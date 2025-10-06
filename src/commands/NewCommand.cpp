@@ -1,5 +1,5 @@
 #include "vix/cli/commands/NewCommand.hpp"
-#include "vix/core/utils/Logger.hpp"
+#include "vix/utils/Logger.hpp"
 #include <filesystem>
 
 namespace Vix::Commands::NewCommand

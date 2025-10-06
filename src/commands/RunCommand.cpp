@@ -1,5 +1,5 @@
 #include "vix/cli/commands/RunCommand.hpp"
-#include "vix/core/utils/Logger.hpp"
+#include "vix/utils/Logger.hpp"
 
 namespace Vix::Commands::RunCommand
 {

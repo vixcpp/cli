@@ -1,18 +1,36 @@
+# ======================================================
+# vix.cpp CLI module
+# ======================================================
+
 cmake_minimum_required(VERSION 3.20)
 project(vix_cli VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(vix
-    src/main.cpp
-    src/CLI.cpp
-    src/commands/NewCommand.cpp
-    src/commands/RunCommand.cpp
-    src/commands/BuildCommand.cpp
+# ======================================================
+# Sources
+# ======================================================
+file(GLOB_RECURSE CLI_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+file(GLOB_RECURSE CLI_HEADERS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
 )
 
-target_include_directories(vix PUBLIC include)
+add_executable(vix ${CLI_SOURCES} ${CLI_HEADERS})
 
-find_package(vix_core REQUIRED)
-target_link_libraries(vix PRIVATE vix_core)
+target_include_directories(vix PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/modules/core/include
+)
+
+# ======================================================
+# Link core library
+# ======================================================
+target_link_libraries(vix PRIVATE core)
+
+# ======================================================
+# Output info
+# ======================================================
+message(STATUS "CLI module 'vix' executable configured.")

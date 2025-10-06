@@ -1,3 +1,7 @@
+# ======================================================
+# vix.cpp CLI module
+# ======================================================
+
 cmake_minimum_required(VERSION 3.20)
 project(vix_cli VERSION 0.1 LANGUAGES CXX)
 
@@ -12,33 +16,34 @@ file(GLOB_RECURSE CLI_SOURCES
 )
 
 # ======================================================
-# Add executable
+# Add CLI executable (avoid naming conflict with INTERFACE vix)
 # ======================================================
-add_executable(vix ${CLI_SOURCES})
+add_executable(vix_cli ${CLI_SOURCES})
 
 # ======================================================
 # Include directories
 # ======================================================
-target_include_directories(vix PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include           # CLI headers
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/utils/include  # Utils headers relative to CLI
+target_include_directories(vix_cli PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include                       # CLI headers
+    ${CMAKE_SOURCE_DIR}/modules/utils/include                # Utils headers from top-level
 )
 
 # ======================================================
 # Link against utils library
 # ======================================================
-target_link_libraries(vix PRIVATE utils)
+target_link_libraries(vix_cli PRIVATE utils)
 
 # ======================================================
 # Set output directory to top-level build dir
 # ======================================================
-set_target_properties(vix PROPERTIES
+set_target_properties(vix_cli PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
 )
 
 # ======================================================
-# Verbose messages
+# Verbose messages for debug / info
 # ======================================================
-message(STATUS "CLI module 'vix' configured.")
-message(STATUS "Sources: ${CLI_SOURCES}")
-message(STATUS "Includes: ${CMAKE_CURRENT_SOURCE_DIR}/modules/utils/include")
+message(STATUS "CLI module 'vix_cli' configured successfully.")
+message(STATUS "CLI sources: ${CLI_SOURCES}")
+message(STATUS "Includes: ${CMAKE_SOURCE_DIR}/modules/utils/include")
+message(STATUS "Executable will be: ${CMAKE_BINARY_DIR}/vix_cli")

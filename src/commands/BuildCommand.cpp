@@ -1,5 +1,5 @@
 #include "vix/cli/commands/BuildCommand.hpp"
-#include "vix/utils/Logger.hpp"
+#include <vix/utils/Logger.hpp>
 
 namespace Vix::Commands::BuildCommand
 {

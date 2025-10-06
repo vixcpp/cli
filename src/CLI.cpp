@@ -2,7 +2,7 @@
 #include "vix/cli/commands/NewCommand.hpp"
 #include "vix/cli/commands/RunCommand.hpp"
 #include "vix/cli/commands/BuildCommand.hpp"
-#include "vix/utils/Logger.hpp"
+#include <vix/utils/Logger.hpp>
 
 namespace Vix
 {

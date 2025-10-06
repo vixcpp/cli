@@ -1,13 +1,12 @@
 #include "vix/cli/commands/BuildCommand.hpp"
-#include <iostream>
+#include "vix/core/utils/Logger.hpp"
 
 namespace Vix::Commands::BuildCommand
 {
-
     int run(const std::vector<std::string> &args)
     {
-        std::cout << "Building project (stub)...\n";
+        auto &logger = Vix::Logger::getInstance();
+        logger.logModule("BuildCommand", Vix::Logger::Level::INFO, "Building project (stub)...");
         return 0;
     }
-
 }

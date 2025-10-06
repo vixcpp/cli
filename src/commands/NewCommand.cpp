@@ -1,14 +1,16 @@
 #include "vix/cli/commands/NewCommand.hpp"
+#include "vix/core/utils/Logger.hpp"
 #include <filesystem>
-#include <iostream>
 
 namespace Vix::Commands::NewCommand
 {
     int run(const std::vector<std::string> &args)
     {
+        auto &logger = Vix::Logger::getInstance();
+
         if (args.empty())
         {
-            std::cerr << "Usage: vix new <project_name>\n";
+            logger.logModule("NewCommand", Vix::Logger::Level::ERROR, "Usage: vix new <project_name>");
             return 1;
         }
 
@@ -16,7 +18,7 @@ namespace Vix::Commands::NewCommand
         std::filesystem::create_directories(name + "/src");
         std::filesystem::create_directories(name + "/include");
 
-        std::cout << "Project '" << name << "' created!\n";
+        logger.logModule("NewCommand", Vix::Logger::Level::INFO, "Project '{}' created!", name);
         return 0;
     }
 }

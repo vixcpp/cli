@@ -1,11 +1,12 @@
 #include "vix/cli/commands/RunCommand.hpp"
-#include <iostream>
+#include "vix/core/utils/Logger.hpp"
 
 namespace Vix::Commands::RunCommand
 {
     int run(const std::vector<std::string> &args)
     {
-        std::cout << "Running project (stub)...\n";
+        auto &logger = Vix::Logger::getInstance();
+        logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Running project (stub)...");
         return 0;
     }
 }

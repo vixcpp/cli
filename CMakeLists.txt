@@ -24,24 +24,25 @@ add_executable(vix ${CLI_SOURCES})
 # Include directories
 # ======================================================
 target_include_directories(vix PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include       # headers CLI
-    ${CMAKE_SOURCE_DIR}/modules/core/include  # headers Core
+    ${CMAKE_CURRENT_SOURCE_DIR}/include        # headers CLI
+    ${CMAKE_SOURCE_DIR}/modules/core          # headers core + utils
+    ${CMAKE_SOURCE_DIR}/modules/core/utils    # explicit utils include
 )
 
 # ======================================================
 # Link core library
 # ======================================================
-target_link_libraries(vix PRIVATE core)
+target_link_libraries(vix PRIVATE core)      
 
 # ======================================================
 # Set output directory to top-level build dir
 # ======================================================
 set_target_properties(vix PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}  # exécutable dans build/
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}  
 )
 
 # ======================================================
-# Output info
+# Optional: verbose message
 # ======================================================
 message(STATUS "CLI module 'vix' executable configured.")
 message(STATUS "All source files included: ${CLI_SOURCES}")

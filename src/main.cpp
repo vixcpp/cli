@@ -1,7 +1,7 @@
-#include <iostream>
+#include "vix/cli/CLI.hpp"
 
 int main(int argc, char **argv)
 {
-    std::cout << "🚀 Vix CLI initialized!" << std::endl;
-    return 0;
+    Vix::CLI cli;
+    return cli.run(argc, argv);
 }

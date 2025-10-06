@@ -31,6 +31,13 @@ target_include_directories(vix PRIVATE
 target_link_libraries(vix PRIVATE core)
 
 # ======================================================
+# Set output directory to top-level build dir
+# ======================================================
+set_target_properties(vix PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}  
+)
+
+# ======================================================
 # Output info
 # ======================================================
 message(STATUS "CLI module 'vix' executable configured.")

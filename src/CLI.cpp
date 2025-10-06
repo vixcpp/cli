@@ -1,4 +1,7 @@
 #include "vix/cli/CLI.hpp"
+#include "vix/cli/commands/NewCommand.hpp"
+#include "vix/cli/commands/RunCommand.hpp"
+#include "vix/cli/commands/BuildCommand.hpp"
 
 namespace Vix
 {
@@ -7,10 +10,16 @@ namespace Vix
         commands_["hello"] = [this](auto args)
         { return help(args); };
         commands_["version"] = [this](auto args)
-        {
-            return version(args);
-        };
-        // new , run, build, serve
+        { return version(args); };
+        commands_["help"] = [this](auto args)
+        { return help(args); };
+
+        commands_["new"] = [](auto args)
+        { return Commands::NewCommand::run(args); };
+        commands_["run"] = [](auto args)
+        { return Commands::RunCommand::run(args); };
+        commands_["build"] = [](auto args)
+        { return Commands::BuildCommand::run(args); };
     }
 
     int CLI::run(int argc, char **argv)
@@ -18,6 +27,7 @@ namespace Vix
         if (argc < 2)
         {
             std::cout << "Usage: vix <command> [options]\n";
+            help({});
             return 1;
         }
 
@@ -30,7 +40,7 @@ namespace Vix
         }
         else
         {
-            std::cout << "Unknow command: " << cmd << "\n";
+            std::cout << "Unknown command: " << cmd << "\n";
             help({});
             return 1;
         }
@@ -38,12 +48,12 @@ namespace Vix
 
     int CLI::help(const std::vector<std::string> &)
     {
-        std::cout << "Vix.cpp CLI - Available commandes:\n"
-                  << " new <name> Create a new Vix project\n"
-                  << " run Run the server\n"
-                  << " build Build the project\n"
-                  << " version Show version\n"
-                  << " help Show this help message\n";
+        std::cout << "Vix.cpp CLI - Available commands:\n"
+                  << "  new <name>    Create a new Vix project\n"
+                  << "  run           Run the server\n"
+                  << "  build         Build the project\n"
+                  << "  version       Show version\n"
+                  << "  help          Show this help message\n";
         return 0;
     }
 

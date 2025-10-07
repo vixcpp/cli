@@ -1,4 +1,0 @@
-[submodule "modules/utils"]
-	path = modules/utils
-	url = https://github.com/vixcpp/utils.git
-	branch = dev

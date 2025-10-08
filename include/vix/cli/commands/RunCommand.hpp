@@ -9,4 +9,4 @@ namespace Vix::Commands::RunCommand
     int run(const std::vector<std::string> &args);
 }
 
-#endif
+#endif // VIX_RUN_COMMAND_HPP

@@ -9,7 +9,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # --- Sources
-# Note: CONFIGURE_DEPENDS pour regénérer quand de nouveaux .cpp arrivent
 file(GLOB_RECURSE CLI_SOURCES
      CONFIGURE_DEPENDS
      "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
@@ -17,7 +16,7 @@ file(GLOB_RECURSE CLI_SOURCES
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(Vix::cli ALIAS vix_cli)
 
-# --- Includes (du module CLI uniquement)
+# --- Includes (propres au module CLI)
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
@@ -43,10 +42,12 @@ else()
   vix_add_flag_if_supported(vix_cli -Wconversion)
 endif()
 
-# --- Dépendance vers Vix::utils
-# 1) si la cible existe (build dans le super-projet vix/) → lier directement
-# 2) sinon, tenter un find_package(vix_utils CONFIG) (build isolé)
-if (TARGET Vix::utils)
+# --- Dépendances
+# 1) si l’umbrella existe (build dans le super-projet) → lien unique
+# 2) sinon, repli minimal sur Vix::utils (comme avant)
+if (TARGET Vix::vix)
+  target_link_libraries(vix_cli PRIVATE Vix::vix)
+elseif (TARGET Vix::utils)
   target_link_libraries(vix_cli PRIVATE Vix::utils)
 else()
   find_package(vix_utils QUIET CONFIG)
@@ -54,8 +55,27 @@ else()
     target_link_libraries(vix_cli PRIVATE Vix::utils)
   else()
     message(FATAL_ERROR
-      "Vix::utils introuvable. Construisez ce module depuis le super-projet vix/ "
-      "ou installez vix_utils avec un config package exportant la cible Vix::utils.")
+      "Dépendances introuvables. Construisez ce module via le super-projet (cible Vix::vix) "
+      "ou installez vix_utils exportant Vix::utils.")
+  endif()
+endif()
+
+# --- Sanitizers (hérités du top-level)
+# Active compile+link ASan/UBSan uniquement si -DVIX_ENABLE_SANITIZERS=ON
+if (VIX_ENABLE_SANITIZERS)
+  message(STATUS "[cli] enabling sanitizers on vix_cli")
+  target_compile_options(vix_cli PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
+  target_link_options(   vix_cli PRIVATE                       -fsanitize=address,undefined)
+endif()
+
+# --- (Optionnel) LTO pour Release si activé au top-level
+if (VIX_ENABLE_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
+  include(CheckIPOSupported)
+  check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
+  if (_ipo_ok)
+    set_property(TARGET vix_cli PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+  else()
+    message(WARNING "[cli] IPO/LTO not supported: ${_ipo_msg}")
   endif()
 endif()
 

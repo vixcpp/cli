@@ -1,6 +1,43 @@
 # ====================================================================
-# Vix.cpp — CLI Module
+# @file CMakeLists.txt
+# @brief Build configuration for the Vix.cpp CLI module.
+#
+# This file defines how the Vix Command Line Interface (CLI) is built,
+# linked, and installed within the Vix.cpp ecosystem. It supports both
+# standalone builds and integration inside the umbrella Vix project.
+#
+# ## Overview
+# The CLI provides developer-facing commands for creating, building,
+# and running Vix-based C++ applications.
+#
+# **Key Features:**
+# - Automatically detects the top-level Vix build or standalone mode.
+# - Enables modern C++20 compilation with strict warnings.
+# - Optionally supports sanitizers (AddressSanitizer, UBSan) and LTO.
+# - Builds a single binary executable named **`vix`**.
+#
+# **Typical Build:**
+# ```bash
+# cd vixcpp/vix/modules/cli
+# cmake -B build -S .
+# cmake --build build
+# ./build/vix --help
+# ```
+#
+# **Integration Mode (preferred):**
+# When built as part of the main umbrella project (target `Vix::vix`),
+# this module automatically inherits global compiler flags and links
+# against all core Vix modules (utils, json, core, etc.).
+#
+# @note
+# The CLI binary will always be output as `vix` at the build root.
+#
+# @version 0.1.0
+# @date 2025
+# @authors
+# SoftAdAstra
 # ====================================================================
+
 cmake_minimum_required(VERSION 3.20)
 project(vix_cli VERSION 0.1.0 LANGUAGES CXX)
 
@@ -16,12 +53,12 @@ file(GLOB_RECURSE CLI_SOURCES
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(Vix::cli ALIAS vix_cli)
 
-# --- Includes (propres au module CLI)
+# --- Includes (specific to CLI)
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-# --- Warnings cross-platform (auto-détection)
+# --- Cross-platform compiler warnings
 include(CheckCXXCompilerFlag)
 function(vix_add_flag_if_supported tgt flag)
   string(REGEX REPLACE "[^A-Za-z0-9]" "_" flag_var "${flag}")
@@ -42,9 +79,9 @@ else()
   vix_add_flag_if_supported(vix_cli -Wconversion)
 endif()
 
-# --- Dépendances
-# 1) si l’umbrella existe (build dans le super-projet) → lien unique
-# 2) sinon, repli minimal sur Vix::utils (comme avant)
+# --- Dependencies
+# 1) If built under the umbrella project → link to main Vix target.
+# 2) Otherwise fallback to minimal dependency (Vix::utils).
 if (TARGET Vix::vix)
   target_link_libraries(vix_cli PRIVATE Vix::vix)
 elseif (TARGET Vix::utils)
@@ -55,20 +92,20 @@ else()
     target_link_libraries(vix_cli PRIVATE Vix::utils)
   else()
     message(FATAL_ERROR
-      "Dépendances introuvables. Construisez ce module via le super-projet (cible Vix::vix) "
-      "ou installez vix_utils exportant Vix::utils.")
+      "Missing dependencies. Build this module via the umbrella project "
+      "(target Vix::vix) or install vix_utils exporting Vix::utils.")
   endif()
 endif()
 
-# --- Sanitizers (hérités du top-level)
-# Active compile+link ASan/UBSan uniquement si -DVIX_ENABLE_SANITIZERS=ON
+# --- Sanitizers (optional, inherited from top-level)
+# Enable ASan/UBSan when -DVIX_ENABLE_SANITIZERS=ON
 if (VIX_ENABLE_SANITIZERS)
   message(STATUS "[cli] enabling sanitizers on vix_cli")
   target_compile_options(vix_cli PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
   target_link_options(   vix_cli PRIVATE                       -fsanitize=address,undefined)
 endif()
 
-# --- (Optionnel) LTO pour Release si activé au top-level
+# --- (Optional) LTO for Release if supported
 if (VIX_ENABLE_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
   include(CheckIPOSupported)
   check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
@@ -79,13 +116,13 @@ if (VIX_ENABLE_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
   endif()
 endif()
 
-# --- Sortie: binaire 'vix' à la racine du build
+# --- Output: binary 'vix' at build root
 set_target_properties(vix_cli PROPERTIES
   OUTPUT_NAME vix
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
 )
 
-# --- (Optionnel) Installation
+# --- Installation
 include(GNUInstallDirs)
 install(TARGETS vix_cli
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

@@ -143,131 +143,129 @@ cmake --build . -j
         s += "# - In standalone mode, Vix must be installed and discoverable by CMake.\n";
 
         return s;
+    }
 
-        // Write a whole text file (binary mode to avoid newline conversion).
-        void write_text_file(const fs::path &p, const std::string &content)
-        {
-            std::ofstream ofs(p, std::ios::binary | std::ios::trunc);
-            if (!ofs)
-                throw std::runtime_error("Cannot open file: " + p.string());
-
-            // ✅ correction : pas d’espace entre static_cast et <>, bon ordre des arguments
-            ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
-
-            if (!ofs)
-                throw std::runtime_error("Failed to write file: " + p.string());
-        }
-
-        // Detect repository root (go up from typical build dirs until we find CMakeLists.txt + modules/).
-        fs::path detect_repo_root()
-        {
-            // 1) Highest priority: explicit environment variable
-            if (const char *p = std::getenv("VIX_REPO_ROOT"))
-            {
-                fs::path env = fs::path(p);
-                if (fs::exists(env) && fs::is_directory(env))
-                    return fs::canonical(env);
-            }
-
-            fs::path cwd = fs::current_path();
-            fs::path parent = cwd.parent_path();
-
-            // Simple heuristic: parent with CMakeLists.txt + modules/
-            if (fs::exists(parent / "CMakeLists.txt") && fs::exists(parent / "modules"))
-                return fs::canonical(parent);
-
-            // Walk up to 5 levels to find a plausible repo root
-            fs::path cur = cwd;
-            for (int i = 0; i < 5 && !cur.empty(); ++i)
-            {
-                if (fs::exists(cur / "CMakeLists.txt") && fs::exists(cur / "modules"))
-                    return fs::canonical(cur);
-                cur = cur.parent_path();
-            }
-
-            // Fallback: current working directory (no guarantee Vix sources exist here)
-            return fs::canonical(cwd);
-        }
-
-    } // namespace
-
-    namespace Vix::Commands::NewCommand
+    // Écrit un fichier texte (binaire pour éviter la conversion des fins de ligne).
+    void write_text_file(const fs::path &p, const std::string &content)
     {
+        std::ofstream ofs(p, std::ios::binary | std::ios::trunc);
+        if (!ofs)
+            throw std::runtime_error("Cannot open file: " + p.string());
 
-        int run(const std::vector<std::string> &args)
+        ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
+        if (!ofs)
+            throw std::runtime_error("Failed to write file: " + p.string());
+    }
+
+    // Détecte la racine du repo (heuristique simple).
+    fs::path detect_repo_root()
+    {
+        // 1) Priorité à la variable d'environnement
+        if (const char *p = std::getenv("VIX_REPO_ROOT"))
         {
-            auto &logger = Vix::Logger::getInstance();
-            if (args.empty())
-            {
-                logger.logModule("NewCommand", Vix::Logger::Level::ERROR,
-                                 "Usage: vix new <project_name>");
-                return 1;
-            }
-
-            const std::string name = args[0];
-
-            try
-            {
-                // 1) Find repo root (enables add_subdirectory fallback)
-                fs::path repoRoot = detect_repo_root();
-
-                // 2) Decide where to create the project (default: repo root)
-                fs::path baseDir = repoRoot;
-                if (const char *p = std::getenv("VIX_PROJECTS_DIR"))
-                {
-                    fs::path custom = fs::path(p);
-                    if (fs::exists(custom) && fs::is_directory(custom))
-                    {
-                        baseDir = fs::canonical(custom);
-                    }
-                    else
-                    {
-                        logger.logModule("NewCommand", Vix::Logger::Level::WARN,
-                                         "VIX_PROJECTS_DIR is invalid: {} — falling back to repo root",
-                                         p ? p : "(null)");
-                    }
-                }
-
-                // Avoid "./vix/<name>" relative to the build dir (may collide with the 'vix' executable)
-                fs::path projectDir = baseDir / name;
-                fs::path srcDir = projectDir / "src";
-                fs::path mainCpp = srcDir / "main.cpp";
-                fs::path cmakeLists = projectDir / "CMakeLists.txt";
-                fs::path readmeFile = projectDir / "README.md";
-
-                // 3) Safety: do not clobber an existing non-empty directory
-                if (fs::exists(projectDir) && !fs::is_empty(projectDir))
-                {
-                    logger.logModule("NewCommand", Vix::Logger::Level::ERROR,
-                                     "Directory '{}' already exists and is not empty.", projectDir.string());
-                    return 2;
-                }
-
-                // 4) Create tree and files
-                fs::create_directories(srcDir);
-                write_text_file(mainCpp, kMainCpp);
-                write_text_file(cmakeLists, make_cmakelists(name, repoRoot));
-                write_text_file(readmeFile, make_readme(name));
-
-                logger.logModule("NewCommand", Vix::Logger::Level::INFO,
-                                 "✅ Project '{}' created at {}", name, projectDir.string());
-
-                logger.logModule("NewCommand", Vix::Logger::Level::INFO,
-                                 "Build & Run:\n"
-                                 "  mkdir -p {0}/build && cd {0}/build\n"
-                                 "  cmake -S .. -B . -DCMAKE_BUILD_TYPE=Release\n"
-                                 "  cmake --build . -j\n"
-                                 "  ./{1}",
-                                 projectDir.string(), name);
-
-                return 0;
-            }
-            catch (const std::exception &ex)
-            {
-                logger.logModule("NewCommand", Vix::Logger::Level::ERROR,
-                                 "Failed to create project '{}': {}", name, ex.what());
-                return 3;
-            }
+            fs::path env = fs::path(p);
+            if (fs::exists(env) && fs::is_directory(env))
+                return fs::canonical(env);
         }
 
-    } // namespace Vix::Commands::NewCommand
+        fs::path cwd = fs::current_path();
+        fs::path parent = cwd.parent_path();
+
+        // Heuristique simple : parent avec CMakeLists.txt + modules/
+        if (fs::exists(parent / "CMakeLists.txt") && fs::exists(parent / "modules"))
+            return fs::canonical(parent);
+
+        // Remonter jusqu'à 5 niveaux
+        fs::path cur = cwd;
+        for (int i = 0; i < 5 && !cur.empty(); ++i)
+        {
+            if (fs::exists(cur / "CMakeLists.txt") && fs::exists(cur / "modules"))
+                return fs::canonical(cur);
+            cur = cur.parent_path();
+        }
+
+        // Repli : répertoire courant
+        return fs::canonical(cwd);
+    }
+
+} // namespace  (fin de l'espace de noms anonyme)
+
+namespace Vix::Commands::NewCommand
+{
+    int run(const std::vector<std::string> &args)
+    {
+        auto &logger = ::Vix::Logger::getInstance(); // <-- note le '::'
+
+        if (args.empty())
+        {
+            logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+                             "Usage: vix new <project_name>");
+            return 1;
+        }
+
+        const std::string name = args[0];
+
+        try
+        {
+            // 1) Repo root (pour mode monorepo via add_subdirectory)
+            fs::path repoRoot = detect_repo_root();
+
+            // 2) Dossier de base (par défaut : repo root)
+            fs::path baseDir = repoRoot;
+            if (const char *p = std::getenv("VIX_PROJECTS_DIR"))
+            {
+                fs::path custom = fs::path(p);
+                if (fs::exists(custom) && fs::is_directory(custom))
+                {
+                    baseDir = fs::canonical(custom);
+                }
+                else
+                {
+                    logger.logModule("NewCommand", ::Vix::Logger::Level::WARN,
+                                     "VIX_PROJECTS_DIR is invalid: {} — falling back to repo root",
+                                     p ? p : "(null)");
+                }
+            }
+
+            // 3) Arborescence
+            fs::path projectDir = baseDir / name;
+            fs::path srcDir = projectDir / "src";
+            fs::path mainCpp = srcDir / "main.cpp";
+            fs::path cmakeLists = projectDir / "CMakeLists.txt";
+            fs::path readmeFile = projectDir / "README.md";
+
+            // 4) Sécurité : ne pas écraser un dossier non vide
+            if (fs::exists(projectDir) && !fs::is_empty(projectDir))
+            {
+                logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+                                 "Directory '{}' already exists and is not empty.", projectDir.string());
+                return 2;
+            }
+
+            // 5) Création des fichiers
+            fs::create_directories(srcDir);
+            write_text_file(mainCpp, kMainCpp);
+            write_text_file(cmakeLists, make_cmakelists(name, repoRoot));
+            write_text_file(readmeFile, make_readme(name));
+
+            logger.logModule("NewCommand", ::Vix::Logger::Level::INFO,
+                             "✅ Project '{}' created at {}", name, projectDir.string());
+
+            logger.logModule("NewCommand", ::Vix::Logger::Level::INFO,
+                             "Build & Run:\n"
+                             "  mkdir -p {0}/build && cd {0}/build\n"
+                             "  cmake -S .. -B . -DCMAKE_BUILD_TYPE=Release\n"
+                             "  cmake --build . -j\n"
+                             "  ./{1}",
+                             projectDir.string(), name);
+
+            return 0;
+        }
+        catch (const std::exception &ex)
+        {
+            logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+                             "Failed to create project '{}': {}", name, ex.what());
+            return 3;
+        }
+    }
+} // namespace Vix::Commands::NewCommand

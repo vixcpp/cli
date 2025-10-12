@@ -158,7 +158,8 @@ namespace Vix
     {
         auto &logger = Logger::getInstance();
         logger.log(Logger::Level::INFO, "Vix.cpp CLI version 1.6.0");
-        logger.log(Logger::Level::INFO, "Developed by SoftAdAstra");
+        logger.log(Logger::Level::INFO, "Developed by Gaspard Kirira");
+        logger.log(Logger::Level::INFO, "Open Source Framework — https://github.com/vixcpp");
         return 0;
     }
 }

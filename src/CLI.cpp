@@ -50,7 +50,7 @@
  * `Vix::Logger` instance, which ensures consistent formatting
  * and module-based colorized output.
  *
- * @version 0.1.0
+ * @version 1.5.2
  * @date 2025
  * @authors
  * SoftAdAstra
@@ -157,7 +157,7 @@ namespace Vix
     int CLI::version(const std::vector<std::string> &)
     {
         auto &logger = Logger::getInstance();
-        logger.log(Logger::Level::INFO, "Vix.cpp CLI version 0.1.0");
+        logger.log(Logger::Level::INFO, "Vix.cpp CLI version 1.5.2");
         logger.log(Logger::Level::INFO, "Developed by SoftAdAstra");
         return 0;
     }

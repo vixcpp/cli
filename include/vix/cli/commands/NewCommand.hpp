@@ -6,30 +6,31 @@
 
 namespace Vix::Commands::NewCommand
 {
+
     /**
-     * @brief Creates a new minimal Vix project.
+     * @brief Create a new minimal Vix project.
      *
-     * This command scaffolds a ready-to-build C++ project using the Vix framework.
-     * It automatically generates:
-     *   - `src/main.cpp` — a minimal "Hello World" HTTP server example
-     *   - `CMakeLists.txt` — a portable build script (supports both local repo and installed Vix)
+     * Generates:
+     *   - src/main.cpp     (tiny HTTP server example)
+     *   - CMakeLists.txt   (portable; uses local Vix if provided, otherwise find_package)
+     *   - README.md
+     *   - .gitignore
      *
-     * The project is created in the repository root by default,
-     * or under `$VIX_PROJECTS_DIR` if that environment variable is defined.
+     * Location rules:
+     *   - By default, creates the project in the current working directory (./<name>).
+     *   - If the environment variable VIX_PROJECTS_DIR is set to a valid directory,
+     *     the project is created under that directory instead (VIX_PROJECTS_DIR/<name>).
      *
-     * **Usage Example:**
-     * @code
-     * vix new myapp
-     * @endcode
+     * Local-Vix rules:
+     *   - If the environment variable VIX_REPO_ROOT points to a Vix source tree
+     *     (contains CMakeLists.txt and modules/), the generated CMake uses add_subdirectory().
+     *   - Otherwise, the generated CMake requires an installed Vix (find_package(Vix CONFIG REQUIRED)).
      *
-     * **Supported Environment Variables:**
-     *   - `VIX_REPO_ROOT` — explicitly set the Vix repository root (otherwise auto-detected)
-     *   - `VIX_PROJECTS_DIR` — custom base directory where the project will be created
-     *
-     * @param args Command-line arguments (expects the project name as the first argument)
-     * @return int Exit code (0 = success, non-zero = failure)
+     * @param args Command-line args; expects args[0] = project name (ASCII/UTF-8).
+     * @return int Exit code (0 = success; non-zero = failure)
      */
     int run(const std::vector<std::string> &args);
-}
+
+} // namespace Vix::Commands::NewCommand
 
 #endif // VIX_NEW_COMMAND_HPP

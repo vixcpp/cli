@@ -4,172 +4,167 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
-#include <string_view>
 #include <stdexcept>
+#include <cstdlib>
 
 namespace fs = std::filesystem;
 
-namespace Vix::Commands::NewCommand
+/**
+ * @file NewCommand.cpp
+ * @brief Implements `vix new <name>` to scaffold a minimal Vix.cpp project.
+ *
+ * This command creates a tiny, ready-to-build C++ project:
+ *   - `src/main.cpp`  : a minimal HTTP server with a single GET "/" route returning JSON
+ *   - `CMakeLists.txt`: a simple, portable build script that links against Vix::vix
+ *   - `README.md`     : quick instructions to build and run the app
+ *
+ * Design goals:
+ *   - Robust path handling: projects are created at the repository root by default,
+ *     or under $VIX_PROJECTS_DIR if set, or under $VIX_REPO_ROOT if provided.
+ *   - No clobbering: refuses to create into a non-empty existing directory.
+ *   - Works both inside the monorepo (via add_subdirectory) and with an installed Vix
+ *     (via find_package(Vix CONFIG REQUIRED)).
+ */
+
+namespace
 {
-    namespace
-    {
-        // Écrit un fichier texte (binaire pour ne pas modifier les fins de lignes par platform)
-        void write_text_file(const fs::path &p, std::string_view content)
-        {
-            std::ofstream ofs(p, std::ios::binary | std::ios::trunc);
-            if (!ofs)
-            {
-                throw std::runtime_error("Cannot open file for writing: " + p.string());
-            }
-            ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
-            if (!ofs)
-            {
-                throw std::runtime_error("Failed to write file: " + p.string());
-            }
-        }
 
-        std::string cmakelists_for(const std::string &name)
-        {
-            // CMake minimal, avec lien optionnel vers Vix::utils (si dispo) ou spdlog
-            return "cmake_minimum_required(VERSION 3.20)\n"
-                   "project(" +
-                   name + " LANGUAGES CXX)\n\n"
-                          "set(CMAKE_CXX_STANDARD 20)\n"
-                          "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n"
-                          "# Optionnel: si le package Vix::utils est disponible, on link; sinon spdlog ; sinon standalone.\n"
-                          "find_package(spdlog QUIET)\n"
-                          "find_package(vix_utils QUIET CONFIG)\n\n"
-                          "add_executable(" +
-                   name + " src/main.cpp)\n\n"
-                          "if (MSVC)\n"
-                          "  target_compile_options(" +
-                   name + " PRIVATE /W4 /permissive-)\n"
-                          "else()\n"
-                          "  include(CheckCXXCompilerFlag)\n"
-                          "  function(add_flag_if_supported tgt flag)\n"
-                          "    string(REGEX REPLACE \"[^A-Za-z0-9]\" \"_\" flag_var \"${flag}\")\n"
-                          "    set(test_var \"HAVE_${flag_var}\")\n"
-                          "    check_cxx_compiler_flag(\"${flag}\" ${test_var})\n"
-                          "    if(${test_var})\n"
-                          "      target_compile_options(${tgt} PRIVATE \"${flag}\")\n"
-                          "    endif()\n"
-                          "  endfunction()\n"
-                          "  add_flag_if_supported(" +
-                   name + " -Wall)\n"
-                          "  add_flag_if_supported(" +
-                   name + " -Wextra)\n"
-                          "  add_flag_if_supported(" +
-                   name + " -Wshadow)\n"
-                          "  add_flag_if_supported(" +
-                   name + " -Wconversion)\n"
-                          "endif()\n\n"
-                          "if (TARGET Vix::utils)\n"
-                          "  target_link_libraries(" +
-                   name + " PRIVATE Vix::utils)\n"
-                          "elseif (spdlog_FOUND)\n"
-                          "  target_link_libraries(" +
-                   name + " PRIVATE spdlog::spdlog)\n"
-                          "endif()\n";
-        }
-
-        constexpr std::string_view gitignore_content =
-            R"(# Build artifacts
-/build/
-cmake-build-*/
-CMakeFiles/
-CMakeCache.txt
-Makefile
-*.o
-*.obj
-*.pdb
-*.ilk
-*.log
-
-# OS cruft
-.DS_Store
-Thumbs.db
-)";
-
-        std::string readme_for(const std::string &name)
-        {
-            return "# " + name + R"(
-
-Projet généré avec **vix new**.
-
-## Build rapide
-
-```bash
-mkdir -p build && cd build
-cmake ..
-cmake --build . -j
-./)" + name + R"(
-Notes
-
-Si Vix::utils est installé (find_package), le binaire utilisera son logger.
-
-Sinon, si spdlog est dispo, on l'utilise directement.
-
-À défaut, l'app reste standalone (std::cout).
-)";
-        }
-        std::string main_cpp_for(const std::string &name)
-        {
-            // Compile avec ou sans Vix::utils. On garde des #if __has_include sûrs.
-            return
-                R"(#include <iostream>
-#include <string>
-
-#if __has_include(<vix/utils/Logger.hpp>)
-#include <vix/utils/Logger.hpp>
-#define VIX_HAVE_LOGGER 1
-#else
-#define VIX_HAVE_LOGGER 0
-#endif
-
-#if __has_include(<vix/utils/Version.hpp>)
-#include <vix/utils/Version.hpp>
-#define VIX_HAVE_VERSION 1
-#else
-#define VIX_HAVE_VERSION 0
-#endif
+    // --- Minimal content: Hello world HTTP ---
+    constexpr const char *kMainCpp = R"(#include <vix.hpp>
+using namespace Vix;
 
 int main()
 {
-#if VIX_HAVE_LOGGER
-auto& log = Vix::Logger::getInstance();
-log.setLevel(Vix::Logger::Level::INFO);
-log.setPattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] %v");
+    App app;
 
+    // GET /
+    app.get("/", [](auto &, auto &res)
+            { res.json({"message", "Hello world"}); });
 
-#if VIX_HAVE_VERSION
-  log.log(Vix::Logger::Level::INFO, "Starting )" +
-                name + R"(");
-  log.log(Vix::Logger::Level::INFO, "Vix.cpp version: {}", std::string(Vix::utils::version()));
-  // Si utils::build_info() existe chez toi :
-  // log.log(Vix::Logger::Level::INFO, "Build: {}", Vix::utils::build_info());
-#else
-  log.log(Vix::Logger::Level::INFO, "Starting )" +
-                name + R"(");
-#endif
-#else
-std::cout << "Starting )" +
-                name + R"(" << std::endl;
-#endif
-
-std::cout << "Hello from )" +
-                name + R"(!" << std::endl;
-return 0;
-
-
+    app.run(8080);
 }
 )";
+
+    // Generate a simple README with build/run instructions.
+    std::string make_readme(const std::string &projectName)
+    {
+        return "# " + projectName + R"(
+A minimal starter project generated by **Vix CLI**.
+
+## Build
+
+```bash
+cd myproject/
+mkdir -p build
+cd build
+cmake -S .. -B . -DCMAKE_BUILD_TYPE=Release
+cmake --build . -j
+# Run
+./)" + projectName +
+               R"(
+# Then open http://localhost:8080/ in your browser
+If you're building this inside the Vix monorepo, CMakeLists.txt will automatically
+add_subdirectory(...) the local Vix sources. If you're outside the repo, make sure
+Vix is installed and discoverable via find_package(Vix CONFIG REQUIRED).
+)";
+    }
+
+    // CMakeLists.txt "smart":
+    // 1) try to include the local Vix repo (absolute path injected),
+    // 2) otherwise try find_package(Vix CONFIG REQUIRED),
+    // 3) link the executable against Vix::vix.
+    std::string make_cmakelists(const std::string &projectName, const fs::path &vixSourceDirAbs)
+    {
+        const std::string vixRoot = vixSourceDirAbs.empty() ? std::string("") : vixSourceDirAbs.string();
+        std::string s;
+        s.reserve(2048);
+        s += "cmake_minimum_required(VERSION 3.20)\n";
+        s += "project(" + projectName + " LANGUAGES CXX)\n\n";
+        s += "set(CMAKE_CXX_STANDARD 20)\n";
+        s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
+
+        s += "# Try using local Vix source (monorepo)\n";
+        s += "set(VIX_LOCAL_SOURCE_DIR \"" + vixRoot + "\")\n";
+        s += "if (EXISTS \"${VIX_LOCAL_SOURCE_DIR}/CMakeLists.txt\")\n";
+        s += "  message(STATUS \"Using local Vix source: ${VIX_LOCAL_SOURCE_DIR}\")\n";
+        s += "  add_subdirectory(\"${VIX_LOCAL_SOURCE_DIR}\" \"${CMAKE_BINARY_DIR}/_vix_build\" EXCLUDE_FROM_ALL)\n";
+        s += "  set(VIX_FROM_LOCAL_SOURCE ON)\n";
+        s += "else()\n";
+        s += "  set(VIX_FROM_LOCAL_SOURCE OFF)\n";
+        s += "endif()\n\n";
+
+        s += "# Otherwise, use an installed package\n";
+        s += "if (NOT VIX_FROM_LOCAL_SOURCE)\n";
+        s += "  find_package(Vix CONFIG REQUIRED)\n";
+        s += "endif()\n\n";
+
+        s += "add_executable(" + projectName + " src/main.cpp)\n";
+        s += "target_link_libraries(" + projectName + " PRIVATE Vix::vix)\n";
+        s += "set_target_properties(" + projectName + " PROPERTIES RUNTIME_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}\")\n\n";
+
+        s += "# Friendly warnings\n";
+        s += "if (MSVC)\n";
+        s += "  target_compile_options(" + projectName + " PRIVATE /W4 /permissive-)\n";
+        s += "else()\n";
+        s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
+        s += "endif()\n";
+
+        return s;
+    }
+
+    // Write a whole text file (binary mode to avoid newline conversion).
+    void write_text_file(const fs::path &p, const std::string &content)
+    {
+        std::ofstream ofs(p, std::ios::binary | std::ios::trunc);
+        if (!ofs)
+            throw std::runtime_error("Cannot open file: " + p.string());
+
+        // ✅ correction : pas d’espace entre static_cast et <>, bon ordre des arguments
+        ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
+
+        if (!ofs)
+            throw std::runtime_error("Failed to write file: " + p.string());
+    }
+
+    // Detect repository root (go up from typical build dirs until we find CMakeLists.txt + modules/).
+    fs::path detect_repo_root()
+    {
+        // 1) Highest priority: explicit environment variable
+        if (const char *p = std::getenv("VIX_REPO_ROOT"))
+        {
+            fs::path env = fs::path(p);
+            if (fs::exists(env) && fs::is_directory(env))
+                return fs::canonical(env);
         }
-    } // namespace
+
+        fs::path cwd = fs::current_path();
+        fs::path parent = cwd.parent_path();
+
+        // Simple heuristic: parent with CMakeLists.txt + modules/
+        if (fs::exists(parent / "CMakeLists.txt") && fs::exists(parent / "modules"))
+            return fs::canonical(parent);
+
+        // Walk up to 5 levels to find a plausible repo root
+        fs::path cur = cwd;
+        for (int i = 0; i < 5 && !cur.empty(); ++i)
+        {
+            if (fs::exists(cur / "CMakeLists.txt") && fs::exists(cur / "modules"))
+                return fs::canonical(cur);
+            cur = cur.parent_path();
+        }
+
+        // Fallback: current working directory (no guarantee Vix sources exist here)
+        return fs::canonical(cwd);
+    }
+
+} // namespace
+
+namespace Vix::Commands::NewCommand
+{
 
     int run(const std::vector<std::string> &args)
     {
         auto &logger = Vix::Logger::getInstance();
-
         if (args.empty())
         {
             logger.logModule("NewCommand", Vix::Logger::Level::ERROR,
@@ -178,41 +173,69 @@ return 0;
         }
 
         const std::string name = args[0];
-        const fs::path projectRoot = fs::path("vix") / name;
-        const fs::path srcDir = projectRoot / "src";
 
         try
         {
-            // Si le dossier existe et n'est pas vide -> on évite l'écrasement
-            if (fs::exists(projectRoot) && !fs::is_empty(projectRoot))
+            // 1) Find repo root (enables add_subdirectory fallback)
+            fs::path repoRoot = detect_repo_root();
+
+            // 2) Decide where to create the project (default: repo root)
+            fs::path baseDir = repoRoot;
+            if (const char *p = std::getenv("VIX_PROJECTS_DIR"))
+            {
+                fs::path custom = fs::path(p);
+                if (fs::exists(custom) && fs::is_directory(custom))
+                {
+                    baseDir = fs::canonical(custom);
+                }
+                else
+                {
+                    logger.logModule("NewCommand", Vix::Logger::Level::WARN,
+                                     "VIX_PROJECTS_DIR is invalid: {} — falling back to repo root",
+                                     p ? p : "(null)");
+                }
+            }
+
+            // Avoid "./vix/<name>" relative to the build dir (may collide with the 'vix' executable)
+            fs::path projectDir = baseDir / name;
+            fs::path srcDir = projectDir / "src";
+            fs::path mainCpp = srcDir / "main.cpp";
+            fs::path cmakeLists = projectDir / "CMakeLists.txt";
+            fs::path readmeFile = projectDir / "README.md";
+
+            // 3) Safety: do not clobber an existing non-empty directory
+            if (fs::exists(projectDir) && !fs::is_empty(projectDir))
             {
                 logger.logModule("NewCommand", Vix::Logger::Level::ERROR,
-                                 "Directory '{}' already exists and is not empty.", projectRoot.string());
+                                 "Directory '{}' already exists and is not empty.", projectDir.string());
                 return 2;
             }
 
+            // 4) Create tree and files
             fs::create_directories(srcDir);
-
-            // Fichiers du template
-            write_text_file(projectRoot / "CMakeLists.txt", cmakelists_for(name));
-            write_text_file(projectRoot / ".gitignore", std::string(gitignore_content));
-            write_text_file(projectRoot / "README.md", readme_for(name));
-            write_text_file(srcDir / "main.cpp", main_cpp_for(name));
+            write_text_file(mainCpp, kMainCpp);
+            write_text_file(cmakeLists, make_cmakelists(name, repoRoot));
+            write_text_file(readmeFile, make_readme(name));
 
             logger.logModule("NewCommand", Vix::Logger::Level::INFO,
-                             "✅ Project '{}' created at {}/", name, projectRoot.string());
+                             "✅ Project '{}' created at {}", name, projectDir.string());
+
             logger.logModule("NewCommand", Vix::Logger::Level::INFO,
-                             "Next steps: `cd {0} && mkdir -p build && cd build && cmake .. && cmake --build . -j && ./{1}`",
-                             projectRoot.string(), name);
+                             "Build & Run:\n"
+                             "  mkdir -p {0}/build && cd {0}/build\n"
+                             "  cmake -S .. -B . -DCMAKE_BUILD_TYPE=Release\n"
+                             "  cmake --build . -j\n"
+                             "  ./{1}",
+                             projectDir.string(), name);
+
+            return 0;
         }
         catch (const std::exception &ex)
         {
             logger.logModule("NewCommand", Vix::Logger::Level::ERROR,
                              "Failed to create project '{}': {}", name, ex.what());
-            return 1;
+            return 3;
         }
-
-        return 0;
     }
 
-}
+} // namespace Vix::Commands::NewCommand

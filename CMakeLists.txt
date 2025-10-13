@@ -27,11 +27,14 @@ cmake_minimum_required(VERSION 3.20)
 #   When built from the umbrella project, the CLI inherits global flags
 #   and links against core Vix modules via Vix::vix.
 # ====================================================================
-
 project(vix_cli VERSION 0.1.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)
+
+# (optionnel) Forcer le CLI en "core-only" si l'umbrella exporte VixOrm
+# pour éviter toute traction ORM côté CLI.
+set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)
 
 # ---------------- Language / Standard ----------------
 set(CMAKE_CXX_STANDARD 20)
@@ -99,6 +102,45 @@ else()
   endif()
 endif()
 
+# ---------------- CLI version wiring (dynamic) -------
+# Priorité:
+#   1) -DVIX_CLI_VERSION=... (cache)
+#   2) env VIX_CLI_VERSION
+#   3) dernier tag git (git describe --tags --abbrev=0)
+#   4) project() VERSION (project(vix_cli VERSION x.y.z))
+#   5) "dev" (fallback)
+set(_VIX_CLI_VERSION "dev")
+
+# 1) Cache var
+if(DEFINED VIX_CLI_VERSION AND NOT "${VIX_CLI_VERSION}" STREQUAL "")
+  set(_VIX_CLI_VERSION "${VIX_CLI_VERSION}")
+# 2) Env var
+elseif(DEFINED ENV{VIX_CLI_VERSION} AND NOT "$ENV{VIX_CLI_VERSION}" STREQUAL "")
+  set(_VIX_CLI_VERSION "$ENV{VIX_CLI_VERSION}")
+else()
+  # 3) Git tag (silencieux si pas un repo)
+  find_package(Git QUIET)
+  if(Git_FOUND)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" describe --tags --abbrev=0
+      WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
+      OUTPUT_VARIABLE _GIT_TAG
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(_GIT_TAG)
+      set(_VIX_CLI_VERSION "${_GIT_TAG}")
+    endif()
+  endif()
+  # 4) project() VERSION si dispo
+  if("${_VIX_CLI_VERSION}" STREQUAL "dev" AND DEFINED PROJECT_VERSION AND NOT "${PROJECT_VERSION}" STREQUAL "")
+    set(_VIX_CLI_VERSION "${PROJECT_VERSION}")
+  endif()
+endif()
+
+message(STATUS "Vix CLI version: ${_VIX_CLI_VERSION}")
+target_compile_definitions(vix_cli PRIVATE VIX_CLI_VERSION="${_VIX_CLI_VERSION}")
+
 # ---------------- Sanitizers (optional) ---------------
 # Honours the umbrella option: -DVIX_ENABLE_SANITIZERS=ON
 if (VIX_ENABLE_SANITIZERS)
@@ -139,3 +181,4 @@ install(TARGETS vix_cli
 # ---------------- Status messages --------------------
 message(STATUS "CLI module configured.")
 message(STATUS "Executable will be: ${CMAKE_BINARY_DIR}/vix")
+

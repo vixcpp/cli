@@ -225,6 +225,8 @@ namespace Vix::Commands::RunCommand
                                               bool usedPresets,
                                               const std::string &config)
         {
+            (void)config;
+
             // Ordre de recherche (raisonnable pour les configs courantes)
             std::vector<fs::path> candidates;
 

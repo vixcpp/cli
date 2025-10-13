@@ -7,6 +7,8 @@
 #include <vector>
 #include <optional>
 #include <sstream>
+#include <cstdio> // popen/pclose
+#include <algorithm>
 
 namespace fs = std::filesystem;
 
@@ -18,7 +20,6 @@ namespace Vix::Commands::BuildCommand
         // Helpers
         // ---------------------------------------------------------------------
 
-        // Trouve la racine du monorepo vix/ (si on est dedans)
         std::optional<fs::path> find_vix_root(fs::path start)
         {
             std::error_code ec;
@@ -30,7 +31,6 @@ namespace Vix::Commands::BuildCommand
             {
                 if (p.filename() == "vix" && fs::exists(p / "modules"))
                     return p;
-
                 if (fs::exists(p / "modules") && fs::exists(p / "modules" / "cli"))
                     if (p.filename() == "vix" || fs::exists(p / "CMakeLists.txt"))
                         return p;
@@ -44,19 +44,17 @@ namespace Vix::Commands::BuildCommand
             std::string config = "Release";   // Debug / Release / RelWithDebInfo / MinSizeRel
             std::string target;               // --target <name>
             std::string generator;            // -G "Ninja", "Unix Makefiles", etc.
-            std::string preset = "dev-ninja"; // --preset (si CMakePresets.json)
+            std::string preset = "dev-ninja"; // configure preset (CMakePresets.json)
+            std::string buildPreset;          // build preset (facultatif)
             std::string dir;                  // --dir/-d chemin explicite du projet
             int jobs = 0;                     // -j / --jobs
             bool clean = false;               // --clean
         };
 
-        // Petit parseur pour --dir/-d si tu n’inclus pas déjà ta version utilitaire.
-        // (Nom différent pour éviter l’ODR si tu as déjà une implémentation ailleurs.)
         std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
         {
             auto is_option = [](std::string_view sv)
             { return !sv.empty() && sv.front() == '-'; };
-
             for (size_t i = 0; i < args.size(); ++i)
             {
                 const std::string &a = args[i];
@@ -85,9 +83,7 @@ namespace Vix::Commands::BuildCommand
             {
                 const std::string &a = args[i];
                 if (a == "--config" && i + 1 < args.size())
-                {
                     o.config = args[++i];
-                }
                 else if ((a == "-j" || a == "--jobs") && i + 1 < args.size())
                 {
                     try
@@ -100,25 +96,17 @@ namespace Vix::Commands::BuildCommand
                     }
                 }
                 else if (a == "--target" && i + 1 < args.size())
-                {
                     o.target = args[++i];
-                }
                 else if (a == "--generator" && i + 1 < args.size())
-                {
                     o.generator = args[++i];
-                }
                 else if (a == "--preset" && i + 1 < args.size())
-                {
-                    o.preset = args[++i];
-                }
+                    o.preset = args[++i]; // configure
+                else if (a == "--build-preset" && i + 1 < args.size())
+                    o.buildPreset = args[++i]; // NEW
                 else if (a == "--clean")
-                {
                     o.clean = true;
-                }
                 else if (o.appName.empty() && !a.empty() && a != "--")
-                {
                     o.appName = a;
-                }
             }
             if (auto d = pick_dir_opt_local(args))
                 o.dir = *d;
@@ -138,10 +126,10 @@ namespace Vix::Commands::BuildCommand
 
         bool has_presets(const fs::path &projectDir)
         {
-            return fs::exists(projectDir / "CMakePresets.json") || fs::exists(projectDir / "CMakeUserPresets.json");
+            return fs::exists(projectDir / "CMakePresets.json") ||
+                   fs::exists(projectDir / "CMakeUserPresets.json");
         }
 
-        // Renvoie project dir “intelligent”
         std::optional<fs::path> choose_project_dir(const Options &opt, const fs::path &cwd)
         {
             auto canonical_if = [](const fs::path &p) -> std::optional<fs::path>
@@ -152,33 +140,115 @@ namespace Vix::Commands::BuildCommand
                 return std::nullopt;
             };
 
-            // 1) --dir explicite prime
             if (!opt.dir.empty())
                 if (auto p = canonical_if(fs::path(opt.dir)))
                     return p;
-
-            // 2) dossier courant
             if (auto p = canonical_if(cwd))
                 return p;
 
-            // 3) appName en chemin absolu/relatif
             if (!opt.appName.empty())
             {
                 if (auto p = canonical_if(fs::path(opt.appName)))
-                    return p; // tel quel
+                    return p;
                 if (auto p = canonical_if(cwd / opt.appName))
-                    return p;                       // relatif
-                if (auto root = find_vix_root(cwd)) // monorepo vix/<app>
+                    return p;
+                if (auto root = find_vix_root(cwd))
                     if (auto p = canonical_if(*root / opt.appName))
                         return p;
             }
 
-            // 4) monorepo vix/ (racine)
             if (auto root = find_vix_root(cwd))
                 if (auto p = canonical_if(*root))
                     return p;
-
             return std::nullopt;
+        }
+
+        // ---- util: exécuter et capturer stdout (POSIX)
+#ifndef _WIN32
+        static std::string run_and_capture(const std::string &cmd)
+        {
+            std::string out;
+            FILE *pipe = popen(cmd.c_str(), "r");
+            if (!pipe)
+                return out;
+            char buf[4096];
+            while (fgets(buf, sizeof(buf), pipe))
+                out.append(buf);
+            pclose(pipe);
+            return out;
+        }
+#endif
+
+        static std::vector<std::string> list_presets(const fs::path &projectDir, const std::string &kind)
+        {
+#ifdef _WIN32
+            // Windows: cmake --list-presets n'imprime pas aisément parsable via popen ici.
+            // On retourne vide → on utilisera le mapping heuristique dev-* → build-*.
+            (void)projectDir;
+            (void)kind;
+            return {};
+#else
+            std::ostringstream oss;
+            oss << "cd " << quote(projectDir.string()) << " && cmake --list-presets=" << kind;
+            const auto out = run_and_capture(oss.str());
+            std::vector<std::string> names;
+            std::istringstream is(out);
+            std::string line;
+            while (std::getline(is, line))
+            {
+                auto q1 = line.find('\"');
+                auto q2 = line.find('\"', q1 == std::string::npos ? q1 : q1 + 1);
+                if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1)
+                    names.emplace_back(line.substr(q1 + 1, q2 - (q1 + 1)));
+            }
+            return names;
+#endif
+        }
+
+        static std::string choose_build_preset(const fs::path &projectDir,
+                                               const std::string &configurePreset,
+                                               const std::string &userBuildPreset)
+        {
+            auto builds = list_presets(projectDir, "build");
+            auto has = [&](const std::string &n)
+            {
+                return std::find(builds.begin(), builds.end(), n) != builds.end();
+            };
+
+            if (!userBuildPreset.empty() && (builds.empty() || has(userBuildPreset)))
+                return userBuildPreset;
+
+            if (!builds.empty())
+            {
+                if (has(configurePreset))
+                    return configurePreset;
+
+                // dev-* → build-*
+                if (configurePreset.rfind("dev-", 0) == 0)
+                {
+                    std::string mapped = configurePreset;
+                    mapped.replace(0, 4, "build-");
+                    if (has(mapped))
+                        return mapped;
+                }
+
+                // préférer un preset contenant "ninja"
+                for (auto &n : builds)
+                    if (n.find("ninja") != std::string::npos)
+                        return n;
+
+                // fallback: premier
+                return builds.front();
+            }
+
+            // Pas de liste possible → heuristique simple
+            if (configurePreset.rfind("dev-", 0) == 0)
+            {
+                std::string mapped = configurePreset;
+                mapped.replace(0, 4, "build-");
+                return mapped; // on tentera quand même
+            }
+            return configurePreset; // dernier recours
         }
     } // namespace
 
@@ -189,10 +259,8 @@ namespace Vix::Commands::BuildCommand
     {
         auto &logger = Vix::Logger::getInstance();
         const Options opt = parse_args(args);
-
         const fs::path cwd = fs::current_path();
 
-        // 🔎 Choisir automatiquement le dossier projet (apps n’importe où)
         auto projectDirOpt = choose_project_dir(opt, cwd);
         if (!projectDirOpt)
         {
@@ -203,10 +271,9 @@ namespace Vix::Commands::BuildCommand
         }
         const fs::path projectDir = *projectDirOpt;
 
-        // 0) Chemin "presets" si disponibles
         if (has_presets(projectDir))
         {
-            // Configure via preset
+            // 1) Configure
             {
                 std::ostringstream oss;
 #ifdef _WIN32
@@ -227,12 +294,17 @@ namespace Vix::Commands::BuildCommand
                 }
             }
 
-            // Build via preset
+            // 2) Choix build preset
+            const std::string buildPreset = choose_build_preset(projectDir, opt.preset, opt.buildPreset);
+            logger.logModule("BuildCommand", Vix::Logger::Level::INFO,
+                             "Build preset sélectionné: {}", buildPreset);
+
+            // 3) Build
             {
                 std::ostringstream oss;
 #ifdef _WIN32
                 oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && cmake --build --preset " << quote(opt.preset);
+                    << " && cmake --build --preset " << quote(buildPreset);
                 if (!opt.target.empty())
                     oss << " --target " << quote(opt.target);
                 if (!opt.config.empty())
@@ -240,7 +312,7 @@ namespace Vix::Commands::BuildCommand
                 oss << "\"";
 #else
                 oss << "cd " << quote(projectDir.string())
-                    << " && cmake --build --preset " << quote(opt.preset);
+                    << " && cmake --build --preset " << quote(buildPreset);
                 if (!opt.target.empty())
                     oss << " --target " << quote(opt.target);
                 if (!opt.config.empty())
@@ -254,17 +326,17 @@ namespace Vix::Commands::BuildCommand
                 if (code != 0)
                 {
                     logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
-                                     "Erreur compilation (preset '{}', code {}).", opt.preset, code);
+                                     "Erreur compilation (build preset '{}', code {}).", buildPreset, code);
                     return code;
                 }
             }
 
             logger.logModule("BuildCommand", Vix::Logger::Level::INFO,
-                             "✅ Build terminé (preset: {}).", opt.preset);
+                             "✅ Build terminé (preset config: {}, preset build: {}).", opt.preset, buildPreset);
             return 0;
         }
 
-        // 1) Fallback: pas de presets → build/ + cmake .. ; cmake --build .
+        // --- Fallback (pas de presets) ---
         fs::path buildDir = projectDir / "build";
 
         if (opt.clean && fs::exists(buildDir))

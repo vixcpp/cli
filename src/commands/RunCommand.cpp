@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <optional>
+#include <sstream>
 
 namespace fs = std::filesystem;
 
@@ -13,17 +14,23 @@ namespace Vix::Commands::RunCommand
 {
     namespace
     {
-        // Cherche le dossier "vix" racine en remontant depuis cwd
+        // ---------------------------------------------------------------------
+        // Helpers
+        // ---------------------------------------------------------------------
+
+        // Trouve la racine du monorepo vix/ (si on est dedans)
         std::optional<fs::path> find_vix_root(fs::path start)
         {
-            start = fs::weakly_canonical(start);
+            std::error_code ec;
+            start = fs::weakly_canonical(start, ec);
+            if (ec)
+                return std::nullopt;
+
             for (fs::path p = start; !p.empty(); p = p.parent_path())
             {
-                // Heuristique: dossier nommé "vix" et contient "modules"
                 if (p.filename() == "vix" && fs::exists(p / "modules"))
                     return p;
 
-                // Autre cas: on est peut-être déjà dans "vix"
                 if (fs::exists(p / "modules") && fs::exists(p / "modules" / "cli"))
                     if (p.filename() == "vix" || fs::exists(p / "CMakeLists.txt"))
                         return p;
@@ -31,27 +38,173 @@ namespace Vix::Commands::RunCommand
             return std::nullopt;
         }
 
-        // Détecte le binaire de sortie le plus probable
-        std::optional<fs::path> detect_binary(const fs::path &buildDir,
-                                              const std::string &preferredName = "")
+        // options
+        struct Options
         {
-            // 1) Nom exact si fourni
+            std::string appName;              // premier argument libre (facultatif)
+            std::string dir;                  // --dir/-d chemin explicite du projet
+            std::string preset = "dev-ninja"; // --preset (si CMakePresets.json)
+            std::string config = "Release";   // --config (MSVC, multi-config)
+            int jobs = 0;                     // -j/--jobs (Unix)
+            std::vector<std::string> appArgs; // après "--"
+        };
+
+        // parse --dir/-d
+        std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
+        {
+            auto is_option = [](std::string_view sv)
+            { return !sv.empty() && sv.front() == '-'; };
+
+            for (size_t i = 0; i < args.size(); ++i)
+            {
+                const std::string &a = args[i];
+                if (a == "-d" || a == "--dir")
+                {
+                    if (i + 1 < args.size() && !is_option(args[i + 1]))
+                        return args[i + 1];
+                    return std::nullopt;
+                }
+                constexpr const char prefix[] = "--dir=";
+                if (a.rfind(prefix, 0) == 0)
+                {
+                    std::string val = a.substr(sizeof(prefix) - 1);
+                    if (val.empty())
+                        return std::nullopt;
+                    return val;
+                }
+            }
+            return std::nullopt;
+        }
+
+        Options parse_args(const std::vector<std::string> &args)
+        {
+            Options o;
+            bool afterDashDash = false;
+            for (size_t i = 0; i < args.size(); ++i)
+            {
+                const std::string &a = args[i];
+                if (afterDashDash)
+                {
+                    o.appArgs.push_back(a);
+                    continue;
+                }
+                if (a == "--")
+                {
+                    afterDashDash = true;
+                    continue;
+                }
+                if ((a == "-d" || a == "--dir") && i + 1 < args.size())
+                {
+                    o.dir = args[++i];
+                    continue;
+                }
+                if (a.rfind("--dir=", 0) == 0)
+                {
+                    o.dir = a.substr(6);
+                    continue;
+                }
+                if ((a == "--preset") && i + 1 < args.size())
+                {
+                    o.preset = args[++i];
+                    continue;
+                }
+                if ((a == "--config") && i + 1 < args.size())
+                {
+                    o.config = args[++i];
+                    continue;
+                }
+                if ((a == "-j" || a == "--jobs") && i + 1 < args.size())
+                {
+                    try
+                    {
+                        o.jobs = std::stoi(args[++i]);
+                    }
+                    catch (...)
+                    {
+                        o.jobs = 0;
+                    }
+                    continue;
+                }
+                if (o.appName.empty() && !a.empty() && a[0] != '-')
+                {
+                    o.appName = a;
+                    continue;
+                }
+                // ignore le reste (extensions futures)
+            }
+
+            if (o.dir.empty())
+                if (auto d = pick_dir_opt_local(args))
+                    o.dir = *d;
+
+            return o;
+        }
+
+        std::string quote(const std::string &s)
+        {
+#ifdef _WIN32
+            return "\"" + s + "\"";
+#else
+            if (s.find_first_of(" \t\"'\\$`") != std::string::npos)
+                return "'" + s + "'";
+            return s;
+#endif
+        }
+
+        bool has_presets(const fs::path &projectDir)
+        {
+            return fs::exists(projectDir / "CMakePresets.json") || fs::exists(projectDir / "CMakeUserPresets.json");
+        }
+
+        // Joindre des args shell-quotés (simple)
+        std::string join_args(const std::vector<std::string> &argv)
+        {
+            std::string out;
+            for (const auto &a : argv)
+            {
+#ifdef _WIN32
+                if (a.find(' ') != std::string::npos)
+                    out += "\"" + a + "\" ";
+                else
+                    out += a + " ";
+#else
+                if (a.find_first_of(" \t\"'\\$`") != std::string::npos)
+                    out += "'" + a + "' ";
+                else
+                    out += a + " ";
+#endif
+            }
+            if (!out.empty())
+                out.pop_back();
+            return out;
+        }
+
+        // Détecte un exécutable plausible dans un dossier
+        std::optional<fs::path> detect_binary_in_dir(const fs::path &dir, const std::string &preferredName)
+        {
+            std::error_code ec;
+            if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
+                return std::nullopt;
+
+            // 1) priorité: nom préféré
             if (!preferredName.empty())
             {
 #ifdef _WIN32
-                fs::path exe = buildDir / (preferredName + ".exe");
-                if (fs::exists(exe))
-                    return exe;
+                fs::path exep = dir / (preferredName + ".exe");
+                if (fs::exists(exep, ec))
+                    return exep;
 #endif
-                fs::path bin = buildDir / preferredName;
-                if (fs::exists(bin))
-                    return bin;
+                fs::path binp = dir / preferredName;
+                if (fs::exists(binp, ec))
+                    return binp;
             }
 
-            // 2) Sinon: 1er fichier "exécutable plausible"
-            for (auto &entry : fs::directory_iterator(buildDir))
+            // 2) sinon: premier fichier exécutable plausible
+            for (auto &entry : fs::directory_iterator(dir, ec))
             {
-                if (!entry.is_regular_file())
+                if (ec)
+                    break;
+                if (!entry.is_regular_file(ec))
                     continue;
 
                 const auto ext = entry.path().extension().string();
@@ -59,7 +212,6 @@ namespace Vix::Commands::RunCommand
                 if (ext == ".exe")
                     return entry.path();
 #else
-                // Pas d’extension ou .out : souvent un exécutable
                 if (ext.empty() || ext == ".out")
                     return entry.path();
 #endif
@@ -67,82 +219,178 @@ namespace Vix::Commands::RunCommand
             return std::nullopt;
         }
 
-        // Concatène des arguments shell échappés très simplement (Unix/Windows basique)
-        std::string join_args(const std::vector<std::string> &argv)
+        // Essaie plusieurs répertoires de build courants pour retrouver le binaire
+        std::optional<fs::path> detect_binary(const fs::path &projectDir,
+                                              const std::string &preferredName,
+                                              bool usedPresets,
+                                              const std::string &config)
         {
-            std::string out;
-            for (const auto &a : argv)
+            // Ordre de recherche (raisonnable pour les configs courantes)
+            std::vector<fs::path> candidates;
+
+            if (usedPresets)
             {
+                candidates.push_back(projectDir / "build-ninja");
+                candidates.push_back(projectDir / "build");
+                candidates.push_back(projectDir / "build-msvc");
 #ifdef _WIN32
-                // En simplifié: entourer de guillemets si espace
-                if (a.find(' ') != std::string::npos)
-                    out += "\"" + a + "\" ";
-                else
-                    out += a + " ";
-#else
-                // Unix: entourer si espace/shell-char simples
-                if (a.find_first_of(" \t\"'\\$`") != std::string::npos)
-                    out += "'" + a + "' ";
-                else
-                    out += a + " ";
+                candidates.push_back(projectDir / "build-msvc" / config);
+                candidates.push_back(projectDir / "build" / config);
 #endif
             }
-            if (!out.empty() && out.back() == ' ')
-                out.pop_back();
-            return out;
+            else
+            {
+                candidates.push_back(projectDir / "build");
+#ifdef _WIN32
+                candidates.push_back(projectDir / "build" / config);
+#endif
+            }
+
+            for (const auto &d : candidates)
+            {
+                if (auto p = detect_binary_in_dir(d, preferredName))
+                    return p;
+            }
+
+            // Dernière chance: racine du projet (peu probable mais pas impossible)
+            return detect_binary_in_dir(projectDir, preferredName);
+        }
+
+        // Sélection “intelligente” du dossier projet (apps n’importe où)
+        std::optional<fs::path> choose_project_dir(const std::string &appName,
+                                                   const std::string &dirOpt,
+                                                   const fs::path &cwd)
+        {
+            auto canonical_if = [](const fs::path &p) -> std::optional<fs::path>
+            {
+                std::error_code ec;
+                if (fs::exists(p / "CMakeLists.txt", ec))
+                    return fs::weakly_canonical(p, ec);
+                return std::nullopt;
+            };
+
+            // 1) --dir explicite
+            if (!dirOpt.empty())
+                if (auto p = canonical_if(fs::path(dirOpt)))
+                    return p;
+
+            // 2) dossier courant
+            if (auto p = canonical_if(cwd))
+                return p;
+
+            // 3) appName en chemin absolu/relatif
+            if (!appName.empty())
+            {
+                if (auto p = canonical_if(fs::path(appName)))
+                    return p; // tel quel
+                if (auto p = canonical_if(cwd / appName))
+                    return p;                       // relatif
+                if (auto root = find_vix_root(cwd)) // monorepo vix/<app>
+                    if (auto p = canonical_if(*root / appName))
+                        return p;
+            }
+
+            // 4) monorepo vix/ (racine)
+            if (auto root = find_vix_root(cwd))
+                if (auto p = canonical_if(*root))
+                    return p;
+
+            return std::nullopt;
         }
     } // namespace
 
+    // -------------------------------------------------------------------------
+    // Entrée principale
+    // -------------------------------------------------------------------------
     int run(const std::vector<std::string> &args)
     {
         auto &logger = Vix::Logger::getInstance();
+        const Options opt = parse_args(args);
 
-        // Parse: [appName?] [-- appArgs...]
-        std::string appName;
-        std::vector<std::string> appArgs;
+        const fs::path cwd = fs::current_path();
+        auto projectDirOpt = choose_project_dir(opt.appName, opt.dir, cwd);
+        if (!projectDirOpt)
         {
-            bool afterDashDash = false;
-            for (const auto &a : args)
+            logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                             "Impossible de déterminer le dossier projet.\n"
+                             "Essayez: `vix run --dir <chemin>` ou lancez la commande depuis le dossier du projet.");
+            return 1;
+        }
+        const fs::path projectDir = *projectDirOpt;
+
+        // Nom préféré pour le binaire: <appName> sinon nom du dossier projet
+        std::string preferredName = opt.appName.empty() ? projectDir.filename().string()
+                                                        : opt.appName;
+
+        // 0) Tenter le chemin "presets" si présents
+        const bool usePresets = has_presets(projectDir);
+        if (usePresets)
+        {
+            // Configure via preset
             {
-                if (!afterDashDash && a == "--")
+                std::ostringstream oss;
+#ifdef _WIN32
+                oss << "cmd /C \"cd /D " << quote(projectDir.string())
+                    << " && cmake --preset " << quote(opt.preset) << "\"";
+#else
+                oss << "cd " << quote(projectDir.string())
+                    << " && cmake --preset " << quote(opt.preset);
+#endif
+                const std::string cmd = oss.str();
+                logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Configure (preset): {}", cmd);
+                int code = std::system(cmd.c_str());
+                if (code != 0)
                 {
-                    afterDashDash = true;
-                    continue;
+                    logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                                     "Échec configuration avec preset '{}' (code {}).", opt.preset, code);
+                    return code;
                 }
-                if (!afterDashDash && appName.empty())
-                    appName = a;
-                else
-                    appArgs.push_back(a);
             }
-        }
 
-        // Trouver la racine vix/
-        auto vixRootOpt = find_vix_root(fs::current_path());
-        if (!vixRootOpt)
-        {
-            logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
-                             "Impossible de localiser le dossier racine 'vix/'. Lance la commande depuis le repo vix ou un sous-dossier.");
-            return 1;
-        }
-        const fs::path vixRoot = *vixRootOpt;
+            // Build via preset (tout)
+            {
+                std::ostringstream oss;
+#ifdef _WIN32
+                oss << "cmd /C \"cd /D " << quote(projectDir.string())
+                    << " && cmake --build --preset " << quote(opt.preset)
+                    << " --config " << quote(opt.config) << "\"";
+#else
+                oss << "cd " << quote(projectDir.string())
+                    << " && cmake --build --preset " << quote(opt.preset);
+                if (opt.jobs > 0)
+                    oss << " -- -j " << opt.jobs; // backend
+#endif
+                const std::string cmd = oss.str();
+                logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Build (preset): {}", cmd);
+                int code = std::system(cmd.c_str());
+                if (code != 0)
+                {
+                    logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                                     "Erreur compilation (preset '{}', code {}).", opt.preset, code);
+                    return code;
+                }
+            }
 
-        // Déterminer le projet à builder/exécuter :
-        // - si appName vide → projet racine vix/
-        // - si appName rempli → projet généré par `vix new` dans vix/<appName>/
-        fs::path projectDir = appName.empty() ? vixRoot : (vixRoot / appName);
-
-        // Vérifier CMakeLists.txt du projet ciblé
-        if (!fs::exists(projectDir / "CMakeLists.txt"))
-        {
-            logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
-                             "CMakeLists.txt introuvable dans '{}'.", projectDir.string());
-            if (!appName.empty())
+            // Exécuter le binaire (on gère les arguments nous-mêmes)
+            if (auto binOpt = detect_binary(projectDir, preferredName, /*usedPresets*/ true, opt.config))
+            {
+                const std::string argStr = join_args(opt.appArgs);
+#ifdef _WIN32
+                std::string runCmd = "cmd /C " + quote(binOpt->string() + (argStr.empty() ? "" : " " + argStr));
+#else
+                std::string runCmd = quote(binOpt->string()) + (argStr.empty() ? "" : " " + argStr);
+#endif
                 logger.logModule("RunCommand", Vix::Logger::Level::INFO,
-                                 "Astuce: crée d'abord l'app avec `vix new {}`.", appName);
+                                 "Exécution: {}{}", binOpt->string(), (argStr.empty() ? "" : " " + argStr));
+                return std::system(runCmd.c_str());
+            }
+
+            logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                             "Binaire introuvable après build (preset '{}').", opt.preset);
             return 1;
         }
 
-        // Dossier build du projet ciblé
+        // 1) Fallback: pas de presets → build/ + cmake .. ; cmake --build .
         fs::path buildDir = projectDir / "build";
         std::error_code ec;
         fs::create_directories(buildDir, ec);
@@ -153,15 +401,16 @@ namespace Vix::Commands::RunCommand
             return 1;
         }
 
-        logger.logModule("RunCommand", Vix::Logger::Level::INFO,
-                         "Configuration CMake: {}", projectDir.string());
-
-        // Étape 1 : cmake ..
+        // Configure
         {
-            std::string cmd = "cd \"" + buildDir.string() + "\" && cmake ..";
+            std::ostringstream oss;
 #ifdef _WIN32
-            cmd = "cmd /C \"cd /D \"" + buildDir.string() + "\" && cmake ..\"";
+            oss << "cmd /C \"cd /D " << quote(buildDir.string()) << " && cmake ..\"";
+#else
+            oss << "cd " << quote(buildDir.string()) << " && cmake ..";
 #endif
+            const std::string cmd = oss.str();
+            logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Configure: {}", cmd);
             int code = std::system(cmd.c_str());
             if (code != 0)
             {
@@ -171,12 +420,19 @@ namespace Vix::Commands::RunCommand
             }
         }
 
-        // Étape 2 : build
+        // Build
         {
-            std::string cmd = "cd \"" + buildDir.string() + "\" && cmake --build . -j";
+            std::ostringstream oss;
 #ifdef _WIN32
-            cmd = "cmd /C \"cd /D \"" + buildDir.string() + "\" && cmake --build . --config Release\"";
+            oss << "cmd /C \"cd /D " << quote(buildDir.string())
+                << " && cmake --build . --config " << quote(opt.config) << "\"";
+#else
+            oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
+            if (opt.jobs > 0)
+                oss << " -j " << opt.jobs;
 #endif
+            const std::string cmd = oss.str();
+            logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Build: {}", cmd);
             int code = std::system(cmd.c_str());
             if (code != 0)
             {
@@ -186,27 +442,22 @@ namespace Vix::Commands::RunCommand
             }
         }
 
-        // Étape 3 : détecter le binaire
-        auto binOpt = detect_binary(buildDir, appName);
-        if (!binOpt || !fs::exists(*binOpt))
+        // Détecter et exécuter le binaire
+        if (auto binOpt = detect_binary(projectDir, preferredName, /*usedPresets*/ false, opt.config))
         {
-            logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
-                             "Aucun binaire trouvé dans '{}'.", buildDir.string());
-            return 1;
-        }
-        const fs::path bin = *binOpt;
-
-        // Étape 4 : Exécuter (+ arguments utilisateur)
-        const std::string argStr = join_args(appArgs);
-        std::string runCmd;
+            const std::string argStr = join_args(opt.appArgs);
 #ifdef _WIN32
-        runCmd = "cmd /C \"" + bin.string() + (argStr.empty() ? "" : " " + argStr) + "\"";
+            std::string runCmd = "cmd /C " + quote(binOpt->string() + (argStr.empty() ? "" : " " + argStr));
 #else
-        runCmd = bin.string() + (argStr.empty() ? "" : " " + argStr);
+            std::string runCmd = quote(binOpt->string()) + (argStr.empty() ? "" : " " + argStr);
 #endif
+            logger.logModule("RunCommand", Vix::Logger::Level::INFO,
+                             "Exécution: {}{}", binOpt->string(), (argStr.empty() ? "" : " " + argStr));
+            return std::system(runCmd.c_str());
+        }
 
-        logger.logModule("RunCommand", Vix::Logger::Level::INFO,
-                         "Exécution: {}{}", bin.string(), (argStr.empty() ? "" : " " + argStr));
-        return std::system(runCmd.c_str());
+        logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                         "Aucun binaire trouvé dans les dossiers de build.");
+        return 1;
     }
 }

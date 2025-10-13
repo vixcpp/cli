@@ -130,11 +130,11 @@ int main()
         return readme;
     }
 
-    // ------- CMakeLists template with package-first + fallback (portable) ------
+    // ------- CMakeLists template (core-only, Boost-enabled) ------
     static std::string make_cmakelists(const std::string &projectName)
     {
         std::string s;
-        s.reserve(16384);
+        s.reserve(9000);
 
         s += "cmake_minimum_required(VERSION 3.20)\n";
         s += "project(" + projectName + " LANGUAGES CXX)\n\n";
@@ -143,129 +143,48 @@ int main()
         s += "set(CMAKE_CXX_STANDARD 20)\n";
         s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
 
-        s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n";
-        s += "option(VIX_USE_INSTALLED \"Prefer installed Vix packages if available\" ON)\n\n";
+        s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n\n";
 
-        s += "# ===== Search prefixes (edit if your install lives elsewhere) =====\n";
-        s += "list(APPEND CMAKE_PREFIX_PATH\n";
+        s += "# ===== Prefixes (adjust if your install lives elsewhere) =====\n";
+        s += "list(APPEND CMAKE_PREFIX_PATH \n";
         s += "  \"/usr/local\"\n";
+        s += "  \"/usr/local/lib/cmake\"\n";
         s += "  \"/usr/local/lib/cmake/Vix\"\n";
-        s += "  \"/usr/local/lib/cmake/VixOrm\"\n";
         s += ")\n\n";
 
-        s += "# -----------------------------------------------------------------------------\n";
-        s += "# 1) Try installed packages (and pull their deps); otherwise, fall back\n";
-        s += "# -----------------------------------------------------------------------------\n";
-        s += "set(_VIX_INC \"/usr/local/include\")\n";
-        s += "set(_VIX_LIBDIR \"/usr/local/lib\")\n\n";
+        s += "# ❗ Disable ORM completely in generated apps (core-only)\n";
+        s += "set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)\n\n";
 
-        s += "set(_use_fallbacks OFF)\n";
-        s += "if (VIX_USE_INSTALLED)\n";
-        s += "  # Do not pull ORM in simple apps\n";
-        s += "  set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)\n\n";
-        s += "  find_package(Vix CONFIG QUIET)\n\n";
-        s += "  if (TARGET Vix::vix)\n";
-        s += "    # Ensure transitive deps exported by Vix exist (create shims if missing)\n";
-        s += "    find_package(spdlog CONFIG QUIET)\n";
-        s += "    if (NOT TARGET spdlog::spdlog_header_only)\n";
-        s += "      add_library(spdlog::spdlog_header_only INTERFACE IMPORTED)\n";
-        s += "      target_include_directories(spdlog::spdlog_header_only INTERFACE \"/usr/local/include\" \"/usr/include\")\n";
-        s += "      message(STATUS \"Shim: created spdlog::spdlog_header_only (headers only)\")\n";
-        s += "    endif()\n\n";
-        s += "    find_package(nlohmann_json CONFIG QUIET)\n";
-        s += "    if (NOT TARGET nlohmann_json::nlohmann_json)\n";
-        s += "      add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)\n";
-        s += "      target_include_directories(nlohmann_json::nlohmann_json INTERFACE \"/usr/local/include\" \"/usr/include\")\n";
-        s += "      message(STATUS \"Shim: created nlohmann_json::nlohmann_json (headers only)\")\n";
-        s += "    endif()\n\n";
-        s += "    find_package(Boost COMPONENTS filesystem QUIET)\n";
-        s += "    if (NOT TARGET Boost::filesystem)\n";
-        s += "      if (Boost_FOUND AND Boost_FILESYSTEM_LIBRARY)\n";
-        s += "        add_library(Boost::filesystem UNKNOWN IMPORTED)\n";
-        s += "        set_target_properties(Boost::filesystem PROPERTIES\n";
-        s += "          IMPORTED_LOCATION \"${Boost_FILESYSTEM_LIBRARY}\"\n";
-        s += "          INTERFACE_INCLUDE_DIRECTORIES \"${Boost_INCLUDE_DIRS}\")\n";
-        s += "        message(STATUS \"Using Boost::filesystem from ${Boost_FILESYSTEM_LIBRARY}\")\n";
-        s += "      else()\n";
-        s += "        message(WARNING \"Installed Vix requires Boost::filesystem but it was not found; falling back to local Vix targets.\")\n";
-        s += "        set(_use_fallbacks ON)\n";
-        s += "      endif()\n";
-        s += "    endif()\n";
-        s += "  else()\n";
-        s += "    set(_use_fallbacks ON)\n";
-        s += "  endif()\n";
-        s += "else()\n";
-        s += "  set(_use_fallbacks ON)\n";
-        s += "endif()\n\n";
-
-        s += "# -----------------------------------------------------------------------------\n";
-        s += "# 2) Fallbacks: build IMPORTED targets core/utils/json and umbrella Vix::vix\n";
-        s += "# -----------------------------------------------------------------------------\n";
-        s += "if (_use_fallbacks)\n";
-        s += "  message(WARNING \"Using local Vix fallbacks (core/utils/json + umbrella target)\")\n\n";
-        s += "  if (NOT TARGET Vix::core)\n";
-        s += "    find_library(VIX_CORE_LIB NAMES vix_core PATHS \"${_VIX_LIBDIR}\" NO_DEFAULT_PATH)\n";
-        s += "    if (VIX_CORE_LIB)\n";
-        s += "      add_library(Vix::core STATIC IMPORTED GLOBAL)\n";
-        s += "      set_target_properties(Vix::core PROPERTIES\n";
-        s += "        IMPORTED_LOCATION \"${VIX_CORE_LIB}\"\n";
-        s += "        INTERFACE_INCLUDE_DIRECTORIES \"${_VIX_INC}\")\n";
-        s += "      message(STATUS \"Fallback Vix::core at ${VIX_CORE_LIB}\")\n";
-        s += "    endif()\n";
-        s += "  endif()\n\n";
-        s += "  if (NOT TARGET Vix::utils)\n";
-        s += "    find_library(VIX_UTILS_LIB NAMES vix_utils PATHS \"${_VIX_LIBDIR}\" NO_DEFAULT_PATH)\n";
-        s += "    if (VIX_UTILS_LIB)\n";
-        s += "      add_library(Vix::utils STATIC IMPORTED GLOBAL)\n";
-        s += "      set_target_properties(Vix::utils PROPERTIES\n";
-        s += "        IMPORTED_LOCATION \"${VIX_UTILS_LIB}\"\n";
-        s += "        INTERFACE_INCLUDE_DIRECTORIES \"${_VIX_INC}\")\n";
-        s += "      message(STATUS \"Fallback Vix::utils at ${VIX_UTILS_LIB}\")\n";
-        s += "    endif()\n";
-        s += "  endif()\n\n";
-        s += "  if (NOT TARGET Vix::json AND EXISTS \"${_VIX_INC}/vix/json/json.hpp\")\n";
-        s += "    add_library(Vix::json INTERFACE IMPORTED GLOBAL)\n";
-        s += "    set_target_properties(Vix::json PROPERTIES\n";
-        s += "      INTERFACE_INCLUDE_DIRECTORIES \"${_VIX_INC}\")\n";
-        s += "    message(STATUS \"Fallback Vix::json headers at ${_VIX_INC}\")\n";
-        s += "  endif()\n\n";
-        s += "  if (NOT TARGET Vix::vix)\n";
-        s += "    set(_JSON_TGT \"\")\n";
-        s += "    if (TARGET Vix::json)\n";
-        s += "      set(_JSON_TGT \"Vix::json\")\n";
-        s += "    endif()\n";
-        s += "    if (TARGET Vix::core AND TARGET Vix::utils AND NOT _JSON_TGT STREQUAL \"\")\n";
-        s += "      add_library(Vix::vix INTERFACE IMPORTED GLOBAL)\n";
-        s += "      set_property(TARGET Vix::vix PROPERTY INTERFACE_LINK_LIBRARIES Vix::core;Vix::utils;${_JSON_TGT})\n";
-        s += "      set_property(TARGET Vix::vix PROPERTY INTERFACE_INCLUDE_DIRECTORIES \"${_VIX_INC}\")\n";
-        s += "      message(STATUS \"Created umbrella Vix::vix from fallbacks\")\n";
-        s += "    else()\n";
-        s += "      message(FATAL_ERROR \"Fallbacks incomplete: need core+utils+json\")\n";
-        s += "    endif()\n";
-        s += "  endif()\n";
-        s += "endif()\n\n";
-
-        s += "# -----------------------------------------------------------------------------\n";
-        s += "# 3) App target\n";
-        s += "# -----------------------------------------------------------------------------\n";
-        s += "add_executable(" + projectName + " src/main.cpp)\n";
-        s += "add_custom_target(run\n";
-        s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
-        s += "  DEPENDS " + projectName + "\n";
-        s += "  USES_TERMINAL\n";
-        s += "  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}\n";
-        s += ")\n";
-        s += "set_target_properties(" + projectName + " PROPERTIES\n";
-        s += "  RUNTIME_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}\"\n";
-        s += "  INSTALL_RPATH_USE_LINK_PATH ON\n";
-        s += ")\n";
-        s += "target_link_libraries(" + projectName + " PRIVATE Vix::vix)\n\n";
-
-        s += "# System deps\n";
+        s += "# ===== System deps first =====\n";
         s += "find_package(Threads REQUIRED)\n";
-        s += "target_link_libraries(" + projectName + " PRIVATE Threads::Threads)\n\n";
-
         s += "find_package(OpenSSL QUIET)\n";
+        s += "find_package(Boost REQUIRED COMPONENTS system thread filesystem)\n\n";
+
+        s += "# Optional: create a small shim if Boost::filesystem isn't exported\n";
+        s += "if (NOT TARGET Boost::filesystem)\n";
+        s += "  if (Boost_FOUND AND Boost_FILESYSTEM_LIBRARY)\n";
+        s += "    add_library(Boost::filesystem UNKNOWN IMPORTED)\n";
+        s += "    set_target_properties(Boost::filesystem PROPERTIES\n";
+        s += "      IMPORTED_LOCATION \"${Boost_FILESYSTEM_LIBRARY}\"\n";
+        s += "      INTERFACE_INCLUDE_DIRECTORIES \"${Boost_INCLUDE_DIRS}\")\n";
+        s += "    message(STATUS \"Shim: Using Boost::filesystem from ${Boost_FILESYSTEM_LIBRARY}\")\n";
+        s += "  else()\n";
+        s += "    message(FATAL_ERROR \"Boost::filesystem not found and no library path provided.\")\n";
+        s += "  endif()\n";
+        s += "endif()\n\n";
+
+        s += "# ===== Vix (core-only) =====\n";
+        s += "find_package(Vix CONFIG REQUIRED)\n\n";
+
+        s += "# ===== App target =====\n";
+        s += "add_executable(" + projectName + " src/main.cpp)\n\n";
+
+        s += "target_link_libraries(" + projectName + " PRIVATE\n";
+        s += "  Vix::vix\n";
+        s += "  Boost::system Boost::thread Boost::filesystem\n";
+        s += "  Threads::Threads\n";
+        s += ")\n\n";
+
         s += "if (OpenSSL_FOUND)\n";
         s += "  target_link_libraries(" + projectName + " PRIVATE OpenSSL::SSL OpenSSL::Crypto)\n";
         s += "endif()\n\n";
@@ -285,7 +204,20 @@ int main()
         s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
         s += "  target_compile_options(" + projectName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
         s += "  target_link_options(" + projectName + " PRIVATE -fsanitize=address,undefined)\n";
-        s += "endif()\n";
+        s += "endif()\n\n";
+
+        s += "# Run helper\n";
+        s += "add_custom_target(run\n";
+        s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
+        s += "  DEPENDS " + projectName + "\n";
+        s += "  USES_TERMINAL\n";
+        s += "  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}\n";
+        s += ")\n\n";
+
+        s += "set_target_properties(" + projectName + " PROPERTIES\n";
+        s += "  RUNTIME_OUTPUT_DIRECTORY \"${CMAKE_BINARY_DIR}\"\n";
+        s += "  INSTALL_RPATH_USE_LINK_PATH ON\n";
+        s += ")\n";
 
         return s;
     }
@@ -293,30 +225,32 @@ int main()
     // Makefile generator (cross-platform helper for Vix apps)
     std::string make_makefile(const std::string &projectName)
     {
-        (void)projectName; // not used, but kept for symmetry
+        (void)projectName;
         return R"(# =============================================================
 # Vix App — Cross-platform build helper
 # =============================================================
 # Usage:
-#   make build     → configure + build
-#   make run       → build + execute
-#   make clean     → delete build folder
-#   make rebuild   → full rebuild
+#   make build         → configure + build (ALL)
+#   make run           → build + run (via CMake target 'run')
+#   make clean         → delete build folders
+#   make rebuild       → full rebuild
+#   make preset=name   → override PRESET (e.g. make preset=dev-msvc run)
 # =============================================================
 
 PRESET ?= dev-ninja
-CMAKE = cmake
+CMAKE  ?= cmake
 
 all: build
 
-# Configure + build (uses preset)
+# Configure + build (ALL)
 build:
 	@$(CMAKE) --preset $(PRESET)
 	@$(CMAKE) --build --preset $(PRESET)
 
-# Run target defined in CMakeLists (cross-platform)
+# Build + run via custom CMake target 'run'
 run:
-	@$(CMAKE) --build --preset $(PRESET)
+	@$(CMAKE) --preset $(PRESET)
+	@$(CMAKE) --build --preset $(PRESET) --target run
 
 # Clean all builds
 clean:
@@ -324,15 +258,16 @@ clean:
 
 # Force a full rebuild
 rebuild: clean build
+
+# Allow overriding preset from CLI: `make preset=dev-msvc run`
+preset:
+	@:
 )";
     }
 
     // CMakePresets.json generator (cross-platform presets: Ninja + MSVC)
     std::string make_cmake_presets_json()
     {
-        // NOTE:
-        // - Raw string with a custom delimiter (JSON) to avoid accidental )" collisions.
-        // - Removed unnecessary "strategy" in the MSVC architecture block (simpler, widely supported).
         return R"JSON({
   "version": 6,
   "configurePresets": [
@@ -342,8 +277,7 @@ rebuild: clean build
       "generator": "Ninja",
       "binaryDir": "build-ninja",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release",
-        "VIX_USE_INSTALLED": "OFF"
+        "CMAKE_BUILD_TYPE": "Release"
       }
     },
     {
@@ -353,20 +287,31 @@ rebuild: clean build
       "architecture": { "value": "x64" },
       "binaryDir": "build-msvc",
       "cacheVariables": {
-        "VIX_USE_INSTALLED": "OFF"
+        "CMAKE_CONFIGURATION_TYPES": "Release"
       }
     }
   ],
   "buildPresets": [
     {
-      "name": "dev-ninja",
-      "displayName": "Build+Run (Ninja)",
+      "name": "build-ninja",
+      "displayName": "Build (ALL, Ninja)",
+      "configurePreset": "dev-ninja"
+    },
+    {
+      "name": "run-ninja",
+      "displayName": "Run (target=run, Ninja)",
       "configurePreset": "dev-ninja",
       "targets": ["run"]
     },
     {
-      "name": "dev-msvc",
-      "displayName": "Build+Run (MSVC)",
+      "name": "build-msvc",
+      "displayName": "Build (ALL, MSVC)",
+      "configurePreset": "dev-msvc",
+      "configuration": "Release"
+    },
+    {
+      "name": "run-msvc",
+      "displayName": "Run (target=run, MSVC)",
       "configurePreset": "dev-msvc",
       "configuration": "Release",
       "targets": ["run"]

@@ -341,7 +341,6 @@ preset:
       "targets": ["run"]
     },
 
-    // --- Aliases pour compat avec Makefile/CLI qui utilisent le même nom ---
     {
       "name": "dev-ninja",
       "displayName": "Alias: dev-ninja → build (Ninja)",

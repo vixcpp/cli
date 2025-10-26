@@ -27,7 +27,7 @@ cmake_minimum_required(VERSION 3.20)
 #   When built from the umbrella project, the CLI inherits global flags
 #   and links against core Vix modules via Vix::vix.
 # ====================================================================
-project(vix_cli VERSION 0.1.0 LANGUAGES CXX)
+project(vix_cli VERSION 1.4.1 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)

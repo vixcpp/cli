@@ -19,7 +19,7 @@ namespace
 
     // --------- Minimal hello-world server (API Vix moderne) ----------
     constexpr const char *kMainCpp = R"(#include <vix.hpp>
-using namespace Vix;
+using namespace vix;
 
 int main()
 {
@@ -133,7 +133,7 @@ int main()
     static std::string make_cmakelists(const std::string &projectName)
     {
         std::string s;
-        s.reserve(9000);
+        s.reserve(14000);
 
         s += "cmake_minimum_required(VERSION 3.20)\n";
         s += "project(" + projectName + " LANGUAGES CXX)\n\n";
@@ -148,7 +148,8 @@ int main()
         s += "list(APPEND CMAKE_PREFIX_PATH \n";
         s += "  \"/usr/local\"\n";
         s += "  \"/usr/local/lib/cmake\"\n";
-        s += "  \"/usr/local/lib/cmake/Vix\"\n";
+        s += "  \"/usr/local/lib/cmake/vix\"  # new lowercase package dir\n";
+        s += "  \"/usr/local/lib/cmake/Vix\"  # legacy package dir (exports fmt::fmt)\n";
         s += ")\n\n";
 
         s += "# ❗ Disable ORM completely in generated apps (core-only)\n";
@@ -172,14 +173,49 @@ int main()
         s += "  endif()\n";
         s += "endif()\n\n";
 
-        s += "# ===== Vix (core-only) =====\n";
-        s += "find_package(Vix CONFIG REQUIRED)\n\n";
+        s += "# ===== fmt shim (must be BEFORE find_package(Vix/vix)) =====\n";
+        s += "# Some legacy Vix packages export vix::utils with fmt::fmt in interface.\n";
+        s += "# To avoid configure errors, ensure fmt::fmt exists (alias header-only or dummy).\n";
+        s += "find_package(fmt QUIET)\n";
+        s += "if (TARGET fmt::fmt-header-only AND NOT TARGET fmt::fmt)\n";
+        s += "  add_library(fmt::fmt ALIAS fmt::fmt-header-only)\n";
+        s += "endif()\n";
+        s += "if (NOT TARGET fmt::fmt)\n";
+        s += "  add_library(fmt::fmt INTERFACE IMPORTED)\n";
+        s += "  target_include_directories(fmt::fmt INTERFACE \"/usr/include\" \"/usr/local/include\")\n";
+        s += "endif()\n\n";
+
+        s += "# ===== Vix (core-only) — prefer new lowercase package, keep legacy fallback =====\n";
+        s += "set(vix_FOUND FALSE)\n";
+        s += "find_package(vix QUIET CONFIG)        # new\n";
+        s += "if (vix_FOUND)\n";
+        s += "  message(STATUS \"Found vix (lowercase) package config\")\n";
+        s += "else()\n";
+        s += "  find_package(Vix QUIET CONFIG)       # legacy\n";
+        s += "  if (Vix_FOUND)\n";
+        s += "    message(STATUS \"Found Vix (legacy) package config\")\n";
+        s += "    set(vix_FOUND TRUE)\n";
+        s += "  endif()\n";
+        s += "endif()\n\n";
+
+        s += "if (NOT vix_FOUND)\n";
+        s += "  message(FATAL_ERROR \"Could not find Vix/vix package config. Set CMAKE_PREFIX_PATH to your install prefix.\")\n";
+        s += "endif()\n\n";
+
+        s += "# Decide main target name (new vs legacy namespace)\n";
+        s += "if (TARGET vix::vix)\n";
+        s += "  set(VIX_MAIN_TARGET vix::vix)\n";
+        s += "elseif (TARGET Vix::vix)\n";
+        s += "  set(VIX_MAIN_TARGET Vix::vix)\n";
+        s += "else()\n";
+        s += "  message(FATAL_ERROR \"Neither vix::vix nor Vix::vix target exists. Check your Vix/vix installation.\")\n";
+        s += "endif()\n\n";
 
         s += "# ===== App target =====\n";
         s += "add_executable(" + projectName + " src/main.cpp)\n\n";
 
         s += "target_link_libraries(" + projectName + " PRIVATE\n";
-        s += "  Vix::vix\n";
+        s += "  ${VIX_MAIN_TARGET}\n";
         s += "  Boost::system Boost::thread Boost::filesystem\n";
         s += "  Threads::Threads\n";
         s += ")\n\n";

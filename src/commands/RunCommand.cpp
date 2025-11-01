@@ -230,8 +230,8 @@ namespace vix::commands::RunCommand
 
         // 2) Choisir run preset (ou build preset avec target run)
         const std::string runPreset = choose_run_preset(projectDir, opt.preset, opt.runPreset);
-        logger.logModule("RunCommand", Logger::Level::INFO,
-                         "Selected run preset: {}", runPreset);
+        // logger.logModule("RunCommand", Logger::Level::INFO,
+        //                  "Selected run preset: {}", runPreset);
 
         // 3) Build + run (target run)
         {
@@ -249,12 +249,12 @@ namespace vix::commands::RunCommand
                 oss << " -- -j " << opt.jobs; // backend args
 #endif
             const std::string cmd = oss.str();
-            logger.logModule("RunCommand", Logger::Level::INFO, "Run (preset): {}", cmd);
+            // logger.logModule("RunCommand", Logger::Level::INFO, "Run (preset): {}", cmd);
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("RunCommand", Logger::Level::ERROR,
-                                 "Execution failed (run preset '{}', code {}).", runPreset, code);
+                // logger.logModule("RunCommand", Logger::Level::ERROR,
+                //                  "Execution failed (run preset '{}', code {}).", runPreset, code);
                 return code;
             }
         }

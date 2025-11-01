@@ -504,13 +504,15 @@ preset:
 
 namespace vix::commands::NewCommand
 {
+    using Logger = vix::utils::Logger;
+
     int run(const std::vector<std::string> &args)
     {
-        auto &logger = ::Vix::Logger::getInstance();
+        auto &logger = Logger::getInstance();
 
         if (args.empty())
         {
-            logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+            logger.logModule("NewCommand", Logger::Level::ERROR,
                              "Usage: vix new <name|path> [-d|--dir <base_dir>]");
             return 1;
         }
@@ -528,7 +530,7 @@ namespace vix::commands::NewCommand
                 fs::path base = fs::path(*baseOpt);
                 if (!fs::exists(base) || !fs::is_directory(base))
                 {
-                    logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+                    logger.logModule("NewCommand", Logger::Level::ERROR,
                                      "Base directory '{}' is invalid.", base.string());
                     return 2;
                 }
@@ -554,7 +556,7 @@ namespace vix::commands::NewCommand
             // Safety: don't overwrite a NON-empty directory
             if (fs::exists(projectDir) && !is_dir_empty(projectDir))
             {
-                logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+                logger.logModule("NewCommand", Logger::Level::ERROR,
                                  "Directory '{}' already exists and is not empty.", projectDir.string());
                 return 3;
             }
@@ -567,11 +569,11 @@ namespace vix::commands::NewCommand
             write_text_file(presetsFile, make_cmake_presets_json());
             write_text_file(makefilePath, make_makefile(projectDir.filename().string()));
 
-            logger.logModule("NewCommand", ::Vix::Logger::Level::INFO,
+            logger.logModule("NewCommand", Logger::Level::INFO,
                              "✅ Project '{}' created at {}", projectDir.filename().string(), projectDir.string());
 
             // ✨ Simplified quick-start message (aligns with vix help + README)
-            logger.logModule("NewCommand", ::Vix::Logger::Level::INFO,
+            logger.logModule("NewCommand", Logger::Level::INFO,
                              "Next steps:\n"
                              "  cd \"{0}\"\n"
                              "  vix build\n"
@@ -582,7 +584,7 @@ namespace vix::commands::NewCommand
         }
         catch (const std::exception &ex)
         {
-            logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
+            logger.logModule("NewCommand", Logger::Level::ERROR,
                              "Failed to create project: {}", ex.what());
             return 4;
         }

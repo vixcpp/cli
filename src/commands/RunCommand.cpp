@@ -15,6 +15,8 @@ namespace fs = std::filesystem;
 
 namespace vix::commands::RunCommand
 {
+    using Logger = vix::utils::Logger;
+
     namespace
     {
         struct Options
@@ -192,14 +194,14 @@ namespace vix::commands::RunCommand
 
     int run(const std::vector<std::string> &args)
     {
-        auto &logger = Vix::Logger::getInstance();
+        auto &logger = Logger::getInstance();
         const Options opt = parse(args);
         const fs::path cwd = fs::current_path();
 
         auto projectDirOpt = choose_project_dir(opt, cwd);
         if (!projectDirOpt)
         {
-            logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+            logger.logModule("RunCommand", Logger::Level::ERROR,
                              "Unable to determine the project folder. Try: `vix run --dir <path>`.");
             return 1;
         }
@@ -216,11 +218,11 @@ namespace vix::commands::RunCommand
                 << " && cmake --preset " << quote(opt.preset);
 #endif
             const std::string cmd = oss.str();
-            logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Configure (preset): {}", cmd);
+            logger.logModule("RunCommand", Logger::Level::INFO, "Configure (preset): {}", cmd);
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                logger.logModule("RunCommand", Logger::Level::ERROR,
                                  "Failed to configure with preset '{}' (code {}).", opt.preset, code);
                 return code;
             }
@@ -228,7 +230,7 @@ namespace vix::commands::RunCommand
 
         // 2) Choisir run preset (ou build preset avec target run)
         const std::string runPreset = choose_run_preset(projectDir, opt.preset, opt.runPreset);
-        logger.logModule("RunCommand", Vix::Logger::Level::INFO,
+        logger.logModule("RunCommand", Logger::Level::INFO,
                          "Selected run preset: {}", runPreset);
 
         // 3) Build + run (target run)
@@ -247,17 +249,17 @@ namespace vix::commands::RunCommand
                 oss << " -- -j " << opt.jobs; // backend args
 #endif
             const std::string cmd = oss.str();
-            logger.logModule("RunCommand", Vix::Logger::Level::INFO, "Run (preset): {}", cmd);
+            logger.logModule("RunCommand", Logger::Level::INFO, "Run (preset): {}", cmd);
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
+                logger.logModule("RunCommand", Logger::Level::ERROR,
                                  "Execution failed (run preset '{}', code {}).", runPreset, code);
                 return code;
             }
         }
 
-        logger.logModule("RunCommand", Vix::Logger::Level::INFO, "🏃 Application started (preset: {}).", runPreset);
+        logger.logModule("RunCommand", Logger::Level::INFO, "🏃 Application started (preset: {}).", runPreset);
         return 0;
     }
 }

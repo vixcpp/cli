@@ -14,6 +14,8 @@ namespace fs = std::filesystem;
 
 namespace vix::commands::BuildCommand
 {
+    using Logger = vix::utils::Logger;
+
     namespace
     {
         // ---------------------------------------------------------------------
@@ -257,14 +259,14 @@ namespace vix::commands::BuildCommand
     // -------------------------------------------------------------------------
     int run(const std::vector<std::string> &args)
     {
-        auto &logger = Vix::Logger::getInstance();
+        auto &logger = Logger::getInstance();
         const Options opt = parse_args(args);
         const fs::path cwd = fs::current_path();
 
         auto projectDirOpt = choose_project_dir(opt, cwd);
         if (!projectDirOpt)
         {
-            logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+            logger.logModule("BuildCommand", Logger::Level::ERROR,
                              "Impossible de déterminer le dossier projet.\n"
                              "Essayez: `vix build --dir <chemin>` ou lancez la commande depuis le dossier du projet.");
             return 1;
@@ -284,11 +286,11 @@ namespace vix::commands::BuildCommand
                     << " && cmake --preset " << quote(opt.preset);
 #endif
                 const std::string cmd = oss.str();
-                logger.logModule("BuildCommand", Vix::Logger::Level::INFO, "Configure (preset): {}", cmd);
+                logger.logModule("BuildCommand", Logger::Level::INFO, "Configure (preset): {}", cmd);
                 const int code = std::system(cmd.c_str());
                 if (code != 0)
                 {
-                    logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+                    logger.logModule("BuildCommand", Logger::Level::ERROR,
                                      "Échec configuration avec preset '{}' (code {}).", opt.preset, code);
                     return code;
                 }
@@ -296,7 +298,7 @@ namespace vix::commands::BuildCommand
 
             // 2) Choix build preset
             const std::string buildPreset = choose_build_preset(projectDir, opt.preset, opt.buildPreset);
-            logger.logModule("BuildCommand", Vix::Logger::Level::INFO,
+            logger.logModule("BuildCommand", Logger::Level::INFO,
                              "Build preset sélectionné: {}", buildPreset);
 
             // 3) Build
@@ -321,17 +323,17 @@ namespace vix::commands::BuildCommand
                     oss << " -- -j " << opt.jobs; // backend args
 #endif
                 const std::string cmd = oss.str();
-                logger.logModule("BuildCommand", Vix::Logger::Level::INFO, "Build (preset): {}", cmd);
+                logger.logModule("BuildCommand", Logger::Level::INFO, "Build (preset): {}", cmd);
                 const int code = std::system(cmd.c_str());
                 if (code != 0)
                 {
-                    logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+                    logger.logModule("BuildCommand", Logger::Level::ERROR,
                                      "Erreur compilation (build preset '{}', code {}).", buildPreset, code);
                     return code;
                 }
             }
 
-            logger.logModule("BuildCommand", Vix::Logger::Level::INFO,
+            logger.logModule("BuildCommand", Logger::Level::INFO,
                              "✅ Build terminé (preset config: {}, preset build: {}).", opt.preset, buildPreset);
             return 0;
         }
@@ -345,18 +347,18 @@ namespace vix::commands::BuildCommand
             fs::remove_all(buildDir, ec);
             if (ec)
             {
-                logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+                logger.logModule("BuildCommand", Logger::Level::ERROR,
                                  "Échec du nettoyage du dossier build: {}", ec.message());
                 return 1;
             }
-            logger.logModule("BuildCommand", Vix::Logger::Level::INFO, "Dossier build/ nettoyé.");
+            logger.logModule("BuildCommand", Logger::Level::INFO, "Dossier build/ nettoyé.");
         }
 
         std::error_code ec;
         fs::create_directories(buildDir, ec);
         if (ec)
         {
-            logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+            logger.logModule("BuildCommand", Logger::Level::ERROR,
                              "Impossible de créer le dossier build: {}", ec.message());
             return 1;
         }
@@ -376,11 +378,11 @@ namespace vix::commands::BuildCommand
 #endif
             const std::string cmd = oss.str();
 
-            logger.logModule("BuildCommand", Vix::Logger::Level::INFO, "Configure: {}", cmd);
+            logger.logModule("BuildCommand", Logger::Level::INFO, "Configure: {}", cmd);
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+                logger.logModule("BuildCommand", Logger::Level::ERROR,
                                  "Échec de la configuration CMake (code {}).", code);
                 return code;
             }
@@ -404,17 +406,17 @@ namespace vix::commands::BuildCommand
 #endif
             const std::string cmd = oss.str();
 
-            logger.logModule("BuildCommand", Vix::Logger::Level::INFO, "Build: {}", cmd);
+            logger.logModule("BuildCommand", Logger::Level::INFO, "Build: {}", cmd);
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("BuildCommand", Vix::Logger::Level::ERROR,
+                logger.logModule("BuildCommand", Logger::Level::ERROR,
                                  "Erreur lors de la compilation (code {}).", code);
                 return code;
             }
         }
 
-        logger.logModule("BuildCommand", Vix::Logger::Level::INFO,
+        logger.logModule("BuildCommand", Logger::Level::INFO,
                          "✅ Build terminé pour: {}", projectDir.string());
         return 0;
     }

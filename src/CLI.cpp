@@ -67,6 +67,8 @@
 
 namespace vix
 {
+    using Logger = vix::utils::Logger;
+
     CLI::CLI()
     {
         // Base commands

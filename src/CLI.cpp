@@ -65,7 +65,7 @@
 #include <iostream>
 #include <unordered_map>
 
-namespace Vix
+namespace vix
 {
     CLI::CLI()
     {
@@ -77,11 +77,11 @@ namespace Vix
 
         // Main CLI commands
         commands_["new"] = [](auto args)
-        { return Commands::NewCommand::run(args); };
+        { return commands::NewCommand::run(args); };
         commands_["run"] = [](auto args)
-        { return Commands::RunCommand::run(args); };
+        { return commands::RunCommand::run(args); };
         commands_["build"] = [](auto args)
-        { return Commands::BuildCommand::run(args); };
+        { return commands::BuildCommand::run(args); };
 
         // Useful aliases
         commands_["-h"] = [this](auto args)

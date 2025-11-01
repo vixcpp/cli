@@ -44,7 +44,7 @@
 #include <iostream>
 #include <vector>
 
-namespace Vix
+namespace vix
 {
     /**
      * @class CLI

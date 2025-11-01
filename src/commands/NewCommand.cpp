@@ -75,10 +75,10 @@ int main()
         readme += "---\n\n";
 
         readme += "## 🔧 Build and Run\n\n";
-        readme += "### 🐧 Linux / macOS\n\n";
+        readme += "### 🐧 Linux / macOS / Windows\n\n";
         readme += "```bash\n";
-        readme += "make build      # Configure + build (via preset)\n";
-        readme += "make run        # Build and execute\n";
+        readme += "vix build      # Build the project\n";
+        readme += "vix run        # Run the project\n";
         readme += "```\n\n";
 
         readme += "### or manually with CMake:\n\n";
@@ -96,13 +96,12 @@ int main()
         readme += "---\n\n";
 
         readme += "## 🧰 Useful Commands\n\n";
-        readme += "| Command                      | Description                             |\n";
-        readme += "| ---------------------------- | --------------------------------------- |\n";
-        readme += "| `make build`                 | Configure and build with default preset |\n";
-        readme += "| `make run`                   | Build and run the app                   |\n";
-        readme += "| `make clean`                 | Remove all build folders                |\n";
-        readme += "| `make rebuild`               | Clean and rebuild everything            |\n";
-        readme += "| `make PRESET=dev-msvc build` | Build with custom preset (e.g. Windows) |\n\n";
+        readme += "| Command            | Description                  |\n";
+        readme += "| ------------------ | ---------------------------- |\n";
+        readme += "| `vix build`        | Build the project            |\n";
+        readme += "| `vix run`          | Run the project              |\n";
+        readme += "| `vix build --clean`| Clean and rebuild the project|\n";
+        readme += "| `vix help`         | Show CLI help menu           |\n\n";
         readme += "---\n\n";
 
         readme += "## ⚡ Example Output\n\n";
@@ -503,7 +502,7 @@ preset:
 
 } // namespace
 
-namespace Vix::Commands::NewCommand
+namespace vix::commands::NewCommand
 {
     int run(const std::vector<std::string> &args)
     {
@@ -523,7 +522,7 @@ namespace Vix::Commands::NewCommand
         {
             fs::path dest;
 
-            // Si -d/--dir est fourni → on résout base + nom (en respectant absolu/relatif)
+            // If -d/--dir is provided → resolve base + name (respect abs/rel)
             if (baseOpt.has_value())
             {
                 fs::path base = fs::path(*baseOpt);
@@ -534,12 +533,12 @@ namespace Vix::Commands::NewCommand
                     return 2;
                 }
                 fs::path np = fs::path(nameOrPath);
-                // base est existant → canonical OK
+                // base exists → canonical OK
                 dest = np.is_absolute() ? np : (fs::canonical(base) / np);
             }
             else
             {
-                // Pas de base explicite : on respecte absolu/relatif tel que fourni par l'utilisateur
+                // No explicit base: respect abs/rel as provided by the user
                 fs::path np = fs::path(nameOrPath);
                 dest = np.is_absolute() ? np : (fs::current_path() / np);
             }
@@ -552,7 +551,7 @@ namespace Vix::Commands::NewCommand
             const fs::path presetsFile = projectDir / "CMakePresets.json";
             const fs::path makefilePath = projectDir / "Makefile";
 
-            // Sécurité : ne pas écraser un dossier NON vide
+            // Safety: don't overwrite a NON-empty directory
             if (fs::exists(projectDir) && !is_dir_empty(projectDir))
             {
                 logger.logModule("NewCommand", ::Vix::Logger::Level::ERROR,
@@ -560,7 +559,7 @@ namespace Vix::Commands::NewCommand
                 return 3;
             }
 
-            // Arborescence + fichiers
+            // Structure + files
             fs::create_directories(srcDir);
             write_text_file(mainCpp, kMainCpp);
             write_text_file(cmakeLists, make_cmakelists(projectDir.filename().string()));
@@ -571,22 +570,12 @@ namespace Vix::Commands::NewCommand
             logger.logModule("NewCommand", ::Vix::Logger::Level::INFO,
                              "✅ Project '{}' created at {}", projectDir.filename().string(), projectDir.string());
 
-            // Conseils multiplateforme (presets + Makefile)
+            // ✨ Simplified quick-start message (aligns with vix help + README)
             logger.logModule("NewCommand", ::Vix::Logger::Level::INFO,
-                             "Build & Run (Linux/macOS with Ninja):\n"
+                             "Next steps:\n"
                              "  cd \"{0}\"\n"
-                             "  cmake --preset dev-ninja\n"
-                             "  cmake --build --preset dev-ninja\n"
-                             "\n"
-                             "Build & Run (Windows, Visual Studio 2022):\n"
-                             "  cd \"{0}\"\n"
-                             "  cmake --preset dev-msvc\n"
-                             "  cmake --build --preset dev-msvc\n"
-                             "\n"
-                             "Or using Makefile helpers (default preset=dev-ninja):\n"
-                             "  cd \"{0}\"\n"
-                             "  make build\n"
-                             "  make run",
+                             "  vix build\n"
+                             "  vix run",
                              projectDir.string());
 
             return 0;
@@ -598,4 +587,5 @@ namespace Vix::Commands::NewCommand
             return 4;
         }
     }
+
 } // namespace Vix::Commands::NewCommand

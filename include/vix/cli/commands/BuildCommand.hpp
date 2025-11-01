@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Vix::Commands::BuildCommand
+namespace vix::commands::BuildCommand
 {
     int run(const std::vector<std::string> &args);
 }

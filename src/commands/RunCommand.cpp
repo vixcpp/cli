@@ -13,7 +13,7 @@
 
 namespace fs = std::filesystem;
 
-namespace Vix::Commands::RunCommand
+namespace vix::commands::RunCommand
 {
     namespace
     {
@@ -200,7 +200,7 @@ namespace Vix::Commands::RunCommand
         if (!projectDirOpt)
         {
             logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
-                             "Impossible de déterminer le dossier projet. Essayez: `vix run --dir <chemin>`.");
+                             "Unable to determine the project folder. Try: `vix run --dir <path>`.");
             return 1;
         }
         const fs::path projectDir = *projectDirOpt;
@@ -221,7 +221,7 @@ namespace Vix::Commands::RunCommand
             if (code != 0)
             {
                 logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
-                                 "Échec configuration avec preset '{}' (code {}).", opt.preset, code);
+                                 "Failed to configure with preset '{}' (code {}).", opt.preset, code);
                 return code;
             }
         }
@@ -229,7 +229,7 @@ namespace Vix::Commands::RunCommand
         // 2) Choisir run preset (ou build preset avec target run)
         const std::string runPreset = choose_run_preset(projectDir, opt.preset, opt.runPreset);
         logger.logModule("RunCommand", Vix::Logger::Level::INFO,
-                         "Run preset sélectionné: {}", runPreset);
+                         "Selected run preset: {}", runPreset);
 
         // 3) Build + run (target run)
         {
@@ -252,12 +252,12 @@ namespace Vix::Commands::RunCommand
             if (code != 0)
             {
                 logger.logModule("RunCommand", Vix::Logger::Level::ERROR,
-                                 "Échec exécution (run preset '{}', code {}).", runPreset, code);
+                                 "Execution failed (run preset '{}', code {}).", runPreset, code);
                 return code;
             }
         }
 
-        logger.logModule("RunCommand", Vix::Logger::Level::INFO, "🏃 Application lancée (preset: {}).", runPreset);
+        logger.logModule("RunCommand", Vix::Logger::Level::INFO, "🏃 Application started (preset: {}).", runPreset);
         return 0;
     }
 }

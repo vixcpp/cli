@@ -24,7 +24,7 @@ It manages your projects, builds them efficiently, and runs them instantly.
 - 🚀 **Instant execution** — `vix run` builds (if needed) and launches automatically.
 - 📦 **Portable binary** — works as a standalone executable or within the full Vix suite.
 - 🧠 **Minimal dependencies** — written in clean, modern C++20.
-- 🎨 **Rich logging** — colorized output powered by `Vix::Logger`.
+- 🎨 **Rich logging** — colorized output powered by `vix::Logger`.
 
 ---
 

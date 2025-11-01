@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Vix::Commands::NewCommand
+namespace vix::commands::NewCommand
 {
 
     /**

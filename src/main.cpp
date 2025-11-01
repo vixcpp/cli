@@ -6,7 +6,7 @@ int main(int argc, char **argv)
 {
     try
     {
-        Vix::CLI cli;
+        vix::CLI cli;
         return cli.run(argc, argv);
     }
     catch (const std::exception &ex)

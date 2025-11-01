@@ -12,7 +12,7 @@
 
 namespace fs = std::filesystem;
 
-namespace Vix::Commands::BuildCommand
+namespace vix::commands::BuildCommand
 {
     namespace
     {

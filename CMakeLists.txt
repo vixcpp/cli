@@ -25,7 +25,7 @@ cmake_minimum_required(VERSION 3.20)
 #
 # Integration (preferred)
 #   When built from the umbrella project, the CLI inherits global flags
-#   and links against core Vix modules via Vix::vix.
+#   and links against core Vix modules via vix::vix.
 # ====================================================================
 project(vix_cli VERSION 1.4.2 LANGUAGES CXX)
 
@@ -47,7 +47,7 @@ file(GLOB_RECURSE CLI_SOURCES
 
 add_executable(vix_cli ${CLI_SOURCES})
 # Alias (handy for umbrella exports/imports). CMake supports ALIAS for executables.
-add_executable(Vix::cli ALIAS vix_cli)
+add_executable(vix::cli ALIAS vix_cli)
 
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -78,26 +78,26 @@ endif()
 
 # ---------------- Dependencies -----------------------
 # Priority:
-#  1) If umbrella target exists → link Vix::vix (brings all modules).
-#  2) Else try find_package(Vix) and link Vix::vix.
-#  3) Else, as a minimal fallback, link Vix::utils (must be provided).
-if (TARGET Vix::vix)
-  target_link_libraries(vix_cli PRIVATE Vix::vix)
+#  1) If umbrella target exists → link vix::vix (brings all modules).
+#  2) Else try find_package(Vix) and link vix::vix.
+#  3) Else, as a minimal fallback, link vix::utils (must be provided).
+if (TARGET vix::vix)
+  target_link_libraries(vix_cli PRIVATE vix::vix)
 else()
   find_package(Vix QUIET CONFIG)
-  if (Vix_FOUND AND TARGET Vix::vix)
-    target_link_libraries(vix_cli PRIVATE Vix::vix)
-  elseif (TARGET Vix::utils)
-    target_link_libraries(vix_cli PRIVATE Vix::utils)
+  if (Vix_FOUND AND TARGET vix::vix)
+    target_link_libraries(vix_cli PRIVATE vix::vix)
+  elseif (TARGET vix::utils)
+    target_link_libraries(vix_cli PRIVATE vix::utils)
   else()
     # Last attempt: try to locate Vix package for utils only
     find_package(Vix QUIET CONFIG)
-    if (TARGET Vix::utils)
-      target_link_libraries(vix_cli PRIVATE Vix::utils)
+    if (TARGET vix::utils)
+      target_link_libraries(vix_cli PRIVATE vix::utils)
     else()
       message(FATAL_ERROR
         "Missing dependencies. Build this module via the umbrella project "
-        "(target Vix::vix) or install the Vix package that exports Vix::utils.")
+        "(target vix::vix) or install the Vix package that exports vix::utils.")
     endif()
   endif()
 endif()

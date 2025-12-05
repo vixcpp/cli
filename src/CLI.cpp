@@ -55,7 +55,6 @@
  * @authors
  * SoftAdAstra
  */
-
 #include <vix/cli/CLI.hpp>
 #include <vix/cli/commands/NewCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
@@ -64,11 +63,86 @@
 
 #include <iostream>
 #include <unordered_map>
+#include <vector>
+#include <string>
+#include <optional>
+#include <cstdlib>   // std::getenv
+#include <algorithm> // std::transform
+#include <cctype>    // std::tolower
 
 namespace vix
 {
     using Logger = vix::utils::Logger;
 
+    namespace
+    {
+        // -------------------------------------------------------------
+        // Helpers for log-level parsing
+        // -------------------------------------------------------------
+
+        std::string to_lower_copy(std::string s)
+        {
+            std::transform(s.begin(), s.end(), s.begin(),
+                           [](unsigned char c)
+                           { return static_cast<char>(std::tolower(c)); });
+            return s;
+        }
+
+        std::optional<Logger::Level> parse_log_level(const std::string &raw)
+        {
+            const std::string s = to_lower_copy(raw);
+
+            if (s == "trace")
+                return Logger::Level::TRACE;
+            if (s == "debug")
+                return Logger::Level::DEBUG;
+            if (s == "info")
+                return Logger::Level::INFO;
+            if (s == "warn" || s == "warning")
+                return Logger::Level::WARN;
+            if (s == "error" || s == "err")
+                return Logger::Level::ERROR;
+            if (s == "critical" || s == "fatal")
+                return Logger::Level::CRITICAL;
+
+            return std::nullopt;
+        }
+
+        void apply_log_level_from_env(Logger &logger)
+        {
+            if (const char *env = std::getenv("VIX_LOG_LEVEL"))
+            {
+                std::string value(env);
+                if (auto lvl = parse_log_level(value))
+                {
+                    logger.setLevel(*lvl);
+                }
+                else
+                {
+                    std::cerr << "vix: invalid VIX_LOG_LEVEL value '" << value
+                              << "'. Expected one of: trace, debug, info, warn, error, critical.\n";
+                }
+            }
+        }
+
+        void apply_log_level_from_flag(Logger &logger, const std::string &value)
+        {
+            if (auto lvl = parse_log_level(value))
+            {
+                logger.setLevel(*lvl);
+            }
+            else
+            {
+                std::cerr << "vix: invalid --log-level value '" << value
+                          << "'. Expected one of: trace, debug, info, warn, error, critical.\n";
+            }
+        }
+
+    } // namespace
+
+    // -----------------------------------------------------------------
+    // CLI constructor — register commands
+    // -----------------------------------------------------------------
     CLI::CLI()
     {
         // Base commands
@@ -85,7 +159,7 @@ namespace vix
         commands_["build"] = [](auto args)
         { return commands::BuildCommand::run(args); };
 
-        // Useful aliases
+        // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
         { return help(args); };
         commands_["--help"] = [this](auto args)
@@ -104,20 +178,149 @@ namespace vix
         };
     }
 
+    // -----------------------------------------------------------------
+    // CLI::run — entry point for the vix binary
+    // -----------------------------------------------------------------
     int CLI::run(int argc, char **argv)
     {
         auto &logger = Logger::getInstance();
 
         if (argc < 2)
         {
-            logger.log(Logger::Level::WARN, "Usage: vix <command> [options]");
-            help({});
-            return 1;
+            // No command → global help
+            return help({});
         }
 
-        std::string cmd = argv[1];
-        std::vector<std::string> args(argv + 2, argv + argc);
+        // ----------------------------------------------------------
+        // 1) Global options: --verbose / --quiet / -q / --log-level
+        //    Syntax:
+        //      vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]
+        //    Examples:
+        //      vix --verbose run myapp
+        //      vix --quiet build
+        //      VIX_LOG_LEVEL=debug vix run myapp
+        //      vix --log-level warn run myapp
+        // ----------------------------------------------------------
+        enum class VerbosityMode
+        {
+            Default,
+            Verbose,
+            Quiet
+        };
 
+        VerbosityMode verbosity = VerbosityMode::Default;
+        std::optional<std::string> logLevelFlag;
+        int index = 1;
+
+        // 1.a Apply environment variable first (base level)
+        //     CLI flags may override this later.
+        apply_log_level_from_env(logger);
+
+        // 1.b Parse leading global options
+        while (index < argc)
+        {
+            std::string arg = argv[index];
+
+            if (arg == "--verbose")
+            {
+                verbosity = VerbosityMode::Verbose;
+                ++index;
+                continue;
+            }
+
+            if (arg == "--quiet" || arg == "-q")
+            {
+                verbosity = VerbosityMode::Quiet;
+                ++index;
+                continue;
+            }
+
+            if (arg == "--log-level")
+            {
+                if (index + 1 >= argc)
+                {
+                    std::cerr << "vix: --log-level requires a value (trace|debug|info|warn|error|critical).\n";
+                    return 1;
+                }
+                logLevelFlag = argv[index + 1];
+                index += 2;
+                continue;
+            }
+
+            // Support --log-level=info style
+            constexpr const char prefix[] = "--log-level=";
+            if (arg.rfind(prefix, 0) == 0)
+            {
+                std::string value = arg.substr(sizeof(prefix) - 1);
+                if (value.empty())
+                {
+                    std::cerr << "vix: --log-level=VALUE cannot be empty.\n";
+                    return 1;
+                }
+                logLevelFlag = value;
+                ++index;
+                continue;
+            }
+
+            // Not a global option → this is the command
+            break;
+        }
+
+        // 1.c Apply verbosity mode (overrides env base level)
+        switch (verbosity)
+        {
+        case VerbosityMode::Verbose:
+            logger.setLevel(Logger::Level::DEBUG);
+            break;
+        case VerbosityMode::Quiet:
+            logger.setLevel(Logger::Level::WARN);
+            break;
+        case VerbosityMode::Default:
+        default:
+            // If env not set anything explicit, we keep whatever default
+            // the Logger was initialized with (often INFO).
+            break;
+        }
+
+        // 1.d Apply explicit --log-level if provided (highest precedence)
+        if (logLevelFlag.has_value())
+        {
+            apply_log_level_from_flag(logger, *logLevelFlag);
+        }
+
+        // ----------------------------------------------------------
+        // 2) Determine command + args
+        // ----------------------------------------------------------
+        if (index >= argc)
+        {
+            // Ex: vix --verbose (no command)
+            return help({});
+        }
+
+        std::string cmd = argv[index];
+        std::vector<std::string> args(argv + index + 1, argv + argc);
+
+        // ----------------------------------------------------------
+        // 3) Per-command help:
+        //    vix <command> --help / -h
+        // ----------------------------------------------------------
+        if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
+        {
+            if (cmd == "new")
+                return commands::NewCommand::help();
+            if (cmd == "build")
+                return commands::BuildCommand::help();
+            if (cmd == "run")
+                return commands::RunCommand::help();
+
+            // Unknown command → global help
+            std::cerr << "vix: unknown command '" << cmd << "'\n\n";
+            return help({});
+        }
+
+        // ----------------------------------------------------------
+        // 4) Dispatch normal command
+        // ----------------------------------------------------------
         if (commands_.count(cmd))
         {
             try
@@ -126,48 +329,111 @@ namespace vix
             }
             catch (const std::exception &ex)
             {
-                logger.logModule("CLI", Logger::Level::ERROR, "Command '{}' failed: {}", cmd, ex.what());
+                logger.logModule("CLI", Logger::Level::ERROR,
+                                 "Command '{}' failed: {}", cmd, ex.what());
                 return 1;
             }
         }
 
-        logger.logModule("CLI", Logger::Level::ERROR, "Unknown command: '{}'", cmd);
+        std::cerr << "vix: unknown command '" << cmd << "'\n\n";
         help({});
         return 1;
     }
 
-    int CLI::help(const std::vector<std::string> &)
+    // -----------------------------------------------------------------
+    // CLI::help — global help + vix help <command>
+    // -----------------------------------------------------------------
+    int CLI::help(const std::vector<std::string> &args)
     {
-        auto &logger = Logger::getInstance();
-        logger.log(Logger::Level::INFO, "");
-        logger.log(Logger::Level::INFO, "✨ Vix.cpp CLI - Developer Commands ✨");
-        logger.log(Logger::Level::INFO, "----------------------------------------");
-        logger.log(Logger::Level::INFO, "  new <name>          Create a new Vix project");
-        logger.log(Logger::Level::INFO, "  build [name]        Build a project (root or app)");
-        logger.log(Logger::Level::INFO, "  run [name] [--args] Run a project or app");
-        logger.log(Logger::Level::INFO, "  version             Show CLI version");
-        logger.log(Logger::Level::INFO, "  help                Show this help message");
-        logger.log(Logger::Level::INFO, "");
-        logger.log(Logger::Level::INFO, "Examples:");
-        logger.log(Logger::Level::INFO, "  vix new blog");
-        logger.log(Logger::Level::INFO, "  vix build blog --config Debug");
-        logger.log(Logger::Level::INFO, "  vix run blog -- --port 8080");
-        logger.log(Logger::Level::INFO, "");
-        return 0;
-    }
-
-    int CLI::version(const std::vector<std::string> &)
-    {
-        auto &logger = Logger::getInstance();
+        // Per-command help: vix help <command>
+        if (!args.empty())
+        {
+            const std::string &cmd = args[0];
+            if (cmd == "new")
+                return commands::NewCommand::help();
+            if (cmd == "build")
+                return commands::BuildCommand::help();
+            if (cmd == "run")
+                return commands::RunCommand::help();
+        }
 
 #ifndef VIX_CLI_VERSION
 #define VIX_CLI_VERSION "dev"
 #endif
 
-        logger.log(Logger::Level::INFO, "Vix.cpp CLI version {}", VIX_CLI_VERSION);
-        logger.log(Logger::Level::INFO, "Developed by Gaspard Kirira");
-        logger.log(Logger::Level::INFO, "Open Source Framework — https://github.com/vixcpp");
+        std::ostream &out = std::cout;
+
+        out << "Vix.cpp — Modern C++ backend runtime\n";
+        out << "Version: " << VIX_CLI_VERSION << "\n";
+        out << "\n";
+
+        out << "Usage:\n";
+        out << "  vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]\n";
+        out << "\n";
+
+        out << "Commands:\n";
+        out << "  Project:\n";
+        out << "    new <name>             Scaffold a new Vix project in ./<name>\n";
+        out << "\n";
+        out << "  Development:\n";
+        out << "    build [name]           Configure and build a project (root or app)\n";
+        out << "    run [name] [--args]    Build (if needed) and run a project or app\n";
+        out << "\n";
+        out << "  Info:\n";
+        out << "    help [command]         Show this help or help for a specific command\n";
+        out << "    version                Show CLI version information\n";
+        out << "\n";
+
+        out << "Global options:\n";
+        out << "  --verbose                Show debug logs from the runtime (log-level=debug)\n";
+        out << "  -q, --quiet              Only show warnings and errors (log-level=warn)\n";
+        out << "  --log-level <level>      Set log level: trace, debug, info, warn, error, critical\n";
+        out << "                           (overrides VIX_LOG_LEVEL environment variable)\n";
+        out << "  -h, --help               Show help for the CLI (or use: vix help)\n";
+        out << "  -v, --version            Show version information\n";
+        out << "\n";
+
+        out << "Environment:\n";
+        out << "  VIX_LOG_LEVEL=level      Default log level if no CLI override is provided.\n";
+        out << "                           Accepted values: trace, debug, info, warn, error, critical.\n";
+        out << "\n";
+
+        out << "Examples:\n";
+        out << "  vix new api\n";
+        out << "  vix build                        # build current project\n";
+        out << "  vix build api --config Debug\n";
+        out << "  vix run api -- --port 8080\n";
+        out << "\n";
+        out << "  vix --log-level debug run api    # verbose runtime logs (debug)\n";
+        out << "  vix --quiet run api              # only warnings and errors\n";
+        out << "  vix --log-level warn build       # build with runtime log-level=warn\n";
+        out << "\n";
+
+        out << "Links:\n";
+        out << "  GitHub: https://github.com/vixcpp/vix\n";
+        out << "\n";
+
         return 0;
     }
 
-}
+    // -----------------------------------------------------------------
+    // CLI::version — simple version banner
+    // -----------------------------------------------------------------
+    int CLI::version(const std::vector<std::string> &)
+    {
+#ifndef VIX_CLI_VERSION
+#define VIX_CLI_VERSION "dev"
+#endif
+
+        std::ostream &out = std::cout;
+
+        out << "Vix.cpp CLI\n";
+        out << "  version : " << VIX_CLI_VERSION << "\n";
+        out << "  author  : Gaspard Kirira\n";
+        out << "  source  : https://github.com/vixcpp/vix\n";
+        out << "\n";
+
+        return 0;
+    }
+
+} // namespace vix

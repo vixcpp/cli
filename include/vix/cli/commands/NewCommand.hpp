@@ -30,6 +30,7 @@ namespace vix::commands::NewCommand
      * @return int Exit code (0 = success; non-zero = failure)
      */
     int run(const std::vector<std::string> &args);
+    int help();
 
 } // namespace Vix::Commands::NewCommand
 

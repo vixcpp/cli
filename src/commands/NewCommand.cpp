@@ -1,5 +1,6 @@
 #include <vix/cli/commands/NewCommand.hpp>
-#include <vix/utils/Logger.hpp>
+#include <vix/cli/Style.hpp>
+#include <vix/cli/Utils.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,8 @@
 #include <system_error>
 
 namespace fs = std::filesystem;
+using namespace vix::cli::style;
+using namespace vix::cli::util;
 
 namespace
 {
@@ -392,164 +395,16 @@ preset:
 )JSON";
     }
 
-    // Écrit un fichier texte de manière sûre : fichier temporaire puis renommage.
-    // - Crée les répertoires parents si nécessaires.
-    // - Utilise un fichier .tmp dans le même dossier pour éviter les problèmes de volume.
-    // - Tente un remplacement atomique (selon l’OS / FS).
-    inline void write_text_file(const fs::path &p, std::string_view content)
-    {
-        std::error_code ec;
-
-        // 1) Assure l'existence du parent (si applicable)
-        const fs::path parent = p.parent_path();
-        if (!parent.empty())
-        {
-            fs::create_directories(parent, ec);
-            if (ec)
-            {
-                throw std::runtime_error("Cannot create directories for: " + parent.string() +
-                                         " — " + ec.message());
-            }
-        }
-
-        // 2) Fichier temporaire à côté de la cible (avec quelques tentatives)
-        auto make_tmp_name = [&]()
-        {
-            std::mt19937_64 rng{std::random_device{}()};
-            auto rnd = rng();
-            return p.string() + ".tmp-" + std::to_string(rnd);
-        };
-
-        fs::path tmp;
-        for (int tries = 0; tries < 3; ++tries)
-        {
-            tmp = make_tmp_name();
-            if (!fs::exists(tmp, ec))
-                break;
-            if (tries == 2)
-            {
-                throw std::runtime_error("Cannot generate unique temp file near: " + p.string());
-            }
-        }
-
-        // 3) Écriture (binaire) + flush + close
-        {
-            std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
-            if (!ofs)
-            {
-                fs::remove(tmp, ec); // best-effort cleanup
-                throw std::runtime_error("Cannot open temp file for write: " + tmp.string());
-            }
-
-            ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
-            if (!ofs)
-            {
-                ofs.close();
-                fs::remove(tmp, ec);
-                throw std::runtime_error("Failed to write file: " + tmp.string());
-            }
-
-            ofs.flush();
-            if (!ofs)
-            {
-                ofs.close();
-                fs::remove(tmp, ec);
-                throw std::runtime_error("Failed to flush file: " + tmp.string());
-            }
-            // close via dtor
-        }
-
-        // 4) Rename → p (tentative atomique). Sous Windows, si p existe, rename peut échouer.
-        fs::rename(tmp, p, ec);
-        if (ec)
-        {
-            // Essaye de supprimer la cible existante puis renommer à nouveau
-            fs::remove(p, ec); // ignorer l'erreur (si absent / verrouillé)
-            ec.clear();
-            fs::rename(tmp, p, ec);
-            if (ec)
-            {
-                std::error_code ec2;
-                fs::remove(tmp, ec2); // éviter les orphelins
-                throw std::runtime_error("Failed to move temp file to destination: " +
-                                         tmp.string() + " → " + p.string() + " — " + ec.message());
-            }
-        }
-    }
-
-    // Renvoie true si le répertoire est vide ou n'existe pas; false sinon.
-    // N'émet **pas** d'exception : utile dans les checks préalables.
-    inline bool is_dir_empty(const fs::path &p) noexcept
-    {
-        std::error_code ec;
-
-        if (!fs::exists(p, ec))
-            return true; // inexistant = considéré vide
-        if (ec)
-            return false;
-        if (!fs::is_directory(p, ec))
-            return false;
-        if (ec)
-            return false;
-
-        fs::directory_iterator it(p, ec);
-        if (ec)
-            return false;
-        return (it == fs::directory_iterator{});
-    }
-
-    // Récupère la valeur de --dir / -d si présente.
-    // Supporte: "-d PATH", "--dir PATH", et "--dir=PATH".
-    // Évite de prendre une autre option comme valeur (ex: "-d --flag").
-    inline std::optional<std::string> pick_dir_opt(const std::vector<std::string> &args)
-    {
-        auto is_option = [](std::string_view sv)
-        {
-            return !sv.empty() && sv.front() == '-';
-        };
-
-        for (size_t i = 0; i < args.size(); ++i)
-        {
-            const std::string &a = args[i];
-
-            if (a == "-d" || a == "--dir")
-            {
-                if (i + 1 < args.size() && !is_option(args[i + 1]))
-                {
-                    return args[i + 1];
-                }
-                // option sans valeur → ignorée (caller gère le défaut)
-                return std::nullopt;
-            }
-
-            // format --dir=/chemin
-            constexpr const char prefix[] = "--dir=";
-            if (a.rfind(prefix, 0) == 0)
-            {
-                std::string val = a.substr(sizeof(prefix) - 1);
-                // autoriser --dir="" (revient à std::nullopt)
-                if (val.empty())
-                    return std::nullopt;
-                return val;
-            }
-        }
-        return std::nullopt;
-    }
-
 } // namespace
 
 namespace vix::commands::NewCommand
 {
-    using Logger = vix::utils::Logger;
-
     int run(const std::vector<std::string> &args)
     {
-        auto &logger = Logger::getInstance();
-
         if (args.empty())
         {
-            logger.logModule("NewCommand", Logger::Level::ERROR,
-                             "Usage: vix new <name|path> [-d|--dir <base_dir>]");
+            error("Missing project name.");
+            hint("Usage: vix new <name|path> [-d|--dir <base_dir>]");
             return 1;
         }
 
@@ -560,23 +415,23 @@ namespace vix::commands::NewCommand
         {
             fs::path dest;
 
-            // If -d/--dir is provided → resolve base + name (respect abs/rel)
+            // Si --dir est fourni, base + name/path
             if (baseOpt.has_value())
             {
                 fs::path base = fs::path(*baseOpt);
                 if (!fs::exists(base) || !fs::is_directory(base))
                 {
-                    logger.logModule("NewCommand", Logger::Level::ERROR,
-                                     "Base directory '{}' is invalid.", base.string());
+                    error("Base directory '" + base.string() + "' is not a valid folder.");
+                    hint("Make sure it exists and is a directory, or omit --dir to use the current directory.");
                     return 2;
                 }
+
                 fs::path np = fs::path(nameOrPath);
-                // base exists → canonical OK
                 dest = np.is_absolute() ? np : (fs::canonical(base) / np);
             }
             else
             {
-                // No explicit base: respect abs/rel as provided by the user
+                // Sinon, on respecte abs/rel à partir du cwd
                 fs::path np = fs::path(nameOrPath);
                 dest = np.is_absolute() ? np : (fs::current_path() / np);
             }
@@ -589,15 +444,16 @@ namespace vix::commands::NewCommand
             const fs::path presetsFile = projectDir / "CMakePresets.json";
             const fs::path makefilePath = projectDir / "Makefile";
 
-            // Safety: don't overwrite a NON-empty directory
+            // Ne pas écraser un dossier non vide
             if (fs::exists(projectDir) && !is_dir_empty(projectDir))
             {
-                logger.logModule("NewCommand", Logger::Level::ERROR,
-                                 "Directory '{}' already exists and is not empty.", projectDir.string());
+                error("Cannot create project in '" + projectDir.string() +
+                      "': directory is not empty.");
+                hint("Choose an empty folder or a different project name.");
                 return 3;
             }
 
-            // Structure + files
+            // Structure + fichiers
             fs::create_directories(srcDir);
             write_text_file(mainCpp, kMainCpp);
             write_text_file(cmakeLists, make_cmakelists(projectDir.filename().string()));
@@ -605,25 +461,51 @@ namespace vix::commands::NewCommand
             write_text_file(presetsFile, make_cmake_presets_json());
             write_text_file(makefilePath, make_makefile(projectDir.filename().string()));
 
-            logger.logModule("NewCommand", Logger::Level::INFO,
-                             "✅ Project '{}' created at {}", projectDir.filename().string(), projectDir.string());
+            const std::string projName = projectDir.filename().string();
 
-            // ✨ Simplified quick-start message (aligns with vix help + README)
-            logger.logModule("NewCommand", Logger::Level::INFO,
-                             "Next steps:\n"
-                             "  cd \"{0}\"\n"
-                             "  vix build\n"
-                             "  vix run",
-                             projectDir.string());
+            success("Project '" + projName + "' created.");
+            info("Location: " + projectDir.string());
+            std::cout << "\n";
+            info("Next steps:");
+            step("cd \"" + projectDir.string() + "\"");
+            step("vix build");
+            step("vix run");
+            std::cout << "\n";
 
             return 0;
         }
         catch (const std::exception &ex)
         {
-            logger.logModule("NewCommand", Logger::Level::ERROR,
-                             "Failed to create project: {}", ex.what());
+            error("Something went wrong while creating the project.");
+            hint(std::string("Details: ") + ex.what());
             return 4;
         }
     }
 
-} // namespace Vix::Commands::NewCommand
+    int help()
+    {
+        std::ostream &out = std::cout;
+
+        out << "Usage:\n";
+        out << "  vix new <name|path> [options]\n";
+        out << "\n";
+
+        out << "Description:\n";
+        out << "  Scaffold a new Vix.cpp project in the given directory.\n";
+        out << "\n";
+
+        out << "Options:\n";
+        out << "  -d, --dir <base_dir>    Base directory where the project folder will be created\n";
+        out << "                          (default: current working directory)\n";
+        out << "\n";
+
+        out << "Examples:\n";
+        out << "  vix new api\n";
+        out << "  vix new blog -d ./projects\n";
+        out << "  vix new /absolute/path/to/app\n";
+        out << "\n";
+
+        return 0;
+    }
+
+} // namespace vix::commands::NewCommand

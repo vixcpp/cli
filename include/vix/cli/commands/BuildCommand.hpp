@@ -7,6 +7,7 @@
 namespace vix::commands::BuildCommand
 {
     int run(const std::vector<std::string> &args);
+    int help();
 }
 
 #endif // VIX_BUILD_COMMAND_HPP

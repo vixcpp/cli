@@ -1,5 +1,5 @@
 #include <vix/cli/commands/BuildCommand.hpp>
-#include <vix/utils/Logger.hpp>
+#include <vix/cli/Style.hpp>
 
 #include <filesystem>
 #include <cstdlib>
@@ -11,11 +11,10 @@
 #include <algorithm>
 
 namespace fs = std::filesystem;
+using namespace vix::cli::style;
 
 namespace vix::commands::BuildCommand
 {
-    using Logger = vix::utils::Logger;
-
     namespace
     {
         // ---------------------------------------------------------------------
@@ -51,7 +50,58 @@ namespace vix::commands::BuildCommand
             std::string dir;                  // --dir/-d chemin explicite du projet
             int jobs = 0;                     // -j / --jobs
             bool clean = false;               // --clean
+            bool quiet = false;               // --quiet/-q   ⬅️ NEW
         };
+
+        // ---------------------------------------------------------------------
+        // UX helpers (quiet mode + config cache)
+        // ---------------------------------------------------------------------
+
+        inline bool is_quiet(const Options &opt) noexcept
+        {
+            return opt.quiet;
+        }
+
+        inline void info_if(const Options &opt, const std::string &msg)
+        {
+            if (!is_quiet(opt))
+                info(msg);
+        }
+
+        inline void success_if(const Options &opt, const std::string &msg)
+        {
+            if (!is_quiet(opt))
+                success(msg);
+        }
+
+        inline void hint_if(const Options &opt, const std::string &msg)
+        {
+            if (!is_quiet(opt))
+                hint(msg);
+        }
+
+        inline void step_if(const Options &opt, const std::string &msg)
+        {
+            if (!is_quiet(opt))
+                step(msg);
+        }
+
+        // Dev preset → build dir heuristique (simple mais centralisé)
+        inline fs::path guess_binary_dir(const fs::path &projectDir, const Options &opt)
+        {
+            // Heuristique actuelle: dev-ninja → build-ninja
+            if (opt.preset.find("dev-ninja") != std::string::npos)
+                return projectDir / "build-ninja";
+
+            // Fallback générique
+            return projectDir / "build";
+        }
+
+        inline bool has_existing_config(const fs::path &binaryDir)
+        {
+            std::error_code ec;
+            return fs::exists(binaryDir / "CMakeCache.txt", ec);
+        }
 
         std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
         {
@@ -104,9 +154,11 @@ namespace vix::commands::BuildCommand
                 else if (a == "--preset" && i + 1 < args.size())
                     o.preset = args[++i]; // configure
                 else if (a == "--build-preset" && i + 1 < args.size())
-                    o.buildPreset = args[++i]; // NEW
+                    o.buildPreset = args[++i];
                 else if (a == "--clean")
                     o.clean = true;
+                else if (a == "--quiet" || a == "-q") // ⬅️ NEW
+                    o.quiet = true;
                 else if (o.appName.empty() && !a.empty() && a != "--")
                     o.appName = a;
             }
@@ -259,47 +311,93 @@ namespace vix::commands::BuildCommand
     // -------------------------------------------------------------------------
     int run(const std::vector<std::string> &args)
     {
-        auto &logger = Logger::getInstance();
         const Options opt = parse_args(args);
         const fs::path cwd = fs::current_path();
 
         auto projectDirOpt = choose_project_dir(opt, cwd);
         if (!projectDirOpt)
         {
-            logger.logModule("BuildCommand", Logger::Level::ERROR,
-                             "Impossible de déterminer le dossier projet.\n"
-                             "Essayez: `vix build --dir <chemin>` ou lancez la commande depuis le dossier du projet.");
+            error("Unable to determine the project directory.");
+            hint("Try: vix build --dir <path> or run the command from your project folder.");
             return 1;
         }
         const fs::path projectDir = *projectDirOpt;
 
+        // Devine le dossier binaire pour le cache de configuration CMake
+        const fs::path binaryDir = guess_binary_dir(projectDir, opt);
+
+        info_if(opt, "Using project directory:");
+        step_if(opt, projectDir.string());
+        if (!is_quiet(opt))
+            std::cout << "\n";
+
+        // ---------------------------------------------------------------------
+        // Path 1: CMakePresets.json present → modern configure / build flow
+        // ---------------------------------------------------------------------
         if (has_presets(projectDir))
         {
-            // 1) Configure
+            // 0) Faut-il vraiment re-configurer ?
+            bool needsConfigure = true;
+            if (!opt.clean && has_existing_config(binaryDir))
+            {
+                needsConfigure = false;
+            }
+
+            // 1) Configure (si nécessaire)
+            if (needsConfigure)
             {
                 std::ostringstream oss;
 #ifdef _WIN32
                 oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && cmake --preset " << quote(opt.preset) << "\"";
+                    << " && cmake --preset " << quote(opt.preset);
+                if (opt.quiet)
+                    oss << " --log-level=ERROR";
+                oss << "\"";
 #else
                 oss << "cd " << quote(projectDir.string())
                     << " && cmake --preset " << quote(opt.preset);
+                if (opt.quiet)
+                    oss << " --log-level=ERROR";
 #endif
                 const std::string cmd = oss.str();
-                logger.logModule("BuildCommand", Logger::Level::INFO, "Configure (preset): {}", cmd);
+
+                info_if(opt, "Configuring project (preset: " + opt.preset + ")...");
                 const int code = std::system(cmd.c_str());
                 if (code != 0)
                 {
-                    logger.logModule("BuildCommand", Logger::Level::ERROR,
-                                     "Échec configuration avec preset '{}' (code {}).", opt.preset, code);
-                    return code;
+                    error("CMake configure failed with preset '" + opt.preset + "'.");
+                    if (!is_quiet(opt))
+                    {
+                        hint("Run the same command manually to inspect the error:");
+#ifdef _WIN32
+                        step("cmake --preset " + opt.preset);
+#else
+                        step("cd " + projectDir.string());
+                        step("cmake --preset " + opt.preset);
+#endif
+                    }
+                    return code != 0 ? code : 2;
                 }
+
+                success_if(opt, "Configure step completed.");
+                if (!is_quiet(opt))
+                    std::cout << "\n";
+            }
+            else
+            {
+                info_if(opt, "Using existing CMake configuration (preset: " + opt.preset + ").");
+                if (!is_quiet(opt))
+                    std::cout << "\n";
             }
 
-            // 2) Choix build preset
-            const std::string buildPreset = choose_build_preset(projectDir, opt.preset, opt.buildPreset);
-            logger.logModule("BuildCommand", Logger::Level::INFO,
-                             "Build preset sélectionné: {}", buildPreset);
+            // 2) Choix du build preset
+            const std::string buildPreset =
+                choose_build_preset(projectDir, opt.preset, opt.buildPreset);
+
+            info_if(opt, "Using build preset:");
+            step_if(opt, buildPreset);
+            if (!is_quiet(opt))
+                std::cout << "\n";
 
             // 3) Build
             {
@@ -320,47 +418,56 @@ namespace vix::commands::BuildCommand
                 if (!opt.config.empty())
                     oss << " --config " << quote(opt.config);
                 if (opt.jobs > 0)
-                    oss << " -- -j " << opt.jobs; // backend args
+                    oss << " -- -j " << opt.jobs; // backend args (ninja/make)
 #endif
                 const std::string cmd = oss.str();
-                logger.logModule("BuildCommand", Logger::Level::INFO, "Build (preset): {}", cmd);
+
+                info_if(opt, "Building project...");
                 const int code = std::system(cmd.c_str());
                 if (code != 0)
                 {
-                    logger.logModule("BuildCommand", Logger::Level::ERROR,
-                                     "Erreur compilation (build preset '{}', code {}).", buildPreset, code);
-                    return code;
+                    error("Build failed (build preset '" + buildPreset +
+                          "', code " + std::to_string(code) + ").");
+                    hint_if(opt, "Check the errors above or run the build command manually.");
+                    return code != 0 ? code : 3;
                 }
             }
 
-            logger.logModule("BuildCommand", Logger::Level::INFO,
-                             "✅ Build terminé (preset config: {}, preset build: {}).", opt.preset, buildPreset);
+            success_if(opt, "Build completed.");
+            hint_if(opt, "Config preset: " + opt.preset + ", build preset: " + buildPreset);
             return 0;
         }
 
-        // --- Fallback (pas de presets) ---
+        // ---------------------------------------------------------------------
+        // Path 2: No CMakePresets → classic build/ directory flow
+        // ---------------------------------------------------------------------
         fs::path buildDir = projectDir / "build";
 
+        // Clean build/ if requested
         if (opt.clean && fs::exists(buildDir))
         {
+            info_if(opt, "Cleaning build directory:");
+            step_if(opt, buildDir.string());
+
             std::error_code ec;
             fs::remove_all(buildDir, ec);
             if (ec)
             {
-                logger.logModule("BuildCommand", Logger::Level::ERROR,
-                                 "Échec du nettoyage du dossier build: {}", ec.message());
+                error("Failed to clean build directory: " + ec.message());
                 return 1;
             }
-            logger.logModule("BuildCommand", Logger::Level::INFO, "Dossier build/ nettoyé.");
+            success_if(opt, "Build directory cleaned.");
         }
 
-        std::error_code ec;
-        fs::create_directories(buildDir, ec);
-        if (ec)
+        // Ensure build directory exists
         {
-            logger.logModule("BuildCommand", Logger::Level::ERROR,
-                             "Impossible de créer le dossier build: {}", ec.message());
-            return 1;
+            std::error_code ec;
+            fs::create_directories(buildDir, ec);
+            if (ec)
+            {
+                error("Unable to create build directory: " + ec.message());
+                return 1;
+            }
         }
 
         // Configure (fallback)
@@ -378,14 +485,19 @@ namespace vix::commands::BuildCommand
 #endif
             const std::string cmd = oss.str();
 
-            logger.logModule("BuildCommand", Logger::Level::INFO, "Configure: {}", cmd);
+            info_if(opt, "Configuring project (fallback mode)...");
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("BuildCommand", Logger::Level::ERROR,
-                                 "Échec de la configuration CMake (code {}).", code);
-                return code;
+                error("CMake configure failed (fallback build/, code " +
+                      std::to_string(code) + ").");
+                hint_if(opt, "Check your CMakeLists.txt or run the command manually.");
+                return code != 0 ? code : 4;
             }
+
+            success_if(opt, "Configure step completed (fallback).");
+            if (!is_quiet(opt))
+                std::cout << "\n";
         }
 
         // Build (fallback)
@@ -406,18 +518,52 @@ namespace vix::commands::BuildCommand
 #endif
             const std::string cmd = oss.str();
 
-            logger.logModule("BuildCommand", Logger::Level::INFO, "Build: {}", cmd);
+            info_if(opt, "Building project (fallback mode)...");
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                logger.logModule("BuildCommand", Logger::Level::ERROR,
-                                 "Erreur lors de la compilation (code {}).", code);
-                return code;
+                error("Build failed (fallback build/, code " +
+                      std::to_string(code) + ").");
+                hint_if(opt, "Check the build logs or run the command manually.");
+                return code != 0 ? code : 5;
             }
         }
 
-        logger.logModule("BuildCommand", Logger::Level::INFO,
-                         "✅ Build terminé pour: {}", projectDir.string());
+        success_if(opt, "Build completed for:");
+        step_if(opt, projectDir.string());
+        return 0;
+    }
+
+    int help()
+    {
+        std::ostream &out = std::cout;
+
+        out << "Usage:\n";
+        out << "  vix build [name] [options]\n";
+        out << "\n";
+
+        out << "Description:\n";
+        out << "  Configure and build a Vix.cpp project using CMake presets\n";
+        out << "  or a classic build/ directory as fallback.\n";
+        out << "\n";
+
+        out << "Options:\n";
+        out << "  -d, --dir <path>        Explicit project directory\n";
+        out << "  --config <type>         Build configuration (Release, Debug, ...)\n";
+        out << "  --preset <name>         Configure preset (CMakePresets.json), default: dev-ninja\n";
+        out << "  --build-preset <name>   Build preset to use (overrides automatic choice)\n";
+        out << "  --target <name>         Build a specific CMake target\n";
+        out << "  -j, --jobs <n>          Number of parallel build jobs\n";
+        out << "  --clean                 Remove existing build directory (no-presets mode only)\n";
+        out << "\n";
+
+        out << "Examples:\n";
+        out << "  vix build\n";
+        out << "  vix build api --config Debug\n";
+        out << "  vix build --dir ./examples/blog\n";
+        out << "  vix build --preset dev-ninja --build-preset build-ninja\n";
+        out << "\n";
+
         return 0;
     }
 }

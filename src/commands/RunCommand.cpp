@@ -10,8 +10,184 @@
 #include <cstdio>
 #include <algorithm>
 
+#ifndef _WIN32
+#include <unistd.h>     // pipe, dup2, read, write, close
+#include <sys/types.h>  // pid_t
+#include <sys/wait.h>   // waitpid, WIFEXITED, WEXITSTATUS
+#include <sys/select.h> // select, fd_set, FD_SET, FD_ZERO, FD_ISSET
+#endif
+
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
+
+namespace
+{
+#ifndef _WIN32
+    struct SigintGuard
+    {
+        struct sigaction oldAction{};
+        bool installed = false;
+
+        SigintGuard()
+        {
+            struct sigaction sa{};
+            sa.sa_handler = SIG_IGN; // ignorer SIGINT dans le parent
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags = 0;
+
+            if (sigaction(SIGINT, &sa, &oldAction) == 0)
+                installed = true;
+        }
+
+        ~SigintGuard()
+        {
+            if (installed)
+            {
+                sigaction(SIGINT, &oldAction, nullptr); // restaurer le handler d’avant
+            }
+        }
+    };
+#endif
+    inline void write_safe(int fd, const char *buf, ssize_t n)
+    {
+        if (n > 0)
+            ::write(fd, buf, static_cast<size_t>(n));
+    }
+
+    int run_cmd_live_filtered(const std::string &cmd)
+    {
+#ifdef _WIN32
+        // Windows: on garde std::system, pas de filtrage avancé.
+        return std::system(cmd.c_str());
+#else
+        SigintGuard sigGuard; // le parent ignore SIGINT pendant le build/run
+
+        int outPipe[2];
+        int errPipe[2];
+
+        if (pipe(outPipe) != 0 || pipe(errPipe) != 0)
+        {
+            return std::system(cmd.c_str());
+        }
+
+        pid_t pid = fork();
+        if (pid < 0)
+        {
+            close(outPipe[0]);
+            close(outPipe[1]);
+            close(errPipe[0]);
+            close(errPipe[1]);
+            return std::system(cmd.c_str());
+        }
+
+        if (pid == 0)
+        {
+            // ----- Child -----
+            // On remet SIGINT par défaut dans l’enfant
+            struct sigaction saChild{};
+            saChild.sa_handler = SIG_DFL;
+            sigemptyset(&saChild.sa_mask);
+            saChild.sa_flags = 0;
+            sigaction(SIGINT, &saChild, nullptr);
+
+            close(outPipe[0]);
+            close(errPipe[0]);
+
+            dup2(outPipe[1], STDOUT_FILENO);
+            dup2(errPipe[1], STDERR_FILENO);
+
+            close(outPipe[1]);
+            close(errPipe[1]);
+
+            execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
+            _exit(127);
+        }
+
+        // ----- Parent -----
+        close(outPipe[1]);
+        close(errPipe[1]);
+
+        fd_set fds;
+        bool running = true;
+        int exitCode = 0;
+
+        const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
+
+        while (running)
+        {
+            FD_ZERO(&fds);
+            FD_SET(outPipe[0], &fds);
+            FD_SET(errPipe[0], &fds);
+
+            int maxfd = std::max(outPipe[0], errPipe[0]) + 1;
+            int ready = select(maxfd, &fds, nullptr, nullptr, nullptr);
+            if (ready <= 0)
+                continue;
+
+            // stdout → live, mais on filtre la phrase ninja si elle tombe ici
+            if (FD_ISSET(outPipe[0], &fds))
+            {
+                char buf[4096];
+                ssize_t n = read(outPipe[0], buf, sizeof(buf));
+                if (n > 0)
+                {
+                    std::string chunk(buf, static_cast<std::size_t>(n));
+                    if (chunk.find(ninjaStop) == std::string::npos)
+                    {
+                        write_safe(STDOUT_FILENO, chunk.data(), static_cast<ssize_t>(chunk.size()));
+                    }
+                    // sinon: on jette ce morceau (ligne ninja)
+                }
+            }
+
+            // stderr → idem, on filtre la phrase ninja
+            if (FD_ISSET(errPipe[0], &fds))
+            {
+                char buf[4096];
+                ssize_t n = read(errPipe[0], buf, sizeof(buf));
+                if (n > 0)
+                {
+                    std::string chunk(buf, static_cast<std::size_t>(n));
+                    if (chunk.find(ninjaStop) == std::string::npos)
+                    {
+                        write_safe(STDERR_FILENO, chunk.data(), static_cast<ssize_t>(chunk.size()));
+                    }
+                }
+            }
+
+            // vérifier si le process enfant est terminé
+            int status = 0;
+            pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid)
+            {
+                running = false;
+
+                if (WIFEXITED(status))
+                {
+                    exitCode = WEXITSTATUS(status);
+                }
+                else if (WIFSIGNALED(status))
+                {
+                    int sig = WTERMSIG(status);
+                    if (sig == SIGINT)
+                        exitCode = 130; // convention: 128 + SIGINT
+                    else
+                        exitCode = 128 + sig;
+                }
+                else
+                {
+                    exitCode = 1;
+                }
+            }
+        }
+
+        close(outPipe[0]);
+        close(errPipe[0]);
+
+        return exitCode;
+#endif
+    }
+}
 
 namespace vix::commands::RunCommand
 {
@@ -134,6 +310,24 @@ namespace vix::commands::RunCommand
             return o;
         }
 
+        // ---------------------------------------------------------------------
+        // Helper: interpréter le code de retour du process runtime
+        // ---------------------------------------------------------------------
+        void handle_runtime_exit_code(int code, const std::string &context)
+        {
+            if (code == 0)
+                return;
+
+            if (code == 2 || code == 130)
+            {
+                hint("ℹ Server interrupted by user (SIGINT).");
+                return;
+            }
+
+            error(context + " (exit code " + std::to_string(code) + ").");
+            hint("Check the logs above or run the command manually.");
+        }
+
         std::string quote(const std::string &s)
         {
 #ifdef _WIN32
@@ -146,18 +340,70 @@ namespace vix::commands::RunCommand
         }
 
 #ifndef _WIN32
-        static std::string run_and_capture(const std::string &cmd)
+
+        // Est-ce que le log de build contient du "vrai travail" ?
+        static bool has_real_build_work(const std::string &log)
+        {
+            // S’il y a des lignes "Building", "Linking", "Compiling", etc. → vrai travail
+            if (log.find("Building") != std::string::npos)
+                return true;
+            if (log.find("Linking") != std::string::npos)
+                return true;
+            if (log.find("Compiling") != std::string::npos)
+                return true;
+            if (log.find("Scanning dependencies") != std::string::npos)
+                return true;
+
+            // Cas Ninja : "ninja: no work to do." → clairement no-op
+            if (log.find("no work to do") != std::string::npos)
+                return false;
+
+            // Si on ne voit que des "Built target ..." ça sent le Make qui spamme sans rien faire
+            bool hasBuiltTarget = log.find("Built target") != std::string::npos;
+            if (hasBuiltTarget)
+            {
+                // Pas de "Building"/"Linking" + seulement "Built target" → no-op
+                return false;
+            }
+
+            // Par défaut, on considère qu’il y a eu du travail (pour ne pas masquer des choses importantes)
+            return true;
+        }
+
+        // Exécuter une commande et capturer stdout (et le code de retour)
+        static std::string run_and_capture_with_code(const std::string &cmd, int &exitCode)
         {
             std::string out;
+#if defined(_WIN32)
+            FILE *p = _popen(cmd.c_str(), "r");
+#else
             FILE *p = popen(cmd.c_str(), "r");
+#endif
             if (!p)
+            {
+                exitCode = -1;
                 return out;
+            }
+
             char buf[4096];
             while (fgets(buf, sizeof(buf), p))
                 out.append(buf);
-            pclose(p);
+
+#if defined(_WIN32)
+            exitCode = _pclose(p);
+#else
+            exitCode = pclose(p);
+#endif
             return out;
         }
+
+        // Version simple quand on n'a pas besoin du code (pour list_presets)
+        static std::string run_and_capture(const std::string &cmd)
+        {
+            int code = 0;
+            return run_and_capture_with_code(cmd, code);
+        }
+
 #endif
 
         static bool has_presets(const fs::path &projectDir)
@@ -350,11 +596,16 @@ namespace vix::commands::RunCommand
                 const std::string cmd = oss.str();
 
                 info("Configuring project (preset: " + opt.preset + ")...");
-                // hint("Command: " + cmd); // à activer un jour pour un vrai --verbose CLI
 
-                const int code = std::system(cmd.c_str());
+                int code = 0;
+                std::string configureLog = run_and_capture_with_code(cmd, code);
+
                 if (code != 0)
                 {
+                    // ❌ En cas d'erreur → on montre tout le log CMake
+                    if (!configureLog.empty())
+                        std::cout << configureLog;
+
                     error("CMake configure failed with preset '" + opt.preset + "'.");
                     hint("Run the same command manually to inspect the error:");
 #ifdef _WIN32
@@ -366,14 +617,21 @@ namespace vix::commands::RunCommand
                     return code != 0 ? code : 2;
                 }
 
+                // ✅ Succès :
+                //  - mode normal  → on ne montre rien (UX clean)
+                //  - mode verbose → on affiche le log complet CMake
+                if (opt.verbose && !configureLog.empty())
+                    std::cout << configureLog;
+
                 success("Configure step completed.");
                 std::cout << "\n";
             }
 
             // 2) Choisir run preset (ou build preset avec target run)
-            const std::string runPreset = choose_run_preset(projectDir, opt.preset, opt.runPreset);
+            const std::string runPreset =
+                choose_run_preset(projectDir, opt.preset, opt.runPreset);
 
-            // 3) Build + run (target run)
+            // 3) Build + run (target run) — **on revient à std::system pour garder les logs live**
             {
                 std::ostringstream oss;
 #ifdef _WIN32
@@ -391,14 +649,15 @@ namespace vix::commands::RunCommand
                 const std::string cmd = oss.str();
 
                 info("Building & running (preset: " + runPreset + ")...");
-                // hint("Command: " + cmd); // idem: pour un futur --verbose
+                // hint("Command: " + cmd);
 
-                const int code = std::system(cmd.c_str());
+                const int code = run_cmd_live_filtered(cmd);
                 if (code != 0)
                 {
-                    error("Execution failed (run preset '" + runPreset + "', code " + std::to_string(code) + ").");
-                    hint("Check the build errors above or run the command manually.");
-                    return code != 0 ? code : 3;
+                    handle_runtime_exit_code(
+                        code,
+                        "Execution failed (run preset '" + runPreset + "')");
+                    return code;
                 }
             }
 
@@ -434,7 +693,7 @@ namespace vix::commands::RunCommand
             const std::string cmd = oss.str();
 
             info("Configuring project (fallback mode)...");
-            const int code = std::system(cmd.c_str());
+            const int code = run_cmd_live_filtered(cmd);
             if (code != 0)
             {
                 error("CMake configure failed (fallback build/, code " + std::to_string(code) + ").");
@@ -454,11 +713,9 @@ namespace vix::commands::RunCommand
         {
             std::ostringstream oss;
 #ifdef _WIN32
-            oss << "cmd /C \"cd /D " << quote(buildDir.string())
-                << " && cmake --build .";
+            oss << "cd /D " << quote(buildDir.string()) << " && cmake --build .";
             if (opt.jobs > 0)
                 oss << " -j " << opt.jobs;
-            oss << "\"";
 #else
             oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
             if (opt.jobs > 0)
@@ -467,13 +724,33 @@ namespace vix::commands::RunCommand
             const std::string cmd = oss.str();
 
             info("Building project (fallback mode)...");
-            const int code = std::system(cmd.c_str());
+
+            int code = 0;
+            std::string buildLog = run_and_capture_with_code(cmd, code);
+
             if (code != 0)
             {
+                // En cas d’erreur → on affiche TOUT le log pour debug
+                std::cout << buildLog;
                 error("Build failed (fallback build/, code " + std::to_string(code) + ").");
                 hint("Check the build logs or run the command manually.");
                 return code != 0 ? code : 5;
             }
+
+            // Succès : décider si on affiche le log ou non
+            if (has_real_build_work(buildLog))
+            {
+                // Il y a eu de la compilation / linking → on montre tout
+                std::cout << buildLog;
+                success("Build completed (fallback).");
+            }
+            else
+            {
+                // Aucun vrai travail → on garde l’UX propre
+                success("Nothing to build — everything is up to date.");
+            }
+
+            std::cout << "\n";
         }
 
         // 3) Tentative de run d’un binaire portant le nom du projet (optionnel)
@@ -523,7 +800,9 @@ namespace vix::commands::RunCommand
                 const int code = std::system(cmd.c_str());
                 if (code != 0)
                 {
-                    error("Example returned non-zero exit code: " + std::to_string(code));
+                    handle_runtime_exit_code(
+                        code,
+                        "Example returned non-zero exit code");
                 }
                 return code;
             }
@@ -551,10 +830,13 @@ namespace vix::commands::RunCommand
             const int code = std::system(cmd.c_str());
             if (code != 0)
             {
-                error("Executable returned non-zero exit code: " + std::to_string(code));
+                handle_runtime_exit_code(
+                    code,
+                    "Executable returned non-zero exit code");
                 return code;
             }
         }
+
         else
         {
             success("Build completed (fallback). No explicit 'run' target found.");

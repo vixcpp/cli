@@ -129,7 +129,8 @@ namespace vix::commands::RunCommand::detail
         if (code == 0)
             return;
 
-        if (code == 2 || code == 130)
+        // 130 = 128 + SIGINT → convention shell "interrupted by user"
+        if (code == 130)
         {
             hint("ℹ Server interrupted by user (SIGINT).");
             return;

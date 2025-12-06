@@ -35,7 +35,8 @@ namespace vix::commands::RunCommand::detail
     // --- Script mode (vix run foo.cpp) ---
     std::filesystem::path get_scripts_root();
     std::string make_script_cmakelists(const std::string &exeName,
-                                       const std::filesystem::path &cppPath);
+                                       const std::filesystem::path &cppPath,
+                                       bool useVixRuntime);
     int run_single_cpp(const Options &opt);
 
     // --- CLI parsing ---

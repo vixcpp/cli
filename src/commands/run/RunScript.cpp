@@ -12,6 +12,37 @@ namespace vix::commands::RunCommand::detail
 {
     namespace fs = std::filesystem;
 
+    // Détection simple : est-ce que le script utilise Vix ?
+    bool script_uses_vix(const std::filesystem::path &cppPath)
+    {
+        std::ifstream ifs(cppPath);
+        if (!ifs)
+            return false;
+
+        std::string line;
+        while (std::getline(ifs, line))
+        {
+            // Si le code utilise explicitement le namespace vix::
+            if (line.find("vix::") != std::string::npos ||
+                line.find("Vix::") != std::string::npos)
+            {
+                return true;
+            }
+
+            // Si la ligne n'est pas un include, on passe
+            if (line.find("#include") == std::string::npos)
+                continue;
+
+            // Tout include qui contient "vix" ou "Vix" est considéré comme script Vix
+            if (line.find("vix") != std::string::npos ||
+                line.find("Vix") != std::string::npos)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::filesystem::path get_scripts_root()
     {
         auto cwd = std::filesystem::current_path();
@@ -19,13 +50,40 @@ namespace vix::commands::RunCommand::detail
     }
 
     std::string make_script_cmakelists(const std::string &exeName,
-                                       const std::filesystem::path &cppPath)
+                                       const std::filesystem::path &cppPath,
+                                       bool useVixRuntime)
     {
         std::string s;
+
         s += "cmake_minimum_required(VERSION 3.20)\n";
         s += "project(" + exeName + " LANGUAGES CXX)\n\n";
         s += "set(CMAKE_CXX_STANDARD 20)\n";
         s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
+
+        if (!useVixRuntime)
+        {
+            // ------------------------------------------------------
+            // Mode "script C++ classique" (sans Vix)
+            // ------------------------------------------------------
+            s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
+
+            // Sur Linux, on link souvent pthread/dl pour être safe
+            s += "if (UNIX AND NOT APPLE)\n";
+            s += "  target_link_libraries(" + exeName + " PRIVATE pthread dl)\n";
+            s += "endif()\n\n";
+
+            s += "add_custom_target(run\n";
+            s += "  COMMAND $<TARGET_FILE:" + exeName + ">\n";
+            s += "  DEPENDS " + exeName + "\n";
+            s += "  USES_TERMINAL\n";
+            s += ")\n";
+
+            return s;
+        }
+
+        // ------------------------------------------------------
+        // Mode "script Vix" (runtime HTTP/WebSocket/etc.)
+        // ------------------------------------------------------
 
         s += "list(APPEND CMAKE_PREFIX_PATH \n";
         s += "  \"/usr/local\"\n";
@@ -138,16 +196,14 @@ namespace vix::commands::RunCommand::detail
         path scriptsRoot = get_scripts_root();
         create_directories(scriptsRoot);
 
-        // Dossier de build dédié à ce script
         path projectDir = scriptsRoot / exeName;
-
         create_directories(projectDir);
         path cmakeLists = projectDir / "CMakeLists.txt";
+        bool useVixRuntime = script_uses_vix(script);
 
-        // Générer un CMakeLists minimal pour ce script
         {
             ofstream ofs(cmakeLists);
-            ofs << make_script_cmakelists(exeName, script);
+            ofs << make_script_cmakelists(exeName, script, useVixRuntime);
         }
 
         info("Script mode: compiling " + script.string());

@@ -52,7 +52,10 @@ namespace
     inline void write_safe(int fd, const char *buf, ssize_t n)
     {
         if (n > 0)
-            ::write(fd, buf, static_cast<size_t>(n));
+        {
+            const ssize_t written = ::write(fd, buf, static_cast<size_t>(n));
+            (void)written;
+        }
     }
 
     int run_cmd_live_filtered(const std::string &cmd)
@@ -662,9 +665,9 @@ namespace vix::commands::RunCommand
 #endif
         }
 
-        static std::string choose_run_preset(const fs::path &dir,
-                                             const std::string &configurePreset,
-                                             const std::string &userRunPreset)
+        std::string choose_run_preset(const fs::path &dir,
+                                      const std::string &configurePreset,
+                                      const std::string &userRunPreset)
         {
             // Les presets "run-*" sont aussi des buildPresets avec target=["run"]
             auto runs = list_presets(dir, "build");

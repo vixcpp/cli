@@ -112,6 +112,23 @@ namespace vix::commands::RunCommand::detail
 
         const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
 
+        auto should_drop_chunk = [&](const std::string &chunk) -> bool
+        {
+            if (chunk.find(ninjaStop) != std::string::npos)
+                return true;
+
+            const bool hasInterrupt = (chunk.find("Interrupt") != std::string::npos);
+            if (hasInterrupt &&
+                (chunk.find("gmake") != std::string::npos ||
+                 chunk.find("make: ***") != std::string::npos ||
+                 chunk.find("gmake: ***") != std::string::npos))
+            {
+                return true;
+            }
+
+            return false;
+        };
+
         while (running)
         {
             FD_ZERO(&fds);
@@ -123,7 +140,7 @@ namespace vix::commands::RunCommand::detail
             if (ready <= 0)
                 continue;
 
-            // stdout → live, mais on filtre la phrase ninja si elle tombe ici
+            // stdout → live, avec filtrage
             if (FD_ISSET(outPipe[0], &fds))
             {
                 char buf[4096];
@@ -131,15 +148,16 @@ namespace vix::commands::RunCommand::detail
                 if (n > 0)
                 {
                     std::string chunk(buf, static_cast<std::size_t>(n));
-                    if (chunk.find(ninjaStop) == std::string::npos)
+                    if (!should_drop_chunk(chunk))
                     {
-                        write_safe(STDOUT_FILENO, chunk.data(), static_cast<ssize_t>(chunk.size()));
+                        write_safe(STDOUT_FILENO,
+                                   chunk.data(),
+                                   static_cast<ssize_t>(chunk.size()));
                     }
-                    // sinon: on jette ce morceau (ligne ninja)
                 }
             }
 
-            // stderr → idem, on filtre la phrase ninja
+            // stderr → idem, avec filtrage
             if (FD_ISSET(errPipe[0], &fds))
             {
                 char buf[4096];
@@ -147,9 +165,11 @@ namespace vix::commands::RunCommand::detail
                 if (n > 0)
                 {
                     std::string chunk(buf, static_cast<std::size_t>(n));
-                    if (chunk.find(ninjaStop) == std::string::npos)
+                    if (!should_drop_chunk(chunk))
                     {
-                        write_safe(STDERR_FILENO, chunk.data(), static_cast<ssize_t>(chunk.size()));
+                        write_safe(STDERR_FILENO,
+                                   chunk.data(),
+                                   static_cast<ssize_t>(chunk.size()));
                     }
                 }
             }

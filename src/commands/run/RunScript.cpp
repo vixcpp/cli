@@ -57,8 +57,20 @@ namespace vix::commands::RunCommand::detail
 
         s += "cmake_minimum_required(VERSION 3.20)\n";
         s += "project(" + exeName + " LANGUAGES CXX)\n\n";
+
+        // ------------------------------------------------------------------
+        // 1) Build type + standard + flags (on force Release par défaut)
+        // ------------------------------------------------------------------
+        s += "if (NOT CMAKE_BUILD_TYPE)\n";
+        s += "    set(CMAKE_BUILD_TYPE Release CACHE STRING \"Build type\" FORCE)\n";
+        s += "endif()\n\n";
+
         s += "set(CMAKE_CXX_STANDARD 20)\n";
         s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
+
+        s += "set(GLOBAL_CXX_FLAGS \"-Wall -Wextra -Wshadow\")\n";
+        s += "set(CMAKE_CXX_FLAGS_RELEASE \"${CMAKE_CXX_FLAGS_RELEASE} ${GLOBAL_CXX_FLAGS} -O3 -DNDEBUG\")\n";
+        s += "set(CMAKE_CXX_FLAGS_DEBUG   \"${CMAKE_CXX_FLAGS_DEBUG}   ${GLOBAL_CXX_FLAGS} -O0 -g\")\n\n";
 
         if (!useVixRuntime)
         {
@@ -136,38 +148,52 @@ namespace vix::commands::RunCommand::detail
         s += "  endif()\n";
         s += "endif()\n\n";
 
-        // ===== Vix (core) =====
-        s += "set(vix_FOUND FALSE)\n";
+        // ===== Vix (on préfère vix::core, sinon on fallback) =====
+        s += "set(VIX_PKG_FOUND FALSE)\n";
         s += "find_package(vix QUIET CONFIG)\n";
         s += "if (vix_FOUND)\n";
         s += "  message(STATUS \"Found vix (lowercase) package config\")\n";
+        s += "  set(VIX_PKG_FOUND TRUE)\n";
         s += "else()\n";
         s += "  find_package(Vix QUIET CONFIG)\n";
         s += "  if (Vix_FOUND)\n";
         s += "    message(STATUS \"Found Vix (legacy) package config\")\n";
-        s += "    set(vix_FOUND TRUE)\n";
+        s += "    set(VIX_PKG_FOUND TRUE)\n";
         s += "  endif()\n";
         s += "endif()\n\n";
 
-        s += "if (NOT vix_FOUND)\n";
+        s += "if (NOT VIX_PKG_FOUND)\n";
         s += "  message(FATAL_ERROR \"Could not find Vix/vix package config\")\n";
         s += "endif()\n\n";
 
-        s += "if (TARGET vix::vix)\n";
-        s += "  set(VIX_MAIN_TARGET vix::vix)\n";
+        s += "# Choisir la meilleure cible à lier :\n";
+        s += "#   1) vix::core (idéal)\n";
+        s += "#   2) Vix::core\n";
+        s += "#   3) vix::vix / Vix::vix (fallback)\n";
+        s += "set(VIX_CORE_TARGET \"\")\n\n";
+
+        s += "if (TARGET vix::core)\n";
+        s += "  set(VIX_CORE_TARGET vix::core)\n";
+        s += "elseif (TARGET Vix::core)\n";
+        s += "  set(VIX_CORE_TARGET Vix::core)\n";
+        s += "elseif (TARGET vix::vix)\n";
+        s += "  set(VIX_CORE_TARGET vix::vix)\n";
         s += "elseif (TARGET Vix::vix)\n";
-        s += "  set(VIX_MAIN_TARGET Vix::vix)\n";
+        s += "  set(VIX_CORE_TARGET Vix::vix)\n";
         s += "else()\n";
-        s += "  message(FATAL_ERROR \"No Vix main target found\")\n";
+        s += "  message(FATAL_ERROR \"No Vix core/main target found (expected vix::core, Vix::core, vix::vix or Vix::vix)\")\n";
         s += "endif()\n\n";
 
         // ===== Executable + liens =====
         s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
         s += "target_link_libraries(" + exeName + " PRIVATE\n";
-        s += "  ${VIX_MAIN_TARGET}\n";
-        s += "  Boost::system Boost::thread Boost::filesystem\n";
+        s += "  ${VIX_CORE_TARGET}\n";
+        s += "  Boost::system\n";
+        s += "  Boost::thread\n";
+        s += "  Boost::filesystem\n";
         s += "  fmt::fmt\n";
-        s += "  OpenSSL::SSL OpenSSL::Crypto\n";
+        s += "  OpenSSL::SSL\n";
+        s += "  OpenSSL::Crypto\n";
         s += ")\n\n";
 
         // Target run

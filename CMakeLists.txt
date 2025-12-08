@@ -77,30 +77,51 @@ else()
 endif()
 
 # ---------------- Dependencies -----------------------
-# Priority:
-#  1) If umbrella target exists → link vix::vix (brings all modules).
-#  2) Else try find_package(Vix) and link vix::vix.
-#  3) Else, as a minimal fallback, link vix::utils (must be provided).
+# Strategy:
+#   1) If umbrella has already defined vix::vix or vix::core → just use them.
+#   2) Else, if we're in the monorepo (../core & ../utils exist) → add_subdirectory().
+#   3) Else, fall back to the installed Vix package (find_package(Vix)).
+
+# 1) Already in umbrella build?
 if (TARGET vix::vix)
+  message(STATUS "[cli] Using umbrella target vix::vix")
   target_link_libraries(vix_cli PRIVATE vix::vix)
+
+elseif (TARGET vix::core)
+  message(STATUS "[cli] Using umbrella target vix::core")
+  target_link_libraries(vix_cli PRIVATE vix::core)
+
 else()
-  find_package(Vix QUIET CONFIG)
-  if (Vix_FOUND AND TARGET vix::vix)
-    target_link_libraries(vix_cli PRIVATE vix::vix)
-  elseif (TARGET vix::utils)
-    target_link_libraries(vix_cli PRIVATE vix::utils)
+  # 2) Monorepo, but not added via umbrella (e.g. running `vix build` in modules/cli)
+  get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+  set(_VIX_CORE_DIR  "${_VIX_MODULES_DIR}/core")
+  set(_VIX_UTILS_DIR "${_VIX_MODULES_DIR}/utils")
+
+  if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
+    message(STATUS "[cli] Building inside Vix repo → adding local modules/core & modules/utils")
+    add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
+    add_subdirectory("${_VIX_CORE_DIR}"  "${CMAKE_BINARY_DIR}/_vix_core")
+    target_link_libraries(vix_cli PRIVATE vix::core vix::utils)
+
   else()
-    # Last attempt: try to locate Vix package for utils only
-    find_package(Vix QUIET CONFIG)
-    if (TARGET vix::utils)
+    # 3) Standalone build against system-installed Vix package
+    find_package(Vix CONFIG REQUIRED)
+    if (TARGET vix::vix)
+      message(STATUS "[cli] Using system Vix package (vix::vix)")
+      target_link_libraries(vix_cli PRIVATE vix::vix)
+    elseif (TARGET vix::utils)
+      message(STATUS "[cli] Using system Vix package (vix::utils)")
       target_link_libraries(vix_cli PRIVATE vix::utils)
     else()
       message(FATAL_ERROR
-        "Missing dependencies. Build this module via the umbrella project "
-        "(target vix::vix) or install the Vix package that exports vix::utils.")
+        "Missing dependencies for vix_cli.\n"
+        " - Either build the CLI from the umbrella project, or\n"
+        " - Ensure a proper VixConfig.cmake is installed (exporting vix::vix or vix::utils)."
+      )
     endif()
   endif()
 endif()
+
 
 # ---------------- CLI version wiring (dynamic) -------
 # Priorité:

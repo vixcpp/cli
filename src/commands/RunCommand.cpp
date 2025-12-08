@@ -12,6 +12,37 @@
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
 
+// Small helper to show a modern multi-step progress (like Vue CLI / Deno)
+namespace
+{
+    struct RunProgress
+    {
+        int total;
+        int current = 0;
+
+        explicit RunProgress(int totalSteps)
+            : total(totalSteps)
+        {
+        }
+
+        void phase_start(const std::string &label)
+        {
+            ++current;
+            // Blank line to visually separate phases
+            std::cout << "\n";
+            info("┏ [" + std::to_string(current) + "/" + std::to_string(total) + "] " + label);
+        }
+
+        void phase_done(const std::string &label, const std::string &extra = {})
+        {
+            std::string msg = "┗ [" + std::to_string(current) + "/" + std::to_string(total) + "] " + label;
+            if (!extra.empty())
+                msg += " — " + extra;
+            success(msg);
+        }
+    };
+}
+
 namespace vix::commands::RunCommand
 {
     using namespace detail;
@@ -46,8 +77,13 @@ namespace vix::commands::RunCommand
         // ----- CAS 1 : Presets -----
         if (has_presets(projectDir))
         {
+            // We have two main phases with presets: configure + build&run
+            RunProgress progress(/*totalSteps=*/2);
+
             // 1) Configure
             {
+                progress.phase_start("Configure project (preset: " + opt.preset + ")");
+
                 std::ostringstream oss;
 #ifdef _WIN32
                 oss << "cmd /C \"cd /D " << quote(projectDir.string())
@@ -57,8 +93,6 @@ namespace vix::commands::RunCommand
                     << " && cmake --preset " << quote(opt.preset);
 #endif
                 const std::string cmd = oss.str();
-
-                info("Configuring project (preset: " + opt.preset + ")...");
 
                 int code = 0;
                 std::string configureLog = run_and_capture_with_code(cmd, code);
@@ -82,7 +116,7 @@ namespace vix::commands::RunCommand
                 if (opt.verbose && !configureLog.empty())
                     std::cout << configureLog;
 
-                success("Configure step completed.");
+                progress.phase_done("Configure project", "completed");
                 std::cout << "\n";
             }
 
@@ -91,6 +125,8 @@ namespace vix::commands::RunCommand
                 choose_run_preset(projectDir, opt.preset, opt.runPreset);
 
             {
+                progress.phase_start("Build & run (preset: " + runPreset + ")");
+
                 std::ostringstream oss;
 #ifdef _WIN32
                 oss << "cmd /C \"cd /D " << quote(projectDir.string())
@@ -106,8 +142,6 @@ namespace vix::commands::RunCommand
 #endif
                 const std::string cmd = oss.str();
 
-                info("Building & running (preset: " + runPreset + ")...");
-
                 const int code = run_cmd_live_filtered(cmd);
                 if (code != 0)
                 {
@@ -116,6 +150,8 @@ namespace vix::commands::RunCommand
                         "Execution failed (run preset '" + runPreset + "')");
                     return code;
                 }
+
+                progress.phase_done("Build & run", "application started");
             }
 
             success("🏃 Application started (preset: " + runPreset + ").");
@@ -124,6 +160,9 @@ namespace vix::commands::RunCommand
 
         // ----- CAS 2 : Fallback build/ + cmake .. -----
         fs::path buildDir = projectDir / "build";
+
+        // 3 main phases: configure (if needed) + build + run
+        RunProgress progress(/*totalSteps=*/3);
 
         {
             std::error_code ec;
@@ -137,6 +176,8 @@ namespace vix::commands::RunCommand
 
         if (!has_cmake_cache(buildDir))
         {
+            progress.phase_start("Configure project (fallback)");
+
             std::ostringstream oss;
 #ifdef _WIN32
             oss << "cmd /C \"cd /D " << quote(buildDir.string()) << " && cmake ..\"";
@@ -145,7 +186,6 @@ namespace vix::commands::RunCommand
 #endif
             const std::string cmd = oss.str();
 
-            info("Configuring project (fallback mode)...");
             const int code = run_cmd_live_filtered(cmd);
             if (code != 0)
             {
@@ -154,15 +194,20 @@ namespace vix::commands::RunCommand
                 return code != 0 ? code : 4;
             }
 
-            success("Configure step completed (fallback).");
+            progress.phase_done("Configure project", "completed (fallback)");
             std::cout << "\n";
         }
         else
         {
             info("CMake cache detected in build/ — skipping configure step (fallback).");
+            // Mark config phase as "already done"
+            progress.phase_start("Configure project (fallback)");
+            progress.phase_done("Configure project", "cache already present");
         }
 
         {
+            progress.phase_start("Build project (fallback)");
+
             std::ostringstream oss;
 #ifdef _WIN32
             oss << "cd /D " << quote(buildDir.string()) << " && cmake --build .";
@@ -174,8 +219,6 @@ namespace vix::commands::RunCommand
                 oss << " -j " << opt.jobs;
 #endif
             const std::string cmd = oss.str();
-
-            info("Building project (fallback mode)...");
 
             int code = 0;
             std::string buildLog = run_and_capture_with_code(cmd, code);
@@ -191,10 +234,11 @@ namespace vix::commands::RunCommand
             if (has_real_build_work(buildLog))
             {
                 std::cout << buildLog;
-                success("Build completed (fallback).");
+                progress.phase_done("Build project", "completed (fallback)");
             }
             else
             {
+                progress.phase_done("Build project", "up to date");
                 success("Nothing to build — everything is up to date.");
             }
 
@@ -261,8 +305,11 @@ namespace vix::commands::RunCommand
             return 0;
         }
 
+        // Phase 3: run
         if (fs::exists(exePath))
         {
+            progress.phase_start("Run application");
+
             info("Running executable: " + exePath.string());
             std::string cmd =
 #ifdef _WIN32
@@ -278,9 +325,13 @@ namespace vix::commands::RunCommand
                     "Executable returned non-zero exit code");
                 return code;
             }
+
+            progress.phase_done("Run application", "completed");
         }
         else
         {
+            progress.phase_start("Run application");
+            progress.phase_done("Run application", "no explicit run target");
             success("Build completed (fallback). No explicit 'run' target found.");
             hint("If you want to run a specific example or binary, "
                  "execute it manually from the build/ directory.");

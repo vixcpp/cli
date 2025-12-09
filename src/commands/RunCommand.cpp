@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <thread>
 #include <atomic>
+#include <cstdlib>
 
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
@@ -138,6 +139,17 @@ namespace
             success(msg);
         }
     };
+
+    void enable_line_buffered_stdout_for_apps()
+    {
+#ifdef _WIN32
+        // Windows : _putenv_s remplace/ajoute la variable
+        _putenv_s("VIX_STDOUT_MODE", "line");
+#else
+        // POSIX : setenv remplace ou ajoute
+        ::setenv("VIX_STDOUT_MODE", "line", 1);
+#endif
+    }
 } // namespace
 
 namespace vix::commands::RunCommand
@@ -147,6 +159,10 @@ namespace vix::commands::RunCommand
     int run(const std::vector<std::string> &args)
     {
         const Options opt = parse(args);
+
+        // 🔥 All apps launched via `vix run` get line-buffered stdout by default.
+        // This is picked up by vix::core's StdoutConfig (VixStdoutConfigurator).
+        enable_line_buffered_stdout_for_apps();
 
         if (opt.singleCpp)
         {
@@ -229,14 +245,18 @@ namespace vix::commands::RunCommand
 
                 std::ostringstream oss;
 #ifdef _WIN32
+                // On injecte la variable d'env AVANT le cmake
                 oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && cmake --build --preset " << quote(runPreset) << " --target run";
+                    << " && set VIX_STDOUT_MODE=line && "
+                    << "cmake --build --preset " << quote(runPreset) << " --target run";
                 if (opt.jobs > 0)
                     oss << " -- -j " << opt.jobs;
                 oss << "\"";
 #else
+                // POSIX : export inline
                 oss << "cd " << quote(projectDir.string())
-                    << " && cmake --build --preset " << quote(runPreset) << " --target run";
+                    << " && VIX_STDOUT_MODE=line "
+                    << "cmake --build --preset " << quote(runPreset) << " --target run";
                 if (opt.jobs > 0)
                     oss << " -- -j " << opt.jobs;
 #endif
@@ -329,24 +349,44 @@ namespace vix::commands::RunCommand
 
             if (opt.quiet)
             {
+                // Quiet → on avait déjà un spinner + capture.
                 Spinner spinner("Building project (fallback)");
                 buildLog = run_and_capture_with_code(cmd, code);
             }
             else
             {
-                // logs live
-                code = run_cmd_live_filtered(cmd);
+                // Non-quiet → logs live, comme avant.
+                code = run_cmd_live_filtered(cmd, "Building project (fallback)");
             }
 
             if (code != 0)
             {
+                // Si on n’a pas encore de log (cas non-quiet), on refait un build silencieux
+                // uniquement pour capturer la sortie et la passer au ErrorHandler.
+                if (buildLog.empty())
+                {
+                    int captureCode = 0;
+                    buildLog = run_and_capture_with_code(cmd, captureCode);
+                    (void)captureCode;
+                }
+
                 if (!buildLog.empty())
-                    std::cout << buildLog;
-                error("Build failed (fallback build/, code " + std::to_string(code) + ").");
-                hint("Check the build logs or run the command manually.");
+                {
+                    vix::cli::ErrorHandler::printBuildErrors(
+                        buildLog,
+                        buildDir,
+                        "Build failed (fallback build/)");
+                }
+                else
+                {
+                    error("Build failed (fallback build/, code " + std::to_string(code) + ").");
+                    hint("Check the build command manually in your terminal.");
+                }
+
                 return code != 0 ? code : 5;
             }
 
+            // Afficher le log seulement si utile
             if (!buildLog.empty() && has_real_build_work(buildLog))
                 std::cout << buildLog;
 

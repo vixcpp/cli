@@ -163,6 +163,60 @@ namespace vix::commands::RunCommand::detail
         return s;
     }
 
+    /// Run a single C++ source file in “script mode”.
+    ///
+    /// This function powers the command:
+    ///     vix run file.cpp
+    ///
+    /// It provides a smooth and IDE-like experience similar to running a script,
+    /// while still using a full CMake-based build pipeline under the hood.
+    ///
+    /// High-level workflow:
+    /// --------------------
+    /// 1. Validate that the input file exists.
+    /// 2. Create a dedicated temporary build directory inside:
+    ///        ~/.vix-scripts/<filename>/
+    /// 3. Generate a minimal CMakeLists.txt adapted for:
+    ///        - pure C++ files
+    ///        - or scripts using the Vix runtime (detected automatically)
+    /// 4. Run CMake configuration silently.
+    /// 5. Build the target using CMake, capturing *all* compiler and linker output
+    ///    into a log file.
+    /// 6. If the compilation fails:
+    ///        - Read the captured log
+    ///        - Pass it to ErrorHandler::printBuildErrors(), which:
+    ///            • parses Clang/GCC errors (file, line, column, message)
+    ///            • detects friendly “special cases”
+    ///              (missing std::cout, missing semicolon, ambiguous overloads,
+    ///               use-after-move, missing #include, etc.)
+    ///            • prints colored, pedagogical error messages
+    ///        - The function then returns the compiler’s exit code.
+    ///
+    /// 7. If the build succeeds:
+    ///        - Locate the executable produced by CMake
+    ///        - Run it directly
+    ///        - Forward the program’s exit code (including crashes)
+    ///
+    /// Error handling:
+    /// ---------------
+    /// • If the compiler fails → ErrorHandler is used for clean, colored output.
+    /// • If the linker fails   → full log is parsed, and linker diagnostics are
+    ///   printed the same way (undefined symbols, missing files, ODR violations,
+    ///   memory / ASan reports, etc.).
+    /// • If no log is captured → a fallback message is printed.
+    ///
+    /// Why this exists:
+    /// ----------------
+    /// It turns Vix into an educational C++ runtime:
+    ///    - CMake complexity is hidden.
+    ///    - The user simply runs:  vix run file.cpp
+    ///    - Compiler errors are transformed into friendly hints.
+    ///
+    /// This is the foundation of the “Vix Script Mode” experience.
+    ///
+    /// \return
+    ///    0  → success
+    ///    >0 → build or runtime error (compiler, linker, or executed program)
     int run_single_cpp(const Options &opt)
     {
         using namespace std;
@@ -205,20 +259,59 @@ namespace vix::commands::RunCommand::detail
             }
         }
 
-        // Exécuter la compilation silencieusement
+        // Exécuter la compilation en capturant le log pour un affichage propre
         {
+            path buildDir = projectDir / "build";
+            path logPath = projectDir / "build.log";
+
             std::ostringstream oss;
-            oss << "cd " << quote(projectDir.string()) << " && cmake --build build --target " << exeName;
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake --build build --target " << exeName;
+
             if (opt.jobs > 0)
                 oss << " -- -j " << opt.jobs;
+
 #ifndef _WIN32
-            oss << " 2>&1 >/dev/null";
+            // On redirige TOUT (stdout + stderr) vers build.log
+            oss << " >" << quote(logPath.string()) << " 2>&1";
 #else
-            oss << " >nul 2>nul";
+            oss.str("");
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake --build build --target " << exeName;
+            if (opt.jobs > 0)
+                oss << " -- /m:" << opt.jobs; // style MSBuild
+
+            oss << " >" << quote(logPath.string()) << " 2>&1";
 #endif
+
             int code = std::system(oss.str().c_str());
             if (code != 0)
             {
+                // Lire le log et passer au ErrorHandler
+                std::ifstream ifs(logPath);
+                std::string logContent;
+
+                if (ifs)
+                {
+                    std::ostringstream logStream;
+                    logStream << ifs.rdbuf();
+                    logContent = logStream.str();
+                }
+
+                if (!logContent.empty())
+                {
+                    vix::cli::ErrorHandler::printBuildErrors(
+                        logContent,
+                        script,
+                        "Script build failed");
+                }
+                else
+                {
+                    // Fallback si pas de log (très rare)
+                    error("Script build failed (no compiler log captured).");
+                }
+
+                // On garde ta gestion d’exit code pour la cohérence CLI
                 handle_runtime_exit_code(code, "Script build failed");
                 return code;
             }
@@ -238,10 +331,14 @@ namespace vix::commands::RunCommand::detail
         // Exécuter le binaire directement, sans messages de configuration
         int runCode = 0;
         std::string cmdRun;
+
 #ifdef _WIN32
-        cmdRun = "\"" + exePath.string() + "\"";
+        // Sur Windows, on passe par cmd /C + set
+        cmdRun = "cmd /C \"set VIX_STDOUT_MODE=line && " +
+                 std::string("\"") + exePath.string() + "\"\"";
 #else
-        cmdRun = quote(exePath.string());
+        // Sur POSIX, on préfixe avec la variable d'environnement
+        cmdRun = "VIX_STDOUT_MODE=line " + quote(exePath.string());
 #endif
 
         runCode = std::system(cmdRun.c_str());

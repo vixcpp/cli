@@ -1,97 +1,164 @@
-# 🧩 Vix.cpp — CLI Module
+# 🧩 Vix.cpp — CLI Module  
+### Modern C++ Runtime Tooling • Zero-Friction Development • Fast Web Apps
 
 ![C++](https://img.shields.io/badge/C%2B%2B-20-blue.svg)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Stable-success)
 ![Platform](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-lightgrey)
+![Runtime](https://img.shields.io/badge/Runtime-Vix.cpp%201.x-orange)
 
-> **vix.cpp/cli** — The official command-line interface for the [Vix.cpp](https://github.com/vixcpp/vix) framework.  
-> Designed for speed and simplicity, it lets you **create**, **build**, and **run** modern C++ web applications with a single command.
-
----
-
-## 🚀 Overview
-
-The **Vix CLI** (`vix`) provides a clean developer experience similar to **FastAPI**, **Vue CLI**, or **Cargo** — but for **modern C++20**.  
-It manages your projects, builds them efficiently, and runs them instantly.
+> **Vix CLI** is the official command-line interface for  
+> **[Vix.cpp](https://github.com/vixcpp/vix)** — the modern C++ backend runtime.  
+> It provides a *smooth*, *unified* and *developer-friendly* workflow for creating, building and running C++20 applications.
 
 ---
 
-## ⚙️ Features
+# 🚀 Overview
 
-- 🏗️ **Project scaffolding** — `vix new <name>` creates a complete C++ app structure.
-- ⚡ **Unified build system** — `vix build` compiles using CMake presets and caching.
-- 🚀 **Instant execution** — `vix run` builds (if needed) and launches automatically.
-- 📦 **Portable binary** — works as a standalone executable or within the full Vix suite.
-- 🧠 **Minimal dependencies** — written in clean, modern C++20.
-- 🎨 **Rich logging** — colorized output powered by `vix::Logger`.
+The Vix CLI (`vix`) brings to C++ what tools like **Cargo**, **Deno**, **Bun**, and **Vue CLI** bring to their ecosystems:
+
+- Simple project creation  
+- Fast builds with CMake presets  
+- Instant execution with clean logs  
+- Developer-oriented error messages  
+- Script-mode for running `.cpp` files like a scripting language  
+
+It finally gives C++ a **modern runtime experience**.
 
 ---
 
-## 🧰 Commands
+# ⚙️ Features
+
+### 🏗️ **Project scaffolding**
+Create a complete application structure in seconds:
+
+```bash
+vix new blog
+```
+
+### ⚡ **Smart build system**
+- Uses CMake presets automatically  
+- Detects missing configs  
+- Parallel builds (`-j`)  
+- Spinner & colored logs  
+- ErrorHandler integration for friendlier compiler diagnostics  
+
+### 🚀 **Run applications instantly**
+```bash
+vix run
+```
+
+Includes:
+- Automatic build if needed  
+- Live filtered logs  
+- Runtime log-level injection  
+- Line-buffered stdout for real-time logs  
+- Clean SIGINT handling (Ctrl+C)  
+
+### 🧠 **ErrorHandler: “your C++ teacher inside the CLI”**
+- Detects overload resolution issues  
+- Explains template deduction errors  
+- Detects ambiguous calls, missing includes, wrong signatures  
+- Clear, structured messages with hints  
+
+### 🛠️ **Script mode (single .cpp execution)**
+```bash
+vix run demo.cpp
+```
+
+The CLI transparently:
+1. Creates a temporary CMake project  
+2. Builds it  
+3. Runs it with enhanced diagnostics  
+
+---
+
+# 🧰 Commands
 
 ```bash
 vix <command> [options]
 ```
 
-| Command                   | Description                                        |
-| ------------------------- | -------------------------------------------------- |
-| `vix new <name>`          | Create a new Vix project in the current directory. |
-| `vix build [name]`        | Build a Vix project or app (uses CMake).           |
-| `vix run [name] [--args]` | Run the specified project or the root app.         |
-| `vix version`             | Show the current CLI version.                      |
-| `vix help`                | Display available commands and usage examples.     |
+| Command                      | Description                                              |
+|-----------------------------|----------------------------------------------------------|
+| `vix new <name>`            | Create a new project scaffold                            |
+| `vix build [name]`          | Build the root or a child application                    |
+| `vix run [name] [--args]`   | Build (if needed) and run an application                 |
+| `vix version`               | Display CLI version and runtime details                  |
+| `vix help [cmd]`            | Show help for the CLI or a specific command              |
 
 ---
 
-## 🧪 Examples
+# 🧪 Usage Examples
 
+### Create a new project
 ```bash
-# Create a new project
 vix new blog
+```
 
-# Build the current project
+### Build it
+```bash
 vix build
+```
 
-# Run the app on port 8080
+### Run the app
+```bash
 vix run -- --port 8080
 ```
 
-Sample output:
-
+### Example output
 ```
-[vix][info] Building project 'blog'...
-[vix][success] Build complete (1.2s)
-[vix][info] Running ./build/blog ...
-[vix][ready] Listening on http://localhost:8080 🚀
+Vix.cpp runtime is ready 🚀
+
+Logs:
+
+Using configuration file: config/config.json
+[I] ThreadPool started with 8 workers
+[I] Acceptor initialized on port 8080
+[I] Server request timeout set to 5000 ms
+```
+
+### Run a single C++ file
+```bash
+vix run hello.cpp
 ```
 
 ---
 
-## 🧩 Architecture
+# 🧩 Architecture
 
-The CLI follows a **command registry** pattern for extensibility:
+The CLI uses a **command registry** for extensibility:
 
 ```cpp
-std::unordered_map<std::string, std::function<int(const std::vector<std::string>&)>> commands_;
+std::unordered_map<std::string, CommandHandler> commands_;
 ```
 
-Each command (`new`, `build`, `run`) is implemented as a separate handler under `src/commands/`.
+### Main components
 
-| File                        | Description                                         |
-| --------------------------- | --------------------------------------------------- |
-| `include/vix/cli/CLI.hpp`   | Core CLI class definition                           |
-| `src/CLI.cpp`               | Command dispatcher & entrypoint                     |
-| `commands/NewCommand.cpp`   | Handles project creation                            |
-| `commands/BuildCommand.cpp` | Handles CMake builds                                |
-| `commands/RunCommand.cpp`   | Runs the built executable                           |
-| `CMakeLists.txt`            | Build config (supports LTO, sanitizers, standalone) |
+| Path                                         | Responsibility                                      |
+|----------------------------------------------|------------------------------------------------------|
+| `include/vix/cli/CLI.hpp`                    | CLI parser and command dispatcher                    |
+| `src/CLI.cpp`                                | Entry point + command registry                       |
+| `src/ErrorHandler.cpp`                       | Friendly compiler diagnostics + pattern detection    |
+| `src/commands/NewCommand.cpp`                | Project scaffolding logic                            |
+| `src/commands/BuildCommand.cpp`              | Build orchestration (presets + fallback)             |
+| `src/commands/RunCommand.cpp`                | Runtime orchestration + environment injection        |
+| `src/commands/run/RunScript.cpp`             | Script mode for single .cpp execution                |
+
+### Runtime integration
+`vix run` automatically injects:
+
+```
+VIX_STDOUT_MODE=line
+```
+
+→ Enables real-time logs in Vix.cpp applications.
 
 ---
 
-## ⚙️ Build & Installation
+# 🔧 Build & Installation
 
-### Build Standalone
+### Build the CLI standalone
 
 ```bash
 git clone https://github.com/vixcpp/vix.git
@@ -100,30 +167,39 @@ cmake -B build -S .
 cmake --build build -j$(nproc)
 ```
 
-Binary output:
+Output binary:
 
 ```bash
 ./build/vix
 ```
 
-### Build with the Full Framework
+### Build as part of the umbrella Vix project
 
 ```bash
 cd vix
 cmake -B build -S .
-cmake --build build -j$(nproc)
+cmake --build build
 ```
 
-The CLI (`vix`) is built and installed automatically as part of the umbrella project.
+The CLI is included automatically.
 
 ---
 
-## 🧰 Development Flags
+# ⚙️ Configuration & Options
 
-| Flag                    | Default | Description                      |
-| ----------------------- | ------- | -------------------------------- |
-| `VIX_ENABLE_SANITIZERS` | OFF     | Enables AddressSanitizer + UBSan |
-| `VIX_ENABLE_LTO`        | OFF     | Enables Link-Time Optimization   |
+### Environment variables
+
+| Variable            | Description                                    |
+|--------------------|------------------------------------------------|
+| `VIX_LOG_LEVEL`    | Controls runtime log level (trace → critical)  |
+| `VIX_STDOUT_MODE`  | Forces real-time stdout flush when set to `line` |
+
+### CMake flags
+
+| Option                   | Default | Description                                |
+|--------------------------|---------|--------------------------------------------|
+| `VIX_ENABLE_SANITIZERS` | OFF     | Enable ASan + UBSan                        |
+| `VIX_ENABLE_LTO`        | OFF     | Enable link-time optimization               |
 
 Example:
 
@@ -131,34 +207,38 @@ Example:
 cmake -B build -S . -DVIX_ENABLE_SANITIZERS=ON
 ```
 
-Run:
-
-```bash
-./vix help
-```
-
 ---
 
-## 📦 Output
+# 📦 Output (CLI Help)
 
-```bash
-✨ Vix.cpp CLI - Developer Commands ✨
-----------------------------------------
-  new <name>          Create a new Vix project
-  build [name]        Build a project (root or app)
-  run [name] [--args] Run a project or app
-  version             Show CLI version
-  help                Show this help message
+```
+Vix.cpp — Modern C++ backend runtime
+Version: v1.6.x
+
+Usage:
+  vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]
+
+Commands:
+  new <name>             Create a new Vix project
+  build [name]           Configure and build a project
+  run [name] [--args]    Build (if needed) and run a project
+  help [command]         Show help
+  version                Show CLI version
+
+Global options:
+  --verbose              Debug logs for the runtime
+  -q, --quiet            Only warnings and errors
+  --log-level <level>    Trace | debug | info | warn | error | critical
 
 Examples:
-  vix new blog
-  vix build blog --config Debug
-  vix run blog -- --port 8080
+  vix new api
+  vix run api -- --port 8080
+  vix --log-level debug run api
 ```
 
 ---
 
-## 🧾 License
+# 🧾 License
 
 **MIT License** © [Gaspard Kirira](https://github.com/gkirira)  
-See [LICENSE](../../LICENSE) for details.
+See [`LICENSE`](../../LICENSE) for details.

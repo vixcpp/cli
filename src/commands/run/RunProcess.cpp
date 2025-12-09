@@ -19,7 +19,10 @@ using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
 {
+
 #ifndef _WIN32
+    /// RAII helper that temporarily ignores SIGINT in the parent process
+    /// while the child build/run process is executing.
     struct SigintGuard
     {
         struct sigaction oldAction{};
@@ -44,7 +47,8 @@ namespace vix::commands::RunCommand::detail
             }
         }
     };
-#endif
+
+    /// Thin wrapper around write(2), best-effort only.
     inline void write_safe(int fd, const char *buf, ssize_t n)
     {
         if (n > 0)
@@ -53,6 +57,105 @@ namespace vix::commands::RunCommand::detail
             (void)written;
         }
     }
+
+    /// Output filter that:
+    ///  - initially streams build logs (Ninja, gmake, etc.),
+    ///  - as soon as it detects runtime logs (`[I]`/`[W]`/`[E]` or
+    ///    "Using configuration file:"), it:
+    ///      * clears the screen,
+    ///      * prints a small header,
+    ///      * then only shows runtime logs from that point on.
+    class RuntimeOutputFilter
+    {
+    public:
+        /// Processes a new chunk coming from stdout/stderr.
+        /// Returns the part that should be written by the caller.
+        /// May also write directly to STDOUT (for clear-screen + header).
+        std::string process(const std::string &chunk, int fdForBuildAndRuntime)
+        {
+            if (clearedForRuntime_)
+            {
+                // Once in "runtime only" mode, we forward everything as-is.
+                return chunk;
+            }
+
+            buffer_ += chunk;
+
+            // Look for the first marker indicating that the runtime is speaking.
+            std::size_t first = std::string::npos;
+            auto update_min = [&](std::size_t candidate)
+            {
+                if (candidate != std::string::npos &&
+                    (first == std::string::npos || candidate < first))
+                {
+                    first = candidate;
+                }
+            };
+
+            update_min(buffer_.find("[I]"));
+            update_min(buffer_.find("[W]"));
+            update_min(buffer_.find("[E]"));
+            update_min(buffer_.find("Using configuration file:"));
+
+            if (first == std::string::npos)
+            {
+                // Still no runtime log detected → progressively flush
+                // prefix of the buffer (build logs) to avoid unbounded growth.
+                std::string prefix = flush_prefix_if_needed();
+                if (!prefix.empty())
+                {
+                    write_safe(fdForBuildAndRuntime,
+                               prefix.data(),
+                               static_cast<ssize_t>(prefix.size()));
+                }
+                return {};
+            }
+
+            // 🔥 First time we detect a runtime log.
+            clearedForRuntime_ = true;
+
+            // Drop everything before the runtime marker.
+            buffer_.erase(0, first);
+
+            // Clear the terminal and move cursor to home.
+            const char *clearScreen = "\033[2J\033[H";
+            write_safe(STDOUT_FILENO, clearScreen,
+                       static_cast<ssize_t>(std::strlen(clearScreen)));
+
+            // Dev-server-like header (Vite-style).
+            std::string header;
+            header += "Vix.cpp runtime is ready 🚀\n\n";
+            header += "Logs:\n\n";
+            write_safe(STDOUT_FILENO,
+                       header.c_str(),
+                       static_cast<ssize_t>(header.size()));
+
+            // Everything left in the buffer is now considered runtime output.
+            std::string out = buffer_;
+            buffer_.clear();
+            return out;
+        }
+
+    private:
+        // Keep a small tail in the buffer to avoid breaking markers
+        // that may be split between read() calls.
+        static constexpr std::size_t KEEP_TAIL = 8;
+
+        bool clearedForRuntime_ = false;
+        std::string buffer_;
+
+        std::string flush_prefix_if_needed()
+        {
+            if (buffer_.size() <= KEEP_TAIL)
+                return {};
+
+            const std::size_t flushLen = buffer_.size() - KEEP_TAIL;
+            std::string out = buffer_.substr(0, flushLen);
+            buffer_.erase(0, flushLen);
+            return out;
+        }
+    };
+#endif // _WIN32
 
     int run_cmd_live_filtered(const std::string &cmd,
                               const std::string &spinnerLabel)
@@ -83,7 +186,7 @@ namespace vix::commands::RunCommand::detail
 
         if (pid == 0)
         {
-            // ===== Child =====
+            // ===== Child process =====
             struct sigaction saChild{};
             saChild.sa_handler = SIG_DFL;
             sigemptyset(&saChild.sa_mask);
@@ -103,7 +206,7 @@ namespace vix::commands::RunCommand::detail
             _exit(127);
         }
 
-        // ===== Parent =====
+        // ===== Parent process =====
         close(outPipe[1]);
         close(errPipe[1]);
 
@@ -168,70 +271,8 @@ namespace vix::commands::RunCommand::detail
                        static_cast<ssize_t>(std::strlen(clearLine)));
         };
 
-        bool clearedForRuntime = false;
-
-        std::string runtimeBuffer;
-
-        auto flush_prefix_if_needed = [&]() -> std::string
-        {
-            constexpr std::size_t KEEP_TAIL = 8;
-
-            if (runtimeBuffer.size() <= KEEP_TAIL)
-                return {};
-
-            const std::size_t flushLen = runtimeBuffer.size() - KEEP_TAIL;
-            std::string out = runtimeBuffer.substr(0, flushLen);
-            runtimeBuffer.erase(0, flushLen);
-            return out;
-        };
-
-        auto process_chunk_for_runtime = [&](const std::string &chunk) -> std::string
-        {
-            if (clearedForRuntime)
-                return chunk;
-
-            runtimeBuffer += chunk;
-
-            std::size_t first = std::string::npos;
-
-            auto update_min = [&](std::size_t candidate)
-            {
-                if (candidate != std::string::npos &&
-                    (first == std::string::npos || candidate < first))
-                {
-                    first = candidate;
-                }
-            };
-
-            update_min(runtimeBuffer.find("[I]"));
-            update_min(runtimeBuffer.find("[W]"));
-            update_min(runtimeBuffer.find("[E]"));
-            update_min(runtimeBuffer.find("Using configuration file:"));
-
-            if (first == std::string::npos)
-            {
-                std::string prefix = flush_prefix_if_needed();
-                return prefix;
-            }
-
-            clearedForRuntime = true;
-
-            runtimeBuffer.erase(0, first);
-            const char *clearScreen = "\033[2J\033[H";
-            write_safe(STDOUT_FILENO, clearScreen,
-                       static_cast<ssize_t>(std::strlen(clearScreen)));
-
-            std::string header;
-            header += "Vix.cpp runtime is ready 🚀\n\n";
-            header += "Logs:\n\n";
-            write_safe(STDOUT_FILENO,
-                       header.c_str(),
-                       static_cast<ssize_t>(header.size()));
-
-            std::string out = runtimeBuffer;
-            runtimeBuffer.clear();
-            return out;
-        };
+        // Runtime filter (clear + header on first runtime log).
+        RuntimeOutputFilter runtimeFilter;
 
         while (running)
         {
@@ -261,6 +302,7 @@ namespace vix::commands::RunCommand::detail
 
             if (ready == 0)
             {
+                // No output yet → update spinner.
                 draw_spinner();
             }
             else
@@ -281,7 +323,9 @@ namespace vix::commands::RunCommand::detail
                         std::string chunk(buf, static_cast<std::size_t>(n));
                         if (!should_drop_chunk(chunk))
                         {
-                            std::string filtered = process_chunk_for_runtime(chunk);
+                            std::string filtered =
+                                runtimeFilter.process(chunk, STDOUT_FILENO);
+
                             if (!filtered.empty())
                             {
                                 write_safe(STDOUT_FILENO,
@@ -302,7 +346,9 @@ namespace vix::commands::RunCommand::detail
                         std::string chunk(buf, static_cast<std::size_t>(n));
                         if (!should_drop_chunk(chunk))
                         {
-                            std::string filtered = process_chunk_for_runtime(chunk);
+                            std::string filtered =
+                                runtimeFilter.process(chunk, STDERR_FILENO);
+
                             if (!filtered.empty())
                             {
                                 write_safe(STDERR_FILENO,

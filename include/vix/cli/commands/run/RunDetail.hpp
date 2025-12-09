@@ -30,7 +30,8 @@ namespace vix::commands::RunCommand::detail
     };
 
     // --- Process / IO ---
-    int run_cmd_live_filtered(const std::string &cmd);
+    int run_cmd_live_filtered(const std::string &cmd,
+                              const std::string &spinnerLabel = {});
 
     // --- Script mode (vix run foo.cpp) ---
     std::filesystem::path get_scripts_root();

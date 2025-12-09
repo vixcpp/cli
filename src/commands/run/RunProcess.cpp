@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <cstring>
 
 #ifndef _WIN32
 #include <unistd.h>     // pipe, dup2, read, write, close
@@ -27,7 +28,7 @@ namespace vix::commands::RunCommand::detail
         SigintGuard()
         {
             struct sigaction sa{};
-            sa.sa_handler = SIG_IGN; // ignorer SIGINT dans le parent
+            sa.sa_handler = SIG_IGN;
             sigemptyset(&sa.sa_mask);
             sa.sa_flags = 0;
 
@@ -39,7 +40,7 @@ namespace vix::commands::RunCommand::detail
         {
             if (installed)
             {
-                sigaction(SIGINT, &oldAction, nullptr); // restaurer le handler d’avant
+                sigaction(SIGINT, &oldAction, nullptr);
             }
         }
     };
@@ -53,13 +54,14 @@ namespace vix::commands::RunCommand::detail
         }
     }
 
-    int run_cmd_live_filtered(const std::string &cmd)
+    int run_cmd_live_filtered(const std::string &cmd,
+                              const std::string &spinnerLabel)
     {
 #ifdef _WIN32
-        // Windows: on garde std::system, pas de filtrage avancé.
+        (void)spinnerLabel;
         return std::system(cmd.c_str());
 #else
-        SigintGuard sigGuard; // le parent ignore SIGINT pendant le build/run
+        SigintGuard sigGuard;
 
         int outPipe[2];
         int errPipe[2];
@@ -81,8 +83,7 @@ namespace vix::commands::RunCommand::detail
 
         if (pid == 0)
         {
-            // ----- Child -----
-            // On remet SIGINT par défaut dans l’enfant
+            // ===== Child =====
             struct sigaction saChild{};
             saChild.sa_handler = SIG_DFL;
             sigemptyset(&saChild.sa_mask);
@@ -102,7 +103,7 @@ namespace vix::commands::RunCommand::detail
             _exit(127);
         }
 
-        // ----- Parent -----
+        // ===== Parent =====
         close(outPipe[1]);
         close(errPipe[1]);
 
@@ -129,6 +130,109 @@ namespace vix::commands::RunCommand::detail
             return false;
         };
 
+        // --- Spinner state ---
+        const bool useSpinner = !spinnerLabel.empty();
+        bool spinnerActive = useSpinner;
+
+        static const char *frames[] = {
+            "⠋", "⠙", "⠹", "⠸",
+            "⠼", "⠴", "⠦", "⠧",
+            "⠇", "⠏"};
+        const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
+        std::size_t frameIndex = 0;
+
+        auto draw_spinner = [&]()
+        {
+            if (!spinnerActive)
+                return;
+
+            std::string line = "\r┃   ";
+            line += frames[frameIndex];
+            line += " ";
+            line += spinnerLabel;
+            line += "   ";
+            write_safe(STDOUT_FILENO, line.c_str(),
+                       static_cast<ssize_t>(line.size()));
+
+            frameIndex = (frameIndex + 1) % frameCount;
+        };
+
+        auto clear_spinner = [&]()
+        {
+            if (!useSpinner)
+                return;
+
+            const char *clearLine =
+                "\r                                                                                \r";
+            write_safe(STDOUT_FILENO, clearLine,
+                       static_cast<ssize_t>(std::strlen(clearLine)));
+        };
+
+        bool clearedForRuntime = false;
+
+        std::string runtimeBuffer;
+
+        auto flush_prefix_if_needed = [&]() -> std::string
+        {
+            constexpr std::size_t KEEP_TAIL = 8;
+
+            if (runtimeBuffer.size() <= KEEP_TAIL)
+                return {};
+
+            const std::size_t flushLen = runtimeBuffer.size() - KEEP_TAIL;
+            std::string out = runtimeBuffer.substr(0, flushLen);
+            runtimeBuffer.erase(0, flushLen);
+            return out;
+        };
+
+        auto process_chunk_for_runtime = [&](const std::string &chunk) -> std::string
+        {
+            if (clearedForRuntime)
+                return chunk;
+
+            runtimeBuffer += chunk;
+
+            std::size_t first = std::string::npos;
+
+            auto update_min = [&](std::size_t candidate)
+            {
+                if (candidate != std::string::npos &&
+                    (first == std::string::npos || candidate < first))
+                {
+                    first = candidate;
+                }
+            };
+
+            update_min(runtimeBuffer.find("[I]"));
+            update_min(runtimeBuffer.find("[W]"));
+            update_min(runtimeBuffer.find("[E]"));
+            update_min(runtimeBuffer.find("Using configuration file:"));
+
+            if (first == std::string::npos)
+            {
+                std::string prefix = flush_prefix_if_needed();
+                return prefix;
+            }
+
+            clearedForRuntime = true;
+
+            runtimeBuffer.erase(0, first);
+            const char *clearScreen = "\033[2J\033[H";
+            write_safe(STDOUT_FILENO, clearScreen,
+                       static_cast<ssize_t>(std::strlen(clearScreen)));
+
+            std::string header;
+            header += "Vix.cpp runtime is ready 🚀\n\n";
+            header += "Logs:\n\n";
+            write_safe(STDOUT_FILENO,
+                       header.c_str(),
+                       static_cast<ssize_t>(header.size()));
+
+            std::string out = runtimeBuffer;
+            runtimeBuffer.clear();
+            return out;
+        };
+
         while (running)
         {
             FD_ZERO(&fds);
@@ -136,45 +240,80 @@ namespace vix::commands::RunCommand::detail
             FD_SET(errPipe[0], &fds);
 
             int maxfd = std::max(outPipe[0], errPipe[0]) + 1;
-            int ready = select(maxfd, &fds, nullptr, nullptr, nullptr);
-            if (ready <= 0)
-                continue;
 
-            // stdout → live, avec filtrage
-            if (FD_ISSET(outPipe[0], &fds))
+            struct timeval tv;
+            struct timeval *tv_ptr = nullptr;
+            if (spinnerActive)
             {
-                char buf[4096];
-                ssize_t n = read(outPipe[0], buf, sizeof(buf));
-                if (n > 0)
+                tv.tv_sec = 0;
+                tv.tv_usec = 100000; // 100 ms
+                tv_ptr = &tv;
+            }
+
+            int ready = select(maxfd, &fds, nullptr, nullptr, tv_ptr);
+
+            if (ready < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+                break;
+            }
+
+            if (ready == 0)
+            {
+                draw_spinner();
+            }
+            else
+            {
+                if (spinnerActive)
                 {
-                    std::string chunk(buf, static_cast<std::size_t>(n));
-                    if (!should_drop_chunk(chunk))
+                    clear_spinner();
+                    spinnerActive = false;
+                }
+
+                // stdout
+                if (FD_ISSET(outPipe[0], &fds))
+                {
+                    char buf[4096];
+                    ssize_t n = read(outPipe[0], buf, sizeof(buf));
+                    if (n > 0)
                     {
-                        write_safe(STDOUT_FILENO,
-                                   chunk.data(),
-                                   static_cast<ssize_t>(chunk.size()));
+                        std::string chunk(buf, static_cast<std::size_t>(n));
+                        if (!should_drop_chunk(chunk))
+                        {
+                            std::string filtered = process_chunk_for_runtime(chunk);
+                            if (!filtered.empty())
+                            {
+                                write_safe(STDOUT_FILENO,
+                                           filtered.data(),
+                                           static_cast<ssize_t>(filtered.size()));
+                            }
+                        }
+                    }
+                }
+
+                // stderr
+                if (FD_ISSET(errPipe[0], &fds))
+                {
+                    char buf[4096];
+                    ssize_t n = read(errPipe[0], buf, sizeof(buf));
+                    if (n > 0)
+                    {
+                        std::string chunk(buf, static_cast<std::size_t>(n));
+                        if (!should_drop_chunk(chunk))
+                        {
+                            std::string filtered = process_chunk_for_runtime(chunk);
+                            if (!filtered.empty())
+                            {
+                                write_safe(STDERR_FILENO,
+                                           filtered.data(),
+                                           static_cast<ssize_t>(filtered.size()));
+                            }
+                        }
                     }
                 }
             }
 
-            // stderr → idem, avec filtrage
-            if (FD_ISSET(errPipe[0], &fds))
-            {
-                char buf[4096];
-                ssize_t n = read(errPipe[0], buf, sizeof(buf));
-                if (n > 0)
-                {
-                    std::string chunk(buf, static_cast<std::size_t>(n));
-                    if (!should_drop_chunk(chunk))
-                    {
-                        write_safe(STDERR_FILENO,
-                                   chunk.data(),
-                                   static_cast<ssize_t>(chunk.size()));
-                    }
-                }
-            }
-
-            // vérifier si le process enfant est terminé
             int status = 0;
             pid_t r = waitpid(pid, &status, WNOHANG);
             if (r == pid)
@@ -189,7 +328,7 @@ namespace vix::commands::RunCommand::detail
                 {
                     int sig = WTERMSIG(status);
                     if (sig == SIGINT)
-                        exitCode = 130; // convention: 128 + SIGINT
+                        exitCode = 130;
                     else
                         exitCode = 128 + sig;
                 }
@@ -199,6 +338,8 @@ namespace vix::commands::RunCommand::detail
                 }
             }
         }
+
+        clear_spinner();
 
         close(outPipe[0]);
         close(errPipe[0]);

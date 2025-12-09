@@ -8,17 +8,87 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <iomanip>
+#include <thread>
+#include <atomic>
 
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
 
-// Small helper to show a modern multi-step progress (like Vue CLI / Deno)
 namespace
 {
+    struct Spinner
+    {
+        std::atomic<bool> running{false};
+        std::thread worker;
+
+        explicit Spinner(const std::string &text)
+        {
+            start(text);
+        }
+
+        void start(const std::string &text)
+        {
+            bool expected = false;
+            // Si déjà en cours → ne pas relancer un 2e thread
+            if (!running.compare_exchange_strong(expected, true,
+                                                 std::memory_order_acq_rel))
+                return;
+
+            worker = std::thread([this, text]()
+                                 {
+                                     // Frames style Vite / npm
+                                     static const char *frames[] = {
+                                         "⠋", "⠙", "⠹", "⠸",
+                                         "⠼", "⠴", "⠦", "⠧",
+                                         "⠇", "⠏"};
+                                     const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
+
+                                     std::size_t idx = 0;
+
+                                     while (running.load(std::memory_order_relaxed))
+                                     {
+                                         // Ligne unique, réécrite avec \r
+                                         std::cout << "\r┃   " << frames[idx] << " " << text << "   "
+                                                   << std::flush;
+
+                                         idx = (idx + 1) % frameCount;
+                                         std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                                     }
+
+                                     // On ne met pas de \n ici, stop() s'en chargera.
+                                 });
+        }
+
+        void stop()
+        {
+            bool expected = true;
+            if (!running.compare_exchange_strong(expected, false))
+                return;
+
+            if (worker.joinable())
+                worker.join();
+
+            // 🔥 efface proprement + remet au début + saute UNE ligne
+            std::cout << "\r" << std::string(80, ' ') << "\r" << std::flush;
+        }
+
+        ~Spinner()
+        {
+            stop();
+        }
+    };
+
     struct RunProgress
     {
+        using Clock = std::chrono::steady_clock;
+
         int total;
         int current = 0;
+
+        std::string currentLabel;
+        Clock::time_point phaseStart{};
 
         explicit RunProgress(int totalSteps)
             : total(totalSteps)
@@ -28,20 +98,47 @@ namespace
         void phase_start(const std::string &label)
         {
             ++current;
-            // Blank line to visually separate phases
-            std::cout << "\n";
-            info("┏ [" + std::to_string(current) + "/" + std::to_string(total) + "] " + label);
+            currentLabel = label;
+            phaseStart = Clock::now();
+
+            // 🔥 Un seul saut de ligne juste avant CHAQUE phase
+            std::cout << std::endl;
+
+            info("┏ [" + std::to_string(current) + "/" +
+                 std::to_string(total) + "] " + label);
+        }
+
+        void phase_log(const std::string &msg)
+        {
+            step("┃   " + msg);
         }
 
         void phase_done(const std::string &label, const std::string &extra = {})
         {
-            std::string msg = "┗ [" + std::to_string(current) + "/" + std::to_string(total) + "] " + label;
+            const auto end = Clock::now();
+
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                end - phaseStart)
+                                .count();
+
+            std::string msg =
+                "┗ [" + std::to_string(current) + "/" +
+                std::to_string(total) + "] " + label;
+
             if (!extra.empty())
                 msg += " — " + extra;
+
+            const double seconds = static_cast<double>(ms) / 1000.0;
+
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(2) << seconds;
+            msg += " (" + oss.str() + "s)";
+
+            // ❌ plus de std::cout << "\n" ici
             success(msg);
         }
     };
-}
+} // namespace
 
 namespace vix::commands::RunCommand
 {
@@ -72,7 +169,7 @@ namespace vix::commands::RunCommand
 
         info("Using project directory:");
         step(projectDir.string());
-        std::cout << "\n";
+        // std::cout << "\n";
 
         // ----- CAS 1 : Presets -----
         if (has_presets(projectDir))
@@ -94,8 +191,12 @@ namespace vix::commands::RunCommand
 #endif
                 const std::string cmd = oss.str();
 
+                Spinner spinner("Configuring project with preset \"" + opt.preset + "\"");
+
                 int code = 0;
                 std::string configureLog = run_and_capture_with_code(cmd, code);
+
+                spinner.stop();
 
                 if (code != 0)
                 {
@@ -117,7 +218,6 @@ namespace vix::commands::RunCommand
                     std::cout << configureLog;
 
                 progress.phase_done("Configure project", "completed");
-                std::cout << "\n";
             }
 
             // 2) run preset
@@ -142,7 +242,10 @@ namespace vix::commands::RunCommand
 #endif
                 const std::string cmd = oss.str();
 
-                const int code = run_cmd_live_filtered(cmd);
+                const int code = run_cmd_live_filtered(
+                    cmd,
+                    "Building & running with preset \"" + runPreset + "\"");
+
                 if (code != 0)
                 {
                     handle_runtime_exit_code(
@@ -186,6 +289,8 @@ namespace vix::commands::RunCommand
 #endif
             const std::string cmd = oss.str();
 
+            Spinner spinner("Configuring project (fallback)");
+
             const int code = run_cmd_live_filtered(cmd);
             if (code != 0)
             {
@@ -200,7 +305,6 @@ namespace vix::commands::RunCommand
         else
         {
             info("CMake cache detected in build/ — skipping configure step (fallback).");
-            // Mark config phase as "already done"
             progress.phase_start("Configure project (fallback)");
             progress.phase_done("Configure project", "cache already present");
         }
@@ -221,27 +325,32 @@ namespace vix::commands::RunCommand
             const std::string cmd = oss.str();
 
             int code = 0;
-            std::string buildLog = run_and_capture_with_code(cmd, code);
+            std::string buildLog;
+
+            if (opt.quiet)
+            {
+                Spinner spinner("Building project (fallback)");
+                buildLog = run_and_capture_with_code(cmd, code);
+            }
+            else
+            {
+                // logs live
+                code = run_cmd_live_filtered(cmd);
+            }
 
             if (code != 0)
             {
-                std::cout << buildLog;
+                if (!buildLog.empty())
+                    std::cout << buildLog;
                 error("Build failed (fallback build/, code " + std::to_string(code) + ").");
                 hint("Check the build logs or run the command manually.");
                 return code != 0 ? code : 5;
             }
 
-            if (has_real_build_work(buildLog))
-            {
+            if (!buildLog.empty() && has_real_build_work(buildLog))
                 std::cout << buildLog;
-                progress.phase_done("Build project", "completed (fallback)");
-            }
-            else
-            {
-                progress.phase_done("Build project", "up to date");
-                success("Nothing to build — everything is up to date.");
-            }
 
+            progress.phase_done("Build project", "completed (fallback)");
             std::cout << "\n";
         }
 
@@ -311,6 +420,7 @@ namespace vix::commands::RunCommand
             progress.phase_start("Run application");
 
             info("Running executable: " + exePath.string());
+
             std::string cmd =
 #ifdef _WIN32
                 "\"" + exePath.string() + "\"";

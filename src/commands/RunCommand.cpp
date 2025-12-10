@@ -37,29 +37,30 @@ namespace
                                                  std::memory_order_acq_rel))
                 return;
 
-            worker = std::thread([this, text]()
-                                 {
-                                     // Frames style Vite / npm
-                                     static const char *frames[] = {
-                                         "⠋", "⠙", "⠹", "⠸",
-                                         "⠼", "⠴", "⠦", "⠧",
-                                         "⠇", "⠏"};
-                                     const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
+            worker = std::thread(
+                [this, text]()
+                {
+                    // Frames style Vite / npm
+                    static const char *frames[] = {
+                        "⠋", "⠙", "⠹", "⠸",
+                        "⠼", "⠴", "⠦", "⠧",
+                        "⠇", "⠏"};
+                    const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
 
-                                     std::size_t idx = 0;
+                    std::size_t idx = 0;
 
-                                     while (running.load(std::memory_order_relaxed))
-                                     {
-                                         // Ligne unique, réécrite avec \r
-                                         std::cout << "\r┃   " << frames[idx] << " " << text << "   "
-                                                   << std::flush;
+                    while (running.load(std::memory_order_relaxed))
+                    {
+                        // Ligne unique, réécrite avec \r
+                        std::cout << "\r┃   " << frames[idx] << " " << text << "   "
+                                  << std::flush;
 
-                                         idx = (idx + 1) % frameCount;
-                                         std::this_thread::sleep_for(std::chrono::milliseconds(80));
-                                     }
+                        idx = (idx + 1) % frameCount;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                    }
 
-                                     // On ne met pas de \n ici, stop() s'en chargera.
-                                 });
+                    // On ne met pas de \n ici, stop() s'en chargera.
+                });
         }
 
         void stop()
@@ -71,7 +72,7 @@ namespace
             if (worker.joinable())
                 worker.join();
 
-            // 🔥 efface proprement + remet au début + saute UNE ligne
+            // efface proprement + remet au début + saute UNE ligne
             std::cout << "\r" << std::string(80, ' ') << "\r" << std::flush;
         }
 
@@ -102,7 +103,7 @@ namespace
             currentLabel = label;
             phaseStart = Clock::now();
 
-            // 🔥 Un seul saut de ligne juste avant CHAQUE phase
+            // Un seul saut de ligne juste avant CHAQUE phase
             std::cout << std::endl;
 
             info("┏ [" + std::to_string(current) + "/" +
@@ -135,7 +136,7 @@ namespace
             oss << std::fixed << std::setprecision(2) << seconds;
             msg += " (" + oss.str() + "s)";
 
-            // ❌ plus de std::cout << "\n" ici
+            // plus de std::cout << "\n" ici
             success(msg);
         }
     };
@@ -160,15 +161,20 @@ namespace vix::commands::RunCommand
     {
         const Options opt = parse(args);
 
-        // 🔥 All apps launched via `vix run` get line-buffered stdout by default.
-        // This is picked up by vix::core's StdoutConfig (VixStdoutConfigurator).
         enable_line_buffered_stdout_for_apps();
+
+        // 1) Mode single .cpp (scripts)
+        if (opt.singleCpp && opt.watch)
+        {
+            return detail::run_single_cpp_watch(opt);
+        }
 
         if (opt.singleCpp)
         {
-            return run_single_cpp(opt);
+            return detail::run_single_cpp(opt);
         }
 
+        // 2) Mode projet (apps)
         const fs::path cwd = fs::current_path();
 
         auto projectDirOpt = choose_project_dir(opt, cwd);
@@ -185,7 +191,19 @@ namespace vix::commands::RunCommand
 
         info("Using project directory:");
         step(projectDir.string());
-        // std::cout << "\n";
+
+        // Project mode + watch → we go DIRECTLY through run_project_watch,
+        // even if CMakePresets.json exists (we use a dedicated dev build).
+        if (!opt.singleCpp && opt.watch)
+        {
+#ifndef _WIN32
+            return detail::run_project_watch(opt, projectDir);
+#else
+            hint("Project watch mode is not yet implemented on Windows; running once without auto-reload.");
+#endif
+        }
+
+        // 3) If we are not in watch mode → continue with the existing logic
 
         // ----- CAS 1 : Presets -----
         if (has_presets(projectDir))
@@ -349,20 +367,16 @@ namespace vix::commands::RunCommand
 
             if (opt.quiet)
             {
-                // Quiet → on avait déjà un spinner + capture.
                 Spinner spinner("Building project (fallback)");
                 buildLog = run_and_capture_with_code(cmd, code);
             }
             else
             {
-                // Non-quiet → logs live, comme avant.
                 code = run_cmd_live_filtered(cmd, "Building project (fallback)");
             }
 
             if (code != 0)
             {
-                // Si on n’a pas encore de log (cas non-quiet), on refait un build silencieux
-                // uniquement pour capturer la sortie et la passer au ErrorHandler.
                 if (buildLog.empty())
                 {
                     int captureCode = 0;
@@ -386,7 +400,6 @@ namespace vix::commands::RunCommand
                 return code != 0 ? code : 5;
             }
 
-            // Afficher le log seulement si utile
             if (!buildLog.empty() && has_real_build_work(buildLog))
                 std::cout << buildLog;
 

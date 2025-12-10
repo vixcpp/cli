@@ -59,6 +59,8 @@
 #include <vix/cli/commands/NewCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
+#include <vix/cli/commands/DevCommand.hpp>
+#include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
 #include <iostream>
@@ -73,6 +75,7 @@
 namespace vix
 {
     using Logger = vix::utils::Logger;
+    using namespace vix::cli::style;
 
     namespace
     {
@@ -158,6 +161,10 @@ namespace vix
         { return commands::RunCommand::run(args); };
         commands_["build"] = [](auto args)
         { return commands::BuildCommand::run(args); };
+        commands_["dev"] = [](auto args)
+        {
+            return commands::DevCommand::run(args);
+        };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -312,6 +319,8 @@ namespace vix
                 return commands::BuildCommand::help();
             if (cmd == "run")
                 return commands::RunCommand::help();
+            if (cmd == "dev")
+                return commands::DevCommand::help();
 
             // Unknown command → global help
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
@@ -355,6 +364,8 @@ namespace vix
                 return commands::BuildCommand::help();
             if (cmd == "run")
                 return commands::RunCommand::help();
+            if (cmd == "dev")
+                return commands::DevCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -364,54 +375,48 @@ namespace vix
         std::ostream &out = std::cout;
 
         out << "Vix.cpp — Modern C++ backend runtime\n";
-        out << "Version: " << VIX_CLI_VERSION << "\n";
-        out << "\n";
+        out << "Version: " << VIX_CLI_VERSION << "\n\n";
 
         out << "Usage:\n";
-        out << "  vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]\n";
-        out << "\n";
+        out << "  vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]\n\n";
 
         out << "Commands:\n";
         out << "  Project:\n";
-        out << "    new <name>             Scaffold a new Vix project in ./<name>\n";
-        out << "\n";
+        out << "    new <name>             Scaffold a new Vix project in ./<name>\n\n";
+
         out << "  Development:\n";
         out << "    build [name]           Configure and build a project (root or app)\n";
         out << "    run [name] [--args]    Build (if needed) and run a project or app\n";
-        out << "\n";
+        out << "    dev [name]             Run in dev mode (auto-reload, rebuild-on-save)\n";
+        out << "                           Options: --force-server, --force-script\n\n";
+
         out << "  Info:\n";
         out << "    help [command]         Show this help or help for a specific command\n";
-        out << "    version                Show CLI version information\n";
-        out << "\n";
+        out << "    version                Show CLI version information\n\n";
 
         out << "Global options:\n";
         out << "  --verbose                Show debug logs from the runtime (log-level=debug)\n";
-        out << "  -q, --quiet              Only show warnings and errors (log-level=warn)\n";
+        out << "  -q, --quiet              Only show warnings and errors\n";
         out << "  --log-level <level>      Set log level: trace, debug, info, warn, error, critical\n";
         out << "                           (overrides VIX_LOG_LEVEL environment variable)\n";
         out << "  -h, --help               Show help for the CLI (or use: vix help)\n";
-        out << "  -v, --version            Show version information\n";
-        out << "\n";
+        out << "  -v, --version            Show version information\n\n";
 
         out << "Environment:\n";
         out << "  VIX_LOG_LEVEL=level      Default log level if no CLI override is provided.\n";
-        out << "                           Accepted values: trace, debug, info, warn, error, critical.\n";
-        out << "\n";
+        out << "                           Accepted values: trace, debug, info, warn, error, critical.\n\n";
 
         out << "Examples:\n";
         out << "  vix new api\n";
-        out << "  vix build                        # build current project\n";
-        out << "  vix build api --config Debug\n";
+        out << "  vix build                           # build current project\n";
         out << "  vix run api -- --port 8080\n";
         out << "\n";
-        out << "  vix --log-level debug run api    # verbose runtime logs (debug)\n";
-        out << "  vix --quiet run api              # only warnings and errors\n";
-        out << "  vix --log-level warn build       # build with runtime log-level=warn\n";
-        out << "\n";
+        out << "  vix dev server.cpp                  # auto-detect server/script behaviour\n";
+        out << "  vix dev server.cpp --force-server   # force server mode\n";
+        out << "  vix dev tool.cpp --force-script     # force script mode\n\n";
 
-        out << "Links:\n";
-        out << "  GitHub: https://github.com/vixcpp/vix\n";
-        out << "\n";
+        section_title(out, "Links:");
+        out << "  GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";
 
         return 0;
     }
@@ -421,17 +426,26 @@ namespace vix
     // -----------------------------------------------------------------
     int CLI::version(const std::vector<std::string> &)
     {
+        using namespace vix::cli::style;
+
 #ifndef VIX_CLI_VERSION
 #define VIX_CLI_VERSION "dev"
 #endif
 
         std::ostream &out = std::cout;
 
-        out << "Vix.cpp CLI\n";
-        out << "  version : " << VIX_CLI_VERSION << "\n";
-        out << "  author  : Gaspard Kirira\n";
-        out << "  source  : https://github.com/vixcpp/vix\n";
-        out << "\n";
+        // Titre coloré (cyan + bold), sans padding
+        section_title(out, "Vix.cpp CLI");
+
+        // Lignes d'infos alignées comme avant, mais stylées
+        out << "  version : "
+            << CYAN << VIX_CLI_VERSION << RESET << "\n";
+
+        out << "  author  : "
+            << "Gaspard Kirira\n";
+
+        out << "  source  : "
+            << link("https://github.com/vixcpp/vix") << "\n\n";
 
         return 0;
     }

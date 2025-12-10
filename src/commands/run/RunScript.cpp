@@ -4,12 +4,35 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
+
+#ifndef _WIN32
+#include <unistd.h>    // fork, execl, _exit
+#include <sys/types.h> // pid_t
+#include <sys/wait.h>  // waitpid
+#include <signal.h>    // SIGINT, kill
+#endif
 
 using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
 {
     namespace fs = std::filesystem;
+
+    namespace
+    {
+        inline void print_watch_restart_banner(const fs::path &script)
+        {
+#ifdef _WIN32
+            // Clear screen sous Windows
+            std::system("cls");
+#else
+            // Clear screen avec séquences ANSI sur POSIX
+            std::cout << "\x1b[2J\x1b[H" << std::flush;
+#endif
+            info(std::string("Watcher Restarting! File change detected: \"") + script.string() + "\"");
+        }
+    }
 
     bool script_uses_vix(const fs::path &cppPath)
     {
@@ -163,106 +186,76 @@ namespace vix::commands::RunCommand::detail
         return s;
     }
 
-    /// Run a single C++ source file in “script mode”.
-    ///
-    /// This function powers the command:
-    ///     vix run file.cpp
-    ///
-    /// It provides a smooth and IDE-like experience similar to running a script,
-    /// while still using a full CMake-based build pipeline under the hood.
-    ///
-    /// High-level workflow:
-    /// --------------------
-    /// 1. Validate that the input file exists.
-    /// 2. Create a dedicated temporary build directory inside:
-    ///        ~/.vix-scripts/<filename>/
-    /// 3. Generate a minimal CMakeLists.txt adapted for:
-    ///        - pure C++ files
-    ///        - or scripts using the Vix runtime (detected automatically)
-    /// 4. Run CMake configuration silently.
-    /// 5. Build the target using CMake, capturing *all* compiler and linker output
-    ///    into a log file.
-    /// 6. If the compilation fails:
-    ///        - Read the captured log
-    ///        - Pass it to ErrorHandler::printBuildErrors(), which:
-    ///            • parses Clang/GCC errors (file, line, column, message)
-    ///            • detects friendly “special cases”
-    ///              (missing std::cout, missing semicolon, ambiguous overloads,
-    ///               use-after-move, missing #include, etc.)
-    ///            • prints colored, pedagogical error messages
-    ///        - The function then returns the compiler’s exit code.
-    ///
-    /// 7. If the build succeeds:
-    ///        - Locate the executable produced by CMake
-    ///        - Run it directly
-    ///        - Forward the program’s exit code (including crashes)
-    ///
-    /// Error handling:
-    /// ---------------
-    /// • If the compiler fails → ErrorHandler is used for clean, colored output.
-    /// • If the linker fails   → full log is parsed, and linker diagnostics are
-    ///   printed the same way (undefined symbols, missing files, ODR violations,
-    ///   memory / ASan reports, etc.).
-    /// • If no log is captured → a fallback message is printed.
-    ///
-    /// Why this exists:
-    /// ----------------
-    /// It turns Vix into an educational C++ runtime:
-    ///    - CMake complexity is hidden.
-    ///    - The user simply runs:  vix run file.cpp
-    ///    - Compiler errors are transformed into friendly hints.
-    ///
-    /// This is the foundation of the “Vix Script Mode” experience.
-    ///
-    /// \return
-    ///    0  → success
-    ///    >0 → build or runtime error (compiler, linker, or executed program)
     int run_single_cpp(const Options &opt)
     {
         using namespace std;
-        using namespace std::filesystem;
+        namespace fs = std::filesystem;
 
-        const path script = opt.cppFile;
-        if (!exists(script))
+        const fs::path script = opt.cppFile;
+        if (!fs::exists(script))
         {
             error("C++ file not found: " + script.string());
             return 1;
         }
 
         const string exeName = script.stem().string();
-        path scriptsRoot = get_scripts_root();
-        create_directories(scriptsRoot);
-        path projectDir = scriptsRoot / exeName;
-        create_directories(projectDir);
-        path cmakeLists = projectDir / "CMakeLists.txt";
 
-        bool useVixRuntime = script_uses_vix(script);
+        fs::path scriptsRoot = get_scripts_root();
+        fs::create_directories(scriptsRoot);
 
+        fs::path projectDir = scriptsRoot / exeName;
+        fs::create_directories(projectDir);
+
+        fs::path cmakeLists = projectDir / "CMakeLists.txt";
+
+        const bool useVixRuntime = script_uses_vix(script);
+
+        // (Re)générer CMakeLists.txt à chaque appel pour refléter
+        // l'état actuel du script et de la détection vix::.
         {
             ofstream ofs(cmakeLists);
             ofs << make_script_cmakelists(exeName, script, useVixRuntime);
         }
 
-        // Exécuter CMake configuration silencieusement
+        fs::path buildDir = projectDir / "build";
+
+        // 🔥 1) Configure projet seulement si nécessaire
+        bool needConfigure = true;
         {
+            std::error_code ec{};
+            if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
+            {
+                // CMake déjà configuré pour ce script → on peut garder le cache
+                // et éviter de relancer `cmake -S . -B build` à chaque run.
+                needConfigure = false;
+            }
+        }
+
+        if (needConfigure)
+        {
+            // Exécuter CMake configuration silencieusement (une seule fois)
             std::ostringstream oss;
-            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build 2>&1 >/dev/null";
-#ifdef _WIN32
-            oss.str(""); // Réinitialiser pour Windows
-            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build >nul 2>nul";
+#ifndef _WIN32
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake -S . -B build 2>&1 >/dev/null";
+#else
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake -S . -B build >nul 2>nul";
 #endif
-            int code = std::system(oss.str().c_str());
+            const std::string cmd = oss.str();
+
+            int code = std::system(cmd.c_str());
             if (code != 0)
             {
                 error("Script configure failed.");
+                handle_runtime_exit_code(code, "Script configure failed");
                 return code;
             }
         }
 
-        // Exécuter la compilation en capturant le log pour un affichage propre
+        // 🔥 2) Compilation — on ne fait plus que `cmake --build` à chaque run
         {
-            path buildDir = projectDir / "build";
-            path logPath = projectDir / "build.log";
+            fs::path logPath = projectDir / "build.log";
 
             std::ostringstream oss;
             oss << "cd " << quote(projectDir.string())
@@ -280,11 +273,11 @@ namespace vix::commands::RunCommand::detail
                 << " && cmake --build build --target " << exeName;
             if (opt.jobs > 0)
                 oss << " -- /m:" << opt.jobs; // style MSBuild
-
             oss << " >" << quote(logPath.string()) << " 2>&1";
 #endif
 
-            int code = std::system(oss.str().c_str());
+            const std::string buildCmd = oss.str();
+            int code = std::system(buildCmd.c_str());
             if (code != 0)
             {
                 // Lire le log et passer au ErrorHandler
@@ -311,13 +304,13 @@ namespace vix::commands::RunCommand::detail
                     error("Script build failed (no compiler log captured).");
                 }
 
-                // On garde ta gestion d’exit code pour la cohérence CLI
                 handle_runtime_exit_code(code, "Script build failed");
                 return code;
             }
         }
 
-        path exePath = projectDir / "build" / exeName;
+        // 🔥 3) Exécution du binaire
+        fs::path exePath = buildDir / exeName;
 #ifdef _WIN32
         exePath += ".exe";
 #endif
@@ -328,7 +321,6 @@ namespace vix::commands::RunCommand::detail
             return 1;
         }
 
-        // Exécuter le binaire directement, sans messages de configuration
         int runCode = 0;
         std::string cmdRun;
 
@@ -351,4 +343,708 @@ namespace vix::commands::RunCommand::detail
 
         return 0;
     }
+
+    int build_script_executable(const Options &opt, std::filesystem::path &exePath)
+    {
+        using namespace std;
+        namespace fs = std::filesystem;
+
+        const fs::path script = opt.cppFile;
+        if (!fs::exists(script))
+        {
+            error("C++ file not found: " + script.string());
+            return 1;
+        }
+
+        const string exeName = script.stem().string();
+
+        fs::path scriptsRoot = get_scripts_root();
+        fs::create_directories(scriptsRoot);
+
+        fs::path projectDir = scriptsRoot / exeName;
+        fs::create_directories(projectDir);
+
+        fs::path cmakeLists = projectDir / "CMakeLists.txt";
+
+        const bool useVixRuntime = script_uses_vix(script);
+
+        // (Re)générer CMakeLists à chaque fois pour refléter les includes / vix::...
+        {
+            ofstream ofs(cmakeLists);
+            ofs << make_script_cmakelists(exeName, script, useVixRuntime);
+        }
+
+        fs::path buildDir = projectDir / "build";
+
+        // 🔥 Configure seulement si cache absent
+        bool needConfigure = true;
+        {
+            std::error_code ec{};
+            if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
+            {
+                needConfigure = false;
+            }
+        }
+
+        if (needConfigure)
+        {
+            std::ostringstream oss;
+#ifndef _WIN32
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake -S . -B build 2>&1 >/dev/null";
+#else
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake -S . -B build >nul 2>nul";
+#endif
+            const std::string cmd = oss.str();
+
+            int code = std::system(cmd.c_str());
+            if (code != 0)
+            {
+                error("Script configure failed.");
+                handle_runtime_exit_code(code, "Script configure failed");
+                return code;
+            }
+        }
+
+        // 🔥 Build (on ne fait plus que ça à chaque reload)
+        fs::path logPath = projectDir / "build.log";
+
+        std::ostringstream oss;
+#ifndef _WIN32
+        oss << "cd " << quote(projectDir.string())
+            << " && cmake --build build --target " << exeName;
+        if (opt.jobs > 0)
+            oss << " -- -j " << opt.jobs;
+        oss << " >" << quote(logPath.string()) << " 2>&1";
+#else
+        oss << "cd " << quote(projectDir.string())
+            << " && cmake --build build --target " << exeName;
+        if (opt.jobs > 0)
+            oss << " -- /m:" << opt.jobs;
+        oss << " >" << quote(logPath.string()) << " 2>&1";
+#endif
+
+        const std::string buildCmd = oss.str();
+        int code = std::system(buildCmd.c_str());
+        if (code != 0)
+        {
+            // Lire le log et passer au ErrorHandler
+            std::ifstream ifs(logPath);
+            std::string logContent;
+
+            if (ifs)
+            {
+                std::ostringstream logStream;
+                logStream << ifs.rdbuf();
+                logContent = logStream.str();
+            }
+
+            if (!logContent.empty())
+            {
+                vix::cli::ErrorHandler::printBuildErrors(
+                    logContent,
+                    script,
+                    "Script build failed");
+            }
+            else
+            {
+                error("Script build failed (no compiler log captured).");
+            }
+
+            handle_runtime_exit_code(code, "Script build failed");
+            return code;
+        }
+
+        exePath = buildDir / exeName;
+#ifdef _WIN32
+        exePath += ".exe";
+#endif
+
+        if (!fs::exists(exePath))
+        {
+            error("Script binary not found: " + exePath.string());
+            return 1;
+        }
+
+        return 0;
+    }
+
+    int run_single_cpp_watch(const Options &opt)
+    {
+        using namespace std::chrono_literals;
+        namespace fs = std::filesystem;
+        using Clock = std::chrono::steady_clock;
+
+        const fs::path script = opt.cppFile;
+        if (!fs::exists(script))
+        {
+            error("C++ file not found: " + script.string());
+            return 1;
+        }
+
+        std::error_code ec{};
+        auto lastWrite = fs::last_write_time(script, ec);
+        if (ec)
+        {
+            error("Unable to read last_write_time for: " + script.string());
+            return 1;
+        }
+
+        const bool usesVixRuntime = script_uses_vix(script);
+        const bool hasForceServer = opt.forceServerLike;
+        const bool hasForceScript = opt.forceScriptLike;
+        bool dynamicServerLike = usesVixRuntime;
+
+        auto final_is_server = [&](bool runtimeGuess) -> bool
+        {
+            if (hasForceServer && hasForceScript)
+            {
+                return true;
+            }
+            if (hasForceServer)
+                return true;
+            if (hasForceScript)
+                return false;
+            return runtimeGuess;
+        };
+
+        auto kind_label = [&](bool runtimeGuess) -> std::string
+        {
+            return final_is_server(runtimeGuess) ? "dev server" : "script";
+        };
+
+        info("Watcher Process started (hot reload).");
+        hint("Watching: " + script.string());
+
+#ifdef _WIN32
+        // 🔁 Fallback simple sur Windows : on garde run_single_cpp
+        while (true)
+        {
+            const auto start = Clock::now();
+            int code = run_single_cpp(opt);
+            const auto end = Clock::now();
+            const auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+            // Heuristique durée seulement si pas forcé
+            if (!hasForceServer && !hasForceScript)
+            {
+                bool runtimeGuess = dynamicServerLike;
+                const bool longLived = (ms >= 500);
+
+                if (longLived && !runtimeGuess)
+                    runtimeGuess = true;
+                if (!longLived && runtimeGuess && code == 0)
+                    runtimeGuess = false;
+
+                dynamicServerLike = runtimeGuess;
+            }
+
+            if (code != 0)
+            {
+                const std::string label = kind_label(dynamicServerLike);
+                error("Last " + label + " run failed (exit code " +
+                      std::to_string(code) + ").");
+                hint("Fix the errors, save the file, and Vix will rebuild automatically.");
+            }
+
+            // 🕵️ Ici on ne spam plus “Watching...” : on attend juste un changement
+            for (;;)
+            {
+                std::this_thread::sleep_for(500ms);
+
+                auto nowWrite = fs::last_write_time(script, ec);
+                if (ec)
+                {
+                    error("Error reading last_write_time during watch loop.");
+                    return 1;
+                }
+
+                if (nowWrite != lastWrite)
+                {
+                    lastWrite = nowWrite;
+                    // CLEAR + bannière de restart comme Deno
+                    print_watch_restart_banner(script);
+                    break; // relancer run_single_cpp
+                }
+            }
+        }
+
+        return 0;
+
+#else
+        // Implémentation POSIX avec fork/exec + kill(SIGINT)
+        while (true)
+        {
+            // 1) Build exécutable (cache CMake réutilisé → rapide)
+            fs::path exePath;
+            int buildCode = build_script_executable(opt, exePath);
+            if (buildCode != 0)
+            {
+                const std::string label = kind_label(dynamicServerLike);
+
+                error("Last " + label + " build failed (exit code " +
+                      std::to_string(buildCode) + ").");
+                hint("Fix the errors, save the file, and Vix will rebuild automatically.");
+
+                for (;;)
+                {
+                    std::this_thread::sleep_for(500ms);
+
+                    auto nowWrite = fs::last_write_time(script, ec);
+                    if (ec)
+                    {
+                        error("Error reading last_write_time during watch loop.");
+                        return 1;
+                    }
+
+                    if (nowWrite != lastWrite)
+                    {
+                        lastWrite = nowWrite;
+                        // CLEAR + bannière de restart
+                        print_watch_restart_banner(script);
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            // 2) Lancer le process (serveur ou script) dans un enfant
+            const auto childStart = Clock::now();
+
+            pid_t pid = fork();
+            if (pid < 0)
+            {
+                error("Failed to fork() for dev process.");
+                return 1;
+            }
+
+            if (pid == 0)
+            {
+                // ===== ENFANT =====
+                ::setenv("VIX_STDOUT_MODE", "line", 1);
+
+                const std::string exeStr = exePath.string();
+                const char *argv0 = exeStr.c_str();
+
+                execl(argv0, argv0, (char *)nullptr);
+                _exit(127); // si execl échoue
+            }
+
+            // ===== PARENT =====
+            bool needRestart = false;
+            bool running = true;
+
+            {
+                const bool isServer = final_is_server(dynamicServerLike);
+                const std::string kind = isServer ? "Dev server" : "Script";
+
+                info(std::string("🏃 ") + kind +
+                     " started (pid=" + std::to_string(pid) + ")");
+            }
+
+            while (running)
+            {
+                std::this_thread::sleep_for(300ms);
+
+                // 2.a Vérifier si le script a changé → déclenche un restart
+                auto nowWrite = fs::last_write_time(script, ec);
+                if (!ec && nowWrite != lastWrite)
+                {
+                    lastWrite = nowWrite;
+
+                    // CLEAR + bannière de restart
+                    print_watch_restart_banner(script);
+
+                    needRestart = true;
+
+                    if (kill(pid, SIGINT) != 0)
+                    {
+                        // peut-être déjà fini, on ignore
+                    }
+                }
+
+                // 2.b Vérifier si le process est terminé
+                int status = 0;
+                pid_t r = waitpid(pid, &status, WNOHANG);
+                if (r == pid)
+                {
+                    running = false;
+
+                    const auto childEnd = Clock::now();
+                    const auto ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            childEnd - childStart)
+                            .count();
+
+                    int exitCode = 0;
+                    if (WIFEXITED(status))
+                        exitCode = WEXITSTATUS(status);
+                    else if (WIFSIGNALED(status))
+                        exitCode = 128 + WTERMSIG(status);
+
+                    // Mise à jour dynamique de la classification (si pas forcée)
+                    if (!hasForceServer && !hasForceScript)
+                    {
+                        bool runtimeGuess = dynamicServerLike;
+                        const bool longLived = (ms >= 500);
+
+                        if (longLived && !runtimeGuess)
+                            runtimeGuess = true;
+                        if (!longLived && runtimeGuess && exitCode == 0)
+                            runtimeGuess = false;
+
+                        dynamicServerLike = runtimeGuess;
+                    }
+
+                    const bool isServer = final_is_server(dynamicServerLike);
+                    const std::string label = isServer ? "dev server" : "script";
+
+                    if (needRestart)
+                    {
+                        break; // rebuild + relaunch
+                    }
+
+                    // Pas de spam en cas de succès : comme Deno, on reste silencieux
+                    if (exitCode != 0)
+                    {
+                        error(label + " exited with code " +
+                              std::to_string(exitCode) +
+                              " (lifetime ~" + std::to_string(ms) + "ms).");
+                    }
+
+                    // Après sortie “normale”, on reste en attente silencieuse jusqu’à la prochaine modif
+                    for (;;)
+                    {
+                        std::this_thread::sleep_for(500ms);
+
+                        auto now2 = fs::last_write_time(script, ec);
+                        if (ec)
+                        {
+                            error("Error reading last_write_time during post-exit watch.");
+                            return exitCode;
+                        }
+
+                        if (now2 != lastWrite)
+                        {
+                            lastWrite = now2;
+                            // CLEAR + bannière de restart
+                            print_watch_restart_banner(script);
+                            break;
+                        }
+                    }
+
+                    break; // retour en haut du while(true) → rebuild + relaunch
+                }
+            }
+        }
+
+        return 0;
+#endif
+    }
+
+    // Petit helper: timestamp "global" du projet (max last_write_time)
+    static fs::file_time_type compute_project_stamp(const fs::path &root, std::error_code &outEc)
+    {
+        using ftime = fs::file_time_type;
+        outEc.clear();
+
+        ftime latest{}; // par défaut
+
+        std::error_code ec;
+        if (!fs::exists(root, ec))
+        {
+            outEc = ec;
+            return latest;
+        }
+
+        fs::recursive_directory_iterator it(root, ec), end;
+        if (ec)
+        {
+            outEc = ec;
+            return latest;
+        }
+
+        for (; it != end; it.increment(ec))
+        {
+            if (ec)
+                break;
+
+            const fs::path &p = it->path();
+            const std::string name = p.filename().string();
+
+            // On ignore les dossiers de build / meta
+            if (name == ".git" ||
+                name == "build" ||
+                name == ".vix-scripts" ||
+                name == "cmake-build-debug" ||
+                name == "cmake-build-release")
+            {
+                if (fs::is_directory(p))
+                    it.disable_recursion_pending();
+                continue;
+            }
+
+            auto t = fs::last_write_time(p, ec);
+            if (ec)
+                continue;
+
+            if (t > latest)
+                latest = t;
+        }
+
+        outEc.clear();
+        return latest;
+    }
+
+    int run_project_watch(const Options &opt, const std::filesystem::path &projectDir)
+    {
+#ifndef _WIN32
+        using Clock = std::chrono::steady_clock;
+        namespace fs = std::filesystem;
+        using namespace vix::cli::style;
+
+        const fs::path buildDir = projectDir / "build-dev";
+
+        std::error_code ec;
+        fs::create_directories(buildDir, ec);
+        if (ec)
+        {
+            error("Unable to create dev build directory: " + buildDir.string() +
+                  " (" + ec.message() + ")");
+            return 1;
+        }
+
+        // Timestamp global du projet : CMakeLists.txt + src/
+        auto compute_timestamp = [&](std::error_code &outEc) -> fs::file_time_type
+        {
+            using ftime = fs::file_time_type;
+            outEc.clear();
+
+            ftime latest = ftime::min();
+
+            auto touch = [&](const fs::path &p)
+            {
+                std::error_code e;
+                if (!fs::exists(p, e) || e)
+                    return;
+                auto t = fs::last_write_time(p, e);
+                if (!e && t > latest)
+                    latest = t;
+            };
+
+            touch(projectDir / "CMakeLists.txt");
+
+            fs::path srcDir = projectDir / "src";
+            if (fs::exists(srcDir, outEc) && !outEc)
+            {
+                for (auto it = fs::recursive_directory_iterator(
+                         srcDir,
+                         fs::directory_options::skip_permission_denied,
+                         outEc);
+                     !outEc && it != fs::recursive_directory_iterator();
+                     ++it)
+                {
+                    if (it->is_regular_file())
+                        touch(it->path());
+                }
+            }
+
+            return latest;
+        };
+
+        std::error_code tsEc;
+        auto lastStamp = compute_timestamp(tsEc);
+        if (tsEc)
+        {
+            hint("Unable to compute initial timestamp for dev watch: " + tsEc.message());
+        }
+
+        info("Watcher Process started (project hot reload).");
+        hint("Watching project: " + projectDir.string());
+        hint("Press Ctrl+C to stop dev mode.");
+
+        while (true)
+        {
+            // 1) Configure si pas de cache
+            if (!has_cmake_cache(buildDir))
+            {
+                info("Configuring project for dev mode (build-dev/).");
+
+                std::ostringstream oss;
+                oss << "cd " << quote(buildDir.string()) << " && cmake ..";
+                const std::string cmd = oss.str();
+
+                const int code = run_cmd_live_filtered(cmd, "Configuring project (dev mode)");
+                if (code != 0)
+                {
+                    error("CMake configure failed for dev mode (build-dev/, code " +
+                          std::to_string(code) + ").");
+                    hint("Check your CMakeLists.txt or run the command manually:");
+                    step("  cd " + buildDir.string());
+                    step("  cmake ..");
+                    return code != 0 ? code : 4;
+                }
+
+                success("Dev configure completed (build-dev/).");
+            }
+
+            // 2) Build
+            {
+                info("Building project (dev mode, build-dev/).");
+
+                std::ostringstream oss;
+                oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
+                if (opt.jobs > 0)
+                    oss << " -j " << opt.jobs;
+
+                const std::string cmd = oss.str();
+
+                int code = 0;
+                std::string buildLog = run_and_capture_with_code(cmd, code);
+
+                if (code != 0)
+                {
+                    if (!buildLog.empty())
+                    {
+                        vix::cli::ErrorHandler::printBuildErrors(
+                            buildLog,
+                            buildDir,
+                            "Build failed in dev mode (build-dev/)");
+                    }
+                    else
+                    {
+                        error("Build failed in dev mode (build-dev/, code " +
+                              std::to_string(code) + ").");
+                    }
+
+                    hint("Fix the errors, save your files, and Vix will rebuild automatically.");
+
+                    while (true)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+                        std::error_code loopEc;
+                        auto nowStamp = compute_timestamp(loopEc);
+                        if (!loopEc && nowStamp != lastStamp)
+                        {
+                            lastStamp = nowStamp;
+                            print_watch_restart_banner(projectDir);
+                            break;
+                        }
+                    }
+
+                    continue;
+                }
+
+                if (!buildLog.empty() && has_real_build_work(buildLog))
+                    std::cout << buildLog;
+
+                success("Build completed (dev mode).");
+            }
+
+            // 3) Lancer le binaire
+            const std::string exeName = projectDir.filename().string();
+            fs::path exePath = buildDir / exeName;
+
+            if (!fs::exists(exePath))
+            {
+                error("Dev executable not found in build-dev/: " + exePath.string());
+                hint("Make sure your CMakeLists.txt defines an executable named '" +
+                     exeName + "'.");
+                return 1;
+            }
+
+            const auto childStart = Clock::now();
+
+            pid_t pid = ::fork();
+            if (pid < 0)
+            {
+                error("Failed to fork() for dev process.");
+                return 1;
+            }
+
+            if (pid == 0)
+            {
+                ::chdir(buildDir.string().c_str());
+                ::setenv("VIX_STDOUT_MODE", "line", 1);
+
+                const std::string exeStr = exePath.string();
+                const char *argv0 = exeStr.c_str();
+
+                execl(argv0, argv0, (char *)nullptr);
+                _exit(127);
+            }
+
+            info("🏃 Dev server started (pid=" + std::to_string(pid) + ")");
+
+            bool needRestart = false;
+            bool running = true;
+
+            while (running)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+                // Watch files
+                std::error_code loopEc;
+                auto nowStamp = compute_timestamp(loopEc);
+                if (!loopEc && nowStamp != lastStamp)
+                {
+                    lastStamp = nowStamp;
+                    print_watch_restart_banner(projectDir);
+                    needRestart = true;
+
+                    if (::kill(pid, SIGINT) != 0)
+                    {
+                        // peut-être déjà mort
+                    }
+                }
+
+                int status = 0;
+                pid_t r = ::waitpid(pid, &status, WNOHANG);
+                if (r == pid)
+                {
+                    running = false;
+
+                    const auto childEnd = Clock::now();
+                    const auto ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            childEnd - childStart)
+                            .count();
+
+                    int exitCode = 0;
+                    if (WIFEXITED(status))
+                        exitCode = WEXITSTATUS(status);
+                    else if (WIFSIGNALED(status))
+                        exitCode = 128 + WTERMSIG(status);
+
+                    if (!needRestart)
+                    {
+                        if (exitCode != 0)
+                        {
+                            error("Dev server exited with code " +
+                                  std::to_string(exitCode) +
+                                  " (lifetime ~" + std::to_string(ms) + "ms).");
+                        }
+                        else
+                        {
+                            success("Dev server stopped cleanly (lifetime ~" +
+                                    std::to_string(ms) + "ms).");
+                        }
+                        return exitCode;
+                    }
+                }
+            }
+        }
+
+        return 0;
+#else
+        (void)opt;
+        (void)projectDir;
+        error("run_project_watch is not implemented on Windows.");
+        return 1;
+#endif
+    }
+
 } // namespace vix::commands::RunCommand::detail

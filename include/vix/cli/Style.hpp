@@ -6,12 +6,13 @@
 
 namespace vix::cli::style
 {
-    // ANSI couleurs simples (Linux/macOS/WSL)
+    // ANSI (Linux/macOS/WSL)
     inline constexpr const char *RESET = "\033[0m";
     inline constexpr const char *BOLD = "\033[1m";
     inline constexpr const char *RED = "\033[31m";
     inline constexpr const char *GREEN = "\033[32m";
     inline constexpr const char *YELLOW = "\033[33m";
+    inline constexpr const char *CYAN = "\033[36m";
     inline constexpr const char *GRAY = "\033[90m";
 
     // ---- Styled Output Helpers ---- //
@@ -40,6 +41,22 @@ namespace vix::cli::style
     {
         std::cout << "  • " << msg << "\n";
     }
+
+    inline void section_title(std::ostream &out, const std::string &label)
+    {
+        out << BOLD << CYAN << label << RESET << "\n";
+    }
+
+    inline void dim_note(std::ostream &out, const std::string &label)
+    {
+        out << GRAY << label << RESET << "\n";
+    }
+
+    inline std::string link(const std::string &url)
+    {
+        return std::string(GREEN) + url + RESET;
+    }
+
 }
 
 #endif // VIX_CLI_STYLE_HPP

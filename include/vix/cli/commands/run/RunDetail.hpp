@@ -28,6 +28,10 @@ namespace vix::commands::RunCommand::detail
         // Single .cpp mode
         bool singleCpp = false;
         std::filesystem::path cppFile;
+        bool watch = false;
+
+        bool forceServerLike = false; // --force-server
+        bool forceScriptLike = false; // --force-script
     };
 
     // --- Process / IO ---
@@ -40,6 +44,8 @@ namespace vix::commands::RunCommand::detail
                                        const std::filesystem::path &cppPath,
                                        bool useVixRuntime);
     int run_single_cpp(const Options &opt);
+    int run_single_cpp_watch(const Options &opt);
+    int run_project_watch(const Options &opt, const fs::path &projectDir);
 
     // --- CLI parsing ---
     Options parse(const std::vector<std::string> &args);

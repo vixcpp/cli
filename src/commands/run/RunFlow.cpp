@@ -75,7 +75,6 @@ namespace vix::commands::RunCommand::detail
                     o.jobs = 0;
                 }
             }
-            // --- Contrôle du logging runtime ---
             else if (a == "--quiet" || a == "-q")
             {
                 o.quiet = true;
@@ -92,15 +91,27 @@ namespace vix::commands::RunCommand::detail
             {
                 o.logLevel = a.substr(std::string("--log-level=").size());
             }
-            // --- Arguments positionnels (appName, exampleName, etc.) ---
+            // mode watch / reload
+            else if (a == "--watch" || a == "--reload")
+            {
+                o.watch = true;
+            }
+            else if (a == "--force-server")
+            {
+                o.forceServerLike = true;
+            }
+            else if (a == "--force-script")
+            {
+                o.forceScriptLike = true;
+            }
+
+            // --- Arguments positionnels ---
             else if (!a.empty() && a != "--" && a[0] != '-')
             {
-                // Premier argument non-option → appName
                 if (o.appName.empty())
                 {
                     o.appName = a;
 
-                    // Single-file mode: vix run main.cpp
                     std::filesystem::path p{a};
                     if (p.extension() == ".cpp")
                     {
@@ -108,7 +119,6 @@ namespace vix::commands::RunCommand::detail
                         o.cppFile = std::filesystem::absolute(p);
                     }
                 }
-                // Cas spécial : vix run example <name>
                 else if (o.appName == "example" && o.exampleName.empty())
                 {
                     o.exampleName = a;
@@ -118,6 +128,13 @@ namespace vix::commands::RunCommand::detail
 
         if (auto d = pick_dir_opt_local(args))
             o.dir = *d;
+
+        if (o.forceServerLike && o.forceScriptLike)
+        {
+            hint("Both --force-server and --force-script were provided; "
+                 "preferring --force-server.");
+            o.forceScriptLike = false;
+        }
 
         return o;
     }

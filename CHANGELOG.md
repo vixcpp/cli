@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)  
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+---
+
+## [Unreleased]
+
+### Added
+
+- Upcoming improvements will appear here.
+
+### Changed
+
+- Pending changes will be listed here.
+
+### Fixed
+
+- Pending fixes will be listed here.
+
+---
+
+## [1.0.0] - Initial Release
+
 ### Added
 
 - Modular C++ framework structure with `core`, `orm`, `cli`, `docs`, `middleware`, `websocket`, `devtools`, `examples`.
@@ -23,12 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Path parameter extraction to correctly handle `string_view` types.
+- Path parameter extraction now correctly handles `string_view` types.
 - Fixed default response for unmatched routes (`404` JSON message).
 
 ---
 
 ## [0.0.1] - Draft
+
+### Added
 
 - Project skeleton created.
 - Basic CMake setup and folder structure.

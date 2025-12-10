@@ -8,17 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+cli: fix WebSocket linkage in RunScript script-mode builds
+
+- Corrected the internal CMake generation so script builds now link against vix::websocket
+- Prevents unresolved symbols (LowLevelServer::run, Session, etc.)
+- Allows using <vix/websocket.hpp> directly inside standalone scripts
+- Improves reliability of `vix run` when testing HTTP+WS combined examples
+
 ## [1.6.5] - 2025-12-10
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 ### Added
 

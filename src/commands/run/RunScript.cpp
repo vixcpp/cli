@@ -84,6 +84,9 @@ namespace vix::commands::RunCommand::detail
         s += "set(CMAKE_CXX_FLAGS_RELEASE \"${CMAKE_CXX_FLAGS_RELEASE} ${GLOBAL_CXX_FLAGS} -O3 -DNDEBUG\")\n";
         s += "set(CMAKE_CXX_FLAGS_DEBUG \"${CMAKE_CXX_FLAGS_DEBUG} ${GLOBAL_CXX_FLAGS} -O0 -g\")\n\n";
 
+        // ------------------------------------------------------------
+        // Mode "simple" : script standalone sans Vix
+        // ------------------------------------------------------------
         if (!useVixRuntime)
         {
             s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
@@ -93,6 +96,9 @@ namespace vix::commands::RunCommand::detail
             return s;
         }
 
+        // ------------------------------------------------------------
+        // Mode Vix runtime (HTTP / WebSocket / etc.)
+        // ------------------------------------------------------------
         s += "list(APPEND CMAKE_PREFIX_PATH \n";
         s += " \"/usr/local\"\n";
         s += " \"/usr/local/lib/cmake\"\n";
@@ -100,6 +106,7 @@ namespace vix::commands::RunCommand::detail
         s += " \"/usr/local/lib/cmake/Vix\"\n";
         s += ")\n\n";
 
+        // fmt shim
         s += "find_package(fmt QUIET)\n";
         s += "if (TARGET fmt::fmt-header-only AND NOT TARGET fmt::fmt)\n";
         s += " add_library(fmt::fmt ALIAS fmt::fmt-header-only)\n";
@@ -109,6 +116,7 @@ namespace vix::commands::RunCommand::detail
         s += " target_include_directories(fmt::fmt INTERFACE \"/usr/include\" \"/usr/local/include\")\n";
         s += "endif()\n\n";
 
+        // Boost (system, thread, filesystem)
         s += "find_package(Boost REQUIRED COMPONENTS system thread filesystem)\n";
         s += "if (NOT TARGET Boost::filesystem)\n";
         s += " add_library(Boost::filesystem UNKNOWN IMPORTED)\n";
@@ -117,6 +125,7 @@ namespace vix::commands::RunCommand::detail
         s += " INTERFACE_INCLUDE_DIRECTORIES \"${Boost_INCLUDE_DIRS}\")\n";
         s += "endif()\n\n";
 
+        // OpenSSL
         s += "find_package(OpenSSL QUIET)\n";
         s += "if (OpenSSL_FOUND)\n";
         s += " if (NOT TARGET OpenSSL::SSL)\n";
@@ -140,6 +149,7 @@ namespace vix::commands::RunCommand::detail
         s += " endif()\n";
         s += "endif()\n\n";
 
+        // Trouver le package Vix/vix
         s += "set(VIX_PKG_FOUND FALSE)\n";
         s += "find_package(vix QUIET CONFIG)\n";
         s += "if (vix_FOUND)\n";
@@ -157,24 +167,29 @@ namespace vix::commands::RunCommand::detail
         s += " message(FATAL_ERROR \"Could not find Vix/vix package config\")\n";
         s += "endif()\n\n";
 
-        s += "set(VIX_CORE_TARGET \"\")\n\n";
+        // ------------------------------------------------------------
+        //  vix::vix / Vix::vix
+        // ------------------------------------------------------------
+        s += "set(VIX_MAIN_TARGET \"\")\n\n";
 
-        s += "if (TARGET vix::core)\n";
-        s += " set(VIX_CORE_TARGET vix::core)\n";
-        s += "elseif (TARGET Vix::core)\n";
-        s += " set(VIX_CORE_TARGET Vix::core)\n";
-        s += "elseif (TARGET vix::vix)\n";
-        s += " set(VIX_CORE_TARGET vix::vix)\n";
+        s += "if (TARGET vix::vix)\n";
+        s += " set(VIX_MAIN_TARGET vix::vix)\n";
         s += "elseif (TARGET Vix::vix)\n";
-        s += " set(VIX_CORE_TARGET Vix::vix)\n";
+        s += " set(VIX_MAIN_TARGET Vix::vix)\n";
+        s += "elseif (TARGET vix::core)\n";
+        s += " set(VIX_MAIN_TARGET vix::core)\n";
+        s += "elseif (TARGET Vix::core)\n";
+        s += " set(VIX_MAIN_TARGET Vix::core)\n";
         s += "else()\n";
-        s += " message(FATAL_ERROR \"No Vix core/main target found (expected vix::core, Vix::core, vix::vix or Vix::vix)\")\n";
+        s += " message(FATAL_ERROR \"No Vix main target found (expected vix::vix, Vix::vix, vix::core or Vix::core)\")\n";
         s += "endif()\n\n";
 
+        // Exécutable
         s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
 
+        // Lien principal
         s += "target_link_libraries(" + exeName + " PRIVATE\n";
-        s += " ${VIX_CORE_TARGET}\n";
+        s += " ${VIX_MAIN_TARGET}\n";
         s += " Boost::system\n";
         s += " Boost::thread\n";
         s += " Boost::filesystem\n";
@@ -182,6 +197,12 @@ namespace vix::commands::RunCommand::detail
         s += " OpenSSL::SSL\n";
         s += " OpenSSL::Crypto\n";
         s += ")\n\n";
+
+        // Ceinture + bretelles : si le module websocket est exposé séparément,
+        // on le link explicitement (utile si VIX_MAIN_TARGET == vix::core).
+        s += "if (TARGET vix::websocket)\n";
+        s += " target_link_libraries(" + exeName + " PRIVATE vix::websocket)\n";
+        s += "endif()\n\n";
 
         return s;
     }
@@ -219,14 +240,12 @@ namespace vix::commands::RunCommand::detail
 
         fs::path buildDir = projectDir / "build";
 
-        // 🔥 1) Configure projet seulement si nécessaire
+        // 1) Configure projet seulement si nécessaire
         bool needConfigure = true;
         {
             std::error_code ec{};
             if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
             {
-                // CMake déjà configuré pour ce script → on peut garder le cache
-                // et éviter de relancer `cmake -S . -B build` à chaque run.
                 needConfigure = false;
             }
         }
@@ -253,7 +272,7 @@ namespace vix::commands::RunCommand::detail
             }
         }
 
-        // 🔥 2) Compilation — on ne fait plus que `cmake --build` à chaque run
+        // 2) Compilation — on ne fait plus que `cmake --build` à chaque run
         {
             fs::path logPath = projectDir / "build.log";
 
@@ -280,7 +299,6 @@ namespace vix::commands::RunCommand::detail
             int code = std::system(buildCmd.c_str());
             if (code != 0)
             {
-                // Lire le log et passer au ErrorHandler
                 std::ifstream ifs(logPath);
                 std::string logContent;
 
@@ -300,7 +318,6 @@ namespace vix::commands::RunCommand::detail
                 }
                 else
                 {
-                    // Fallback si pas de log (très rare)
                     error("Script build failed (no compiler log captured).");
                 }
 
@@ -309,7 +326,7 @@ namespace vix::commands::RunCommand::detail
             }
         }
 
-        // 🔥 3) Exécution du binaire
+        // 3) Exécution du binaire
         fs::path exePath = buildDir / exeName;
 #ifdef _WIN32
         exePath += ".exe";
@@ -376,7 +393,7 @@ namespace vix::commands::RunCommand::detail
 
         fs::path buildDir = projectDir / "build";
 
-        // 🔥 Configure seulement si cache absent
+        // Configure seulement si cache absent
         bool needConfigure = true;
         {
             std::error_code ec{};
@@ -407,7 +424,7 @@ namespace vix::commands::RunCommand::detail
             }
         }
 
-        // 🔥 Build (on ne fait plus que ça à chaque reload)
+        // Build (on ne fait plus que ça à chaque reload)
         fs::path logPath = projectDir / "build.log";
 
         std::ostringstream oss;
@@ -429,7 +446,6 @@ namespace vix::commands::RunCommand::detail
         int code = std::system(buildCmd.c_str());
         if (code != 0)
         {
-            // Lire le log et passer au ErrorHandler
             std::ifstream ifs(logPath);
             std::string logContent;
 
@@ -518,7 +534,7 @@ namespace vix::commands::RunCommand::detail
         hint("Watching: " + script.string());
 
 #ifdef _WIN32
-        // 🔁 Fallback simple sur Windows : on garde run_single_cpp
+        // Fallback simple sur Windows : on garde run_single_cpp
         while (true)
         {
             const auto start = Clock::now();
@@ -527,7 +543,6 @@ namespace vix::commands::RunCommand::detail
             const auto ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-            // Heuristique durée seulement si pas forcé
             if (!hasForceServer && !hasForceScript)
             {
                 bool runtimeGuess = dynamicServerLike;
@@ -549,7 +564,7 @@ namespace vix::commands::RunCommand::detail
                 hint("Fix the errors, save the file, and Vix will rebuild automatically.");
             }
 
-            // 🕵️ Ici on ne spam plus “Watching...” : on attend juste un changement
+            // Ici on ne spam plus “Watching...” : on attend juste un changement
             for (;;)
             {
                 std::this_thread::sleep_for(500ms);
@@ -602,7 +617,6 @@ namespace vix::commands::RunCommand::detail
                     if (nowWrite != lastWrite)
                     {
                         lastWrite = nowWrite;
-                        // CLEAR + bannière de restart
                         print_watch_restart_banner(script);
                         break;
                     }
@@ -629,7 +643,7 @@ namespace vix::commands::RunCommand::detail
                 const char *argv0 = exeStr.c_str();
 
                 execl(argv0, argv0, (char *)nullptr);
-                _exit(127); // si execl échoue
+                _exit(127);
             }
 
             // ===== PARENT =====
@@ -684,7 +698,6 @@ namespace vix::commands::RunCommand::detail
                     else if (WIFSIGNALED(status))
                         exitCode = 128 + WTERMSIG(status);
 
-                    // Mise à jour dynamique de la classification (si pas forcée)
                     if (!hasForceServer && !hasForceScript)
                     {
                         bool runtimeGuess = dynamicServerLike;
@@ -706,7 +719,6 @@ namespace vix::commands::RunCommand::detail
                         break; // rebuild + relaunch
                     }
 
-                    // Pas de spam en cas de succès : comme Deno, on reste silencieux
                     if (exitCode != 0)
                     {
                         error(label + " exited with code " +
@@ -744,60 +756,6 @@ namespace vix::commands::RunCommand::detail
 #endif
     }
 
-    // Petit helper: timestamp "global" du projet (max last_write_time)
-    static fs::file_time_type compute_project_stamp(const fs::path &root, std::error_code &outEc)
-    {
-        using ftime = fs::file_time_type;
-        outEc.clear();
-
-        ftime latest{}; // par défaut
-
-        std::error_code ec;
-        if (!fs::exists(root, ec))
-        {
-            outEc = ec;
-            return latest;
-        }
-
-        fs::recursive_directory_iterator it(root, ec), end;
-        if (ec)
-        {
-            outEc = ec;
-            return latest;
-        }
-
-        for (; it != end; it.increment(ec))
-        {
-            if (ec)
-                break;
-
-            const fs::path &p = it->path();
-            const std::string name = p.filename().string();
-
-            // On ignore les dossiers de build / meta
-            if (name == ".git" ||
-                name == "build" ||
-                name == ".vix-scripts" ||
-                name == "cmake-build-debug" ||
-                name == "cmake-build-release")
-            {
-                if (fs::is_directory(p))
-                    it.disable_recursion_pending();
-                continue;
-            }
-
-            auto t = fs::last_write_time(p, ec);
-            if (ec)
-                continue;
-
-            if (t > latest)
-                latest = t;
-        }
-
-        outEc.clear();
-        return latest;
-    }
-
     int run_project_watch(const Options &opt, const std::filesystem::path &projectDir)
     {
 #ifndef _WIN32
@@ -816,7 +774,6 @@ namespace vix::commands::RunCommand::detail
             return 1;
         }
 
-        // Timestamp global du projet : CMakeLists.txt + src/
         auto compute_timestamp = [&](std::error_code &outEc) -> fs::file_time_type
         {
             using ftime = fs::file_time_type;

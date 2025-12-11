@@ -101,7 +101,7 @@ int main()
     readme += "## 🧰 Useful Commands\n\n";
     readme += "| Command            | Description                  |\n";
     readme += "| ------------------ | ---------------------------- |\n";
-    readme += "| `vix build`        | Build the project            |\n";
+    readme += "| `vix build`        `| Build the project            |\n";
     readme += "| `vix run`          | Run the project              |\n";
     readme += "| `vix build --clean`| Clean and rebuild the project|\n";
     readme += "| `vix help`         | Show CLI help menu           |\n\n";
@@ -122,7 +122,7 @@ int main()
     readme += "It offers:\n\n";
     readme += "- Extreme performance (**40k+ requests/sec**)\n";
     readme += "- Clean syntax (`App app; app.get(\"/\", ...);`)\n";
-    readme += "- Modular architecture (`core`, `orm`, `cli`, `json`, `utils`, etc.)\n";
+    readme += "- Modular architecture (`core`, `orm`, `cli`, json`, `utils`, etc.)\n";
     readme += "- Simple CMake integration for external apps\n\n";
     readme += "---\n\n";
 
@@ -136,7 +136,7 @@ int main()
   static std::string make_cmakelists(const std::string &projectName)
   {
     std::string s;
-    s.reserve(14000);
+    s.reserve(20000);
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + projectName + " LANGUAGES CXX)\n\n";
@@ -154,6 +154,32 @@ int main()
     s += "  \"/usr/local/lib/cmake/vix\"  # new lowercase package dir\n";
     s += "  \"/usr/local/lib/cmake/Vix\"  # legacy package dir (exports fmt::fmt)\n";
     s += ")\n\n";
+
+    s += "# ==============================================================\n";
+    s += "# 🔹 MySQL section (commented by default)\n";
+    s += "# --------------------------------------------------------------\n";
+    s += "# If you want to use Vix ORM + MySQL, uncomment the block below:\n";
+    s += "#\n";
+    s += "#   find_library(MYSQLCPPCONN_LIB\n";
+    s += "#       NAMES mysqlcppconn8 mysqlcppconn\n";
+    s += "#       PATHS /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib\n";
+    s += "#   )\n";
+    s += "#   if (NOT MYSQLCPPCONN_LIB)\n";
+    s += "#       message(FATAL_ERROR \"MySQL Connector/C++ not found. Install libmysqlcppconn-dev.\")\n";
+    s += "#   endif()\n";
+    s += "#\n";
+    s += "#   add_library(MySQLCppConn::MySQLCppConn UNKNOWN IMPORTED)\n";
+    s += "#   set_target_properties(MySQLCppConn::MySQLCppConn PROPERTIES IMPORTED_LOCATION \"${MYSQLCPPCONN_LIB}\")\n";
+    s += "#\n";
+    s += "#   # Enable ORM\n";
+    s += "#   find_package(VixOrm REQUIRED)\n";
+    s += "#   target_link_libraries(" + projectName + " PRIVATE vix::orm)\n";
+    s += "# ==============================================================\n\n";
+
+    s += "# 🔹 Stub MySQLCppConn to avoid hard dependency in apps that don't use ORM\n";
+    s += "if (NOT TARGET MySQLCppConn::MySQLCppConn)\n";
+    s += "  add_library(MySQLCppConn::MySQLCppConn INTERFACE IMPORTED)\n";
+    s += "endif()\n\n";
 
     s += "# ❗ Disable ORM completely in generated apps (core-only)\n";
     s += "set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)\n\n";
@@ -177,8 +203,6 @@ int main()
     s += "endif()\n\n";
 
     s += "# ===== fmt shim (must be BEFORE find_package(Vix/vix)) =====\n";
-    s += "# Some legacy Vix packages export vix::utils with fmt::fmt in interface.\n";
-    s += "# To avoid configure errors, ensure fmt::fmt exists (alias header-only or dummy).\n";
     s += "find_package(fmt QUIET)\n";
     s += "if (TARGET fmt::fmt-header-only AND NOT TARGET fmt::fmt)\n";
     s += "  add_library(fmt::fmt ALIAS fmt::fmt-header-only)\n";
@@ -188,13 +212,13 @@ int main()
     s += "  target_include_directories(fmt::fmt INTERFACE \"/usr/include\" \"/usr/local/include\")\n";
     s += "endif()\n\n";
 
-    s += "# ===== Vix (core-only) — prefer new lowercase package, keep legacy fallback =====\n";
+    s += "# ===== Vix (core-only) — new lowercase package preferred =====\n";
     s += "set(vix_FOUND FALSE)\n";
-    s += "find_package(vix QUIET CONFIG)        # new\n";
+    s += "find_package(vix QUIET CONFIG)\n";
     s += "if (vix_FOUND)\n";
     s += "  message(STATUS \"Found vix (lowercase) package config\")\n";
     s += "else()\n";
-    s += "  find_package(Vix QUIET CONFIG)       # legacy\n";
+    s += "  find_package(Vix QUIET CONFIG)\n";
     s += "  if (Vix_FOUND)\n";
     s += "    message(STATUS \"Found Vix (legacy) package config\")\n";
     s += "    set(vix_FOUND TRUE)\n";
@@ -202,16 +226,15 @@ int main()
     s += "endif()\n\n";
 
     s += "if (NOT vix_FOUND)\n";
-    s += "  message(FATAL_ERROR \"Could not find Vix/vix package config. Set CMAKE_PREFIX_PATH to your install prefix.\")\n";
+    s += "  message(FATAL_ERROR \"Could not find Vix/vix. Set CMAKE_PREFIX_PATH to your install prefix.\")\n";
     s += "endif()\n\n";
 
-    s += "# Decide main target name (new vs legacy namespace)\n";
     s += "if (TARGET vix::vix)\n";
     s += "  set(VIX_MAIN_TARGET vix::vix)\n";
     s += "elseif (TARGET Vix::vix)\n";
     s += "  set(VIX_MAIN_TARGET Vix::vix)\n";
     s += "else()\n";
-    s += "  message(FATAL_ERROR \"Neither vix::vix nor Vix::vix target exists. Check your Vix/vix installation.\")\n";
+    s += "  message(FATAL_ERROR \"Neither vix::vix nor Vix::vix target exists.\")\n";
     s += "endif()\n\n";
 
     s += "# ===== App target =====\n";
@@ -238,7 +261,7 @@ int main()
     s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
     s += "endif()\n\n";
 
-    s += "# Sanitizers (optional)\n";
+    s += "# Sanitizers\n";
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
     s += "  target_compile_options(" + projectName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
     s += "  target_link_options(" + projectName + " PRIVATE -fsanitize=address,undefined)\n";

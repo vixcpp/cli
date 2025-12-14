@@ -60,6 +60,7 @@
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
+#include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -79,9 +80,7 @@ namespace vix
 
     namespace
     {
-        // -------------------------------------------------------------
         // Helpers for log-level parsing
-        // -------------------------------------------------------------
 
         std::string to_lower_copy(std::string s)
         {
@@ -143,9 +142,7 @@ namespace vix
 
     } // namespace
 
-    // -----------------------------------------------------------------
     // CLI constructor — register commands
-    // -----------------------------------------------------------------
     CLI::CLI()
     {
         // Base commands
@@ -165,6 +162,8 @@ namespace vix
         {
             return commands::DevCommand::run(args);
         };
+        commands_["orm"] = [](auto args)
+        { return commands::OrmCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -190,6 +189,12 @@ namespace vix
     // -----------------------------------------------------------------
     int CLI::run(int argc, char **argv)
     {
+#ifndef _WIN32
+        setenv("VIX_CLI_PATH", argv[0], 1);
+#else
+        _putenv_s("VIX_CLI_PATH", argv[0]);
+#endif
+
         auto &logger = Logger::getInstance();
 
         if (argc < 2)
@@ -198,7 +203,6 @@ namespace vix
             return help({});
         }
 
-        // ----------------------------------------------------------
         // 1) Global options: --verbose / --quiet / -q / --log-level
         //    Syntax:
         //      vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]
@@ -207,7 +211,6 @@ namespace vix
         //      vix --quiet build
         //      VIX_LOG_LEVEL=debug vix run myapp
         //      vix --log-level warn run myapp
-        // ----------------------------------------------------------
         enum class VerbosityMode
         {
             Default,
@@ -295,9 +298,7 @@ namespace vix
             apply_log_level_from_flag(logger, *logLevelFlag);
         }
 
-        // ----------------------------------------------------------
         // 2) Determine command + args
-        // ----------------------------------------------------------
         if (index >= argc)
         {
             // Ex: vix --verbose (no command)
@@ -307,10 +308,8 @@ namespace vix
         std::string cmd = argv[index];
         std::vector<std::string> args(argv + index + 1, argv + argc);
 
-        // ----------------------------------------------------------
         // 3) Per-command help:
         //    vix <command> --help / -h
-        // ----------------------------------------------------------
         if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
         {
             if (cmd == "new")
@@ -321,15 +320,15 @@ namespace vix
                 return commands::RunCommand::help();
             if (cmd == "dev")
                 return commands::DevCommand::help();
+            if (cmd == "orm")
+                return commands::OrmCommand::help();
 
             // Unknown command → global help
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
             return help({});
         }
 
-        // ----------------------------------------------------------
         // 4) Dispatch normal command
-        // ----------------------------------------------------------
         if (commands_.count(cmd))
         {
             try
@@ -349,9 +348,6 @@ namespace vix
         return 1;
     }
 
-    // -----------------------------------------------------------------
-    // CLI::help — global help + vix help <command>
-    // -----------------------------------------------------------------
     int CLI::help(const std::vector<std::string> &args)
     {
         // Per-command help: vix help <command>
@@ -366,6 +362,8 @@ namespace vix
                 return commands::RunCommand::help();
             if (cmd == "dev")
                 return commands::DevCommand::help();
+            if (cmd == "orm")
+                return commands::OrmCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -414,6 +412,11 @@ namespace vix
         out << "  vix dev server.cpp                  # auto-detect server/script behaviour\n";
         out << "  vix dev server.cpp --force-server   # force server mode\n";
         out << "  vix dev tool.cpp --force-script     # force script mode\n\n";
+        out << "  Database (ORM):\n";
+        out << "    vix orm migrate   [options]\n";
+        out << "    vix orm rollback  --steps <n> [options]\n";
+        out << "    vix orm status    [options]\n";
+        out << "    vix help orm\n\n";
 
         section_title(out, "Links:");
         out << "  GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";
@@ -421,9 +424,7 @@ namespace vix
         return 0;
     }
 
-    // -----------------------------------------------------------------
     // CLI::version — simple version banner
-    // -----------------------------------------------------------------
     int CLI::version(const std::vector<std::string> &)
     {
         using namespace vix::cli::style;
@@ -434,10 +435,8 @@ namespace vix
 
         std::ostream &out = std::cout;
 
-        // Titre coloré (cyan + bold), sans padding
         section_title(out, "Vix.cpp CLI");
 
-        // Lignes d'infos alignées comme avant, mais stylées
         out << "  version : "
             << CYAN << VIX_CLI_VERSION << RESET << "\n";
 

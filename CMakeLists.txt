@@ -27,7 +27,7 @@ cmake_minimum_required(VERSION 3.20)
 #   When built from the umbrella project, the CLI inherits global flags
 #   and links against core Vix modules via vix::vix.
 # ====================================================================
-project(vix_cli VERSION 1.7.0 LANGUAGES CXX)
+project(vix_cli VERSION 1.8.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)
@@ -101,7 +101,7 @@ else()
     message(STATUS "[cli] Building inside Vix repo → adding local modules/core & modules/utils")
     add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
     add_subdirectory("${_VIX_CORE_DIR}"  "${CMAKE_BINARY_DIR}/_vix_core")
-    target_link_libraries(vix_cli PRIVATE vix::core vix::utils)
+    target_link_libraries(vix_cli PRIVATE vix::core)
 
   else()
     # 3) Standalone build against system-installed Vix package
@@ -109,14 +109,13 @@ else()
     if (TARGET vix::vix)
       message(STATUS "[cli] Using system Vix package (vix::vix)")
       target_link_libraries(vix_cli PRIVATE vix::vix)
-    elseif (TARGET vix::utils)
-      message(STATUS "[cli] Using system Vix package (vix::utils)")
-      target_link_libraries(vix_cli PRIVATE vix::utils)
+    elseif (TARGET vix::core)
+      message(STATUS "[cli] Using system Vix package (vix::core)")
+      target_link_libraries(vix_cli PRIVATE vix::core)
     else()
       message(FATAL_ERROR
         "Missing dependencies for vix_cli.\n"
-        " - Either build the CLI from the umbrella project, or\n"
-        " - Ensure a proper VixConfig.cmake is installed (exporting vix::vix or vix::utils)."
+        "Expected vix::vix or vix::core from the installed Vix package."
       )
     endif()
   endif()

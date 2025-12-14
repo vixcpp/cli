@@ -19,7 +19,6 @@ using namespace vix::cli::util;
 
 namespace
 {
-  // --------- Minimal hello-world server (API Vix moderne) ----------
   constexpr const char *kMainCpp = R"(#include <vix.hpp>
 using namespace vix;
 
@@ -36,7 +35,6 @@ int main()
 }
 )";
 
-  // README generator (modern, cross-platform, rich content)
   std::string make_readme(const std::string &projectName)
   {
     std::string readme;
@@ -138,7 +136,6 @@ int main()
     return readme;
   }
 
-  // ------- CMakeLists template (simple, ORM optional) ------
   static std::string make_cmakelists(const std::string &projectName)
   {
     std::string s;

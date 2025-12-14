@@ -70,139 +70,83 @@ namespace vix::commands::RunCommand::detail
                                        bool useVixRuntime)
     {
         std::string s;
+        s.reserve(2500);
+
         s += "cmake_minimum_required(VERSION 3.20)\n";
         s += "project(" + exeName + " LANGUAGES CXX)\n\n";
-
-        s += "if (NOT CMAKE_BUILD_TYPE)\n";
-        s += " set(CMAKE_BUILD_TYPE Release CACHE STRING \"Build type\" FORCE)\n";
-        s += "endif()\n\n";
 
         s += "set(CMAKE_CXX_STANDARD 20)\n";
         s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
 
-        s += "set(GLOBAL_CXX_FLAGS \"-Wall -Wextra -Wshadow\")\n";
-        s += "set(CMAKE_CXX_FLAGS_RELEASE \"${CMAKE_CXX_FLAGS_RELEASE} ${GLOBAL_CXX_FLAGS} -O3 -DNDEBUG\")\n";
-        s += "set(CMAKE_CXX_FLAGS_DEBUG \"${CMAKE_CXX_FLAGS_DEBUG} ${GLOBAL_CXX_FLAGS} -O0 -g\")\n\n";
+        s += "if (NOT CMAKE_BUILD_TYPE)\n";
+        s += "  set(CMAKE_BUILD_TYPE Release CACHE STRING \"Build type\" FORCE)\n";
+        s += "endif()\n\n";
 
-        // ------------------------------------------------------------
-        // Mode "simple" : script standalone sans Vix
-        // ------------------------------------------------------------
+        s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n";
+        s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n\n";
+
+        s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
+
+        // Standalone script (no Vix)
         if (!useVixRuntime)
         {
-            s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
             s += "if (UNIX AND NOT APPLE)\n";
-            s += " target_link_libraries(" + exeName + " PRIVATE pthread dl)\n";
+            s += "  target_link_libraries(" + exeName + " PRIVATE pthread dl)\n";
             s += "endif()\n\n";
+
+            s += "target_compile_options(" + exeName + " PRIVATE -Wall -Wextra -Wpedantic)\n\n";
+
+            s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
+            s += "  target_compile_options(" + exeName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
+            s += "  target_link_options(" + exeName + " PRIVATE -fsanitize=address,undefined)\n";
+            s += "endif()\n";
+
             return s;
         }
 
-        // ------------------------------------------------------------
-        // Mode Vix runtime (HTTP / WebSocket / etc.)
-        // ------------------------------------------------------------
-        s += "list(APPEND CMAKE_PREFIX_PATH \n";
-        s += " \"/usr/local\"\n";
-        s += " \"/usr/local/lib/cmake\"\n";
-        s += " \"/usr/local/lib/cmake/vix\"\n";
-        s += " \"/usr/local/lib/cmake/Vix\"\n";
-        s += ")\n\n";
-
-        // fmt shim
-        s += "find_package(fmt QUIET)\n";
-        s += "if (TARGET fmt::fmt-header-only AND NOT TARGET fmt::fmt)\n";
-        s += " add_library(fmt::fmt ALIAS fmt::fmt-header-only)\n";
-        s += "endif()\n";
-        s += "if (NOT TARGET fmt::fmt)\n";
-        s += " add_library(fmt::fmt INTERFACE IMPORTED)\n";
-        s += " target_include_directories(fmt::fmt INTERFACE \"/usr/include\" \"/usr/local/include\")\n";
-        s += "endif()\n\n";
-
-        // Boost (system, thread, filesystem)
-        s += "find_package(Boost REQUIRED COMPONENTS system thread filesystem)\n";
-        s += "if (NOT TARGET Boost::filesystem)\n";
-        s += " add_library(Boost::filesystem UNKNOWN IMPORTED)\n";
-        s += " set_target_properties(Boost::filesystem PROPERTIES\n";
-        s += " IMPORTED_LOCATION \"${Boost_FILESYSTEM_LIBRARY}\"\n";
-        s += " INTERFACE_INCLUDE_DIRECTORIES \"${Boost_INCLUDE_DIRS}\")\n";
-        s += "endif()\n\n";
-
-        // OpenSSL
-        s += "find_package(OpenSSL QUIET)\n";
-        s += "if (OpenSSL_FOUND)\n";
-        s += " if (NOT TARGET OpenSSL::SSL)\n";
-        s += " add_library(OpenSSL::SSL UNKNOWN IMPORTED)\n";
-        s += " set_target_properties(OpenSSL::SSL PROPERTIES\n";
-        s += " IMPORTED_LOCATION \"${OPENSSL_SSL_LIBRARY}\"\n";
-        s += " INTERFACE_INCLUDE_DIRECTORIES \"${OPENSSL_INCLUDE_DIR}\")\n";
-        s += " endif()\n";
-        s += " if (NOT TARGET OpenSSL::Crypto AND DEFINED OPENSSL_CRYPTO_LIBRARY)\n";
-        s += " add_library(OpenSSL::Crypto UNKNOWN IMPORTED)\n";
-        s += " set_target_properties(OpenSSL::Crypto PROPERTIES\n";
-        s += " IMPORTED_LOCATION \"${OPENSSL_CRYPTO_LIBRARY}\"\n";
-        s += " INTERFACE_INCLUDE_DIRECTORIES \"${OPENSSL_INCLUDE_DIR}\")\n";
-        s += " endif()\n";
-        s += "else()\n";
-        s += " if (NOT TARGET OpenSSL::SSL)\n";
-        s += " add_library(OpenSSL::SSL INTERFACE IMPORTED)\n";
-        s += " endif()\n";
-        s += " if (NOT TARGET OpenSSL::Crypto)\n";
-        s += " add_library(OpenSSL::Crypto INTERFACE IMPORTED)\n";
-        s += " endif()\n";
-        s += "endif()\n\n";
-
-        // Trouver le package Vix/vix
-        s += "set(VIX_PKG_FOUND FALSE)\n";
+        // Vix runtime script (HTTP/WebSocket/etc.)
+        s += "# Prefer lowercase package, fallback to legacy Vix\n";
         s += "find_package(vix QUIET CONFIG)\n";
-        s += "if (vix_FOUND)\n";
-        s += " message(STATUS \"Found vix (lowercase) package config\")\n";
-        s += " set(VIX_PKG_FOUND TRUE)\n";
-        s += "else()\n";
-        s += " find_package(Vix QUIET CONFIG)\n";
-        s += " if (Vix_FOUND)\n";
-        s += " message(STATUS \"Found Vix (legacy) package config\")\n";
-        s += " set(VIX_PKG_FOUND TRUE)\n";
-        s += " endif()\n";
+        s += "if (NOT vix_FOUND)\n";
+        s += "  find_package(Vix CONFIG REQUIRED)\n";
         s += "endif()\n\n";
 
-        s += "if (NOT VIX_PKG_FOUND)\n";
-        s += " message(FATAL_ERROR \"Could not find Vix/vix package config\")\n";
-        s += "endif()\n\n";
-
-        // ------------------------------------------------------------
-        //  vix::vix / Vix::vix
-        // ------------------------------------------------------------
-        s += "set(VIX_MAIN_TARGET \"\")\n\n";
-
+        s += "# Pick main target (umbrella preferred)\n";
+        s += "set(VIX_MAIN_TARGET \"\")\n";
         s += "if (TARGET vix::vix)\n";
-        s += " set(VIX_MAIN_TARGET vix::vix)\n";
+        s += "  set(VIX_MAIN_TARGET vix::vix)\n";
         s += "elseif (TARGET Vix::vix)\n";
-        s += " set(VIX_MAIN_TARGET Vix::vix)\n";
+        s += "  set(VIX_MAIN_TARGET Vix::vix)\n";
         s += "elseif (TARGET vix::core)\n";
-        s += " set(VIX_MAIN_TARGET vix::core)\n";
+        s += "  set(VIX_MAIN_TARGET vix::core)\n";
         s += "elseif (TARGET Vix::core)\n";
-        s += " set(VIX_MAIN_TARGET Vix::core)\n";
+        s += "  set(VIX_MAIN_TARGET Vix::core)\n";
         s += "else()\n";
-        s += " message(FATAL_ERROR \"No Vix main target found (expected vix::vix, Vix::vix, vix::core or Vix::core)\")\n";
+        s += "  message(FATAL_ERROR \"No Vix target found (vix::vix/Vix::vix/vix::core/Vix::core)\")\n";
         s += "endif()\n\n";
 
-        // Exécutable
-        s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
+        s += "target_link_libraries(" + exeName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
 
-        // Lien principal
-        s += "target_link_libraries(" + exeName + " PRIVATE\n";
-        s += " ${VIX_MAIN_TARGET}\n";
-        s += " Boost::system\n";
-        s += " Boost::thread\n";
-        s += " Boost::filesystem\n";
-        s += " fmt::fmt\n";
-        s += " OpenSSL::SSL\n";
-        s += " OpenSSL::Crypto\n";
-        s += ")\n\n";
-
-        // Ceinture + bretelles : si le module websocket est exposé séparément,
-        // on le link explicitement (utile si VIX_MAIN_TARGET == vix::core).
-        s += "if (TARGET vix::websocket)\n";
-        s += " target_link_libraries(" + exeName + " PRIVATE vix::websocket)\n";
+        s += "# Optional ORM\n";
+        s += "if (VIX_USE_ORM)\n";
+        s += "  if (TARGET vix::orm)\n";
+        s += "    target_link_libraries(" + exeName + " PRIVATE vix::orm)\n";
+        s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
+        s += "  else()\n";
+        s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
+        s += "  endif()\n";
         s += "endif()\n\n";
+
+        s += "if (MSVC)\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE /W4 /permissive-)\n";
+        s += "else()\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
+        s += "endif()\n\n";
+
+        s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
+        s += "  target_link_options(" + exeName + " PRIVATE -fsanitize=address,undefined)\n";
+        s += "endif()\n";
 
         return s;
     }

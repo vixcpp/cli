@@ -1,5 +1,15 @@
 #include "vix/cli/ErrorHandler.hpp"
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+
 #include <regex>
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+
 #include <iostream>
 #include <sstream>
 #include <unordered_map>

@@ -119,8 +119,17 @@ else()
       )
     endif()
   endif()
+endif()  
+
+# ---------------- Inherit umbrella warnings ----------
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli PRIVATE vix_warnings)
 endif()
 
+# ---------------- Sanitizers (umbrella-inherited) -----
+if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
+  target_link_libraries(vix_cli PRIVATE vix_sanitizers)
+endif()
 
 # ---------------- CLI version wiring (dynamic) -------
 # Priorité:
@@ -161,16 +170,9 @@ endif()
 message(STATUS "Vix CLI version: ${_VIX_CLI_VERSION}")
 target_compile_definitions(vix_cli PRIVATE VIX_CLI_VERSION="${_VIX_CLI_VERSION}")
 
-# ---------------- Sanitizers (optional) ---------------
-# Honours the umbrella option: -DVIX_ENABLE_SANITIZERS=ON
-if (VIX_ENABLE_SANITIZERS)
-  message(STATUS "[cli] enabling sanitizers on vix_cli")
-  if (MSVC)
-    # No default ASan/UBSan flags here for MSVC.
-  else()
-    target_compile_options(vix_cli PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)
-    target_link_options(   vix_cli PRIVATE                       -fsanitize=address,undefined)
-  endif()
+# ---------------- Sanitizers (umbrella-inherited) -----
+if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
+  target_link_libraries(vix_cli PRIVATE vix_sanitizers)
 endif()
 
 # ---------------- LTO in Release (opt-in) ------------

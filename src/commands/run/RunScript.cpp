@@ -5,6 +5,8 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <cerrno>
+#include <cstring>
 
 #ifndef _WIN32
 #include <unistd.h>    // fork, execl, _exit
@@ -868,13 +870,28 @@ namespace vix::commands::RunCommand::detail
 
             if (pid == 0)
             {
-                ::chdir(buildDir.string().c_str());
-                ::setenv("VIX_STDOUT_MODE", "line", 1);
+                // chdir
+                if (::chdir(buildDir.string().c_str()) != 0)
+                {
+                    // (si tu as un logger dans ce fichier, utilise-le, sinon stderr)
+                    std::cerr << "[vix][run] chdir failed: " << std::strerror(errno) << "\n";
+                    _exit(127);
+                }
+
+                // setenv
+                if (::setenv("VIX_STDOUT_MODE", "line", 1) != 0)
+                {
+                    std::cerr << "[vix][run] setenv failed: " << std::strerror(errno) << "\n";
+                    _exit(127);
+                }
 
                 const std::string exeStr = exePath.string();
                 const char *argv0 = exeStr.c_str();
 
-                execl(argv0, argv0, (char *)nullptr);
+                // execl (si ça retourne, c'est un échec)
+                ::execl(argv0, argv0, (char *)nullptr);
+
+                std::cerr << "[vix][run] execl failed: " << std::strerror(errno) << "\n";
                 _exit(127);
             }
 

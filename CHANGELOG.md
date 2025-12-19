@@ -8,17 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## v1.9.2 — CLI Packaging & Signing UX Fix
+
+### Fixed
+
+- Fixed `vix pack` blocking when signing was auto-detected and minisign required a passphrase.
+- Ensured `--sign=auto` never blocks execution (non-interactive signing).
+
+### Added
+
+- Added explicit signing modes: `--sign=auto | never | required` (npm-style behavior).
+- Clear user-facing messages when signing is required (tool, key, file, prompt).
+
+### Improved
+
+- Better CLI UX around package signing and minisign integration.
+- Clear distinction between optional and mandatory cryptographic signing.
+
 ## [1.9.1] - 2025-12-19
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 # Changelog
 

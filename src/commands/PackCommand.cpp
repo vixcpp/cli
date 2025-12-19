@@ -56,7 +56,10 @@ namespace
 
     void write_checksums_sha256_posix_excluding_self_and_manifest(const fs::path &packRoot);
 
-    bool minisign_sign_payload_digest_posix(const fs::path &packRoot, bool verbose);
+    bool minisign_sign_payload_digest_posix(const fs::path &packRoot,
+                                            const std::string &seckeyPath,
+                                            bool verbose,
+                                            bool allowInteractive);
 
     std::unordered_map<std::string, std::string> parse_sha256sum_file(const fs::path &p);
     std::optional<std::string> sha256_of_file_posix(const fs::path &p);
@@ -67,6 +70,13 @@ namespace
     std::string detect_cmd_first_line_or_empty(const std::string &cmd);
 #endif
 
+    enum class SignMode
+    {
+        Auto,
+        Never,
+        Required
+    };
+
     struct Options
     {
         std::optional<fs::path> dir;
@@ -76,6 +86,9 @@ namespace
         bool noZip{false};
         bool noHash{false};
         bool verbose{false};
+
+        // bool sign{false};
+        SignMode signMode{SignMode::Auto};
     };
 
     // TOML reader for vix.toml
@@ -190,6 +203,19 @@ namespace
 
         return std::nullopt;
     }
+    static std::optional<std::string> find_signing_key_path()
+    {
+        std::string sk = env_or_default("VIX_MINISIGN_SECKEY", "");
+        if (!sk.empty())
+            return sk;
+
+        const auto def = find_default_minisign_seckey();
+        if (def.has_value())
+            return def->string();
+
+        return std::nullopt;
+    }
+
 #endif
 
     TomlData read_vix_toml_if_exists(const fs::path &projectDir)
@@ -267,6 +293,21 @@ namespace
             return f.string();
         return "vix-package";
     }
+    static SignMode parse_sign_mode(std::string v)
+    {
+        v = trim_copy(v);
+        for (auto &c : v)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        if (v == "auto")
+            return SignMode::Auto;
+        if (v == "never")
+            return SignMode::Never;
+        if (v == "required")
+            return SignMode::Required;
+
+        throw std::runtime_error("Invalid --sign mode: " + v + " (expected: auto|never|required)");
+    }
 
     Options parse_args(const std::vector<std::string> &args)
     {
@@ -323,6 +364,18 @@ namespace
             if (a == "--verbose")
             {
                 opt.verbose = true;
+                continue;
+            }
+            if (a == "--sign")
+            { // alias required
+                opt.signMode = SignMode::Required;
+                continue;
+            }
+
+            // --sign=auto|never|required
+            if (starts_with(a, "--sign="))
+            {
+                opt.signMode = parse_sign_mode(a.substr(std::string("--sign=").size()));
                 continue;
             }
 
@@ -793,20 +846,12 @@ namespace
         write_text_file(packRoot / "checksums.sha256", listing);
     }
 
-    bool minisign_sign_payload_digest_posix(const fs::path &packRoot, bool verbose)
+    bool minisign_sign_payload_digest_posix(const fs::path &packRoot,
+                                            const std::string &seckeyPath,
+                                            bool verbose,
+                                            bool allowInteractive)
     {
         if (!tool_exists_posix("minisign"))
-            return false;
-
-        std::string sk = env_or_default("VIX_MINISIGN_SECKEY", "");
-        if (sk.empty())
-        {
-            const auto def = find_default_minisign_seckey();
-            if (def.has_value())
-                sk = def->string();
-        }
-
-        if (sk.empty())
             return false;
 
         const fs::path digestPath = packRoot / "meta" / "payload.digest";
@@ -816,12 +861,16 @@ namespace
             return false;
 
         std::ostringstream oss;
-        oss << "minisign -S -s " << shell_quote_posix(sk)
+        oss << "minisign -S -s " << shell_quote_posix(seckeyPath)
             << " -m " << shell_quote_posix(digestPath.string())
             << " -x " << shell_quote_posix(sigPath.string());
 
         if (!verbose)
             oss << " >/dev/null 2>&1";
+
+        // IMPORTANT: in auto mode, never block for passphrase
+        if (!allowInteractive)
+            oss << " </dev/null";
 
         const int code = std::system(oss.str().c_str());
         return code == 0 && has_file(sigPath);
@@ -1011,7 +1060,79 @@ namespace vix::commands::PackCommand
 
             write_text_file(packRoot / "meta" / "payload.digest", payloadDigest + "\n");
 
-            const bool signatureOk = minisign_sign_payload_digest_posix(packRoot, opt.verbose);
+            bool signatureOk = false;
+
+            const bool minisignOk = tool_exists_posix("minisign");
+            const auto keyOpt = find_signing_key_path();
+            const bool haveKey = keyOpt.has_value() && !keyOpt->empty();
+
+            auto fail_required = [&](const std::string &reason)
+            {
+                vix::cli::style::error("pack: signing required but unavailable: " + reason);
+                vix::cli::style::hint("Install minisign and/or set VIX_MINISIGN_SECKEY=/path/to/key");
+            };
+
+            if (opt.signMode == SignMode::Never)
+            {
+                signatureOk = false;
+            }
+            else if (opt.signMode == SignMode::Required)
+            {
+                if (!minisignOk)
+                {
+                    fail_required("minisign not found");
+                    return 1;
+                }
+                if (!haveKey)
+                {
+                    fail_required("no signing key found");
+                    return 1;
+                }
+
+                const std::string keyPath = *keyOpt;
+
+                // clearer UX: show exactly what will happen
+                vix::cli::style::info("Signing:");
+                vix::cli::style::step("mode: required");
+                vix::cli::style::step("tool: minisign (ed25519)");
+                vix::cli::style::step("key: " + keyPath);
+                vix::cli::style::step("file: meta/payload.digest");
+                vix::cli::style::hint("minisign may prompt for the private key passphrase.");
+
+                signatureOk = minisign_sign_payload_digest_posix(
+                    packRoot,
+                    keyPath,
+                    opt.verbose,
+                    /*allowInteractive*/ true);
+
+                if (!signatureOk)
+                {
+                    fail_required("minisign failed");
+                    return 1;
+                }
+            }
+            else // Auto
+            {
+                if (minisignOk && haveKey)
+                {
+                    const std::string keyPath = *keyOpt;
+
+                    // auto must NEVER block: deny interactive prompt
+                    signatureOk = minisign_sign_payload_digest_posix(
+                        packRoot,
+                        keyPath,
+                        opt.verbose,
+                        /*allowInteractive*/ false);
+
+                    if (!signatureOk && opt.verbose)
+                        vix::cli::style::hint("Signing skipped (auto): needs passphrase or minisign failed.");
+                }
+                else
+                {
+                    if (opt.verbose)
+                        vix::cli::style::hint("Signing skipped (auto): minisign/key not available.");
+                }
+            }
 
             // 4) checksums.sha256 (exclude self + manifest)
             if (!opt.noHash)
@@ -1082,6 +1203,8 @@ namespace vix::commands::PackCommand
         out << "  --no-zip                Do not create .vixpkg (folder package only)\n";
         out << "  --no-hash               Do not generate checksums.sha256\n";
         out << "  --verbose               Show copied files + minisign output (if used)\n";
+        out << "  --sign[=mode]           Signing: auto|never|required (default: auto)\n";
+        out << "                          Use VIX_MINISIGN_SECKEY=path\n";
         out << "  -h, --help              Show this help\n\n";
 
         out << "Signing (optional):\n";
@@ -1092,7 +1215,10 @@ namespace vix::commands::PackCommand
         out << "  vix pack --name blog --version 1.0.0\n";
         out << "  vix pack --verbose\n";
         out << "  vix pack --no-zip\n";
-        out << "  VIX_MINISIGN_SECKEY=./keys/vix-pack.key vix pack\n";
+        out << "  vix pack --sign=never\n";
+        out << "  vix pack --sign=auto\n";
+        out << "  vix pack --sign=required\n";
+        out << "  VIX_MINISIGN_SECKEY=./keys/vix-pack.key vix pack --sign\n";
 
         return 0;
     }

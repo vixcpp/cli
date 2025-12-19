@@ -62,6 +62,7 @@
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
+#include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -167,6 +168,8 @@ namespace vix
         { return commands::OrmCommand::run(args); };
         commands_["pack"] = [](auto args)
         { return commands::PackCommand::run(args); };
+        commands_["verify"] = [](auto args)
+        { return commands::VerifyCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -327,6 +330,8 @@ namespace vix
                 return commands::OrmCommand::help();
             if (cmd == "pack")
                 return commands::PackCommand::help();
+            if (cmd == "verify")
+                return commands::VerifyCommand::help();
 
             // Unknown command → global help
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
@@ -371,6 +376,8 @@ namespace vix
                 return commands::OrmCommand::help();
             if (cmd == "pack")
                 return commands::PackCommand::help();
+            if (cmd == "verify")
+                return commands::VerifyCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -383,51 +390,49 @@ namespace vix
         out << "Version: " << VIX_CLI_VERSION << "\n\n";
 
         out << "Usage:\n";
-        out << "  vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]\n\n";
+        out << "  vix <command> [options] [args...]\n";
+        out << "  vix help <command>\n\n";
+
+        out << "Quick start:\n";
+        out << "  vix new api\n";
+        out << "  cd api && vix dev\n";
+        out << "  vix pack --version 1.0.0 && vix verify\n\n";
 
         out << "Commands:\n";
         out << "  Project:\n";
-        out << "    new <name>             Scaffold a new Vix project in ./<name>\n";
-        out << "    pack [options]         Package a project into dist/<name>@<version>\n\n";
+        out << "    new <name>               Create a new Vix project in ./<name>\n";
+        out << "    build [name]             Configure + build (root project or app)\n";
+        out << "    run  [name] [--args]     Build (if needed) then run\n";
+        out << "    dev  [name]              Dev mode (watch, rebuild, reload)\n\n";
 
-        out << "  Development:\n";
-        out << "    build [name]           Configure and build a project (root or app)\n";
-        out << "    run [name] [--args]    Build (if needed) and run a project or app\n";
-        out << "    dev [name]             Run in dev mode (auto-reload, rebuild-on-save)\n";
-        out << "                           Options: --force-server, --force-script\n\n";
+        out << "  Packaging & security:\n";
+        out << "    pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";
+        out << "    verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n\n";
+
+        out << "  Database (ORM):\n";
+        out << "    orm <subcommand>         Migrations/status/rollback\n\n";
 
         out << "  Info:\n";
-        out << "    help [command]         Show this help or help for a specific command\n";
-        out << "    version                Show CLI version information\n\n";
+        out << "    help [command]           Show help for CLI or a specific command\n";
+        out << "    version                  Show version information\n\n";
 
         out << "Global options:\n";
-        out << "  --verbose                Show debug logs from the runtime (log-level=debug)\n";
-        out << "  -q, --quiet              Only show warnings and errors\n";
-        out << "  --log-level <level>      Set log level: trace, debug, info, warn, error, critical\n";
-        out << "                           (overrides VIX_LOG_LEVEL environment variable)\n";
-        out << "  -h, --help               Show help for the CLI (or use: vix help)\n";
-        out << "  -v, --version            Show version information\n\n";
+        out << "  --verbose                  Enable debug logs (equivalent to --log-level debug)\n";
+        out << "  -q, --quiet                Only show warnings and errors\n";
+        out << "  --log-level <level>        trace|debug|info|warn|error|critical\n";
+        out << "  -h, --help                 Show CLI help (or: vix help)\n";
+        out << "  -v, --version              Show version info\n\n";
 
         out << "Environment:\n";
-        out << "  VIX_LOG_LEVEL=level      Default log level if no CLI override is provided.\n";
-        out << "                           Accepted values: trace, debug, info, warn, error, critical.\n";
-        out << "  VIX_MINISIGN_SECKEY=path Secret key used by `vix pack` to sign payload.digest\n\n";
+        out << "  VIX_LOG_LEVEL=level        Default log level (if --log-level not provided)\n";
+        out << "  VIX_MINISIGN_SECKEY=path   Secret key used by `vix pack` to sign payload.digest\n";
+        out << "  VIX_MINISIGN_PUBKEY=path   Public key used by `vix verify` if --pubkey not provided\n\n";
 
         out << "Examples:\n";
-        out << "  vix new api\n";
-        out << "  vix pack                           # package current project\n";
-        out << "  vix pack --version 1.0.0           # override version\n";
-        out << "  vix build                           # build current project\n";
-        out << "  vix run api -- --port 8080\n";
-        out << "\n";
-        out << "  vix dev server.cpp                  # auto-detect server/script behaviour\n";
-        out << "  vix dev server.cpp --force-server   # force server mode\n";
-        out << "  vix dev tool.cpp --force-script     # force script mode\n\n";
-        out << "  Database (ORM):\n";
-        out << "    vix orm migrate   [options]\n";
-        out << "    vix orm rollback  --steps <n> [options]\n";
-        out << "    vix orm status    [options]\n";
-        out << "    vix help orm\n\n";
+        out << "  vix pack --name blog --version 1.0.0\n";
+        out << "  vix pack --verbose                 # show minisign prompt/output\n";
+        out << "  vix verify --require-signature\n";
+        out << "  vix help verify\n\n";
 
         section_title(out, "Links:");
         out << "  GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";

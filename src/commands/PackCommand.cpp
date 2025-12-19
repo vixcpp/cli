@@ -56,7 +56,7 @@ namespace
 
     void write_checksums_sha256_posix_excluding_self_and_manifest(const fs::path &packRoot);
 
-    bool minisign_sign_payload_digest_posix(const fs::path &packRoot);
+    bool minisign_sign_payload_digest_posix(const fs::path &packRoot, bool verbose);
 
     std::unordered_map<std::string, std::string> parse_sha256sum_file(const fs::path &p);
     std::optional<std::string> sha256_of_file_posix(const fs::path &p);
@@ -172,6 +172,25 @@ namespace
         std::optional<std::string> cxx_standard;
         std::optional<std::string> cmake_generator;
     };
+
+#ifndef _WIN32
+    static std::optional<fs::path> find_default_minisign_seckey()
+    {
+        const char *home = std::getenv("HOME");
+        if (!home || !*home)
+            return std::nullopt;
+
+        const fs::path p1 = fs::path(home) / ".config" / "vix" / "keys" / "vix-pack.key";
+        if (has_file(p1))
+            return p1;
+
+        const fs::path p2 = fs::path(home) / "keys" / "vix" / "vix-pack.key";
+        if (has_file(p2))
+            return p2;
+
+        return std::nullopt;
+    }
+#endif
 
     TomlData read_vix_toml_if_exists(const fs::path &projectDir)
     {
@@ -774,12 +793,19 @@ namespace
         write_text_file(packRoot / "checksums.sha256", listing);
     }
 
-    bool minisign_sign_payload_digest_posix(const fs::path &packRoot)
+    bool minisign_sign_payload_digest_posix(const fs::path &packRoot, bool verbose)
     {
         if (!tool_exists_posix("minisign"))
             return false;
 
-        const std::string sk = env_or_default("VIX_MINISIGN_SECKEY", "");
+        std::string sk = env_or_default("VIX_MINISIGN_SECKEY", "");
+        if (sk.empty())
+        {
+            const auto def = find_default_minisign_seckey();
+            if (def.has_value())
+                sk = def->string();
+        }
+
         if (sk.empty())
             return false;
 
@@ -792,8 +818,10 @@ namespace
         std::ostringstream oss;
         oss << "minisign -S -s " << shell_quote_posix(sk)
             << " -m " << shell_quote_posix(digestPath.string())
-            << " -x " << shell_quote_posix(sigPath.string())
-            << " >/dev/null 2>&1";
+            << " -x " << shell_quote_posix(sigPath.string());
+
+        if (!verbose)
+            oss << " >/dev/null 2>&1";
 
         const int code = std::system(oss.str().c_str());
         return code == 0 && has_file(sigPath);
@@ -983,7 +1011,7 @@ namespace vix::commands::PackCommand
 
             write_text_file(packRoot / "meta" / "payload.digest", payloadDigest + "\n");
 
-            const bool signatureOk = minisign_sign_payload_digest_posix(packRoot);
+            const bool signatureOk = minisign_sign_payload_digest_posix(packRoot, opt.verbose);
 
             // 4) checksums.sha256 (exclude self + manifest)
             if (!opt.noHash)
@@ -1043,26 +1071,28 @@ namespace vix::commands::PackCommand
         out << "  vix pack [options]\n\n";
 
         out << "Description:\n";
-        out << "  Package the current Vix project into a distributable artifact.\n";
-        out << "  Generates dist/<name>@<version>/ with a v2 manifest.json, and can\n";
-        out << "  optionally zip it into dist/<name>@<version>.vixpkg.\n\n";
+        out << "  Package a Vix project into dist/<name>@<version> (manifest v2).\n";
+        out << "  Optionally creates dist/<name>@<version>.vixpkg.\n\n";
 
         out << "Options:\n";
         out << "  -d, --dir <path>        Project directory (default: current directory)\n";
         out << "  --out <path>            Output directory (default: <project>/dist)\n";
         out << "  --name <name>           Package name (default: project folder name)\n";
         out << "  --version <ver>         Package version (default: 0.1.0)\n";
-        out << "  --no-zip                Do not create .vixpkg zip (keep folder only)\n";
+        out << "  --no-zip                Do not create .vixpkg (folder package only)\n";
         out << "  --no-hash               Do not generate checksums.sha256\n";
-        out << "  --verbose               Verbose file copy logs\n";
+        out << "  --verbose               Show copied files + minisign output (if used)\n";
         out << "  -h, --help              Show this help\n\n";
+
+        out << "Signing (optional):\n";
+        out << "  VIX_MINISIGN_SECKEY=path  Sign meta/payload.digest with minisign\n\n";
 
         out << "Examples:\n";
         out << "  vix pack\n";
-        out << "  vix pack --version 1.0.0\n";
-        out << "  vix pack --name vix-http-cache --version 1.2.0\n";
-        out << "  vix pack --dir ./modules/core --out ./dist\n";
+        out << "  vix pack --name blog --version 1.0.0\n";
+        out << "  vix pack --verbose\n";
         out << "  vix pack --no-zip\n";
+        out << "  VIX_MINISIGN_SECKEY=./keys/vix-pack.key vix pack\n";
 
         return 0;
     }

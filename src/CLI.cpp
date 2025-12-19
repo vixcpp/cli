@@ -61,6 +61,7 @@
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
+#include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -164,6 +165,8 @@ namespace vix
         };
         commands_["orm"] = [](auto args)
         { return commands::OrmCommand::run(args); };
+        commands_["pack"] = [](auto args)
+        { return commands::PackCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -322,6 +325,8 @@ namespace vix
                 return commands::DevCommand::help();
             if (cmd == "orm")
                 return commands::OrmCommand::help();
+            if (cmd == "pack")
+                return commands::PackCommand::help();
 
             // Unknown command → global help
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
@@ -364,6 +369,8 @@ namespace vix
                 return commands::DevCommand::help();
             if (cmd == "orm")
                 return commands::OrmCommand::help();
+            if (cmd == "pack")
+                return commands::PackCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -380,7 +387,8 @@ namespace vix
 
         out << "Commands:\n";
         out << "  Project:\n";
-        out << "    new <name>             Scaffold a new Vix project in ./<name>\n\n";
+        out << "    new <name>             Scaffold a new Vix project in ./<name>\n";
+        out << "    pack [options]         Package a project into dist/<name>@<version>\n\n";
 
         out << "  Development:\n";
         out << "    build [name]           Configure and build a project (root or app)\n";
@@ -402,10 +410,13 @@ namespace vix
 
         out << "Environment:\n";
         out << "  VIX_LOG_LEVEL=level      Default log level if no CLI override is provided.\n";
-        out << "                           Accepted values: trace, debug, info, warn, error, critical.\n\n";
+        out << "                           Accepted values: trace, debug, info, warn, error, critical.\n";
+        out << "  VIX_MINISIGN_SECKEY=path Secret key used by `vix pack` to sign payload.digest\n\n";
 
         out << "Examples:\n";
         out << "  vix new api\n";
+        out << "  vix pack                           # package current project\n";
+        out << "  vix pack --version 1.0.0           # override version\n";
         out << "  vix build                           # build current project\n";
         out << "  vix run api -- --port 8080\n";
         out << "\n";

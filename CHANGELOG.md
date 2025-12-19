@@ -8,61 +8,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## v1.9.0 — 2025-01-18
+
+### Added
+
+- `vix pack`: new CLI command to package a Vix project into a distributable artifact.
+- Generation of `dist/<name>@<version>/` with optional `.vixpkg` zip archive.
+- Manifest v2 (`vix.manifest.v2`) including:
+  - Package metadata (name, version, kind, license).
+  - ABI detection (OS, architecture).
+  - Toolchain information (C++ compiler, standard, CMake version and generator).
+  - Layout flags (include, src, lib, modules, README).
+  - Exports and dependencies from `vix.toml`.
+
+### Security
+
+- Payload integrity verification via:
+  - Stable SHA256 listing of payload files.
+  - `meta/payload.digest` (content digest).
+- Optional Ed25519 signature using `minisign`:
+  - Signature stored as `meta/payload.digest.minisig`.
+  - Secret key provided via `VIX_MINISIGN_SECKEY`.
+
+### Changed
+
+- `vix help` now lists the `pack` command.
+- `vix help pack` provides detailed usage and options.
+
+### Notes
+
+- Signing is optional and only enabled when `minisign` is available and `VIX_MINISIGN_SECKEY` is set.
+- The manifest is generated after checksums to avoid self-referential hashes.
+
 ## [1.8.1] - 2025-12-17
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.8.0] - 2025-12-14
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.7.0] - 2025-12-12
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.6.7] - 2025-12-11
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.6.6] - 2025-12-11
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 cli: fix WebSocket linkage in RunScript script-mode builds
 

@@ -1,0 +1,252 @@
+// File: modules/cli/docs/error_samples/vix_error_samples.txt
+// Purpose:
+//   Concrete, copy/paste build logs that Vix CLI ErrorHandler/Pipeline can detect.
+//   Use these samples for manual testing or unit tests.
+// Notes:
+//   - These are representative examples of real-world Clang/GCC/ASan outputs.
+//   - Paths are placeholders; your parsers should handle any absolute path.
+//   - Some samples include extra noise (ninja/make) on purpose.
+
+// ============================================================================
+// A) Compiler (Clang/GCC) — structured errors: file:line:col: error: ...
+// ============================================================================
+
+================================================================================
+[CPP001] cout not declared (missing <iostream> or std::)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:5:5: error: use of undeclared identifier 'cout'
+    cout << "Hello" << endl;
+    ^
+1 error generated.
+================================================================================
+
+================================================================================
+[CPP002] header not found (.hpp file not found)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:1:10: fatal error: 'h.hpp' file not found
+#include "h.hpp"
+         ^~~~~~~
+1 error generated.
+================================================================================
+
+================================================================================
+[CPP003] missing semicolon (expected ';')
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:8:14: error: expected ';' after expression
+    int x = 42
+             ^
+             ;
+1 error generated.
+================================================================================
+
+================================================================================
+[CPP004] vector streamed to ostream (cannot print std::vector<T> directly)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:12:15: error: invalid operands to binary expression ('std::ostream' (aka 'basic_ostream<char>') and 'std::vector<int>')
+    std::cout << v << "\n";
+    ~~~~~~~~~ ^  ~
+1 error generated.
+================================================================================
+
+================================================================================
+[CPP005] overload ambiguity: process(nullptr)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:21:5: error: no matching function for call to 'process'
+    process(nullptr);
+    ^~~~~~~
+/home/me/tmp/main.cpp:10:6: note: candidate function not viable: no known conversion from 'std::nullptr_t' to 'int' for 1st argument
+void process(int);
+     ^
+/home/me/tmp/main.cpp:14:6: note: candidate template ignored: could not match 'T *' against 'std::nullptr_t'
+void process(T* p);
+     ^
+1 error generated.
+================================================================================
+
+================================================================================
+[CPP006] use-after-move (moved-from object used)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:33:9: error: use of 'ptr' after it was moved
+    ptr->run();
+    ^~~
+/home/me/tmp/main.cpp:31:15: note: move occurred here
+    auto x = std::move(ptr);
+              ^
+1 error generated.
+================================================================================
+
+
+// ============================================================================
+// B) Ownership / memory-related compile-time patterns (rules)
+// ============================================================================
+
+================================================================================
+[MEM001] unique_ptr copy (deleted copy constructor / use of deleted function)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:14:18: error: call to deleted constructor of 'std::unique_ptr<int>'
+    auto b = a; // copy
+                 ^
+/usr/include/c++/13/bits/unique_ptr.h:514:7: note: 'unique_ptr' has been explicitly marked deleted here
+      unique_ptr(const unique_ptr&) = delete;
+      ^
+1 error generated.
+================================================================================
+
+================================================================================
+[MEM002] shared_ptr raw-pointer double-delete warning (representative)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:18:5: warning: construction of 'std::shared_ptr<T>' from raw pointer may lead to double delete [-Wshared-ptr-ownership]
+    std::shared_ptr<int> b(p);
+    ^
+1 warning generated.
+================================================================================
+
+================================================================================
+[MEM003] delete mismatch: new[] freed with delete (mismatched delete)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:22:5: warning: mismatched new/delete: allocated with 'new[]' but deallocated with 'delete' [-Wmismatched-new-delete]
+    delete a;
+    ^
+/home/me/tmp/main.cpp:20:14: note: allocated with 'new[]' here
+    int* a = new int[10];
+             ^
+1 warning generated.
+================================================================================
+
+================================================================================
+[MEM004] dangling string_view (representative warning)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:9:24: warning: dangling pointer to temporary object [-Wdangling]
+    std::string_view sv = std::string("hello");
+                       ^
+1 warning generated.
+================================================================================
+
+================================================================================
+[MEM005] returning reference/pointer to local (dangling reference)
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:7:12: warning: reference to stack memory associated with local variable 's' returned [-Wreturn-stack-address]
+    return s;
+           ^
+/home/me/tmp/main.cpp:6:17: note: local variable 's' declared here
+    std::string s = "hi";
+                ^
+1 warning generated.
+================================================================================
+
+================================================================================
+[MEM006] use of uninitialized value
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:11:18: warning: variable 'x' is used uninitialized whenever 'if' condition is false [-Wsometimes-uninitialized]
+    std::cout << x << "\n";
+                 ^
+/home/me/tmp/main.cpp:9:9: note: remove the 'if' if its condition is always true
+    if (flag)
+        ^
+/home/me/tmp/main.cpp:10:9: note: variable 'x' is declared here
+    int x;
+        ^
+1 warning generated.
+================================================================================
+
+
+// ============================================================================
+// C) Raw log detectors — Linker errors (undefined reference)
+// ============================================================================
+
+================================================================================
+[LINK001] undefined reference (missing .cpp in target or missing target_link_libraries)
+--------------------------------------------------------------------------------
+[ 50%] Linking CXX executable app
+/usr/bin/ld: CMakeFiles/app.dir/main.cpp.o: in function `main':
+main.cpp:(.text+0x1a): undefined reference to `foo()'
+collect2: error: ld returned 1 exit status
+ninja: build stopped: subcommand failed.
+================================================================================
+
+
+// ============================================================================
+// D) Raw log detectors — Sanitizers (generic) + runtime precise detectors
+//     - double free / invalid free
+//     - heap-buffer-overflow / stack-buffer-overflow
+// ============================================================================
+
+================================================================================
+[RT001] AddressSanitizer: attempting double-free
+--------------------------------------------------------------------------------
+==12345==ERROR: AddressSanitizer: attempting double-free on 0x602000000010 in thread T0:
+    #0 0x7f3a4a1a0f67 in __interceptor_free (/usr/lib/x86_64-linux-gnu/libasan.so+0x... )
+    #1 0x55c7f2d1b3a9 in main /home/me/tmp/main.cpp:12
+    #2 0x7f3a49c1c24a in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x...)
+    #3 0x55c7f2d1b1d9 in _start (/home/me/tmp/app+0x...)
+0x602000000010 is located 0 bytes inside of 4-byte region [0x602000000010,0x602000000014)
+freed by thread T0 here:
+    #0 0x7f3a4a1a0f67 in __interceptor_free (/usr/lib/x86_64-linux-gnu/libasan.so+0x...)
+    #1 0x55c7f2d1b380 in main /home/me/tmp/main.cpp:11
+previously allocated by thread T0 here:
+    #0 0x7f3a4a1a19cf in __interceptor_malloc (/usr/lib/x86_64-linux-gnu/libasan.so+0x...)
+    #1 0x55c7f2d1b33a in main /home/me/tmp/main.cpp:10
+SUMMARY: AddressSanitizer: double-free (/usr/lib/x86_64-linux-gnu/libasan.so+0x...)
+================================================================================
+
+================================================================================
+[RT002] free(): invalid pointer (glibc-style)
+--------------------------------------------------------------------------------
+free(): invalid pointer
+Aborted (core dumped)
+================================================================================
+
+================================================================================
+[RT003] AddressSanitizer: heap-buffer-overflow
+--------------------------------------------------------------------------------
+==777==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60200000001c at pc 0x55f1a6a2c7a1 bp 0x7ffeefbff2b0 sp 0x7ffeefbff2a8
+READ of size 4 at 0x60200000001c thread T0
+    #0 0x55f1a6a2c7a0 in main /home/me/tmp/main.cpp:9
+    #1 0x7f88d0f9d24a in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x...)
+    #2 0x55f1a6a2c5e9 in _start (/home/me/tmp/app+0x...)
+0x60200000001c is located 0 bytes to the right of 12-byte region [0x602000000010,0x60200000001c)
+allocated by thread T0 here:
+    #0 0x7f88d15219cf in __interceptor_malloc (/usr/lib/x86_64-linux-gnu/libasan.so+0x...)
+    #1 0x55f1a6a2c73a in main /home/me/tmp/main.cpp:7
+SUMMARY: AddressSanitizer: heap-buffer-overflow /home/me/tmp/main.cpp:9 in main
+================================================================================
+
+================================================================================
+[RT004] AddressSanitizer: stack-buffer-overflow
+--------------------------------------------------------------------------------
+==888==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x7ffd9c3d0f5c at pc 0x55b9f1d2a7a1 bp 0x7ffd9c3d0f20 sp 0x7ffd9c3d0f18
+WRITE of size 1 at 0x7ffd9c3d0f5c thread T0
+    #0 0x55b9f1d2a7a0 in main /home/me/tmp/main.cpp:14
+    #1 0x7f88d0f9d24a in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x...)
+    #2 0x55b9f1d2a5e9 in _start (/home/me/tmp/app+0x...)
+SUMMARY: AddressSanitizer: stack-buffer-overflow /home/me/tmp/main.cpp:14 in main
+================================================================================
+
+================================================================================
+[RT005] LeakSanitizer report (generic sanitizer fallback)
+--------------------------------------------------------------------------------
+==999==ERROR: LeakSanitizer: detected memory leaks
+
+Direct leak of 64 byte(s) in 1 object(s) allocated from:
+    #0 0x7f4d3c3d19cf in __interceptor_malloc (/usr/lib/x86_64-linux-gnu/libasan.so+0x...)
+    #1 0x55c7f2d1b33a in main /home/me/tmp/main.cpp:10
+
+SUMMARY: LeakSanitizer: 64 byte(s) leaked in 1 allocation(s).
+================================================================================
+
+
+// ============================================================================
+// E) Mixed / noisy logs (ensure parser ignores make/ninja noise)
+// ============================================================================
+
+================================================================================
+[MIX001] Ninja noise + real error
+--------------------------------------------------------------------------------
+ninja: Entering directory `build'
+[1/2] Building CXX object CMakeFiles/app.dir/main.cpp.o
+FAILED: CMakeFiles/app.dir/main.cpp.o
+/home/me/tmp/main.cpp:3:5: error: use of undeclared identifier 'cout'
+    cout << "Hello";
+    ^
+ninja: build stopped: subcommand failed.
+================================================================================

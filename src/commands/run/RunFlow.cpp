@@ -11,13 +11,15 @@
 #include <string_view>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
 using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
 {
     namespace fs = std::filesystem;
-
-    // ------------------- CLI parsing -------------------
 
     std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
     {
@@ -139,14 +141,13 @@ namespace vix::commands::RunCommand::detail
         return o;
     }
 
-    // ------------------- Runtime exit code -------------------
-
+    // Runtime exit code
     void handle_runtime_exit_code(int code, const std::string &context)
     {
+        code = normalize_exit_code(code); // ← appel réel
         if (code == 0)
             return;
 
-        // 130 = 128 + SIGINT → convention shell "interrupted by user"
         if (code == 130)
         {
             hint("ℹ Server interrupted by user (SIGINT).");
@@ -156,8 +157,6 @@ namespace vix::commands::RunCommand::detail
         error(context + " (exit code " + std::to_string(code) + ").");
         hint("Check the logs above or run the command manually.");
     }
-
-    // ------------------- Quoting -------------------
 
     std::string quote(const std::string &s)
     {
@@ -170,7 +169,7 @@ namespace vix::commands::RunCommand::detail
 #endif
     }
 
-    // ------------------- Build log analysis -------------------
+    // Build log analysis
 #ifndef _WIN32
     bool has_real_build_work(const std::string &log)
     {
@@ -243,7 +242,7 @@ namespace vix::commands::RunCommand::detail
     }
 #endif
 
-    // ------------------- Presets & project selection -------------------
+    // Presets & project selection
 
     bool has_presets(const fs::path &projectDir)
     {
@@ -280,7 +279,6 @@ namespace vix::commands::RunCommand::detail
                                   const std::string &configurePreset,
                                   const std::string &userRunPreset)
     {
-        // Les presets "run-*" sont aussi des buildPresets avec target=["run"]
         auto runs = list_presets(dir, "build");
         auto has = [&](const std::string &n)
         {
@@ -292,7 +290,6 @@ namespace vix::commands::RunCommand::detail
 
         if (!runs.empty())
         {
-            // run-dev-ninja
             if (has("run-" + configurePreset))
                 return "run-" + configurePreset;
 
@@ -304,18 +301,15 @@ namespace vix::commands::RunCommand::detail
                     return mapped;
             }
 
-            // sinon on tentera "run-ninja"
             if (has("run-ninja"))
                 return "run-ninja";
 
-            // fallback: build-ninja, ou le premier
             if (has("build-ninja"))
                 return "build-ninja";
 
             return runs.front();
         }
 
-        // Heuristique si pas de liste dispo
         if (configurePreset.rfind("dev-", 0) == 0)
             return std::string("run-") + configurePreset.substr(4);
         return "run-ninja";
@@ -353,16 +347,8 @@ namespace vix::commands::RunCommand::detail
         return cwd;
     }
 
-    // ---------------------------------------------------------------------
-    // Pont CLI -> serveur: injecter VIX_LOG_LEVEL dans l'environnement
-    // ---------------------------------------------------------------------
     void apply_log_level_env(const Options &opt)
     {
-        // Priorité:
-        //  1) --log-level <level>
-        //  2) --quiet  => warn
-        //  3) --verbose => debug
-        //  4) sinon: ne rien toucher (on laisse VIX_LOG_LEVEL existant, ou défaut App)
         std::string level;
 
         if (!opt.logLevel.empty())

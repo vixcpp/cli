@@ -1,0 +1,145 @@
+// File: modules/cli/docs/error_samples/vix_error_samples_extra.txt
+// Purpose:
+//   Additional real-world error samples captured by Vix (runtime + UB + memory).
+//   Complements vix_error_samples.txt.
+
+// ============================================================================
+// F) Runtime memory errors — ASan / glibc (advanced)
+// ============================================================================
+
+================================================================================
+[RT006] AddressSanitizer: use-after-free
+--------------------------------------------------------------------------------
+==4242==ERROR: AddressSanitizer: heap-use-after-free on address 0x602000000030 at pc 0x559f1a9c27a1
+READ of size 4 at 0x602000000030 thread T0
+    #0 0x559f1a9c27a0 in main /home/me/tmp/main.cpp:18
+    #1 0x7f9b2c1e824a in __libc_start_main (/lib/x86_64-linux-gnu/libc.so.6+0x...)
+    #2 0x559f1a9c25e9 in _start (/home/me/tmp/app+0x...)
+0x602000000030 is located 0 bytes inside of 4-byte region
+freed by thread T0 here:
+    #0 0x7f9b2c76af67 in __interceptor_free
+    #1 0x559f1a9c2760 in main /home/me/tmp/main.cpp:16
+previously allocated by thread T0 here:
+    #0 0x7f9b2c76b9cf in __interceptor_malloc
+    #1 0x559f1a9c273a in main /home/me/tmp/main.cpp:14
+SUMMARY: AddressSanitizer: heap-use-after-free /home/me/tmp/main.cpp:18
+================================================================================
+
+================================================================================
+[RT007] AddressSanitizer: global-buffer-overflow
+--------------------------------------------------------------------------------
+==5011==ERROR: AddressSanitizer: global-buffer-overflow on address 0x55b7caa42020
+READ of size 1 at 0x55b7caa42020 thread T0
+    #0 0x55b7caa3f12a in main /home/me/tmp/main.cpp:7
+    #1 0x7f53bba9e24a in __libc_start_main
+SUMMARY: AddressSanitizer: global-buffer-overflow /home/me/tmp/main.cpp:7
+================================================================================
+
+================================================================================
+[RT008] glibc abort: corrupted size vs. prev_size
+--------------------------------------------------------------------------------
+corrupted size vs. prev_size
+Aborted (core dumped)
+================================================================================
+
+================================================================================
+[RT009] glibc abort: malloc(): corrupted top size
+--------------------------------------------------------------------------------
+malloc(): corrupted top size
+Aborted (core dumped)
+================================================================================
+
+
+// ============================================================================
+// G) Undefined Behavior Sanitizer (UBSan)
+// ============================================================================
+
+================================================================================
+[UB001] UndefinedBehaviorSanitizer: signed integer overflow
+--------------------------------------------------------------------------------
+runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /home/me/tmp/main.cpp:9
+================================================================================
+
+================================================================================
+[UB002] UndefinedBehaviorSanitizer: null pointer dereference
+--------------------------------------------------------------------------------
+runtime error: member access within null pointer of type 'Node'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /home/me/tmp/main.cpp:13
+================================================================================
+
+================================================================================
+[UB003] UndefinedBehaviorSanitizer: shift out of bounds
+--------------------------------------------------------------------------------
+runtime error: shift exponent 32 is too large for 32-bit type 'unsigned int'
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /home/me/tmp/main.cpp:11
+================================================================================
+
+
+// ============================================================================
+// H) MemorySanitizer (MSan) — uninitialized reads
+// ============================================================================
+
+================================================================================
+[MS001] MemorySanitizer: use-of-uninitialized-value
+--------------------------------------------------------------------------------
+==8123==WARNING: MemorySanitizer: use-of-uninitialized-value
+    #0 0x55e1a9a4c7a0 in main /home/me/tmp/main.cpp:10
+    #1 0x7f42f6a6224a in __libc_start_main
+SUMMARY: MemorySanitizer: use-of-uninitialized-value /home/me/tmp/main.cpp:10
+================================================================================
+
+
+// ============================================================================
+// I) ThreadSanitizer (TSan) — data races
+// ============================================================================
+
+================================================================================
+[TS001] ThreadSanitizer: data race
+--------------------------------------------------------------------------------
+WARNING: ThreadSanitizer: data race (pid=9001)
+  Write of size 4 at 0x7b0400001000 by thread T1:
+    #0 worker /home/me/tmp/main.cpp:20
+  Previous read of size 4 at 0x7b0400001000 by thread T0:
+    #0 main /home/me/tmp/main.cpp:12
+SUMMARY: ThreadSanitizer: data race /home/me/tmp/main.cpp:20
+================================================================================
+
+
+// ============================================================================
+// J) C++ lifetime / ownership — realistic compiler warnings
+// ============================================================================
+
+================================================================================
+[LIFE001] returning pointer to local array
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:9:12: warning: address of local variable 'buf' returned [-Wreturn-local-addr]
+    return buf;
+           ^
+/home/me/tmp/main.cpp:7:10: note: local variable 'buf' declared here
+    char buf[32];
+         ^
+================================================================================
+
+================================================================================
+[LIFE002] dangling reference to temporary
+--------------------------------------------------------------------------------
+/home/me/tmp/main.cpp:14:28: warning: returning reference to temporary object [-Wreturn-stack-address]
+    return std::string("hi");
+                           ^
+================================================================================
+
+
+// ============================================================================
+// K) Mixed sanitizer + linker noise
+// ============================================================================
+
+================================================================================
+[MIX002] ASan error mixed with linker output
+--------------------------------------------------------------------------------
+[100%] Linking CXX executable app
+==1234==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x602000000014
+    #0 0x55f12c7a18d0 in main /home/me/tmp/main.cpp:15
+/usr/bin/ld: warning: creating DT_TEXTREL in a PIE
+collect2: error: ld returned 1 exit status
+================================================================================

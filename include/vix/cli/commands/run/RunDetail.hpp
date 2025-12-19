@@ -38,6 +38,46 @@ namespace vix::commands::RunCommand::detail
     int run_cmd_live_filtered(const std::string &cmd,
                               const std::string &spinnerLabel = {});
 
+    inline int normalize_exit_code(int code) noexcept
+    {
+#ifdef _WIN32
+        return code;
+#else
+        if (code < 0)
+            return 1;
+
+        // If it's a real wait-status, WIF* macros will work.
+        if (WIFEXITED(code))
+            return WEXITSTATUS(code);
+
+        if (WIFSIGNALED(code))
+            return 128 + WTERMSIG(code);
+
+        // If it is already a plain exit code, keep it.
+        if (code >= 0 && code <= 255)
+            return code;
+
+        return 1;
+#endif
+    }
+
+#ifndef _WIN32
+    struct LiveRunResult
+    {
+        int rawStatus = 0; // waitpid status
+        int exitCode = 0;  // normalized 0..255 or 128+signal
+        std::string stdoutText;
+        std::string stderrText;
+    };
+
+    // Same behavior as run_cmd_live_filtered(), but also captures stdout/stderr
+    // so we can parse runtime crashes and friendly diagnostics.
+    LiveRunResult run_cmd_live_filtered_capture(const std::string &cmd,
+                                                const std::string &spinnerLabel,
+                                                bool passthroughRuntime = false);
+
+#endif
+
     // --- Script mode (vix run foo.cpp) ---
     std::filesystem::path get_scripts_root();
     std::string make_script_cmakelists(const std::string &exeName,

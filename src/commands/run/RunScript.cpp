@@ -1,4 +1,5 @@
 #include "vix/cli/commands/run/RunDetail.hpp"
+#include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/Style.hpp>
 #include <filesystem>
 #include <fstream>
@@ -7,6 +8,8 @@
 #include <thread>
 #include <cerrno>
 #include <cstring>
+#include <iostream>
+#include <chrono>
 
 #ifndef _WIN32
 #include <unistd.h>    // fork, execl, _exit
@@ -72,82 +75,162 @@ namespace vix::commands::RunCommand::detail
                                        bool useVixRuntime)
     {
         std::string s;
-        s.reserve(2500);
+        s.reserve(5200);
+
+        auto q = [](const std::string &p)
+        {
+            std::string out = "\"";
+            for (char c : p)
+            {
+                if (c == '\\')
+                    out += "\\\\";
+                else if (c == '"')
+                    out += "\\\"";
+                else
+                    out += c;
+            }
+            out += "\"";
+            return out;
+        };
 
         s += "cmake_minimum_required(VERSION 3.20)\n";
         s += "project(" + exeName + " LANGUAGES CXX)\n\n";
 
+        // Standard
         s += "set(CMAKE_CXX_STANDARD 20)\n";
-        s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
+        s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
+        s += "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
 
+        // Default build type
         s += "if (NOT CMAKE_BUILD_TYPE)\n";
-        s += "  set(CMAKE_BUILD_TYPE Release CACHE STRING \"Build type\" FORCE)\n";
+        s += "  set(CMAKE_BUILD_TYPE Debug CACHE STRING \"Build type\" FORCE)\n";
         s += "endif()\n\n";
 
+        // Options
         s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n";
+        s += "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)\n";
+        s += "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)\n";
         s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n\n";
 
-        s += "add_executable(" + exeName + " \"" + cppPath.string() + "\")\n\n";
+        // Executable
+        s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
 
-        // Standalone script (no Vix)
+        // Warnings
+        s += "if (MSVC)\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE /W4 /permissive- /EHsc)\n";
+        s += "  target_compile_definitions(" + exeName + " PRIVATE _CRT_SECURE_NO_WARNINGS)\n";
+        s += "else()\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE\n";
+        s += "    -Wall -Wextra -Wpedantic\n";
+        s += "    -Wshadow -Wconversion -Wsign-conversion\n";
+        s += "    -Wformat=2 -Wnull-dereference\n";
+        s += "  )\n";
+        s += "endif()\n\n";
+
+        // Better backtraces
+        s += "if (NOT MSVC)\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE -fno-omit-frame-pointer)\n";
+        s += "  if (UNIX AND NOT APPLE)\n";
+        s += "    target_link_options(" + exeName + " PRIVATE -rdynamic)\n";
+        s += "  endif()\n";
+        s += "endif()\n\n";
+
+        // libstdc++ assertions
+        s += "if (VIX_ENABLE_LIBCXX_ASSERTS AND NOT MSVC)\n";
+        s += "  target_compile_definitions(" + exeName + " PRIVATE _GLIBCXX_ASSERTIONS)\n";
+        s += "endif()\n\n";
+
+        // Hardening
+        s += "if (VIX_ENABLE_HARDENING AND NOT MSVC)\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE -D_FORTIFY_SOURCE=2)\n";
+        s += "  target_link_options(" + exeName + " PRIVATE -Wl,-z,relro -Wl,-z,now)\n";
+        s += "endif()\n\n";
+
+        // Link libs if standalone
         if (!useVixRuntime)
         {
             s += "if (UNIX AND NOT APPLE)\n";
             s += "  target_link_libraries(" + exeName + " PRIVATE pthread dl)\n";
             s += "endif()\n\n";
+        }
+        else
+        {
+            s += "# Prefer lowercase package, fallback to legacy Vix\n";
+            s += "find_package(vix QUIET CONFIG)\n";
+            s += "if (NOT vix_FOUND)\n";
+            s += "  find_package(Vix CONFIG REQUIRED)\n";
+            s += "endif()\n\n";
 
-            s += "target_compile_options(" + exeName + " PRIVATE -Wall -Wextra -Wpedantic)\n\n";
+            s += "# Pick main target (umbrella preferred)\n";
+            s += "set(VIX_MAIN_TARGET \"\")\n";
+            s += "if (TARGET vix::vix)\n";
+            s += "  set(VIX_MAIN_TARGET vix::vix)\n";
+            s += "elseif (TARGET Vix::vix)\n";
+            s += "  set(VIX_MAIN_TARGET Vix::vix)\n";
+            s += "elseif (TARGET vix::core)\n";
+            s += "  set(VIX_MAIN_TARGET vix::core)\n";
+            s += "elseif (TARGET Vix::core)\n";
+            s += "  set(VIX_MAIN_TARGET Vix::core)\n";
+            s += "else()\n";
+            s += "  message(FATAL_ERROR \"No Vix target found (vix::vix/Vix::vix/vix::core/Vix::core)\")\n";
+            s += "endif()\n\n";
 
-            s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-            s += "  target_compile_options(" + exeName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
-            s += "  target_link_options(" + exeName + " PRIVATE -fsanitize=address,undefined)\n";
-            s += "endif()\n";
+            s += "target_link_libraries(" + exeName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
 
-            return s;
+            s += "# Optional ORM\n";
+            s += "if (VIX_USE_ORM)\n";
+            s += "  if (TARGET vix::orm)\n";
+            s += "    target_link_libraries(" + exeName + " PRIVATE vix::orm)\n";
+            s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
+            s += "  else()\n";
+            s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
+            s += "  endif()\n";
+            s += "endif()\n\n";
         }
 
-        // Vix runtime script (HTTP/WebSocket/etc.)
-        s += "# Prefer lowercase package, fallback to legacy Vix\n";
-        s += "find_package(vix QUIET CONFIG)\n";
-        s += "if (NOT vix_FOUND)\n";
-        s += "  find_package(Vix CONFIG REQUIRED)\n";
-        s += "endif()\n\n";
-
-        s += "# Pick main target (umbrella preferred)\n";
-        s += "set(VIX_MAIN_TARGET \"\")\n";
-        s += "if (TARGET vix::vix)\n";
-        s += "  set(VIX_MAIN_TARGET vix::vix)\n";
-        s += "elseif (TARGET Vix::vix)\n";
-        s += "  set(VIX_MAIN_TARGET Vix::vix)\n";
-        s += "elseif (TARGET vix::core)\n";
-        s += "  set(VIX_MAIN_TARGET vix::core)\n";
-        s += "elseif (TARGET Vix::core)\n";
-        s += "  set(VIX_MAIN_TARGET Vix::core)\n";
-        s += "else()\n";
-        s += "  message(FATAL_ERROR \"No Vix target found (vix::vix/Vix::vix/vix::core/Vix::core)\")\n";
-        s += "endif()\n\n";
-
-        s += "target_link_libraries(" + exeName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
-
-        s += "# Optional ORM\n";
-        s += "if (VIX_USE_ORM)\n";
-        s += "  if (TARGET vix::orm)\n";
-        s += "    target_link_libraries(" + exeName + " PRIVATE vix::orm)\n";
-        s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
-        s += "  else()\n";
-        s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
-        s += "  endif()\n";
-        s += "endif()\n\n";
-
-        s += "if (MSVC)\n";
-        s += "  target_compile_options(" + exeName + " PRIVATE /W4 /permissive-)\n";
-        s += "else()\n";
-        s += "  target_compile_options(" + exeName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
-        s += "endif()\n\n";
-
+        // Sanitizers
         s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-        s += "  target_compile_options(" + exeName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
-        s += "  target_link_options(" + exeName + " PRIVATE -fsanitize=address,undefined)\n";
+        s += "  message(STATUS \"Sanitizers: ASan+UBSan enabled\")\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE\n";
+        s += "    -O1 -g3\n";
+        s += "    -fno-omit-frame-pointer\n";
+        s += "    -fsanitize=address,undefined\n";
+        s += "    -fno-sanitize-recover=all\n";
+        s += "  )\n";
+        s += "  target_link_options(" + exeName + " PRIVATE\n";
+        s += "    -fsanitize=address,undefined\n";
+        s += "  )\n";
+        s += "  # Quiet ASan/UBSan: keep the crash but reduce the huge report in terminal.\n";
+        s += "  # Vix will parse stderr and print a clean location+codeframe.\n";
+        s += "  target_compile_definitions(" + exeName + " PRIVATE\n";
+        s += "    VIX_ASAN_QUIET=1\n";
+        s += "  )\n";
+        s += "endif()\n\n";
+
+        // Always keep some debug info on Linux
+        s += "if (UNIX AND NOT APPLE)\n";
+        s += "  target_compile_options(" + exeName + " PRIVATE -g)\n";
+        s += "endif()\n\n";
+
+        // -------------------------
+        // Environment for runtime
+        // -------------------------
+        // This is the KEY: set ASAN_OPTIONS/UBSAN_OPTIONS at buildsystem level
+        // so child process inherits it when launched by vix run.
+        s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
+        s += "  # ASan: keep symbols, stop at first error, reduce noise\n";
+        s += "  set(ENV{ASAN_OPTIONS}\n";
+        s += "      \"abort_on_error=1:"
+             "detect_leaks=1:"
+             "symbolize=1:"
+             "allocator_may_return_null=1:"
+             "fast_unwind_on_malloc=0:"
+             "strict_init_order=1:"
+             "check_initialization_order=1:"
+             "color=never:"
+             "quiet=1\")\n";
+        s += "  # UBSan: halt, stacktrace\n";
+        s += "  set(ENV{UBSAN_OPTIONS} \"halt_on_error=1:print_stacktrace=1:color=never\")\n";
         s += "endif()\n";
 
         return s;
@@ -296,7 +379,30 @@ namespace vix::commands::RunCommand::detail
         cmdRun = "VIX_STDOUT_MODE=line " + quote(exePath.string());
 #endif
 
+#ifndef _WIN32
+        auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", true);
+        // rr.exitCode = RAW wait-status -> normalize here
+        runCode = normalize_exit_code(rr.exitCode);
+
+        if (runCode != 0)
+        {
+            const std::string runtimeLog = rr.stdoutText + "\n" + rr.stderrText;
+
+            vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                runtimeLog, script, "Script execution failed");
+
+            handle_runtime_exit_code(runCode, "Script execution failed");
+            return runCode;
+        }
+#else
         runCode = std::system(cmdRun.c_str());
+        runCode = normalize_exit_code(runCode);
+        if (runCode != 0)
+        {
+            handle_runtime_exit_code(runCode, "Script execution failed");
+            return runCode;
+        }
+#endif
 
         if (runCode != 0)
         {

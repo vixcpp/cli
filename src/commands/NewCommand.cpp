@@ -35,14 +35,23 @@ int main()
 }
 )";
 
+  constexpr const char *kBasicTestCpp = R"(#include <iostream>
+
+int main()
+{
+    std::cout << "basic test OK\n";
+    return 0;
+}
+)";
+
   std::string make_readme(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(12000);
+    readme.reserve(18000);
 
     readme += "# " + projectName + " — Example project using [Vix.cpp](https://github.com/vixcpp/vix)\n\n";
-    readme += projectName + " is a minimal example showing how to build, run, and hot-reload a C++ web app with **Vix.cpp**.\n";
-    readme += "It uses `CMakePresets.json` for a clean cross-platform workflow, and supports optional **Vix ORM**.\n\n";
+    readme += projectName + " is a minimal example showing how to build, run, test, and hot-reload a C++ web app with **Vix.cpp**.\n";
+    readme += "It uses `CMakePresets.json` for a clean cross-platform workflow, supports optional **Vix ORM**, and includes a basic **CTest** test out of the box.\n\n";
     readme += "---\n\n";
 
     readme += "## Features\n\n";
@@ -50,7 +59,8 @@ int main()
     readme += "- Modern **C++20** codebase\n";
     readme += "- Cross-platform build setup via **CMake presets**\n";
     readme += "- **Hot reload** dev mode: rebuild & restart on save (`vix dev`)\n";
-    readme += "- Optional sanitizers (`VIX_ENABLE_SANITIZERS`)\n";
+    readme += "- Built-in **tests** (CTest) + `vix check --tests`\n";
+    readme += "- Optional sanitizers (`--san`, `--ubsan`)\n";
     readme += "- Optional **ORM** (`VIX_USE_ORM=ON`)\n\n";
     readme += "---\n\n";
 
@@ -60,8 +70,10 @@ int main()
     readme += "├── CMakeLists.txt\n";
     readme += "├── CMakePresets.json\n";
     readme += "├── README.md\n";
-    readme += "└── src/\n";
-    readme += "    └── main.cpp\n";
+    readme += "├── src/\n";
+    readme += "│   └── main.cpp\n";
+    readme += "└── tests/\n";
+    readme += "    └── test_basic.cpp\n";
     readme += "```\n\n";
     readme += "---\n\n";
 
@@ -73,11 +85,23 @@ int main()
     readme += "- **Vix.cpp installed** (system install or local build)\n\n";
     readme += "---\n\n";
 
-    readme += "## Build & Run (Vix CLI)\n\n";
+    readme += "## Quick start\n\n";
     readme += "```bash\n";
-    readme += "vix build        # Configure & build\n";
-    readme += "vix run          # Run (builds if needed)\n";
-    readme += "vix dev          # Hot reload: rebuild & restart on save\n";
+    readme += "vix build\n";
+    readme += "vix run\n";
+    readme += "```\n\n";
+    readme += "Open **http://localhost:8080/** in your browser.\n\n";
+    readme += "---\n\n";
+
+    readme += "## Vix CLI workflow\n\n";
+    readme += "```bash\n";
+    readme += "vix build                 # Configure & build (presets)\n";
+    readme += "vix run                   # Run (builds if needed)\n";
+    readme += "vix dev                   # Hot reload: watch + rebuild + restart\n";
+    readme += "vix check                 # Validate project build\n";
+    readme += "vix check --tests         # Build + run CTest\n";
+    readme += "vix check --san --tests   # ASan+UBSan + tests\n";
+    readme += "vix check --ubsan --tests # UBSan-only + tests\n";
     readme += "```\n\n";
 
     readme += "### Enable ORM (optional)\n\n";
@@ -88,27 +112,56 @@ int main()
     readme += "vix dev   -D VIX_USE_ORM=ON\n";
     readme += "```\n\n";
     readme += "> If `vix::orm` is not available in your install, CMake will fail with a clear error.\n\n";
+
+    readme += "### Sanitizers (optional)\n\n";
+    readme += "This project supports a mode-aware sanitizer setup via presets:\n\n";
+    readme += "```bash\n";
+    readme += "vix build --san     # uses dev-ninja-san (ASan+UBSan)\n";
+    readme += "vix build --ubsan   # uses dev-ninja-ubsan (UBSan only)\n";
+    readme += "```\n\n";
+    readme += "You can also enable sanitizers manually:\n\n";
+    readme += "```bash\n";
+    readme += "vix build -D VIX_ENABLE_SANITIZERS=ON -D VIX_SANITIZER_MODE=asan_ubsan\n";
+    readme += "vix build -D VIX_ENABLE_SANITIZERS=ON -D VIX_SANITIZER_MODE=ubsan\n";
+    readme += "```\n\n";
     readme += "---\n\n";
 
     readme += "## Manual CMake (optional)\n\n";
     readme += "```bash\n";
     readme += "cmake --preset dev-ninja\n";
     readme += "cmake --build --preset dev-ninja\n";
+    readme += "ctest --test-dir build-ninja --output-on-failure\n";
     readme += "```\n\n";
 
     readme += "### Windows (Visual Studio 2022)\n\n";
     readme += "```powershell\n";
     readme += "cmake --preset dev-msvc\n";
     readme += "cmake --build --preset dev-msvc\n";
+    readme += "ctest --test-dir build-msvc --output-on-failure\n";
     readme += "```\n\n";
+    readme += "---\n\n";
+
+    readme += "## Packaging & security (optional)\n\n";
+    readme += "Vix provides packaging and artifact verification:\n\n";
+    readme += "```bash\n";
+    readme += "vix pack --name " + projectName + " --version 1.0.0\n";
+    readme += "vix verify --require-signature\n";
+    readme += "```\n\n";
+    readme += "Environment variables:\n\n";
+    readme += "- `VIX_MINISIGN_SECKEY=path` — secret key used by `vix pack` to sign `payload.digest`\n";
+    readme += "- `VIX_MINISIGN_PUBKEY=path` — public key used by `vix verify` (if `--pubkey` not provided)\n\n";
     readme += "---\n\n";
 
     readme += "## Useful Commands\n\n";
     readme += "| Command | Description |\n";
     readme += "|--------|-------------|\n";
-    readme += "| `vix build` | Build the project |\n";
-    readme += "| `vix run` | Run the project |\n";
+    readme += "| `vix build` | Configure + build the project |\n";
+    readme += "| `vix run` | Run the project (builds if needed) |\n";
     readme += "| `vix dev` | Hot reload (watch + rebuild + restart) |\n";
+    readme += "| `vix check` | Validate a project build |\n";
+    readme += "| `vix check --tests` | Build + run CTest |\n";
+    readme += "| `vix pack` | Create `dist/<name>@<version>` (+ optional `.vixpkg`) |\n";
+    readme += "| `vix verify` | Verify `dist/<name>@<version>` or a `.vixpkg` artifact |\n";
     readme += "| `vix help` | Show CLI help |\n\n";
     readme += "---\n\n";
 
@@ -120,7 +173,11 @@ int main()
     readme += "[I] Acceptor initialized on port 8080\n";
     readme += "[I] Server request timeout set to 5000 ms\n";
     readme += "```\n\n";
-    readme += "Open **http://localhost:8080/** in your browser.\n\n";
+
+    readme += "Running tests:\n\n";
+    readme += "```bash\n";
+    readme += "vix check --tests\n";
+    readme += "```\n\n";
     readme += "---\n\n";
 
     readme += "## About Vix.cpp\n\n";
@@ -139,7 +196,7 @@ int main()
   static std::string make_cmakelists(const std::string &projectName)
   {
     std::string s;
-    s.reserve(6000);
+    s.reserve(9000);
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + projectName + " LANGUAGES CXX)\n\n";
@@ -153,7 +210,8 @@ int main()
     s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
 
     s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n";
-    s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n\n";
+    s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n";
+    s += "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan | ubsan\")\n\n";
 
     s += "# Prefer lowercase package, fallback to legacy Vix\n";
     s += "find_package(vix QUIET CONFIG)\n";
@@ -183,11 +241,31 @@ int main()
     s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
     s += "endif()\n\n";
 
-    s += "# Sanitizers\n";
+    s += "# Sanitizers (mode-aware)\n";
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-    s += "  target_compile_options(" + projectName + " PRIVATE -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined)\n";
-    s += "  target_link_options(" + projectName + " PRIVATE -fsanitize=address,undefined)\n";
+    s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
+    s += "    target_compile_options(" + projectName + " PRIVATE -O0 -g3 -fno-omit-frame-pointer -fsanitize=undefined -fno-sanitize-recover=all)\n";
+    s += "    target_link_options(" + projectName + " PRIVATE -fsanitize=undefined)\n";
+    s += "  else()\n";
+    s += "    target_compile_options(" + projectName + " PRIVATE -O1 -g3 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all)\n";
+    s += "    target_link_options(" + projectName + " PRIVATE -fsanitize=address,undefined)\n";
+    s += "  endif()\n";
     s += "endif()\n\n";
+
+    // ✅ AJOUT : tests CTest + 1 test par défaut
+    s += "# ------------------------------------------------------\n";
+    s += "# Tests (CTest)\n";
+    s += "# ------------------------------------------------------\n";
+    s += "include(CTest)\n";
+    s += "enable_testing()\n\n";
+
+    s += "add_executable(" + projectName + "_basic_test tests/test_basic.cpp)\n";
+    s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n\n";
+
+    s += "add_test(\n";
+    s += "  NAME " + projectName + ".basic\n";
+    s += "  COMMAND " + projectName + "_basic_test\n";
+    s += ")\n\n";
 
     s += "add_custom_target(run\n";
     s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
@@ -214,6 +292,29 @@ int main()
       }
     },
     {
+      "name": "dev-ninja-san",
+      "displayName": "Dev (Ninja, ASan+UBSan, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "build-ninja-san",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VIX_ENABLE_SANITIZERS": "ON",
+        "VIX_SANITIZER_MODE": "asan_ubsan"
+      }
+    },
+    {
+      "name": "dev-ninja-ubsan",
+      "displayName": "Dev (Ninja, UBSan, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "build-ninja-ubsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "VIX_ENABLE_SANITIZERS": "ON",
+        "VIX_SANITIZER_MODE": "ubsan"
+      }
+    },
+
+    {
       "name": "dev-msvc",
       "displayName": "Dev (MSVC, Release)",
       "generator": "Visual Studio 17 2022",
@@ -224,6 +325,7 @@ int main()
       }
     }
   ],
+
   "buildPresets": [
     {
       "name": "build-ninja",
@@ -231,11 +333,23 @@ int main()
       "configurePreset": "dev-ninja"
     },
     {
+      "name": "build-ninja-san",
+      "displayName": "Build (ALL, Ninja, ASan+UBSan)",
+      "configurePreset": "dev-ninja-san"
+    },
+    {
+      "name": "build-ninja-ubsan",
+      "displayName": "Build (ALL, Ninja, UBSan)",
+      "configurePreset": "dev-ninja-ubsan"
+    },
+
+    {
       "name": "run-ninja",
       "displayName": "Run (target=run, Ninja)",
       "configurePreset": "dev-ninja",
       "targets": ["run"]
     },
+
     {
       "name": "build-msvc",
       "displayName": "Build (ALL, MSVC)",
@@ -255,6 +369,17 @@ int main()
       "displayName": "Alias: dev-ninja → build (Ninja)",
       "configurePreset": "dev-ninja"
     },
+    {
+      "name": "dev-ninja-san",
+      "displayName": "Alias: dev-ninja-san → build (ASan+UBSan)",
+      "configurePreset": "dev-ninja-san"
+    },
+    {
+      "name": "dev-ninja-ubsan",
+      "displayName": "Alias: dev-ninja-ubsan → build (UBSan)",
+      "configurePreset": "dev-ninja-ubsan"
+    },
+
     {
       "name": "dev-msvc",
       "displayName": "Alias: dev-msvc → build (MSVC)",
@@ -310,6 +435,8 @@ namespace vix::commands::NewCommand
       const fs::path projectDir = dest;
       const fs::path srcDir = projectDir / "src";
       const fs::path mainCpp = srcDir / "main.cpp";
+      const fs::path testsDir = projectDir / "tests";
+      const fs::path testCpp = testsDir / "test_basic.cpp";
       const fs::path cmakeLists = projectDir / "CMakeLists.txt";
       const fs::path readmeFile = projectDir / "README.md";
       const fs::path presetsFile = projectDir / "CMakePresets.json";
@@ -326,7 +453,9 @@ namespace vix::commands::NewCommand
 
       // Structure + fichiers
       fs::create_directories(srcDir);
+      fs::create_directories(testsDir);
       write_text_file(mainCpp, kMainCpp);
+      write_text_file(testCpp, kBasicTestCpp);
       write_text_file(cmakeLists, make_cmakelists(projectDir.filename().string()));
       write_text_file(readmeFile, make_readme(projectDir.filename().string()));
       write_text_file(presetsFile, make_cmake_presets_json());

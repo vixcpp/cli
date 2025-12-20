@@ -63,6 +63,7 @@
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
+#include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -170,6 +171,8 @@ namespace vix
         { return commands::PackCommand::run(args); };
         commands_["verify"] = [](auto args)
         { return commands::VerifyCommand::run(args); };
+        commands_["check"] = [](auto args)
+        { return commands::CheckCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -190,9 +193,7 @@ namespace vix
         };
     }
 
-    // -----------------------------------------------------------------
     // CLI::run — entry point for the vix binary
-    // -----------------------------------------------------------------
     int CLI::run(int argc, char **argv)
     {
 #ifndef _WIN32
@@ -332,6 +333,8 @@ namespace vix
                 return commands::PackCommand::help();
             if (cmd == "verify")
                 return commands::VerifyCommand::help();
+            if (cmd == "check")
+                return commands::CheckCommand::help();
 
             // Unknown command → global help
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
@@ -378,6 +381,8 @@ namespace vix
                 return commands::PackCommand::help();
             if (cmd == "verify")
                 return commands::VerifyCommand::help();
+            if (cmd == "check")
+                return commands::CheckCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -404,6 +409,7 @@ namespace vix
         out << "    build [name]             Configure + build (root project or app)\n";
         out << "    run  [name] [--args]     Build (if needed) then run\n";
         out << "    dev  [name]              Dev mode (watch, rebuild, reload)\n\n";
+        out << "    check [path]             Validate a project or compile a single .cpp (no execution)\n";
 
         out << "  Packaging & security:\n";
         out << "    pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";

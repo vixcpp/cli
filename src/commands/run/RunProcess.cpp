@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <chrono>
 
 #ifndef _WIN32
 #include <errno.h>
@@ -207,7 +208,8 @@ namespace vix::commands::RunCommand::detail
     // Capturing version (declared in RunDetail.hpp under !WIN32)
     LiveRunResult run_cmd_live_filtered_capture(const std::string &cmd,
                                                 const std::string &spinnerLabel,
-                                                bool passthroughRuntime)
+                                                bool passthroughRuntime,
+                                                int timeoutSec)
     {
         SigintGuard sigGuard;
 
@@ -365,12 +367,10 @@ namespace vix::commands::RunCommand::detail
                      line.find("HINT:") != std::string_view::npos ||
                      line.find("WARNING:") != std::string_view::npos))
                 {
-                    // Start only if it looks sanitizer-related
                     if (is_sanitizer_keyword_line(line) || line.find("Sanitizer") != std::string_view::npos)
                         return true;
                 }
 
-                // Some lines appear without the ==pid== prefix
                 if (is_sanitizer_keyword_line(line))
                     return true;
 
@@ -383,11 +383,9 @@ namespace vix::commands::RunCommand::detail
 
             static bool is_report_end(std::string_view line) noexcept
             {
-                // ASan often ends with SUMMARY, but not always.
                 if (line.rfind("SUMMARY:", 0) == 0)
                     return true;
 
-                // If sanitizer report ended and normal runtime starts again.
                 if (is_vix_runtime_line(line))
                     return true;
 
@@ -427,8 +425,6 @@ namespace vix::commands::RunCommand::detail
                     }
                     else
                     {
-                        // We are inside sanitizer report: drop everything.
-                        // We stop dropping when we reach SUMMARY or we see our own runtime output again.
                         if (is_report_end(line))
                         {
                             inReport = false;
@@ -448,8 +444,52 @@ namespace vix::commands::RunCommand::detail
         int finalStatus = 0; // RAW wait-status (waitpid format)
         bool haveStatus = false;
 
+        // ---- Timeout state ----
+        const bool enableTimeout = (timeoutSec > 0);
+        const auto startTime = std::chrono::steady_clock::now();
+        bool didTimeout = false;
+
+        bool sentTerm = false;
+        bool sentKill = false;
+        auto termTime = startTime;
+
+        auto elapsed_sec = [&]() -> long long
+        {
+            using namespace std::chrono;
+            return duration_cast<seconds>(steady_clock::now() - startTime).count();
+        };
+
+        auto term_elapsed_ms = [&]() -> long long
+        {
+            using namespace std::chrono;
+            return duration_cast<milliseconds>(steady_clock::now() - termTime).count();
+        };
+
         while (running)
         {
+            // ---- Timeout: SIGTERM then SIGKILL ----
+            if (!didTimeout && enableTimeout && elapsed_sec() >= timeoutSec)
+            {
+                didTimeout = true;
+
+                const std::string msg =
+                    "\n[vix] runtime timeout (" + std::to_string(timeoutSec) + "s)\n";
+                result.stderrText += msg;
+
+                ::kill(pid, SIGTERM);
+                sentTerm = true;
+                termTime = std::chrono::steady_clock::now();
+            }
+
+            if (didTimeout && sentTerm && !sentKill)
+            {
+                if (term_elapsed_ms() >= 500)
+                {
+                    ::kill(pid, SIGKILL);
+                    sentKill = true;
+                }
+            }
+
             fd_set fds;
             FD_ZERO(&fds);
 
@@ -481,10 +521,12 @@ namespace vix::commands::RunCommand::detail
 
             struct timeval tv;
             struct timeval *tv_ptr = nullptr;
-            if (spinnerActive)
+
+            // wake up regularly for spinner or timeout checks
+            if (spinnerActive || enableTimeout)
             {
                 tv.tv_sec = 0;
-                tv.tv_usec = 100000;
+                tv.tv_usec = 100000; // 100ms
                 tv_ptr = &tv;
             }
 
@@ -562,7 +604,7 @@ namespace vix::commands::RunCommand::detail
                                 std::string filtered;
                                 if (passthroughRuntime)
                                 {
-                                    filtered = printable; // script mode: don't wait for markers
+                                    filtered = printable;
                                 }
                                 else
                                 {
@@ -610,8 +652,16 @@ namespace vix::commands::RunCommand::detail
             }
         }
 
-        // IMPORTANT: store RAW wait-status here.
-        result.exitCode = haveStatus ? finalStatus : 1;
+        result.rawStatus = haveStatus ? finalStatus : 0;
+
+        if (didTimeout)
+        {
+            // Conventional timeout code (stable, regardless of SIGTERM/SIGKILL)
+            result.exitCode = 124;
+            return result;
+        }
+
+        result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
         return result;
     }
 
@@ -626,7 +676,7 @@ namespace vix::commands::RunCommand::detail
         return std::system(cmd.c_str());
 #else
         LiveRunResult r = run_cmd_live_filtered_capture(cmd, spinnerLabel, false);
-        return normalize_exit_code(r.exitCode); // ✅
+        return r.exitCode;
 
 #endif
     }

@@ -154,7 +154,7 @@ namespace vix::commands::RunCommand::detail
     // Runtime exit code
     void handle_runtime_exit_code(int code, const std::string &context)
     {
-        code = normalize_exit_code(code); // ← appel réel
+        // code is expected to be an already-normalized exit code (0..255 or 128+signal)
         if (code == 0)
             return;
 
@@ -225,7 +225,7 @@ namespace vix::commands::RunCommand::detail
 #if defined(_WIN32)
         exitCode = _pclose(p);
 #else
-        exitCode = pclose(p);
+        exitCode = normalize_exit_code(pclose(p));
 #endif
         return out;
     }

@@ -305,14 +305,42 @@ namespace vix::commands::CheckCommand::detail
                 const fs::path ctestPresets = projectDir / "CTestPresets.json";
                 const bool hasCTestPresets = fs::exists(ctestPresets);
 
+                // Helper: decide if we should add --output-on-failure
+                // (When listing tests, this is not needed and can be confusing.)
+                auto wants_listing_only = [&]() -> bool
+                {
+                    for (const auto &x : opt.ctestArgs)
+                    {
+                        if (x == "--show-only" || x == "-N" || x == "--show-only=json-v1")
+                            return true;
+                    }
+                    return false;
+                };
+
+                const bool listingOnly = wants_listing_only();
+
+                // Helper: append extra args
+                auto append_ctest_args = [&](std::ostringstream &os)
+                {
+                    for (const auto &x : opt.ctestArgs)
+                        os << " " << quote(x);
+                };
+
                 // 1) Try preset route if file exists (or user explicitly forced a ctest preset)
                 if (hasCTestPresets || !opt.ctestPreset.empty())
                 {
-                    const std::string ctp = opt.ctestPreset.empty() ? ("test-" + preset) : opt.ctestPreset;
+                    const std::string ctp = opt.ctestPreset.empty()
+                                                ? ("test-" + preset)
+                                                : opt.ctestPreset;
 
                     std::ostringstream cmd;
                     cmd << "cd " << quote(projectDir.string())
-                        << " && ctest --preset " << quote(ctp) << " --output-on-failure";
+                        << " && ctest --preset " << quote(ctp);
+
+                    if (!listingOnly)
+                        cmd << " --output-on-failure";
+
+                    append_ctest_args(cmd);
 
                     int tcode = run_cmd_live_filtered(cmd.str(), "Running tests");
 
@@ -320,11 +348,18 @@ namespace vix::commands::CheckCommand::detail
                     if (tcode != 0)
                     {
                         hint("CTest preset failed — falling back to build directory.");
+
                         std::ostringstream fb;
                         fb << "cd " << quote(buildDir.string())
-                           << " && ctest --output-on-failure";
+                           << " && ctest";
+
+                        if (!listingOnly)
+                            fb << " --output-on-failure";
+
+                        append_ctest_args(fb);
 
                         tcode = run_cmd_live_filtered(fb.str(), "Running tests (fallback)");
+
                         if (tcode != 0)
                         {
                             error("Tests failed (ctest).");
@@ -337,7 +372,12 @@ namespace vix::commands::CheckCommand::detail
                     // 2) No CTestPresets.json → run directly from build dir (works in your blog)
                     std::ostringstream fb;
                     fb << "cd " << quote(buildDir.string())
-                       << " && ctest --output-on-failure";
+                       << " && ctest";
+
+                    if (!listingOnly)
+                        fb << " --output-on-failure";
+
+                    append_ctest_args(fb);
 
                     const int tcode = run_cmd_live_filtered(fb.str(), "Running tests");
                     if (tcode != 0)
@@ -353,7 +393,7 @@ namespace vix::commands::CheckCommand::detail
             if (opt.runAfterBuild)
             {
                 // Important: appliquer env ASAN/UBSAN avant d'exécuter
-                run::apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
+                // run::apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
                 const std::string projectName = guess_project_name_from_dir(projectDir);
                 const std::string configName = resolve_build_type_from_cache_or_default(buildDir, "Debug");
@@ -458,24 +498,14 @@ namespace vix::commands::CheckCommand::detail
 
         if (opt.tests)
         {
-#ifdef _WIN32
-            int tcode = 0;
-            std::string tlog = run_and_capture_with_code(
-                "cmd /C \"cd /D " + quote(buildDir.string()) + " && ctest --output-on-failure\"",
-                tcode);
+#ifndef _WIN32
+            std::ostringstream t;
+            t << "cd " << quote(buildDir.string()) << " && ctest --output-on-failure";
 
-            if (tcode != 0)
-            {
-                if (!tlog.empty())
-                    std::cout << tlog;
-                error("Tests failed.");
-                return tcode != 0 ? tcode : 4;
-            }
-#else
-            const int tcode = run_cmd_live_filtered(
-                "cd " + quote(buildDir.string()) + " && ctest --output-on-failure",
-                "Running tests");
+            for (const auto &x : opt.ctestArgs)
+                t << " " << quote(x);
 
+            const int tcode = run_cmd_live_filtered(t.str(), "Running tests");
             if (tcode != 0)
             {
                 error("Tests failed.");

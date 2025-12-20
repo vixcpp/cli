@@ -47,23 +47,25 @@ int main()
   std::string make_readme(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(18000);
+    readme.reserve(22000);
 
     readme += "# " + projectName + " — Example project using [Vix.cpp](https://github.com/vixcpp/vix)\n\n";
-    readme += projectName + " is a minimal example showing how to build, run, test, and hot-reload a C++ web app with **Vix.cpp**.\n";
+    readme += projectName + " is a minimal example showing how to **build**, **run**, **test**, and **hot-reload** a C++ app with **Vix.cpp**.\n";
     readme += "It uses `CMakePresets.json` for a clean cross-platform workflow, supports optional **Vix ORM**, and includes a basic **CTest** test out of the box.\n\n";
     readme += "---\n\n";
 
+    // Features
     readme += "## Features\n\n";
     readme += "- Simple **HTTP server** powered by `vix::App`\n";
     readme += "- Modern **C++20** codebase\n";
-    readme += "- Cross-platform build setup via **CMake presets**\n";
+    readme += "- Cross-platform build workflow via **CMake presets**\n";
     readme += "- **Hot reload** dev mode: rebuild & restart on save (`vix dev`)\n";
-    readme += "- Built-in **tests** (CTest) + `vix check --tests`\n";
+    readme += "- Built-in **tests** (CTest) via `vix tests`\n";
     readme += "- Optional sanitizers (`--san`, `--ubsan`)\n";
     readme += "- Optional **ORM** (`VIX_USE_ORM=ON`)\n\n";
     readme += "---\n\n";
 
+    // Project structure
     readme += "## Project Structure\n\n";
     readme += "```\n";
     readme += projectName + "/\n";
@@ -77,6 +79,7 @@ int main()
     readme += "```\n\n";
     readme += "---\n\n";
 
+    // Requirements
     readme += "## Requirements\n\n";
     readme += "- **CMake ≥ 3.20**\n";
     readme += "- **C++20 compiler**\n";
@@ -85,6 +88,7 @@ int main()
     readme += "- **Vix.cpp installed** (system install or local build)\n\n";
     readme += "---\n\n";
 
+    // Quick start
     readme += "## Quick start\n\n";
     readme += "```bash\n";
     readme += "vix build\n";
@@ -93,18 +97,38 @@ int main()
     readme += "Open **http://localhost:8080/** in your browser.\n\n";
     readme += "---\n\n";
 
+    // Vix CLI workflow
     readme += "## Vix CLI workflow\n\n";
     readme += "```bash\n";
     readme += "vix build                 # Configure & build (presets)\n";
     readme += "vix run                   # Run (builds if needed)\n";
     readme += "vix dev                   # Hot reload: watch + rebuild + restart\n";
     readme += "vix check                 # Validate project build\n";
-    readme += "vix check --tests         # Build + run CTest\n";
-    readme += "vix check --san --tests   # ASan+UBSan + tests\n";
-    readme += "vix check --ubsan --tests # UBSan-only + tests\n";
+    readme += "vix tests                 # Run tests (alias of `vix check --tests`)\n";
     readme += "```\n\n";
 
-    readme += "### Enable ORM (optional)\n\n";
+    // Tests (vix tests)
+    readme += "## Tests\n\n";
+    readme += "This project uses **CTest**. Vix provides a dedicated command:\n\n";
+    readme += "```bash\n";
+    readme += "vix tests                 # Run all tests\n";
+    readme += "vix tests --list          # List tests (ctest --show-only)\n";
+    readme += "vix tests --fail-fast     # Stop at first failure (ctest --stop-on-failure)\n";
+    readme += "```\n\n";
+
+    readme += "### Passing extra CTest arguments\n\n";
+    readme += "`vix tests` forwards extra arguments to `ctest` via `--ctest-arg`:\n\n";
+    readme += "```bash\n";
+    readme += "vix tests --ctest-arg -V                    # verbose output\n";
+    readme += "vix tests --ctest-arg -R --ctest-arg \"basic\" # regex filter\n";
+    readme += "vix tests --ctest-arg -j --ctest-arg 8      # run tests in parallel\n";
+    readme += "```\n\n";
+
+    readme += "> Tip: if you use `--list`, Vix will not add extra `--output-on-failure` flags to keep output clean.\n\n";
+    readme += "---\n\n";
+
+    // ORM
+    readme += "## Enable ORM (optional)\n\n";
     readme += "If your Vix installation exports `vix::orm`, you can enable it like this:\n\n";
     readme += "```bash\n";
     readme += "vix build -D VIX_USE_ORM=ON\n";
@@ -112,21 +136,32 @@ int main()
     readme += "vix dev   -D VIX_USE_ORM=ON\n";
     readme += "```\n\n";
     readme += "> If `vix::orm` is not available in your install, CMake will fail with a clear error.\n\n";
+    readme += "---\n\n";
 
-    readme += "### Sanitizers (optional)\n\n";
-    readme += "This project supports a mode-aware sanitizer setup via presets:\n\n";
+    // Sanitizers
+    readme += "## Sanitizers (optional)\n\n";
+    readme += "Vix supports sanitizers via CLI flags and presets:\n\n";
     readme += "```bash\n";
-    readme += "vix build --san     # uses dev-ninja-san (ASan+UBSan)\n";
-    readme += "vix build --ubsan   # uses dev-ninja-ubsan (UBSan only)\n";
+    readme += "vix run  --san            # ASan+UBSan (preset-aware)\n";
+    readme += "vix run  --ubsan          # UBSan-only\n";
+    readme += "vix tests --san           # build/run tests with sanitizers\n";
+    readme += "vix tests --ubsan         # UBSan-only tests\n";
     readme += "```\n\n";
-    readme += "You can also enable sanitizers manually:\n\n";
+
+    readme += "You can also enable sanitizers manually using CMake definitions:\n\n";
     readme += "```bash\n";
     readme += "vix build -D VIX_ENABLE_SANITIZERS=ON -D VIX_SANITIZER_MODE=asan_ubsan\n";
     readme += "vix build -D VIX_ENABLE_SANITIZERS=ON -D VIX_SANITIZER_MODE=ubsan\n";
     readme += "```\n\n";
+
+    readme += "### Notes\n\n";
+    readme += "- Sanitizers are intended for **dev/debug** builds.\n";
+    readme += "- The generated CMake applies sanitizer flags to the **app target** and the **test targets**.\n\n";
     readme += "---\n\n";
 
+    // Manual CMake
     readme += "## Manual CMake (optional)\n\n";
+    readme += "If you prefer not using `vix`, you can still build and test using plain CMake:\n\n";
     readme += "```bash\n";
     readme += "cmake --preset dev-ninja\n";
     readme += "cmake --build --preset dev-ninja\n";
@@ -141,17 +176,20 @@ int main()
     readme += "```\n\n";
     readme += "---\n\n";
 
+    // Pack + Verify
     readme += "## Packaging & security (optional)\n\n";
     readme += "Vix provides packaging and artifact verification:\n\n";
     readme += "```bash\n";
     readme += "vix pack --name " + projectName + " --version 1.0.0\n";
     readme += "vix verify --require-signature\n";
     readme += "```\n\n";
+
     readme += "Environment variables:\n\n";
     readme += "- `VIX_MINISIGN_SECKEY=path` — secret key used by `vix pack` to sign `payload.digest`\n";
     readme += "- `VIX_MINISIGN_PUBKEY=path` — public key used by `vix verify` (if `--pubkey` not provided)\n\n";
     readme += "---\n\n";
 
+    // Useful commands table
     readme += "## Useful Commands\n\n";
     readme += "| Command | Description |\n";
     readme += "|--------|-------------|\n";
@@ -159,12 +197,15 @@ int main()
     readme += "| `vix run` | Run the project (builds if needed) |\n";
     readme += "| `vix dev` | Hot reload (watch + rebuild + restart) |\n";
     readme += "| `vix check` | Validate a project build |\n";
-    readme += "| `vix check --tests` | Build + run CTest |\n";
+    readme += "| `vix tests` | Run tests (alias of `vix check --tests`) |\n";
+    readme += "| `vix tests --list` | List available tests |\n";
+    readme += "| `vix tests --fail-fast` | Stop at first failure |\n";
     readme += "| `vix pack` | Create `dist/<name>@<version>` (+ optional `.vixpkg`) |\n";
     readme += "| `vix verify` | Verify `dist/<name>@<version>` or a `.vixpkg` artifact |\n";
     readme += "| `vix help` | Show CLI help |\n\n";
     readme += "---\n\n";
 
+    // Example output
     readme += "## Example Output\n\n";
     readme += "When the server starts successfully, you’ll see logs like:\n\n";
     readme += "```bash\n";
@@ -176,10 +217,11 @@ int main()
 
     readme += "Running tests:\n\n";
     readme += "```bash\n";
-    readme += "vix check --tests\n";
+    readme += "vix tests\n";
     readme += "```\n\n";
     readme += "---\n\n";
 
+    // About Vix.cpp
     readme += "## About Vix.cpp\n\n";
     readme += "[Vix.cpp](https://github.com/vixcpp/vix) is a high-performance, modular C++ backend runtime inspired by **FastAPI**, **Express.js**, and modern tooling.\n\n";
     readme += "- Clean routing (`app.get(\"/\", ...)`)\n";
@@ -187,6 +229,7 @@ int main()
     readme += "- Simple CMake integration for external apps\n\n";
     readme += "---\n\n";
 
+    // License
     readme += "## License\n\n";
     readme += "MIT © [Vix.cpp Authors](https://github.com/vixcpp)\n";
 
@@ -196,7 +239,7 @@ int main()
   static std::string make_cmakelists(const std::string &projectName)
   {
     std::string s;
-    s.reserve(9000);
+    s.reserve(12000);
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + projectName + " LANGUAGES CXX)\n\n";
@@ -219,6 +262,9 @@ int main()
     s += "  find_package(Vix CONFIG REQUIRED)\n";
     s += "endif()\n\n";
 
+    // ------------------------------------------------------
+    // Main target
+    // ------------------------------------------------------
     s += "add_executable(" + projectName + " src/main.cpp)\n\n";
 
     s += "# Always link Vix umbrella\n";
@@ -241,18 +287,29 @@ int main()
     s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
     s += "endif()\n\n";
 
+    // ------------------------------------------------------
+    // Sanitizers (robust + exports defs for tests)
+    // ------------------------------------------------------
     s += "# Sanitizers (mode-aware)\n";
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
+    s += "  # Common sanitizer flags\n";
+    s += "  target_compile_options(" + projectName + " PRIVATE -g3 -fno-omit-frame-pointer)\n";
+    s += "  target_link_options(" + projectName + " PRIVATE -g)\n\n";
+
     s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
-    s += "    target_compile_options(" + projectName + " PRIVATE -O0 -g3 -fno-omit-frame-pointer -fsanitize=undefined -fno-sanitize-recover=all)\n";
+    s += "    target_compile_options(" + projectName + " PRIVATE -O0 -fsanitize=undefined -fno-sanitize-recover=undefined)\n";
     s += "    target_link_options(" + projectName + " PRIVATE -fsanitize=undefined)\n";
+    s += "    target_compile_definitions(" + projectName + " PRIVATE VIX_SANITIZERS=1 VIX_UBSAN=1)\n";
     s += "  else()\n";
-    s += "    target_compile_options(" + projectName + " PRIVATE -O1 -g3 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all)\n";
+    s += "    target_compile_options(" + projectName + " PRIVATE -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined)\n";
     s += "    target_link_options(" + projectName + " PRIVATE -fsanitize=address,undefined)\n";
+    s += "    target_compile_definitions(" + projectName + " PRIVATE VIX_SANITIZERS=1 VIX_ASAN=1 VIX_UBSAN=1)\n";
     s += "  endif()\n";
     s += "endif()\n\n";
 
-    // ✅ AJOUT : tests CTest + 1 test par défaut
+    // ------------------------------------------------------
+    // Tests (CTest) + 1 default test
+    // ------------------------------------------------------
     s += "# ------------------------------------------------------\n";
     s += "# Tests (CTest)\n";
     s += "# ------------------------------------------------------\n";
@@ -262,11 +319,30 @@ int main()
     s += "add_executable(" + projectName + "_basic_test tests/test_basic.cpp)\n";
     s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n\n";
 
+    // Apply sanitizer flags to tests too (important!)
+    s += "# Apply sanitizer flags to tests too\n";
+    s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
+    s += "  target_compile_options(" + projectName + "_basic_test PRIVATE -g3 -fno-omit-frame-pointer)\n";
+    s += "  target_link_options(" + projectName + "_basic_test PRIVATE -g)\n";
+    s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
+    s += "    target_compile_options(" + projectName + "_basic_test PRIVATE -O0 -fsanitize=undefined -fno-sanitize-recover=undefined)\n";
+    s += "    target_link_options(" + projectName + "_basic_test PRIVATE -fsanitize=undefined)\n";
+    s += "    target_compile_definitions(" + projectName + "_basic_test PRIVATE VIX_SANITIZERS=1 VIX_UBSAN=1)\n";
+    s += "  else()\n";
+    s += "    target_compile_options(" + projectName + "_basic_test PRIVATE -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined)\n";
+    s += "    target_link_options(" + projectName + "_basic_test PRIVATE -fsanitize=address,undefined)\n";
+    s += "    target_compile_definitions(" + projectName + "_basic_test PRIVATE VIX_SANITIZERS=1 VIX_ASAN=1 VIX_UBSAN=1)\n";
+    s += "  endif()\n";
+    s += "endif()\n\n";
+
     s += "add_test(\n";
     s += "  NAME " + projectName + ".basic\n";
     s += "  COMMAND " + projectName + "_basic_test\n";
     s += ")\n\n";
 
+    // ------------------------------------------------------
+    // Convenience run target
+    // ------------------------------------------------------
     s += "add_custom_target(run\n";
     s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
     s += "  DEPENDS " + projectName + "\n";

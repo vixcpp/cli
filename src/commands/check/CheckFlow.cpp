@@ -49,6 +49,7 @@ namespace vix::commands::CheckCommand::detail
 
             if (a == "--preset" && i + 1 < args.size())
                 o.preset = args[++i];
+
             else if ((a == "-j" || a == "--jobs") && i + 1 < args.size())
             {
                 try
@@ -83,24 +84,32 @@ namespace vix::commands::CheckCommand::detail
             else if (a == "--ctest-preset" && i + 1 < args.size())
                 o.ctestPreset = args[++i];
 
+            // extra ctest args
+            else if (a == "--ctest-arg" && i + 1 < args.size())
+            {
+                o.ctestArgs.push_back(args[++i]);
+            }
+
+            // runtime check
             else if (a == "--run")
+            {
                 o.runAfterBuild = true;
-            else if (a == "--timeout" && i + 1 < args.size())
+            }
+            else if (a == "--run-timeout" && i + 1 < args.size())
             {
                 try
                 {
-                    o.runTimeoutSec = std::stoi(args[++i]);
+                    o.runTimeoutSec = std::max(0, std::stoi(args[++i]));
                 }
                 catch (...)
                 {
-                    o.runTimeoutSec = 8;
+                    o.runTimeoutSec = 0;
                 }
             }
 
             // positional
             else if (!a.empty() && a != "--" && a[0] != '-')
             {
-                // si c’est un .cpp => script mode
                 fs::path p{a};
                 if (p.extension() == ".cpp")
                 {
@@ -113,13 +122,8 @@ namespace vix::commands::CheckCommand::detail
         if (auto d = pick_dir_opt_local(args))
             o.dir = *d;
 
-        // cohérence flags
         if (o.enableUbsanOnly)
             o.enableSanitizers = false;
-
-        //  auto-run si sanitizers demandés
-        if (o.enableSanitizers || o.enableUbsanOnly)
-            o.runAfterBuild = true;
 
         return o;
     }

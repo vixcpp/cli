@@ -205,7 +205,6 @@ namespace vix::commands::RunCommand::detail
                    static_cast<ssize_t>(std::strlen(clearLine)));
     }
 
-    // Capturing version (declared in RunDetail.hpp under !WIN32)
     LiveRunResult run_cmd_live_filtered_capture(const std::string &cmd,
                                                 const std::string &spinnerLabel,
                                                 bool passthroughRuntime,

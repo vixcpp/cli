@@ -18,17 +18,21 @@ namespace vix::commands::CheckCommand::detail
         bool quiet = false;
         bool verbose = false;
         std::string logLevel;
+
         // script mode
         bool singleCpp = false;
         fs::path cppFile;
         bool enableSanitizers = false; // --san
         bool enableUbsanOnly = false;  // --ubsan
+
         // project checks
-        bool tests = false;      // --tests
-        std::string ctestPreset; // --ctest-preset
-        // runtime check
+        bool tests = false;                 // --tests
+        std::string ctestPreset;            // --ctest-preset
+        std::vector<std::string> ctestArgs; // repeatable: --ctest-arg <...>
+
+        // runtime check (project mode + optional)
         bool runAfterBuild = false; // --run
-        int runTimeoutSec = 8;      // --timeout N (optionnel)
+        int runTimeoutSec = 0;      // --run-timeout <sec> (0 = no timeout)
     };
 
     Options parse(const std::vector<std::string> &args);

@@ -37,9 +37,7 @@ namespace vix::commands::RunCommand::detail
         bool enableUbsanOnly = false;  // --ubsan (UBSan only)
     };
 
-    // ---------------------------------------------------------------------
     // Process / IO
-    // ---------------------------------------------------------------------
     int run_cmd_live_filtered(const std::string &cmd,
                               const std::string &spinnerLabel = {});
 
@@ -79,9 +77,7 @@ namespace vix::commands::RunCommand::detail
 
 #endif
 
-    // ---------------------------------------------------------------------
     // Script mode (vix run foo.cpp)
-    // ---------------------------------------------------------------------
     std::filesystem::path get_scripts_root();
 
     /// 🔹 Detect whether a .cpp script depends on Vix runtime
@@ -95,14 +91,10 @@ namespace vix::commands::RunCommand::detail
     int run_single_cpp_watch(const Options &opt);
     int run_project_watch(const Options &opt, const fs::path &projectDir);
 
-    // ---------------------------------------------------------------------
     // CLI parsing
-    // ---------------------------------------------------------------------
     Options parse(const std::vector<std::string> &args);
 
-    // ---------------------------------------------------------------------
     // Build / run flow helpers
-    // ---------------------------------------------------------------------
     std::string quote(const std::string &s);
     void handle_runtime_exit_code(int code, const std::string &context);
 
@@ -117,15 +109,11 @@ namespace vix::commands::RunCommand::detail
 
     void apply_log_level_env(const Options &opt);
 
-    // ---------------------------------------------------------------------
     // Execution helpers (capturing output)
-    // ---------------------------------------------------------------------
     std::string run_and_capture_with_code(const std::string &cmd, int &exitCode);
     std::string run_and_capture(const std::string &cmd);
 
-    // ---------------------------------------------------------------------
     // Build log analysis
-    // ---------------------------------------------------------------------
     bool has_real_build_work(const std::string &log);
 
 } // namespace vix::commands::RunCommand::detail

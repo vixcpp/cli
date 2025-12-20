@@ -64,6 +64,7 @@
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
+#include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -173,6 +174,10 @@ namespace vix
         { return commands::VerifyCommand::run(args); };
         commands_["check"] = [](auto args)
         { return commands::CheckCommand::run(args); };
+        commands_["tests"] = [](auto args)
+        { return commands::TestsCommand::run(args); };
+        commands_["test"] = [](auto args)
+        { return commands::TestsCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -335,13 +340,13 @@ namespace vix
                 return commands::VerifyCommand::help();
             if (cmd == "check")
                 return commands::CheckCommand::help();
+            if (cmd == "tests" || cmd == "test")
+                return commands::TestsCommand::help();
 
-            // Unknown command → global help
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
             return help({});
         }
 
-        // 4) Dispatch normal command
         if (commands_.count(cmd))
         {
             try
@@ -383,6 +388,8 @@ namespace vix
                 return commands::VerifyCommand::help();
             if (cmd == "check")
                 return commands::CheckCommand::help();
+            if (cmd == "tests" || cmd == "test")
+                return commands::TestsCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -391,62 +398,70 @@ namespace vix
 
         std::ostream &out = std::cout;
 
+        // Global padding helpers (2 spaces per level)
+        auto indent = [](int level) -> std::string
+        {
+            return std::string(static_cast<size_t>(level) * 2, ' ');
+        };
+
         out << "Vix.cpp — Modern C++ backend runtime\n";
         out << "Version: " << VIX_CLI_VERSION << "\n\n";
 
-        out << "Usage:\n";
-        out << "  vix <command> [options] [args...]\n";
-        out << "  vix help <command>\n\n";
+        out << indent(1) << "Usage:\n";
+        out << indent(2) << "vix <command> [options] [args...]\n";
+        out << indent(2) << "vix help <command>\n\n";
 
-        out << "Quick start:\n";
-        out << "  vix new api\n";
-        out << "  cd api && vix dev\n";
-        out << "  vix pack --version 1.0.0 && vix verify\n\n";
+        out << indent(1) << "Quick start:\n";
+        out << indent(2) << "vix new api\n";
+        out << indent(2) << "cd api && vix dev\n";
+        out << indent(2) << "vix pack --version 1.0.0 && vix verify\n\n";
 
-        out << "Commands:\n";
-        out << "  Project:\n";
-        out << "    new <name>               Create a new Vix project in ./<name>\n";
-        out << "    build [name]             Configure + build (root project or app)\n";
-        out << "    run  [name] [--args]     Build (if needed) then run\n";
-        out << "    dev  [name]              Dev mode (watch, rebuild, reload)\n\n";
-        out << "    check [path]             Validate a project or compile a single .cpp (no execution)\n";
+        out << indent(1) << "Commands:\n";
 
-        out << "  Packaging & security:\n";
-        out << "    pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";
-        out << "    verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n\n";
+        out << indent(2) << "Project:\n";
+        out << indent(3) << "new <name>               Create a new Vix project in ./<name>\n";
+        out << indent(3) << "build [name]             Configure + build (root project or app)\n";
+        out << indent(3) << "run   [name] [--args]    Build (if needed) then run\n";
+        out << indent(3) << "dev   [name]             Dev mode (watch, rebuild, reload)\n";
+        out << indent(3) << "check [path]             Validate a project or compile a single .cpp (no execution)\n";
+        out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n\n";
 
-        out << "  Database (ORM):\n";
-        out << "    orm <subcommand>         Migrations/status/rollback\n\n";
+        out << indent(2) << "Packaging & security:\n";
+        out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";
+        out << indent(3) << "verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n\n";
 
-        out << "  Info:\n";
-        out << "    help [command]           Show help for CLI or a specific command\n";
-        out << "    version                  Show version information\n\n";
+        out << indent(2) << "Database (ORM):\n";
+        out << indent(3) << "orm <subcommand>         Migrations/status/rollback\n\n";
 
-        out << "Global options:\n";
-        out << "  --verbose                  Enable debug logs (equivalent to --log-level debug)\n";
-        out << "  -q, --quiet                Only show warnings and errors\n";
-        out << "  --log-level <level>        trace|debug|info|warn|error|critical\n";
-        out << "  -h, --help                 Show CLI help (or: vix help)\n";
-        out << "  -v, --version              Show version info\n\n";
+        out << indent(2) << "Info:\n";
+        out << indent(3) << "help [command]           Show help for CLI or a specific command\n";
+        out << indent(3) << "version                  Show version information\n\n";
 
-        out << "Environment:\n";
-        out << "  VIX_LOG_LEVEL=level        Default log level (if --log-level not provided)\n";
-        out << "  VIX_MINISIGN_SECKEY=path   Secret key used by `vix pack` to sign payload.digest\n";
-        out << "  VIX_MINISIGN_PUBKEY=path   Public key used by `vix verify` if --pubkey not provided\n\n";
+        out << indent(1) << "Global options:\n";
+        out << indent(2) << "--verbose                Enable debug logs (equivalent to --log-level debug)\n";
+        out << indent(2) << "-q, --quiet              Only show warnings and errors\n";
+        out << indent(2) << "--log-level <level>      trace|debug|info|warn|error|critical\n";
+        out << indent(2) << "-h, --help               Show CLI help (or: vix help)\n";
+        out << indent(2) << "-v, --version            Show version info\n\n";
 
-        out << "Examples:\n";
-        out << "  vix pack --name blog --version 1.0.0\n";
-        out << "  vix pack --verbose                 # show minisign prompt/output\n";
-        out << "  vix verify --require-signature\n";
-        out << "  vix help verify\n\n";
+        out << indent(1) << "Environment:\n";
+        out << indent(2) << "VIX_LOG_LEVEL=level      Default log level (if --log-level not provided)\n";
+        out << indent(2) << "VIX_MINISIGN_SECKEY=path Secret key used by `vix pack` to sign payload.digest\n";
+        out << indent(2) << "VIX_MINISIGN_PUBKEY=path Public key used by `vix verify` if --pubkey not provided\n\n";
 
+        out << indent(1) << "Examples:\n";
+        out << indent(2) << "vix pack --name blog --version 1.0.0\n";
+        out << indent(2) << "vix pack --verbose               # show minisign prompt/output\n";
+        out << indent(2) << "vix verify --require-signature\n";
+        out << indent(2) << "vix help verify\n\n";
+
+        out << indent(1);
         section_title(out, "Links:");
-        out << "  GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";
+        out << indent(2) << "GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";
 
         return 0;
     }
 
-    // CLI::version — simple version banner
     int CLI::version(const std::vector<std::string> &)
     {
         using namespace vix::cli::style;

@@ -8,28 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## v1.12.0 — 2025-12-20
+
+### Added
+
+- **`vix tests [path]`**: new command to run project tests easily.
+  - Acts as an alias of **`vix check --tests`** for a faster, more discoverable workflow.
+  - Supports both project validation and test execution depending on the detected target.
+
+### Changed
+
+- CLI global help output: improved readability by adding consistent **left padding / indentation** across sections (Usage, Commands, Options, Examples, Links).
+- `vix check` internals: updates to support the new `tests` entrypoint and shared flows.
+
+### Notes
+
+- This release focuses on improving the **testing UX** and making the CLI help output feel more modern and readable.
+
 ## [1.11.0] - 2025-12-20
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.10.0] - 2025-12-20
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 feat(cli/run): add --san and --ubsan flags for script mode with clean sanitizer reports
 

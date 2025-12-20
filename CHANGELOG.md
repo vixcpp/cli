@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+## [1.10.0] - 2025-12-20
+
+### Added
+- 
+
+### Changed
+- 
+
+### Removed
+- 
+
 
 feat(cli/run): add --san and --ubsan flags for script mode with clean sanitizer reports
 

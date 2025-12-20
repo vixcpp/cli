@@ -107,7 +107,17 @@ namespace vix::commands::RunCommand::detail
                 o.forceScriptLike = true;
             }
 
-            // --- Arguments positionnels ---
+            else if (a == "--san")
+            {
+                o.enableSanitizers = true;
+                o.enableUbsanOnly = false;
+            }
+            else if (a == "--ubsan")
+            {
+                o.enableUbsanOnly = true;
+                o.enableSanitizers = false;
+            }
+
             else if (!a.empty() && a != "--" && a[0] != '-')
             {
                 if (o.appName.empty())

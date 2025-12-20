@@ -30,8 +30,10 @@ namespace vix::commands::RunCommand::detail
         std::filesystem::path cppFile;
         bool watch = false;
 
-        bool forceServerLike = false; // --force-server
-        bool forceScriptLike = false; // --force-script
+        bool forceServerLike = false;  // --force-server
+        bool forceScriptLike = false;  // --force-script
+        bool enableSanitizers = false; // --san  (ASan+UBSan)
+        bool enableUbsanOnly = false;  // --ubsan (UBSan only)
     };
 
     // --- Process / IO ---

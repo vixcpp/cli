@@ -37,7 +37,81 @@ namespace vix::commands::RunCommand::detail
 #endif
             info(std::string("Watcher Restarting! File change detected: \"") + script.string() + "\"");
         }
-    }
+
+        inline std::string bool01(bool v)
+        {
+            return v ? "1" : "0";
+        }
+
+        inline std::string sanitizer_mode_string(const Options &opt)
+        {
+            if (opt.enableUbsanOnly)
+                return "ubsan";
+            return "asan_ubsan";
+        }
+
+        inline bool want_sanitizers(const Options &opt)
+        {
+            return opt.enableSanitizers || opt.enableUbsanOnly;
+        }
+
+        inline std::string make_script_config_signature(bool useVixRuntime, const Options &opt)
+        {
+            std::string sig;
+            sig.reserve(64);
+            sig += "useVix=" + bool01(useVixRuntime);
+            sig += ";san=" + bool01(want_sanitizers(opt));
+            sig += ";mode=" + sanitizer_mode_string(opt);
+            return sig;
+        }
+
+        inline std::string read_text_file_or_empty(const fs::path &p)
+        {
+            std::ifstream ifs(p);
+            if (!ifs)
+                return {};
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            return oss.str();
+        }
+
+        inline bool write_text_file(const fs::path &p, const std::string &text)
+        {
+            std::ofstream ofs(p, std::ios::trunc);
+            if (!ofs)
+                return false;
+            ofs << text;
+            return static_cast<bool>(ofs);
+        }
+
+#ifndef _WIN32
+        inline void apply_sanitizer_env_if_needed(const Options &opt)
+        {
+            if (!want_sanitizers(opt))
+                return;
+
+            // UBSan
+            ::setenv("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1:color=never", 1);
+
+            if (!opt.enableUbsanOnly)
+            {
+                // ASan
+                ::setenv(
+                    "ASAN_OPTIONS",
+                    "abort_on_error=1:"
+                    "detect_leaks=1:"
+                    "symbolize=1:"
+                    "allocator_may_return_null=1:"
+                    "fast_unwind_on_malloc=0:"
+                    "strict_init_order=1:"
+                    "check_initialization_order=1:"
+                    "color=never:"
+                    "quiet=1",
+                    1);
+            }
+        }
+#endif
+    } // namespace
 
     bool script_uses_vix(const fs::path &cppPath)
     {
@@ -75,7 +149,7 @@ namespace vix::commands::RunCommand::detail
                                        bool useVixRuntime)
     {
         std::string s;
-        s.reserve(5200);
+        s.reserve(6200);
 
         auto q = [](const std::string &p)
         {
@@ -107,7 +181,9 @@ namespace vix::commands::RunCommand::detail
         s += "endif()\n\n";
 
         // Options
-        s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n";
+        s += "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)\n";
+        s += "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan or ubsan\")\n";
+        s += "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan)\n";
         s += "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)\n";
         s += "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)\n";
         s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n\n";
@@ -188,49 +264,33 @@ namespace vix::commands::RunCommand::detail
             s += "endif()\n\n";
         }
 
-        // Sanitizers
+        // Sanitizers (mode-aware)
         s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-        s += "  message(STATUS \"Sanitizers: ASan+UBSan enabled\")\n";
-        s += "  target_compile_options(" + exeName + " PRIVATE\n";
-        s += "    -O1 -g3\n";
-        s += "    -fno-omit-frame-pointer\n";
-        s += "    -fsanitize=address,undefined\n";
-        s += "    -fno-sanitize-recover=all\n";
-        s += "  )\n";
-        s += "  target_link_options(" + exeName + " PRIVATE\n";
-        s += "    -fsanitize=address,undefined\n";
-        s += "  )\n";
-        s += "  # Quiet ASan/UBSan: keep the crash but reduce the huge report in terminal.\n";
-        s += "  # Vix will parse stderr and print a clean location+codeframe.\n";
-        s += "  target_compile_definitions(" + exeName + " PRIVATE\n";
-        s += "    VIX_ASAN_QUIET=1\n";
-        s += "  )\n";
+        s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
+        s += "    message(STATUS \"Sanitizers: UBSan enabled\")\n";
+        s += "    target_compile_options(" + exeName + " PRIVATE\n";
+        s += "      -O0 -g3\n";
+        s += "      -fno-omit-frame-pointer\n";
+        s += "      -fsanitize=undefined\n";
+        s += "      -fno-sanitize-recover=all\n";
+        s += "    )\n";
+        s += "    target_link_options(" + exeName + " PRIVATE -fsanitize=undefined)\n";
+        s += "  else()\n";
+        s += "    message(STATUS \"Sanitizers: ASan+UBSan enabled\")\n";
+        s += "    target_compile_options(" + exeName + " PRIVATE\n";
+        s += "      -O1 -g3\n";
+        s += "      -fno-omit-frame-pointer\n";
+        s += "      -fsanitize=address,undefined\n";
+        s += "      -fno-sanitize-recover=all\n";
+        s += "    )\n";
+        s += "    target_link_options(" + exeName + " PRIVATE -fsanitize=address,undefined)\n";
+        s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_ASAN_QUIET=1)\n";
+        s += "  endif()\n";
         s += "endif()\n\n";
 
         // Always keep some debug info on Linux
         s += "if (UNIX AND NOT APPLE)\n";
         s += "  target_compile_options(" + exeName + " PRIVATE -g)\n";
-        s += "endif()\n\n";
-
-        // -------------------------
-        // Environment for runtime
-        // -------------------------
-        // This is the KEY: set ASAN_OPTIONS/UBSAN_OPTIONS at buildsystem level
-        // so child process inherits it when launched by vix run.
-        s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-        s += "  # ASan: keep symbols, stop at first error, reduce noise\n";
-        s += "  set(ENV{ASAN_OPTIONS}\n";
-        s += "      \"abort_on_error=1:"
-             "detect_leaks=1:"
-             "symbolize=1:"
-             "allocator_may_return_null=1:"
-             "fast_unwind_on_malloc=0:"
-             "strict_init_order=1:"
-             "check_initialization_order=1:"
-             "color=never:"
-             "quiet=1\")\n";
-        s += "  # UBSan: halt, stacktrace\n";
-        s += "  set(ENV{UBSAN_OPTIONS} \"halt_on_error=1:print_stacktrace=1:color=never\")\n";
         s += "endif()\n";
 
         return s;
@@ -260,38 +320,50 @@ namespace vix::commands::RunCommand::detail
 
         const bool useVixRuntime = script_uses_vix(script);
 
-        // (Re)générer CMakeLists.txt à chaque appel pour refléter
-        // l'état actuel du script et de la détection vix::.
         {
             ofstream ofs(cmakeLists);
             ofs << make_script_cmakelists(exeName, script, useVixRuntime);
         }
 
         fs::path buildDir = projectDir / "build";
+        const fs::path sigFile = projectDir / ".vix-config.sig";
 
-        // 1) Configure projet seulement si nécessaire
+        const std::string sig = make_script_config_signature(useVixRuntime, opt);
+
         bool needConfigure = true;
         {
             std::error_code ec{};
             if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
             {
-                needConfigure = false;
+                const std::string oldSig = read_text_file_or_empty(sigFile);
+                if (!oldSig.empty() && oldSig == sig)
+                    needConfigure = false;
             }
         }
 
         if (needConfigure)
         {
-            // Exécuter CMake configuration silencieusement (une seule fois)
             std::ostringstream oss;
-#ifndef _WIN32
-            oss << "cd " << quote(projectDir.string())
-                << " && cmake -S . -B build 2>&1 >/dev/null";
-#else
-            oss << "cd " << quote(projectDir.string())
-                << " && cmake -S . -B build >nul 2>nul";
-#endif
-            const std::string cmd = oss.str();
 
+            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build";
+
+            if (want_sanitizers(opt))
+            {
+                oss << " -DVIX_ENABLE_SANITIZERS=ON"
+                    << " -DVIX_SANITIZER_MODE=" << sanitizer_mode_string(opt);
+            }
+            else
+            {
+                oss << " -DVIX_ENABLE_SANITIZERS=OFF";
+            }
+
+#ifndef _WIN32
+            oss << " 2>&1 >/dev/null";
+#else
+            oss << " >nul 2>nul";
+#endif
+
+            const std::string cmd = oss.str();
             int code = std::system(cmd.c_str());
             if (code != 0)
             {
@@ -299,9 +371,11 @@ namespace vix::commands::RunCommand::detail
                 handle_runtime_exit_code(code, "Script configure failed");
                 return code;
             }
+
+            (void)write_text_file(sigFile, sig);
         }
 
-        // 2) Compilation — on ne fait plus que `cmake --build` à chaque run
+        // Build
         {
             fs::path logPath = projectDir / "build.log";
 
@@ -313,14 +387,8 @@ namespace vix::commands::RunCommand::detail
                 oss << " -- -j " << opt.jobs;
 
 #ifndef _WIN32
-            // On redirige TOUT (stdout + stderr) vers build.log
             oss << " >" << quote(logPath.string()) << " 2>&1";
 #else
-            oss.str("");
-            oss << "cd " << quote(projectDir.string())
-                << " && cmake --build build --target " << exeName;
-            if (opt.jobs > 0)
-                oss << " -- /m:" << opt.jobs; // style MSBuild
             oss << " >" << quote(logPath.string()) << " 2>&1";
 #endif
 
@@ -355,7 +423,6 @@ namespace vix::commands::RunCommand::detail
             }
         }
 
-        // 3) Exécution du binaire
         fs::path exePath = buildDir / exeName;
 #ifdef _WIN32
         exePath += ".exe";
@@ -371,17 +438,17 @@ namespace vix::commands::RunCommand::detail
         std::string cmdRun;
 
 #ifdef _WIN32
-        // Sur Windows, on passe par cmd /C + set
         cmdRun = "cmd /C \"set VIX_STDOUT_MODE=line && " +
                  std::string("\"") + exePath.string() + "\"\"";
 #else
-        // Sur POSIX, on préfixe avec la variable d'environnement
         cmdRun = "VIX_STDOUT_MODE=line " + quote(exePath.string());
 #endif
 
 #ifndef _WIN32
+        // Apply runtime env (more reliable than trying to set it in CMake)
+        apply_sanitizer_env_if_needed(opt);
+
         auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", true);
-        // rr.exitCode = RAW wait-status -> normalize here
         runCode = normalize_exit_code(rr.exitCode);
 
         if (runCode != 0)
@@ -403,12 +470,6 @@ namespace vix::commands::RunCommand::detail
             return runCode;
         }
 #endif
-
-        if (runCode != 0)
-        {
-            handle_runtime_exit_code(runCode, "Script execution failed");
-            return runCode;
-        }
 
         return 0;
     }
@@ -437,34 +498,49 @@ namespace vix::commands::RunCommand::detail
 
         const bool useVixRuntime = script_uses_vix(script);
 
-        // (Re)générer CMakeLists à chaque fois pour refléter les includes / vix::...
         {
             ofstream ofs(cmakeLists);
             ofs << make_script_cmakelists(exeName, script, useVixRuntime);
         }
 
         fs::path buildDir = projectDir / "build";
+        const fs::path sigFile = projectDir / ".vix-config.sig";
 
-        // Configure seulement si cache absent
+        const std::string sig = make_script_config_signature(useVixRuntime, opt);
+
         bool needConfigure = true;
         {
             std::error_code ec{};
             if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
             {
-                needConfigure = false;
+                const std::string oldSig = read_text_file_or_empty(sigFile);
+                if (!oldSig.empty() && oldSig == sig)
+                    needConfigure = false;
             }
         }
 
         if (needConfigure)
         {
             std::ostringstream oss;
+
+            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build";
+
+            if (want_sanitizers(opt))
+            {
+                oss << " -DVIX_ENABLE_SANITIZERS=ON"
+                    << " -DVIX_SANITIZER_MODE=" << sanitizer_mode_string(opt);
+            }
+            else
+            {
+                oss << " -DVIX_ENABLE_SANITIZERS=OFF";
+            }
+
 #ifndef _WIN32
-            oss << "cd " << quote(projectDir.string())
-                << " && cmake -S . -B build 2>&1 >/dev/null";
+            oss << " 2>&1 >/dev/null";
 #else
-            oss << "cd " << quote(projectDir.string())
-                << " && cmake -S . -B build >nul 2>nul";
+            oss << " >nul 2>nul";
 #endif
+
             const std::string cmd = oss.str();
 
             int code = std::system(cmd.c_str());
@@ -474,9 +550,11 @@ namespace vix::commands::RunCommand::detail
                 handle_runtime_exit_code(code, "Script configure failed");
                 return code;
             }
+
+            (void)write_text_file(sigFile, sig);
         }
 
-        // Build (on ne fait plus que ça à chaque reload)
+        // Build
         fs::path logPath = projectDir / "build.log";
 
         std::ostringstream oss;
@@ -690,6 +768,8 @@ namespace vix::commands::RunCommand::detail
             {
                 // ===== ENFANT =====
                 ::setenv("VIX_STDOUT_MODE", "line", 1);
+
+                apply_sanitizer_env_if_needed(opt);
 
                 const std::string exeStr = exePath.string();
                 const char *argv0 = exeStr.c_str();

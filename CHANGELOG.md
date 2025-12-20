@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+feat(cli/run): add --san and --ubsan flags for script mode with clean sanitizer reports
+
+- Add --san (ASan+UBSan) and --ubsan (UBSan only) flags to `vix run`
+- Extend RunCommand Options to track sanitizer mode explicitly
+- Enable sanitizer-aware CMake generation for single-file .cpp scripts
+- Apply sanitizer runtime environment reliably at execution time
+- Improve runtime error detection and messaging (alloc/dealloc mismatch, UBSan)
+- Update `vix run -h` to document new sanitizer options
+
+This makes `vix run main.cpp --san/--ubsan` a fast, ergonomic way
+to debug memory errors and undefined behavior in standalone scripts.
+
 ### Added
 
 -

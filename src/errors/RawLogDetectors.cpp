@@ -6,12 +6,12 @@
 #include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <optional>
+#include <regex>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <regex>
-#include <optional>
 
 #include <vix/cli/Style.hpp>
 
@@ -71,21 +71,23 @@ namespace vix::cli::errors
                 CompilerError e;
                 e.file = file;
                 e.line = line;
-                e.column = col > 0 ? col : 1;
+                e.column = (col > 0) ? col : 1;
                 return e;
             };
 
-            const std::string abs = fallbackSource.empty()
-                                        ? std::string{}
-                                        : std::filesystem::weakly_canonical(fallbackSource).string();
+            std::string abs;
+            if (!fallbackSource.empty())
+            {
+                std::error_code ec;
+                abs = std::filesystem::weakly_canonical(fallbackSource, ec).string();
+                if (ec)
+                    abs = fallbackSource.string();
+            }
 
             // 1) BEST: exact script absolute path appears in stack
             if (!abs.empty())
             {
-                // matches "... <abs>:LINE[:COL]" even if preceded by "in main "
-                const std::regex re(
-                    abs + R"(:([0-9]+)(?::([0-9]+))?)");
-
+                const std::regex re(abs + R"(:([0-9]+)(?::([0-9]+))?)");
                 std::smatch m;
                 if (std::regex_search(log, m, re))
                 {
@@ -114,10 +116,7 @@ namespace vix::cli::errors
                 }
             }
 
-            // 3) Last resort: show script line 1
-            if (!fallbackSource.empty())
-                return make(fallbackSource.string(), 1, 1);
-
+            // 3) Last resort: no reliable file:line info
             return std::nullopt;
         }
 
@@ -133,9 +132,9 @@ namespace vix::cli::errors
 
         static std::string_view trim_view(std::string_view s) noexcept
         {
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())) != 0)
                 s.remove_prefix(1);
-            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())) != 0)
                 s.remove_suffix(1);
             return s;
         }
@@ -172,7 +171,6 @@ namespace vix::cli::errors
             {
                 if (icontains(l, "ERROR:") && icontains(l, san))
                 {
-                    // Example: "ERROR: AddressSanitizer: heap-use-after-free on address ..."
                     const std::size_t pos = l.find(':');
                     if (pos == std::string::npos)
                         continue;
@@ -196,12 +194,12 @@ namespace vix::cli::errors
             std::string_view san,
             std::size_t maxLines)
         {
-            // 1) find first “interesting” line index
             std::size_t firstHit = lines.size();
+
             for (std::size_t i = 0; i < lines.size(); ++i)
             {
                 const std::string &l = lines[i];
-                const std::string_view t = trim_view(l);
+                const std::string_view t = trim_view(std::string_view(l));
 
                 const bool interesting =
                     icontains(l, san) ||
@@ -215,6 +213,7 @@ namespace vix::cli::errors
                     icontains(l, "WRITE") ||
                     icontains(l, "invalid") ||
                     icontains(l, "double-free") ||
+                    icontains(l, "double free") ||
                     icontains(l, "overflow");
 
                 if (interesting)
@@ -224,7 +223,6 @@ namespace vix::cli::errors
                 }
             }
 
-            // 2) use a window around it (less noise, more relevant)
             if (firstHit != lines.size())
             {
                 auto out = excerptWindow(lines, firstHit, 2, 12, maxLines);
@@ -232,7 +230,6 @@ namespace vix::cli::errors
                     return out;
             }
 
-            // 3) fallback: just first N lines
             std::vector<std::string> out;
             for (std::size_t i = 0; i < std::min(lines.size(), maxLines); ++i)
                 out.push_back(lines[i]);
@@ -244,43 +241,35 @@ namespace vix::cli::errors
             const std::string &runtimeLog,
             const std::filesystem::path &sourceFile)
         {
-            // Detect common double-free / invalid-free patterns (glibc + ASan)
+            // NOTE: keep this detector for "invalid pointer"/"not malloc()-ed".
+            // Plain "double free" is handled by handleRuntimeDoubleFree() first.
             const bool hit =
-                icontains(runtimeLog, "attempting double-free") ||
-                icontains(runtimeLog, "double free") ||
                 icontains(runtimeLog, "free(): invalid pointer") ||
                 icontains(runtimeLog, "munmap_chunk(): invalid pointer") ||
-                icontains(runtimeLog, "invalid pointer") ||
                 (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "not malloc()-ed")) ||
-                (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "attempting free")) ||
-                (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "double-free"));
+                (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "attempting free"));
 
             if (!hit)
                 return false;
 
             const bool hasASan = icontains(runtimeLog, "AddressSanitizer");
 
-            // If ASan already printed the big report, don't re-print it again in our excerpt.
-            // We'll show a short summary + codeframe instead.
             const bool alreadyPrintedByAsan =
                 hasASan &&
                 icontains(runtimeLog, "ERROR: AddressSanitizer") &&
                 icontains(runtimeLog, "SUMMARY: AddressSanitizer");
 
-            std::cerr << RED << "runtime error: invalid free (double free / invalid pointer)" << RESET << "\n\n";
-
+            std::cerr << RED << "runtime error: invalid free (free/malloc or delete)" << RESET << "\n\n";
             std::cerr << GRAY
                       << "A pointer is being freed incorrectly.\n"
-                      << "This usually means: freeing the same pointer twice, freeing a non-heap pointer,\n"
-                      << "or freeing memory not owned by the allocator.\n"
+                      << "Common causes: freeing a non-heap pointer, freeing shifted pointers (p+1),\n"
+                      << "or freeing memory you don't own.\n"
                       << RESET << "\n";
 
-            // Only print excerpt when ASan did NOT already dump the whole stacktrace.
             if (!alreadyPrintedByAsan)
             {
                 const auto lines = splitLines(runtimeLog);
 
-                // For non-ASan glibc logs, focus around "free"/"invalid pointer"
                 auto excerpt = hasASan
                                    ? extractSanitizerExcerpt(lines, "AddressSanitizer", 14)
                                    : extractSanitizerExcerpt(lines, "free", 12);
@@ -294,22 +283,24 @@ namespace vix::cli::errors
             {
                 std::cerr << GRAY
                           << "AddressSanitizer already printed a detailed report above.\n"
-                          << "Use the stack trace above; the first frame in your code is the key.\n"
+                          << "Use the first frame in your code (file:line).\n"
                           << RESET << "\n";
             }
 
             std::cerr << YELLOW << "tip:" << RESET << "\n"
                       << GRAY
-                      << "    ✔ don't construct multiple std::shared_ptr from the same raw pointer\n"
-                      << "    ✔ prefer std::make_shared / std::make_unique\n"
-                      << "    ✔ ensure each allocation is freed exactly once\n"
-                      << "    ✔ do not call delete/free on stack memory or memory you don't own\n"
+                      << "  C:\n"
+                      << "    ✔ only free() pointers returned by malloc/calloc/realloc\n"
+                      << "    ✔ never free(): stack pointers, shifted pointers (p+1), or foreign memory\n"
+                      << "  C++:\n"
+                      << "    ✔ new    -> delete\n"
+                      << "    ✔ new[]  -> delete[]\n"
+                      << "    ✔ prefer std::unique_ptr / std::vector / std::string to avoid manual free/delete\n"
                       << RESET << "\n";
 
             if (!sourceFile.empty())
                 std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
 
-            // Try to locate file:line from runtime log; fallback to script file (line 1)
             if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
             {
                 ErrorContext ctx;
@@ -326,7 +317,7 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found in runtime log. Re-run with ASan/UBSan enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
@@ -349,17 +340,17 @@ namespace vix::cli::errors
                       << "This can crash later or silently corrupt data.\n"
                       << RESET << "\n";
 
-            std::cerr << GRAY
-                      << "Sanitizer report was captured and hidden to keep output clean.\n"
-                      << "Use the location + code frame below.\n"
-                      << RESET << "\n";
-
             std::cerr << YELLOW << "fix:" << RESET << "\n"
                       << GRAY
                       << "    ✔ don't access a pointer/reference after delete/free\n"
                       << "    ✔ set pointer to nullptr after delete/free\n"
                       << "    ✔ avoid storing references/iterators to elements that may be erased\n"
                       << "    ✔ prefer std::unique_ptr/std::shared_ptr instead of raw owning pointers\n"
+                      << RESET << "\n";
+
+            std::cerr << GRAY
+                      << "Sanitizer report was captured and hidden to keep output clean.\n"
+                      << "Use the location + code frame below.\n"
                       << RESET << "\n";
 
             if (!sourceFile.empty())
@@ -381,13 +372,12 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found. Re-run with sanitizers enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
         }
 
-        // alloc-dealloc-mismatch (new[] vs delete / malloc vs delete, etc.)
         static bool handleRuntimeAllocDeallocMismatch(
             const std::string &runtimeLog,
             const std::filesystem::path &sourceFile)
@@ -400,7 +390,9 @@ namespace vix::cli::errors
                 icontains(runtimeLog, "operator new vs operator delete []") ||
                 icontains(runtimeLog, "malloc vs operator delete") ||
                 icontains(runtimeLog, "operator new vs free") ||
-                icontains(runtimeLog, "malloc vs delete");
+                icontains(runtimeLog, "malloc vs delete") ||
+                icontains(runtimeLog, "malloc vs operator delete[]") ||
+                icontains(runtimeLog, "operator new[] vs free");
 
             const bool fuzzyMismatch =
                 icontains(runtimeLog, "new[]") &&
@@ -450,13 +442,13 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found. Re-run with sanitizers enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
         }
 
-        // double-free (specialized message for shared_ptr raw ownership)
+        // double-free (malloc/free or new/delete)
         static bool handleRuntimeDoubleFree(
             const std::string &runtimeLog,
             const std::filesystem::path &sourceFile)
@@ -465,34 +457,42 @@ namespace vix::cli::errors
                 icontains(runtimeLog, "attempting double-free") ||
                 icontains(runtimeLog, "double-free") ||
                 icontains(runtimeLog, "double free") ||
+                icontains(runtimeLog, "free(): double free") ||
+                icontains(runtimeLog, "double free detected") ||
                 (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "double-free"));
 
             if (!hit)
                 return false;
 
-            std::cerr << RED << "runtime error: double-free" << RESET << "\n\n";
+            std::cerr << RED << "runtime error: double-free (free/malloc or delete)" << RESET << "\n\n";
             std::cerr << GRAY
-                      << "The same heap pointer was freed more than once.\n"
-                      << "This commonly happens with multiple owners of the same raw pointer.\n"
+                      << "The same heap allocation was freed more than once.\n"
+                      << "This can happen in C (free/free) or C++ (delete/delete, double owner, etc.).\n"
                       << RESET << "\n";
 
             std::cerr << YELLOW << "fix:" << RESET << "\n"
                       << GRAY
-                      << "    ✔ never create 2 std::shared_ptr from the same raw pointer\n"
+                      << "  C (malloc/free):\n"
+                      << "    ✔ free() each allocation exactly once\n"
+                      << "    ✔ after free(p), set p = nullptr to avoid accidental double-free\n"
+                      << "    ✔ never free(): stack pointers, shifted pointers (p+1), or non-owned memory\n"
+                      << "\n"
+                      << "  C++ (new/delete / smart pointers):\n"
+                      << "    ✔ new    -> delete\n"
+                      << "    ✔ new[]  -> delete[]\n"
+                      << "    ✔ never create 2 std::shared_ptr from the same raw pointer:\n"
                       << "        int* p = new int(1);\n"
                       << "        std::shared_ptr<int> a(p);\n"
                       << "        std::shared_ptr<int> b(p); // ❌ double delete\n"
-                      << "\n"
                       << "    ✔ do this instead:\n"
                       << "        auto a = std::make_shared<int>(1);\n"
                       << "        auto b = a; // ✅ shared ownership\n"
-                      << "\n"
                       << "    ✔ or use std::unique_ptr when there must be a single owner\n"
                       << RESET << "\n";
 
             std::cerr << GRAY
                       << "Sanitizer report was captured and hidden to keep output clean.\n"
-                      << "Use the location + code frame below.\n"
+                      << "Use the location + code frame below (if available).\n"
                       << RESET << "\n";
 
             if (!sourceFile.empty())
@@ -514,13 +514,12 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found. Re-run with sanitizers enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
         }
 
-        // use-after-return (returned pointer/reference/view to a local)
         static bool handleRuntimeUseAfterReturn(
             const std::string &runtimeLog,
             const std::filesystem::path &sourceFile)
@@ -574,13 +573,12 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found. Re-run with sanitizers enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
         }
 
-        // stack-use-after-scope (cleaner message than generic overflow)
         static bool handleRuntimeStackUseAfterScope(
             const std::string &runtimeLog,
             const std::filesystem::path &sourceFile)
@@ -594,7 +592,6 @@ namespace vix::cli::errors
                 return false;
 
             std::cerr << RED << "runtime error: stack-use-after-scope" << RESET << "\n\n";
-
             std::cerr << GRAY
                       << "Likely cause: a dangling reference/view/span was used after its backing storage went out of scope.\n"
                       << "Example: std::string_view sv = std::string(\"Hello\"); // dangling view\n"
@@ -632,7 +629,7 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found. Re-run with sanitizers enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
@@ -650,8 +647,7 @@ namespace vix::cli::errors
                 icontains(runtimeLog, "stack-use-after-scope") ||
                 icontains(runtimeLog, "use-after-scope");
 
-            const bool isUseAfterReturn =
-                icontains(runtimeLog, "use-after-return");
+            const bool isUseAfterReturn = icontains(runtimeLog, "use-after-return");
 
             const bool isOutOfBounds =
                 icontains(runtimeLog, "out of bounds") ||
@@ -742,7 +738,6 @@ namespace vix::cli::errors
                           << RESET << "\n";
             }
 
-            // ---- Clean output note ----
             std::cerr << GRAY
                       << "Sanitizer report was captured and hidden to keep output clean.\n"
                       << "Use the location + code frame below.\n"
@@ -751,7 +746,6 @@ namespace vix::cli::errors
             if (!sourceFile.empty())
                 std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
 
-            // ---- Location + codeframe ----
             if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
             {
                 ErrorContext ctx;
@@ -768,7 +762,7 @@ namespace vix::cli::errors
             }
             else
             {
-                hint("No file:line info found. Re-run with sanitizers enabled to get an exact location.");
+                hint("no stack trace (enable ASan for exact location)");
             }
 
             return true;
@@ -792,8 +786,8 @@ namespace vix::cli::errors
                 : hasMSan  ? "MemorySanitizer"
                            : "ThreadSanitizer";
 
-            auto lines = splitLines(log);
-            auto kind = extractSanitizerKind(lines, san);
+            const auto lines = splitLines(log);
+            const auto kind = extractSanitizerKind(lines, san);
 
             std::cerr << RED << "runtime error: sanitizer reported an issue" << RESET << "\n";
             std::cerr << GRAY << "sanitizer: " << san;
@@ -823,12 +817,16 @@ namespace vix::cli::errors
 
                 printCodeFrame(*loc, ctx, opt);
             }
+            else
+            {
+                hint("no stack trace (enable ASan for exact location)");
+            }
 
             std::cerr << "\n"
                       << YELLOW << "tip:" << RESET << "\n"
                       << GRAY
-                      << "    ✔ fix the mismatch: new[] must be paired with delete[]\n"
-                      << "    ✔ prefer std::vector / std::unique_ptr<T[]> to avoid manual delete\n"
+                      << "    ✔ fix the first reported issue; others may be consequences\n"
+                      << "    ✔ prefer RAII (std::vector/std::string/unique_ptr) over manual memory management\n"
                       << RESET << "\n";
 
             return true;
@@ -874,7 +872,9 @@ namespace vix::cli::errors
                       << "    ✔ verify target_link_libraries(...) in CMake\n"
                       << RESET << "\n";
 
-            std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
+            if (!sourceFile.empty())
+                std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
+
             return true;
         }
     } // namespace
@@ -884,6 +884,7 @@ namespace vix::cli::errors
         const std::filesystem::path &sourceFile,
         [[maybe_unused]] const std::string &contextMessage)
     {
+        // Order matters: keep specific ones first.
         if (handleRuntimeAllocDeallocMismatch(runtimeLog, sourceFile))
             return true;
 

@@ -521,6 +521,15 @@ namespace vix::commands::RunCommand
         out << "  --run-preset <name>     Build preset used to build target 'run'\n";
         out << "  -j, --jobs <n>          Number of parallel build jobs\n\n";
 
+        out << "Watch / process mode:\n";
+        out << "  --watch, --reload       Rebuild & restart on file changes (hot reload)\n";
+        out << "  --force-server          Force server-like mode (long-lived process)\n";
+        out << "  --force-script          Force script-like mode (short-lived process)\n\n";
+
+        out << "Sanitizers (script mode only):\n";
+        out << "  --san                   Enable ASan + UBSan for single-file .cpp scripts\n";
+        out << "  --ubsan                 Enable UBSan only for single-file .cpp scripts\n\n";
+
         out << "Global flags (from `vix`):\n";
         out << "  --verbose               Show debug logs from the runtime (log-level=debug)\n";
         out << "  -q, --quiet             Only show warnings and errors (log-level=warn)\n";
@@ -531,7 +540,14 @@ namespace vix::commands::RunCommand
         out << "  vix run api -- --port 8080\n";
         out << "  vix run --dir ./examples/blog\n";
         out << "  vix run api --preset dev-ninja --run-preset run-ninja\n";
+        out << "  vix run --watch api\n";
+        out << "  vix run --force-server --watch api\n";
         out << "  vix run example main              # in the umbrella repo, run ./build/main\n\n";
+
+        out << "  vix run main.cpp                  # compile & run single-file script\n";
+        out << "  vix run main.cpp --san            # script with ASan+UBSan\n";
+        out << "  vix run main.cpp --ubsan          # script with UBSan only\n\n";
+
         out << "  vix --log-level debug run api     # run with debug logs from runtime\n";
         out << "  vix --quiet run api               # minimal logs from runtime\n";
 

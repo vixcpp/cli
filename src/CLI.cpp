@@ -202,7 +202,6 @@ namespace vix
         };
     }
 
-    // CLI::run — entry point for the vix binary
     int CLI::run(int argc, char **argv)
     {
 #ifndef _WIN32
@@ -212,40 +211,33 @@ namespace vix
 #endif
 
         auto &logger = Logger::getInstance();
+        auto &dispatcher = vix::cli::dispatch::global();
+
+        apply_log_level_from_env(logger);
 
         if (argc < 2)
-        {
-            // No command → global help
-            return help({});
-        }
+            return dispatcher.run("repl", {});
 
-        // 1) Global options: --verbose / --quiet / -q / --log-level
-        //    Syntax:
-        //      vix [GLOBAL OPTIONS] <COMMAND> [ARGS...]
-        //    Examples:
-        //      vix --verbose run myapp
-        //      vix --quiet build
-        //      VIX_LOG_LEVEL=debug vix run myapp
-        //      vix --log-level warn run myapp
         enum class VerbosityMode
         {
             Default,
             Verbose,
             Quiet
         };
-
         VerbosityMode verbosity = VerbosityMode::Default;
         std::optional<std::string> logLevelFlag;
         int index = 1;
 
-        // 1.a Apply environment variable first (base level)
-        //     CLI flags may override this later.
-        apply_log_level_from_env(logger);
-
-        // 1.b Parse leading global options
         while (index < argc)
         {
             std::string arg = argv[index];
+
+            // ✅ global help/version should still work
+            if (arg == "-h" || arg == "--help")
+                return help({});
+
+            if (arg == "-v" || arg == "--version")
+                return version({});
 
             if (arg == "--verbose")
             {
@@ -273,7 +265,6 @@ namespace vix
                 continue;
             }
 
-            // Support --log-level=info style
             constexpr const char prefix[] = "--log-level=";
             if (arg.rfind(prefix, 0) == 0)
             {
@@ -288,11 +279,10 @@ namespace vix
                 continue;
             }
 
-            // Not a global option → this is the command
-            break;
+            break; // command starts here
         }
 
-        // 1.c Apply verbosity mode (overrides env base level)
+        // apply verbosity
         switch (verbosity)
         {
         case VerbosityMode::Verbose:
@@ -301,32 +291,20 @@ namespace vix
         case VerbosityMode::Quiet:
             logger.setLevel(Logger::Level::WARN);
             break;
-        case VerbosityMode::Default:
         default:
-            // If env not set anything explicit, we keep whatever default
-            // the Logger was initialized with (often INFO).
             break;
         }
 
-        // 1.d Apply explicit --log-level if provided (highest precedence)
         if (logLevelFlag.has_value())
-        {
             apply_log_level_from_flag(logger, *logLevelFlag);
-        }
 
-        // 2) Determine command + args
         if (index >= argc)
-        {
-            // Ex: vix --verbose (no command)
-            return help({});
-        }
+            return dispatcher.run("repl", {});
 
         std::string cmd = argv[index];
         std::vector<std::string> args(argv + index + 1, argv + argc);
 
-        auto &dispatcher = vix::cli::dispatch::global();
-
-        // 3) Per-command help: vix <command> --help / -h
+        // per-command help
         if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
         {
             if (!dispatcher.has(cmd))
@@ -337,7 +315,6 @@ namespace vix
             return dispatcher.help(cmd);
         }
 
-        // Normal run
         if (!dispatcher.has(cmd))
         {
             std::cerr << "vix: unknown command '" << cmd << "'\n\n";
@@ -355,39 +332,6 @@ namespace vix
                              "Command '{}' failed: {}", cmd, ex.what());
             return 1;
         }
-
-        // 3) Per-command help:
-        //    vix <command> --help / -h
-        if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
-        {
-            auto &disp = vix::cli::dispatch::global();
-
-            if (!disp.has(cmd))
-            {
-                std::cerr << "vix: unknown command '" << cmd << "'\n\n";
-                return help({});
-            }
-
-            return disp.help(cmd);
-        }
-
-        if (commands_.count(cmd))
-        {
-            try
-            {
-                return commands_[cmd](args);
-            }
-            catch (const std::exception &ex)
-            {
-                logger.logModule("CLI", Logger::Level::ERROR,
-                                 "Command '{}' failed: {}", cmd, ex.what());
-                return 1;
-            }
-        }
-
-        std::cerr << "vix: unknown command '" << cmd << "'\n\n";
-        help({});
-        return 1;
     }
 
     int CLI::help(const std::vector<std::string> &args)

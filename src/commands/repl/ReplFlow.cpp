@@ -20,6 +20,8 @@
 #include <string>
 #include <cstring>
 #include <chrono>
+#include <nlohmann/json.hpp>
+#include <optional>
 
 namespace fs = std::filesystem;
 
@@ -55,6 +57,13 @@ namespace
         Interrupted, // Ctrl+C
         Clear        // Ctrl+L
     };
+
+    static bool try_eval_math_with_vars(
+        const std::string &expr,
+        const std::unordered_map<std::string, nlohmann::json> &vars,
+        nlohmann::json &valueOut,
+        std::string &formattedOut,
+        std::string &err);
 
 #ifndef _WIN32
     struct TerminalRawMode
@@ -96,32 +105,6 @@ namespace
     };
 
 #endif
-
-    static bool looks_like_math_expr(const std::string &s)
-    {
-        auto t = vix::cli::repl::trim_copy(s);
-        if (t.empty())
-            return false;
-
-        // If first char is alpha or '_' => command-like
-        const unsigned char first = static_cast<unsigned char>(t.front());
-        if (std::isalpha(first) || t.front() == '_')
-            return false;
-
-        // Avoid obvious code-ish patterns
-        for (char c : t)
-        {
-            if (c == ';' || c == '{' || c == '}' || c == '#' || c == '=')
-                return false;
-        }
-
-        // Accept math only if starts with a math char
-        const char c0 = t.front();
-        if (std::isdigit(static_cast<unsigned char>(c0)) || c0 == '.' || c0 == '(' || c0 == '+' || c0 == '-')
-            return true;
-
-        return false;
-    }
 
     static void print_banner()
     {
@@ -222,32 +205,89 @@ namespace
         return false;
     }
 
-    static std::string arg_to_text(const vix::cli::repl::api::CallExpr &call, size_t i, std::string &err)
+    static bool is_ident_start(char c)
+    {
+        unsigned char u = (unsigned char)c;
+        return std::isalpha(u) || c == '_';
+    }
+    static bool is_ident_char(char c)
+    {
+        unsigned char u = (unsigned char)c;
+        return std::isalnum(u) || c == '_';
+    }
+
+    static bool looks_like_ident(const std::string &s)
+    {
+        if (s.empty())
+            return false;
+
+        if (!is_ident_start(s.front()))
+            return false;
+
+        for (char c : s)
+            if (!is_ident_char(c))
+                return false;
+
+        return true;
+    }
+
+    static std::string arg_to_text(
+        const vix::cli::repl::api::CallExpr &call,
+        size_t i,
+        const std::unordered_map<std::string, nlohmann::json> &vars,
+        std::string &err)
     {
         using namespace vix::cli::repl;
+
+        err.clear();
 
         if (i >= call.args.size())
             return {};
 
-        // If raw exists and looks like an expression, evaluate it
+        // ✅ IMPORTANT: si l'argument a été parsé comme string literal, on le retourne DIRECT.
+        // Cela évite de traiter "x+1 =" comme une expression math à cause du '+' dedans.
+        if (call.args[i].is_string())
+            return call.args[i].as_string();
+
+        // raw token available (println(x), println(x+1), etc.)
         if (i < call.args_raw.size())
         {
-            const std::string &raw = call.args_raw[i];
+            const std::string raw = trim_copy(call.args_raw[i]);
+
+            // 1) variable resolution: println(x)
+            if (looks_like_ident(raw))
+            {
+                auto it = vars.find(raw);
+                if (it != vars.end())
+                {
+                    if (it->second.is_string())
+                        return it->second.get<std::string>();
+                    return it->second.dump();
+                }
+            }
+
+            // 2) math expression with vars: println(x+2)
+            // ✅ utilise la version qui remplace les variables numériques
             if (contains_math_ops(raw))
             {
-                auto r = eval_expression(raw, err);
-                if (!r)
+                nlohmann::json val;
+                std::string formatted;
+
+                if (!try_eval_math_with_vars(raw, vars, val, formatted, err))
                     return {};
-                return r->formatted;
+
+                return formatted;
             }
         }
 
-        // fallback: literal stringify
+        // fallback: literal (number, bool, null)
         return to_string(call.args[i]);
     }
 
-    static bool invoke_call(const vix::cli::repl::api::CallExpr &call,
-                            vix::cli::repl::api::Vix &VixObj)
+    static bool invoke_call(
+        const vix::cli::repl::api::CallExpr &call,
+        vix::cli::repl::api::Vix &VixObj,
+        const std::unordered_map<std::string, nlohmann::json> &vars)
     {
         auto join_all = [&](std::string_view sep, std::string &err) -> std::optional<std::string>
         {
@@ -257,7 +297,7 @@ namespace
                 if (i)
                     out += sep;
 
-                auto t = arg_to_text(call, i, err);
+                auto t = arg_to_text(call, i, vars, err); // ✅ PASS vars
                 if (!err.empty())
                     return std::nullopt;
 
@@ -409,7 +449,218 @@ namespace
             return true;
         }
 
+        if (m == "args")
+        {
+            // print JSON array
+            nlohmann::json j = nlohmann::json::array();
+            for (const auto &a : VixObj.args())
+                j.push_back(a);
+            vix::cli::repl::api::println(j.dump());
+            return true;
+        }
+
+        if (m == "run")
+        {
+            if (call.args.empty() || !call.args[0].is_string())
+            {
+                vix::cli::repl::api::println("error: Vix.run(cmd:string, ...args)");
+                return true;
+            }
+
+            std::string cmd = call.args[0].as_string();
+            std::vector<std::string> args;
+
+            for (size_t i = 1; i < call.args.size(); ++i)
+                args.push_back(to_string(call.args[i])); // convert literals
+
+            auto &disp = vix::cli::dispatch::global();
+
+            try
+            {
+                int code = disp.run(cmd, args);
+                vix::cli::repl::api::println_int((long long)code);
+            }
+            catch (const std::exception &e)
+            {
+                vix::cli::repl::api::println(std::string("error: ") + e.what());
+            }
+
+            return true;
+        }
+
         return false;
+    }
+
+    static bool contains_forbidden_code_chars(const std::string &s)
+    {
+        for (char c : s)
+        {
+            if (c == ';' || c == '#')
+                return true;
+        }
+        return false;
+    }
+
+    static bool contains_math_ops_anywhere(const std::string &s)
+    {
+        for (char c : s)
+        {
+            if (c == '+' || c == '-' || c == '*' || c == '/' || c == '(' || c == ')')
+                return true;
+        }
+        return false;
+    }
+
+    static std::optional<std::pair<std::string, std::string>> parse_assignment(const std::string &line)
+    {
+        // name = rhs
+        // allow spaces
+        size_t eq = line.find('=');
+        if (eq == std::string::npos)
+            return std::nullopt;
+
+        std::string left = vix::cli::repl::trim_copy(line.substr(0, eq));
+        std::string right = vix::cli::repl::trim_copy(line.substr(eq + 1));
+
+        if (left.empty() || right.empty())
+            return std::nullopt;
+
+        // left must be identifier
+        if (!is_ident_start(left.front()))
+            return std::nullopt;
+
+        for (char c : left)
+            if (!is_ident_char(c))
+                return std::nullopt;
+
+        return std::make_pair(left, right);
+    }
+
+    static bool looks_like_json_literal(const std::string &rhs)
+    {
+        auto t = vix::cli::repl::trim_copy(rhs);
+        if (t.empty())
+            return false;
+        return (t.front() == '{' || t.front() == '[');
+    }
+
+    // Replace identifiers by numeric values from vars (only if var is number).
+    static bool substitute_numeric_vars(
+        const std::string &expr,
+        const std::unordered_map<std::string, nlohmann::json> &vars,
+        std::string &out,
+        std::string &err)
+    {
+        out.clear();
+        err.clear();
+
+        bool inQuote = false;
+        char quote = 0;
+
+        for (size_t i = 0; i < expr.size();)
+        {
+            char c = expr[i];
+
+            if (inQuote)
+            {
+                if (c == '\\' && i + 1 < expr.size())
+                {
+                    out.push_back(expr[i]);
+                    out.push_back(expr[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                out.push_back(c);
+                if (c == quote)
+                    inQuote = false;
+                ++i;
+                continue;
+            }
+
+            if (c == '"' || c == '\'')
+            {
+                inQuote = true;
+                quote = c;
+                out.push_back(c);
+                ++i;
+                continue;
+            }
+
+            if (is_ident_start(c))
+            {
+                size_t j = i + 1;
+                while (j < expr.size() && is_ident_char(expr[j]))
+                    ++j;
+
+                std::string name = expr.substr(i, j - i);
+                auto it = vars.find(name);
+                if (it == vars.end())
+                {
+                    err = "unknown variable: " + name;
+                    return false;
+                }
+                if (!it->second.is_number())
+                {
+                    err = "variable '" + name + "' is not a number";
+                    return false;
+                }
+
+                // dump number without quotes
+                out += it->second.dump();
+                i = j;
+                continue;
+            }
+
+            out.push_back(c);
+            ++i;
+        }
+
+        return true;
+    }
+
+    static bool try_eval_math_with_vars(
+        const std::string &expr,
+        const std::unordered_map<std::string, nlohmann::json> &vars,
+        nlohmann::json &valueOut,
+        std::string &formattedOut,
+        std::string &err)
+    {
+        err.clear();
+        formattedOut.clear();
+
+        std::string substituted;
+        if (!substitute_numeric_vars(expr, vars, substituted, err))
+            return false;
+
+        auto r = vix::cli::repl::eval_expression(substituted, err);
+        if (!r)
+            return false;
+
+        formattedOut = r->formatted;
+
+        try
+        {
+            double v = std::stod(r->formatted);
+            double iv = std::round(v);
+
+            if (std::fabs(v - iv) < 1e-12 &&
+                iv >= (double)LLONG_MIN &&
+                iv <= (double)LLONG_MAX)
+            {
+                valueOut = (long long)iv;
+            }
+            else
+            {
+                valueOut = v;
+            }
+        }
+        catch (...)
+        {
+            err = "math result is not a number";
+            return false;
+        }
+
+        return true;
     }
 
 } // namespace
@@ -430,6 +681,9 @@ namespace vix::commands::ReplCommand
 
         History history(cfg.maxHistory);
         vix::cli::repl::api::Vix VixObj(&history);
+        std::unordered_map<std::string, nlohmann::json> vars;
+
+        VixObj.set_args({});
 
         if (cfg.enableFileHistory)
         {
@@ -756,7 +1010,7 @@ namespace vix::commands::ReplCommand
                 auto pr = vix::cli::repl::api::parse_call(line);
                 if (pr.ok)
                 {
-                    if (invoke_call(pr.expr, VixObj))
+                    if (invoke_call(pr.expr, VixObj, vars))
                     {
                         // if user requested exit via Vix.exit(...)
                         if (VixObj.exit_requested())
@@ -792,6 +1046,86 @@ namespace vix::commands::ReplCommand
 
             // History
             history.add(line);
+
+            // VARIABLES: x = 42, x = 1+2, x = {"a":1}, x = [1,2]
+            if (auto asg = parse_assignment(line))
+            {
+                const std::string &name = asg->first;
+                const std::string &rhs = asg->second;
+
+                // 1) JSON literal FIRST
+                if (looks_like_json_literal(rhs))
+                {
+                    try
+                    {
+                        nlohmann::json j = nlohmann::json::parse(rhs);
+                        vars[name] = j;
+                        std::cout << name << " = " << j.dump() << "\n";
+                    }
+                    catch (const std::exception &e)
+                    {
+                        std::cout << "error: " << e.what() << "\n";
+
+                        auto t = vix::cli::repl::trim_copy(rhs);
+                        if (!t.empty() && t.front() == '{')
+                        {
+                            if (t.find("\",") != std::string::npos && t.find("\":") == std::string::npos)
+                            {
+                                std::cout << "hint: JSON object uses ':' between key and value.\n";
+                                std::cout << "      example: {\"name\":\"Gaspard\",\"age\":10}\n";
+                            }
+                        }
+                    }
+
+                    continue;
+                }
+
+                // 2) forbid code chars (non-JSON)
+                if (contains_forbidden_code_chars(rhs))
+                {
+                    std::cout << "error: invalid expression\n";
+                    continue;
+                }
+
+                // 3) math expression
+                std::string err;
+                std::string formatted;
+                nlohmann::json val;
+
+                if (!try_eval_math_with_vars(rhs, vars, val, formatted, err))
+                {
+                    std::cout << "error: " << (err.empty() ? "invalid expression" : err) << "\n";
+                    continue;
+                }
+
+                vars[name] = val;
+                std::cout << formatted << "\n";
+                continue;
+            }
+
+            // Single identifier => print var
+            {
+                std::string t = vix::cli::repl::trim_copy(line);
+                if (!t.empty() && is_ident_start(t.front()))
+                {
+                    bool ok = true;
+                    for (char c : t)
+                        if (!is_ident_char(c))
+                        {
+                            ok = false;
+                            break;
+                        }
+                    if (ok)
+                    {
+                        auto it = vars.find(t);
+                        if (it != vars.end())
+                        {
+                            std::cout << it->second.dump() << "\n";
+                            continue;
+                        }
+                    }
+                }
+            }
 
             if (line == "exit" || line == ".exit") // keep legacy alias
                 break;
@@ -939,13 +1273,16 @@ namespace vix::commands::ReplCommand
             }
 
             // 2) Not a known command -> try math directly (no '=' needed)
-            if (cfg.enableCalculator && looks_like_math_expr(line))
+            if (cfg.enableCalculator && !contains_forbidden_code_chars(line) &&
+                (contains_math_ops_anywhere(line)))
             {
                 std::string err;
-                auto r = vix::cli::repl::eval_expression(line, err);
-                if (r)
+                std::string formatted;
+                nlohmann::json val;
+
+                if (try_eval_math_with_vars(line, vars, val, formatted, err))
                 {
-                    std::cout << r->formatted << "\n";
+                    std::cout << formatted << "\n";
                     continue;
                 }
 

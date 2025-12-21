@@ -65,6 +65,8 @@
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
+#include <vix/cli/commands/ReplCommand.hpp>
+#include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -178,6 +180,8 @@ namespace vix
         { return commands::TestsCommand::run(args); };
         commands_["test"] = [](auto args)
         { return commands::TestsCommand::run(args); };
+        commands_["repl"] = [](auto args)
+        { return commands::ReplCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -320,31 +324,51 @@ namespace vix
         std::string cmd = argv[index];
         std::vector<std::string> args(argv + index + 1, argv + argc);
 
+        auto &dispatcher = vix::cli::dispatch::global();
+
+        // 3) Per-command help: vix <command> --help / -h
+        if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
+        {
+            if (!dispatcher.has(cmd))
+            {
+                std::cerr << "vix: unknown command '" << cmd << "'\n\n";
+                return help({});
+            }
+            return dispatcher.help(cmd);
+        }
+
+        // Normal run
+        if (!dispatcher.has(cmd))
+        {
+            std::cerr << "vix: unknown command '" << cmd << "'\n\n";
+            help({});
+            return 1;
+        }
+
+        try
+        {
+            return dispatcher.run(cmd, args);
+        }
+        catch (const std::exception &ex)
+        {
+            logger.logModule("CLI", Logger::Level::ERROR,
+                             "Command '{}' failed: {}", cmd, ex.what());
+            return 1;
+        }
+
         // 3) Per-command help:
         //    vix <command> --help / -h
         if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
         {
-            if (cmd == "new")
-                return commands::NewCommand::help();
-            if (cmd == "build")
-                return commands::BuildCommand::help();
-            if (cmd == "run")
-                return commands::RunCommand::help();
-            if (cmd == "dev")
-                return commands::DevCommand::help();
-            if (cmd == "orm")
-                return commands::OrmCommand::help();
-            if (cmd == "pack")
-                return commands::PackCommand::help();
-            if (cmd == "verify")
-                return commands::VerifyCommand::help();
-            if (cmd == "check")
-                return commands::CheckCommand::help();
-            if (cmd == "tests" || cmd == "test")
-                return commands::TestsCommand::help();
+            auto &disp = vix::cli::dispatch::global();
 
-            std::cerr << "vix: unknown command '" << cmd << "'\n\n";
-            return help({});
+            if (!disp.has(cmd))
+            {
+                std::cerr << "vix: unknown command '" << cmd << "'\n\n";
+                return help({});
+            }
+
+            return disp.help(cmd);
         }
 
         if (commands_.count(cmd))
@@ -390,6 +414,8 @@ namespace vix
                 return commands::CheckCommand::help();
             if (cmd == "tests" || cmd == "test")
                 return commands::TestsCommand::help();
+            if (cmd == "repl")
+                return commands::ReplCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -425,6 +451,7 @@ namespace vix
         out << indent(3) << "dev   [name]             Dev mode (watch, rebuild, reload)\n";
         out << indent(3) << "check [path]             Validate a project or compile a single .cpp (no execution)\n";
         out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n\n";
+        out << indent(3) << "repl                      Start interactive Vix REPL\n";
 
         out << indent(2) << "Packaging & security:\n";
         out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";

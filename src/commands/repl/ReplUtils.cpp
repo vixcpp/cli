@@ -44,11 +44,8 @@ namespace vix::cli::repl
 
     std::string make_prompt(const std::filesystem::path &cwd)
     {
-        // show only folder name for clean prompt: vix(project)>
-        std::string name = cwd.filename().string();
-        if (name.empty())
-            name = cwd.string(); // root case
-        return "vix(" + name + ")> ";
+        (void)cwd;
+        return ">>> ";
     }
 
     void clear_screen()

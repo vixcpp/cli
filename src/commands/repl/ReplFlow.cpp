@@ -4,7 +4,6 @@
 #include <vix/cli/commands/repl/ReplMath.hpp>
 #include <vix/cli/commands/repl/ReplUtils.hpp>
 #include <vix/cli/commands/repl/ReplFlow.hpp>
-#include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/repl/ReplLineEditor.hpp>
 #include <vix/cli/commands/repl/api/Vix.hpp>
 #include <vix/cli/commands/repl/api/ReplCallParser.hpp>
@@ -132,23 +131,9 @@ namespace
 
     static void print_commands_from_dispatcher()
     {
-        auto &disp = vix::cli::dispatch::global();
-
-        std::unordered_map<std::string, std::vector<const vix::cli::dispatch::Entry *>> groups;
-        for (const auto &[name, e] : disp.entries())
-            groups[e.category].push_back(&e);
-
+        // CLI commands are intentionally disabled in REPL.
         std::cout << "Commands:\n";
-        for (auto &[cat, list] : groups)
-        {
-            std::cout << "  " << cat << ":\n";
-            std::sort(list.begin(), list.end(),
-                      [](auto a, auto b)
-                      { return a->name < b->name; });
-
-            for (auto *e : list)
-                std::cout << "    " << e->name << "  - " << e->summary << "\n";
-        }
+        std::cout << "  (disabled in REPL)\n";
     }
 
     static void print_help()
@@ -461,30 +446,7 @@ namespace
 
         if (m == "run")
         {
-            if (call.args.empty() || !call.args[0].is_string())
-            {
-                vix::cli::repl::api::println("error: Vix.run(cmd:string, ...args)");
-                return true;
-            }
-
-            std::string cmd = call.args[0].as_string();
-            std::vector<std::string> args;
-
-            for (size_t i = 1; i < call.args.size(); ++i)
-                args.push_back(to_string(call.args[i])); // convert literals
-
-            auto &disp = vix::cli::dispatch::global();
-
-            try
-            {
-                int code = disp.run(cmd, args);
-                vix::cli::repl::api::println_int((long long)code);
-            }
-            catch (const std::exception &e)
-            {
-                vix::cli::repl::api::println(std::string("error: ") + e.what());
-            }
-
+            vix::cli::repl::api::println("error: Vix.run() is disabled in REPL.");
             return true;
         }
 
@@ -669,7 +631,7 @@ namespace vix::commands::ReplCommand
 {
     int repl_flow_run()
     {
-        using vix::cli::repl::Dispatcher;
+        // using vix::cli::repl::Dispatcher;
         using vix::cli::repl::History;
         using vix::cli::repl::ReplConfig;
 
@@ -776,8 +738,6 @@ namespace vix::commands::ReplCommand
                 std::string trimmed = vix::cli::repl::trim_copy(current);
                 auto parts = vix::cli::repl::split_command_line(trimmed);
 
-                const auto &disp = vix::cli::dispatch::global();
-
                 auto starts_with = [](const std::string &s, const std::string &p) -> bool
                 {
                     return s.rfind(p, 0) == 0;
@@ -788,29 +748,10 @@ namespace vix::commands::ReplCommand
                     "help", "exit", "clear", "pwd", "cd",
                     "history", "version", "commands", "calc"};
 
-                // Options by command (extend as you want)
-                auto options_for = [&](const std::string &cmd) -> std::vector<std::string>
+                // Options by command (REPL only)
+                auto options_for = [&](const std::string &) -> std::vector<std::string>
                 {
-                    // global common flags
-                    std::vector<std::string> base = {"--help"};
-
-                    // examples based on your Vix CLI
-                    if (cmd == "check" || cmd == "run" || cmd == "tests" || cmd == "verify")
-                    {
-                        base.push_back("--san");
-                        base.push_back("--asan");
-                        base.push_back("--ubsan");
-                        base.push_back("--tsan");
-                        base.push_back("--lsan");
-                    }
-
-                    if (cmd == "check")
-                    {
-                        base.push_back("--release");
-                        base.push_back("--debug");
-                    }
-
-                    return base;
+                    return {}; // no CLI options in REPL
                 };
 
                 // Utility: unique/sort
@@ -825,14 +766,6 @@ namespace vix::commands::ReplCommand
                 {
                     const std::string prefix = trimmed;
                     std::vector<std::string> matches;
-
-                    // dispatcher commands
-                    for (const auto &[name, e] : disp.entries())
-                    {
-                        (void)e;
-                        if (starts_with(name, prefix))
-                            matches.push_back(name);
-                    }
 
                     // builtins
                     for (const auto &b : builtins)
@@ -1135,7 +1068,7 @@ namespace vix::commands::ReplCommand
             {
                 auto normalized = line;
                 if (vix::cli::repl::starts_with(normalized, ".help"))
-                    normalized.erase(0, 1); // remove leading '.'
+                    normalized.erase(0, 1);
 
                 auto parts = vix::cli::repl::split_command_line(normalized);
 
@@ -1145,17 +1078,7 @@ namespace vix::commands::ReplCommand
                     continue;
                 }
 
-                const std::string cmd = parts[1];
-                auto &disp = vix::cli::dispatch::global();
-
-                if (!disp.has(cmd))
-                {
-                    std::cout << "Unknown command: " << cmd << "\n";
-                    continue;
-                }
-
-                disp.help(cmd);
-                std::cout << "\n";
+                std::cout << "error: 'help <command>' is disabled in REPL. Use: vix help <command>\n";
                 continue;
             }
 
@@ -1196,9 +1119,7 @@ namespace vix::commands::ReplCommand
 
             if (line == "commands" || line == ".commands")
             {
-                auto &disp = vix::cli::dispatch::global();
-                for (const auto &[name, e] : disp.entries())
-                    std::cout << name << "  - " << e.summary << "\n";
+                std::cout << "error: CLI commands list is disabled in REPL.\n";
                 continue;
             }
 
@@ -1253,24 +1174,6 @@ namespace vix::commands::ReplCommand
 
             const std::string cmd = parts[0];
             std::vector<std::string> args(parts.begin() + 1, parts.end());
-
-            auto &disp = vix::cli::dispatch::global();
-
-            // 1) Known Vix command -> run
-            if (disp.has(cmd))
-            {
-                try
-                {
-                    int code = disp.run(cmd, args);
-                    if (code != 0)
-                        std::cout << "(exit code " << code << ")\n";
-                }
-                catch (const std::exception &ex)
-                {
-                    std::cout << "error: " << ex.what() << "\n";
-                }
-                continue;
-            }
 
             // 2) Not a known command -> try math directly (no '=' needed)
             if (cfg.enableCalculator && !contains_forbidden_code_chars(line) &&

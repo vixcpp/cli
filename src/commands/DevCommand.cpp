@@ -6,6 +6,11 @@
 #include <string>
 #include <vector>
 
+#include <cstdlib>
+#ifdef _WIN32
+#include <stdlib.h>
+#endif
+
 using namespace vix::cli::style;
 
 namespace vix::commands::DevCommand
@@ -20,26 +25,18 @@ namespace vix::commands::DevCommand
                                    return s == "--watch" || s == "--reload";
                                });
         }
+
     } // namespace
 
     int run(const std::vector<std::string> &args)
     {
-        // Forward the args as-is to `run` (without the word "dev").
         std::vector<std::string> forwarded;
         forwarded.reserve(args.size() + 1);
         forwarded.insert(forwarded.end(), args.begin(), args.end());
 
-        // Dev mode = watch enabled by default (scripts + projects),
-        //    unless the user already specified --watch / --reload.
         if (!has_watch_flag(forwarded))
-        {
             forwarded.emplace_back("--watch");
-        }
-
-        info("Starting Vix dev mode.");
-        hint("Tip: use `Ctrl+C` to stop dev mode; edit your files and Vix will rebuild & restart automatically.");
-
-        // Delegate all logic to RunCommand
+        info("VIX dev  • hot-reload enabled");
         return vix::commands::RunCommand::run(forwarded);
     }
 

@@ -266,6 +266,11 @@ namespace vix::commands::RunCommand::detail
             ::close(outPipe[1]);
             ::close(errPipe[1]);
 
+            // Tell runtime which mode we are in (run by default)
+            if (::getenv("VIX_MODE") == nullptr)
+            {
+                ::setenv("VIX_MODE", "run", 1);
+            }
             ::execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
             _exit(127);
         }

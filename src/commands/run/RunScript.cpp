@@ -575,7 +575,6 @@ namespace vix::commands::RunCommand::detail
             return final_is_server(runtimeGuess) ? "dev server" : "script";
         };
 
-        info("Watcher Process started (hot reload).");
         hint("Watching: " + script.string());
 
 #ifdef _WIN32
@@ -624,7 +623,6 @@ namespace vix::commands::RunCommand::detail
                 if (nowWrite != lastWrite)
                 {
                     lastWrite = nowWrite;
-                    // CLEAR + bannière de restart comme Deno
                     print_watch_restart_banner(script);
                     break; // relancer run_single_cpp
                 }
@@ -634,7 +632,6 @@ namespace vix::commands::RunCommand::detail
         return 0;
 
 #else
-        // Implémentation POSIX avec fork/exec + kill(SIGINT)
         while (true)
         {
             // 1) Build exécutable (cache CMake réutilisé → rapide)
@@ -683,6 +680,7 @@ namespace vix::commands::RunCommand::detail
             {
                 // ===== ENFANT =====
                 ::setenv("VIX_STDOUT_MODE", "line", 1);
+                ::setenv("VIX_MODE", "dev", 1);
 
                 apply_sanitizer_env_if_needed(opt.enableSanitizers,
                                               opt.enableUbsanOnly);
@@ -997,7 +995,7 @@ namespace vix::commands::RunCommand::detail
                 _exit(127);
             }
 
-            info("🏃 Dev server started (pid=" + std::to_string(pid) + ")");
+            success("PID " + std::to_string(pid));
 
             bool needRestart = false;
             bool running = true;

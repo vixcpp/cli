@@ -143,24 +143,37 @@ namespace
 
     void enable_line_buffered_stdout_for_apps()
     {
-#ifdef _WIN32
-        // Windows : _putenv_s remplace/ajoute la variable
-        _putenv_s("VIX_STDOUT_MODE", "line");
-#else
-        // POSIX : setenv remplace ou ajoute
+#ifndef _WIN32
         ::setenv("VIX_STDOUT_MODE", "line", 1);
 #endif
     }
+
 } // namespace
 
 namespace vix::commands::RunCommand
 {
     using namespace detail;
 
+    static void ensure_mode_env_for_run(const Options &opt)
+    {
+        // If DevCommand already set VIX_MODE, keep it.
+        // Otherwise: watch => dev, else run.
+        const char *cur = std::getenv("VIX_MODE");
+        if (cur && *cur)
+            return;
+
+#ifdef _WIN32
+        _putenv_s("VIX_MODE", opt.watch ? "dev" : "run");
+#else
+        ::setenv("VIX_MODE", opt.watch ? "dev" : "run", 1);
+#endif
+    }
+
     int run(const std::vector<std::string> &args)
     {
         const Options opt = parse(args);
 
+        ensure_mode_env_for_run(opt);
         enable_line_buffered_stdout_for_apps();
 
         // 1) Mode single .cpp (scripts)
@@ -260,21 +273,25 @@ namespace vix::commands::RunCommand
 
             {
                 progress.phase_start("Build & run (preset: " + runPreset + ")");
+                const std::string mode = opt.watch ? "dev" : "run";
 
                 std::ostringstream oss;
 #ifdef _WIN32
-                // On injecte la variable d'env AVANT le cmake
                 oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && set VIX_STDOUT_MODE=line && "
-                    << "cmake --build --preset " << quote(runPreset) << " --target run";
+                    << " && set VIX_STDOUT_MODE=line"
+                    << " && set VIX_MODE=" << mode
+                    << " && cmake --build --preset " << quote(runPreset) << " --target run";
+
                 if (opt.jobs > 0)
                     oss << " -- -j " << opt.jobs;
+
                 oss << "\"";
 #else
-                // POSIX : export inline
                 oss << "cd " << quote(projectDir.string())
-                    << " && VIX_STDOUT_MODE=line "
-                    << "cmake --build --preset " << quote(runPreset) << " --target run";
+                    << " && VIX_STDOUT_MODE=line"
+                    << " VIX_MODE=" << mode
+                    << " cmake --build --preset " << quote(runPreset) << " --target run";
+
                 if (opt.jobs > 0)
                     oss << " -- -j " << opt.jobs;
 #endif

@@ -397,6 +397,22 @@ namespace vix::commands::RunCommand::detail
             level = "debug";
         }
 
+        if (level == "unset" || level == "off" || level == "none")
+        {
+#if defined(_WIN32)
+            _putenv_s("VIX_LOG_LEVEL", "");
+#else
+            ::unsetenv("VIX_LOG_LEVEL");
+#endif
+            return;
+        }
+
+        // ON = default logs
+        if (level == "on")
+        {
+            level = "debug";
+        }
+
         if (level.empty())
             return;
 

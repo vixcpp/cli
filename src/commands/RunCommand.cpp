@@ -32,7 +32,6 @@ namespace
         void start(const std::string &text)
         {
             bool expected = false;
-            // Si déjà en cours → ne pas relancer un 2e thread
             if (!running.compare_exchange_strong(expected, true,
                                                  std::memory_order_acq_rel))
                 return;
@@ -40,7 +39,6 @@ namespace
             worker = std::thread(
                 [this, text]()
                 {
-                    // Frames style Vite / npm
                     static const char *frames[] = {
                         "⠋", "⠙", "⠹", "⠸",
                         "⠼", "⠴", "⠦", "⠧",
@@ -51,15 +49,12 @@ namespace
 
                     while (running.load(std::memory_order_relaxed))
                     {
-                        // Ligne unique, réécrite avec \r
                         std::cout << "\r┃   " << frames[idx] << " " << text << "   "
                                   << std::flush;
 
                         idx = (idx + 1) % frameCount;
                         std::this_thread::sleep_for(std::chrono::milliseconds(80));
                     }
-
-                    // On ne met pas de \n ici, stop() s'en chargera.
                 });
         }
 
@@ -72,7 +67,6 @@ namespace
             if (worker.joinable())
                 worker.join();
 
-            // efface proprement + remet au début + saute UNE ligne
             std::cout << "\r" << std::string(80, ' ') << "\r" << std::flush;
         }
 
@@ -103,7 +97,6 @@ namespace
             currentLabel = label;
             phaseStart = Clock::now();
 
-            // Un seul saut de ligne juste avant CHAQUE phase
             std::cout << std::endl;
 
             info("┏ [" + std::to_string(current) + "/" +
@@ -136,7 +129,6 @@ namespace
             oss << std::fixed << std::setprecision(2) << seconds;
             msg += " (" + oss.str() + "s)";
 
-            // plus de std::cout << "\n" ici
             success(msg);
         }
     };
@@ -156,8 +148,6 @@ namespace vix::commands::RunCommand
 
     static void ensure_mode_env_for_run(const Options &opt)
     {
-        // If DevCommand already set VIX_MODE, keep it.
-        // Otherwise: watch => dev, else run.
         const char *cur = std::getenv("VIX_MODE");
         if (cur && *cur)
             return;
@@ -175,6 +165,8 @@ namespace vix::commands::RunCommand
 
         ensure_mode_env_for_run(opt);
         enable_line_buffered_stdout_for_apps();
+
+        apply_log_level_env(opt);
 
 #ifndef _WIN32
         ::setenv("VIX_CLI_CLEAR", opt.clearMode.c_str(), 1);
@@ -206,13 +198,9 @@ namespace vix::commands::RunCommand
 
         const fs::path projectDir = *projectDirOpt;
 
-        apply_log_level_env(opt);
-
         info("Using project directory:");
         step(projectDir.string());
 
-        // Project mode + watch → we go DIRECTLY through run_project_watch,
-        // even if CMakePresets.json exists (we use a dedicated dev build).
         if (!opt.singleCpp && opt.watch)
         {
 #ifndef _WIN32
@@ -222,12 +210,8 @@ namespace vix::commands::RunCommand
 #endif
         }
 
-        // 3) If we are not in watch mode → continue with the existing logic
-
-        // ----- CAS 1 : Presets -----
         if (has_presets(projectDir))
         {
-            // We have two main phases with presets: configure + build&run
             RunProgress progress(/*totalSteps=*/2);
 
             // 1) Configure
@@ -539,27 +523,33 @@ namespace vix::commands::RunCommand
         out << "  with the selected preset, and finally executes the resulting binary.\n\n";
 
         out << "Options:\n";
-        out << "  -d, --dir <path>        Explicit project directory\n";
-        out << "  --preset <name>         Configure preset (CMakePresets.json), default: dev-ninja\n";
-        out << "  --run-preset <name>     Build preset used to build target 'run'\n";
-        out << "  -j, --jobs <n>          Number of parallel build jobs\n";
-        out << "  --clear <auto|always|never>  Control terminal clearing before runtime output (default: auto)\n";
-        out << "  --clear=auto|always|never    Same as above\n";
-        out << "  --no-clear                   Alias for --clear=never\n";
+        out << "  -d, --dir <path>              Explicit project directory\n";
+        out << "  --preset <name>               Configure preset (CMakePresets.json), default: dev-ninja\n";
+        out << "  --run-preset <name>           Build preset used to build target 'run'\n";
+        out << "  -j, --jobs <n>                Number of parallel build jobs\n";
+        out << "  --clear <auto|always|never>   Control terminal clearing before runtime output (default: auto)\n";
+        out << "  --clear=auto|always|never     Same as above\n";
+        out << "  --no-clear                    Alias for --clear=never\n\n";
 
         out << "Watch / process mode:\n";
-        out << "  --watch, --reload       Rebuild & restart on file changes (hot reload)\n";
-        out << "  --force-server          Force server-like mode (long-lived process)\n";
-        out << "  --force-script          Force script-like mode (short-lived process)\n\n";
+        out << "  --watch, --reload             Rebuild & restart on file changes (hot reload)\n";
+        out << "  --force-server                Force server-like mode (long-lived process)\n";
+        out << "  --force-script                Force script-like mode (short-lived process)\n\n";
 
         out << "Sanitizers (script mode only):\n";
-        out << "  --san                   Enable ASan + UBSan for single-file .cpp scripts\n";
-        out << "  --ubsan                 Enable UBSan only for single-file .cpp scripts\n\n";
+        out << "  --san                         Enable ASan + UBSan for single-file .cpp scripts\n";
+        out << "  --ubsan                       Enable UBSan only for single-file .cpp scripts\n\n";
 
-        out << "Global flags (from `vix`):\n";
-        out << "  --verbose               Show debug logs from the runtime (log-level=debug)\n";
-        out << "  -q, --quiet             Only show warnings and errors (log-level=warn)\n";
-        out << "  --log-level <level>     Set runtime log-level for the app process\n\n";
+        out << "Logging:\n";
+        out << "  --log-level <level>           Set runtime log level\n";
+        out << "                               Levels: debug | info | warn | error\n";
+        out << "                               Aliases:\n";
+        out << "                                 on      -> info\n";
+        out << "                                 off     -> disable logs (unset VIX_LOG_LEVEL)\n";
+        out << "                                 none    -> disable logs\n";
+        out << "                                 unset   -> disable logs\n";
+        out << "  --verbose                     Shortcut for --log-level=debug\n";
+        out << "  -q, --quiet                   Shortcut for --log-level=warn\n\n";
 
         out << "Examples:\n";
         out << "  vix run\n";
@@ -574,8 +564,9 @@ namespace vix::commands::RunCommand
         out << "  vix run main.cpp --san            # script with ASan+UBSan\n";
         out << "  vix run main.cpp --ubsan          # script with UBSan only\n\n";
 
-        out << "  vix --log-level debug run api     # run with debug logs from runtime\n";
-        out << "  vix --quiet run api               # minimal logs from runtime\n";
+        out << "  vix --log-level debug run api     # run with debug logs\n";
+        out << "  vix run api --log-level=off       # disable runtime logs\n";
+        out << "  vix run api --log-level=on        # enable normal logs (info)\n";
 
         return 0;
     }

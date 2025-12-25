@@ -360,7 +360,6 @@ namespace vix::commands::RunCommand::detail
 #endif
 
 #ifndef _WIN32
-        // Apply runtime env (more reliable than trying to set it in CMake)
         apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
         auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", true);
@@ -578,7 +577,6 @@ namespace vix::commands::RunCommand::detail
         hint("Watching: " + script.string());
 
 #ifdef _WIN32
-        // Fallback simple sur Windows : on garde run_single_cpp
         while (true)
         {
             const auto start = Clock::now();
@@ -608,7 +606,6 @@ namespace vix::commands::RunCommand::detail
                 hint("Fix the errors, save the file, and Vix will rebuild automatically.");
             }
 
-            // Ici on ne spam plus “Watching...” : on attend juste un changement
             for (;;)
             {
                 std::this_thread::sleep_for(500ms);
@@ -623,8 +620,8 @@ namespace vix::commands::RunCommand::detail
                 if (nowWrite != lastWrite)
                 {
                     lastWrite = nowWrite;
-                    print_watch_restart_banner(script);
-                    break; // relancer run_single_cpp
+                    print_watch_restart_banner(script, "Rebuilding script...");
+                    break;
                 }
             }
         }
@@ -634,11 +631,12 @@ namespace vix::commands::RunCommand::detail
 #else
         while (true)
         {
-            // 1) Build exécutable (cache CMake réutilisé → rapide)
+            // 1) Build
             fs::path exePath;
             int buildCode = build_script_executable(opt, exePath);
             if (buildCode != 0)
             {
+                watch_spinner_stop();
                 const std::string label = kind_label(dynamicServerLike);
 
                 error("Last " + label + " build failed (exit code " +
@@ -659,42 +657,65 @@ namespace vix::commands::RunCommand::detail
                     if (nowWrite != lastWrite)
                     {
                         lastWrite = nowWrite;
-                        print_watch_restart_banner(script);
+                        print_watch_restart_banner(script, "Rebuilding script...");
                         break;
                     }
                 }
                 continue;
             }
 
-            // 2) Lancer le process (serveur ou script) dans un enfant
             const auto childStart = Clock::now();
+
+            int gate[2] = {-1, -1};
+            if (::pipe(gate) != 0)
+            {
+                error("Failed to create restart gate pipe.");
+                return 1;
+            }
 
             pid_t pid = fork();
             if (pid < 0)
             {
                 error("Failed to fork() for dev process.");
+                ::close(gate[0]);
+                ::close(gate[1]);
                 return 1;
             }
 
             if (pid == 0)
             {
                 // ===== ENFANT =====
+                ::close(gate[1]);
+
+                char b = 0;
+                const ssize_t n = ::read(gate[0], &b, 1);
+                if (n < 0)
+                {
+                    std::cerr << "[vix][dev] gate read failed: " << std::strerror(errno) << "\n";
+                    ::close(gate[0]);
+                    _exit(127);
+                }
+                ::close(gate[0]);
+
                 ::setenv("VIX_STDOUT_MODE", "line", 1);
                 ::setenv("VIX_MODE", "dev", 1);
 
-                apply_sanitizer_env_if_needed(opt.enableSanitizers,
-                                              opt.enableUbsanOnly);
+                apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
                 const std::string exeStr = exePath.string();
                 const char *argv0 = exeStr.c_str();
 
-                execl(argv0, argv0, (char *)nullptr);
+                ::execl(argv0, argv0, (char *)nullptr);
                 _exit(127);
             }
 
             // ===== PARENT =====
+            ::close(gate[0]);
+
             bool needRestart = false;
             bool running = true;
+
+            watch_spinner_stop();
 
             {
                 const bool isServer = final_is_server(dynamicServerLike);
@@ -704,28 +725,29 @@ namespace vix::commands::RunCommand::detail
                      " started (pid=" + std::to_string(pid) + ")");
             }
 
+            const ssize_t w = ::write(gate[1], "1", 1);
+            if (w < 0)
+            {
+                error(std::string("restart gate write failed: ") + std::strerror(errno));
+            }
+            ::close(gate[1]);
+
             while (running)
             {
                 std::this_thread::sleep_for(300ms);
 
-                // 2.a Vérifier si le script a changé → déclenche un restart
                 auto nowWrite = fs::last_write_time(script, ec);
                 if (!ec && nowWrite != lastWrite)
                 {
                     lastWrite = nowWrite;
-
-                    // CLEAR + bannière de restart
-                    print_watch_restart_banner(script);
-
+                    print_watch_restart_banner(script, "Rebuilding script...");
                     needRestart = true;
 
                     if (kill(pid, SIGINT) != 0)
                     {
-                        // peut-être déjà fini, on ignore
                     }
                 }
 
-                // 2.b Vérifier si le process est terminé
                 int status = 0;
                 pid_t r = waitpid(pid, &status, WNOHANG);
                 if (r == pid)
@@ -772,7 +794,6 @@ namespace vix::commands::RunCommand::detail
                               " (lifetime ~" + std::to_string(ms) + "ms).");
                     }
 
-                    // Après sortie “normale”, on reste en attente silencieuse jusqu’à la prochaine modif
                     for (;;)
                     {
                         std::this_thread::sleep_for(500ms);
@@ -787,13 +808,12 @@ namespace vix::commands::RunCommand::detail
                         if (now2 != lastWrite)
                         {
                             lastWrite = now2;
-                            // CLEAR + bannière de restart
-                            print_watch_restart_banner(script);
+                            print_watch_restart_banner(script, "Rebuilding script...");
                             break;
                         }
                     }
 
-                    break; // retour en haut du while(true) → rebuild + relaunch
+                    break;
                 }
             }
         }
@@ -895,7 +915,7 @@ namespace vix::commands::RunCommand::detail
 
             // 2) Build
             {
-                info("Building project (dev mode, build-dev/).");
+                watch_spinner_start("Rebuilding project...");
 
                 std::ostringstream oss;
                 oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
@@ -906,6 +926,8 @@ namespace vix::commands::RunCommand::detail
 
                 int code = 0;
                 std::string buildLog = run_and_capture_with_code(cmd, code);
+
+                watch_spinner_pause_for_output();
 
                 if (code != 0)
                 {
@@ -933,7 +955,7 @@ namespace vix::commands::RunCommand::detail
                         if (!loopEc && nowStamp != lastStamp)
                         {
                             lastStamp = nowStamp;
-                            print_watch_restart_banner(projectDir);
+                            print_watch_restart_banner(projectDir, "Rebuilding project...");
                             break;
                         }
                     }
@@ -973,7 +995,6 @@ namespace vix::commands::RunCommand::detail
                 // chdir
                 if (::chdir(buildDir.string().c_str()) != 0)
                 {
-                    // (si tu as un logger dans ce fichier, utilise-le, sinon stderr)
                     std::cerr << "[vix][run] chdir failed: " << std::strerror(errno) << "\n";
                     _exit(127);
                 }
@@ -988,13 +1009,13 @@ namespace vix::commands::RunCommand::detail
                 const std::string exeStr = exePath.string();
                 const char *argv0 = exeStr.c_str();
 
-                // execl (si ça retourne, c'est un échec)
                 ::execl(argv0, argv0, (char *)nullptr);
 
                 std::cerr << "[vix][run] execl failed: " << std::strerror(errno) << "\n";
                 _exit(127);
             }
 
+            watch_spinner_pause_for_output();
             success("PID " + std::to_string(pid));
 
             bool needRestart = false;
@@ -1010,12 +1031,11 @@ namespace vix::commands::RunCommand::detail
                 if (!loopEc && nowStamp != lastStamp)
                 {
                     lastStamp = nowStamp;
-                    print_watch_restart_banner(projectDir);
+                    print_watch_restart_banner(projectDir, "Rebuilding project...");
                     needRestart = true;
 
                     if (::kill(pid, SIGINT) != 0)
                     {
-                        // peut-être déjà mort
                     }
                 }
 

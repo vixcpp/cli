@@ -3,6 +3,9 @@
 
 #include <iostream>
 #include <cstdlib>
+#include <atomic>
+#include <thread>
+#include <chrono>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -12,14 +15,101 @@ using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
 {
-    void print_watch_restart_banner(const fs::path &script)
+    namespace
+    {
+        struct WatchSpinner
+        {
+            std::atomic<bool> running{false};
+            std::thread worker;
+
+            void start(std::string label)
+            {
+                bool expected = false;
+                if (!running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+                    return;
+
+                worker = std::thread([this, label = std::move(label)]()
+                                     {
+                    static const char *frames[] = {"⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"};
+                    constexpr std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
+
+                    std::size_t i = 0;
+                    while (running.load(std::memory_order_relaxed))
+                    {
+                        std::cout << "\r┃   " << frames[i] << " " << label << "   " << std::flush;
+                        i = (i + 1) % frameCount;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                    } });
+            }
+
+            void stop()
+            {
+                bool expected = true;
+                if (!running.compare_exchange_strong(expected, false))
+                    return;
+
+                if (worker.joinable())
+                    worker.join();
+
+                std::cout << "\r" << std::string(120, ' ') << "\r" << std::flush;
+            }
+
+            ~WatchSpinner()
+            {
+                stop();
+            }
+        };
+
+        WatchSpinner g_watch_spinner;
+    }
+
+    void watch_spinner_start(std::string label)
+    {
+        g_watch_spinner.start(std::move(label));
+    }
+
+    void watch_spinner_stop()
+    {
+        g_watch_spinner.stop();
+    }
+
+    void watch_spinner_pause_for_output()
+    {
+        watch_spinner_stop();
+    }
+
+    namespace
+    {
+        struct WatchSpinnerScope
+        {
+            explicit WatchSpinnerScope(std::string label)
+            {
+                watch_spinner_start(std::move(label));
+            }
+            ~WatchSpinnerScope()
+            {
+                watch_spinner_stop();
+            }
+        };
+    }
+
+    void print_watch_restart_banner(const fs::path &path, std::string_view label)
     {
 #ifdef _WIN32
         std::system("cls");
 #else
         std::cout << "\x1b[2J\x1b[H" << std::flush;
 #endif
-        info(std::string("Watcher Restarting! File change detected: \"") + script.string() + "\"");
+
+        info(std::string("Watcher Restarting! File change detected: \"") + path.string() + "\"");
+
+        std::cout << "\n"
+                  << std::flush;
+
+        if (label.empty())
+            label = "Rebuilding & restarting...";
+
+        watch_spinner_start(std::string(label));
     }
 
     std::string sanitizer_mode_string(bool /*enableSanitizers*/, bool enableUbsanOnly)
@@ -69,4 +159,5 @@ namespace vix::commands::RunCommand::detail
         }
     }
 #endif
-}
+
+} // namespace vix::commands::RunCommand::detail

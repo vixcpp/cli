@@ -35,6 +35,8 @@ namespace vix::commands::RunCommand::detail
         bool forceScriptLike = false;  // --force-script
         bool enableSanitizers = false; // --san  (ASan+UBSan)
         bool enableUbsanOnly = false;  // --ubsan (UBSan only)
+
+        std::string clearMode = "auto";
     };
 
     // Process / IO

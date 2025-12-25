@@ -90,14 +90,24 @@ namespace vix::commands::RunCommand::detail
                 }
             };
 
+            // Legacy runtime markers
             update_min(buffer_.find("[I]"));
             update_min(buffer_.find("[W]"));
             update_min(buffer_.find("[E]"));
             update_min(buffer_.find("Using configuration file:"));
 
+            // ✅ New server banner markers (Vix READY block)
+            update_min(buffer_.find("● VIX"));
+            update_min(buffer_.find("VIX   READY"));
+            update_min(buffer_.find("› HTTP:"));
+            update_min(buffer_.find("› WS:"));
+            update_min(buffer_.find("i Threads:"));
+            update_min(buffer_.find("i Mode:"));
+            update_min(buffer_.find("i Status:"));
+            update_min(buffer_.find("Vix.cpp v"));
+
             if (first == std::string::npos)
             {
-                // flush build prefix progressively (keep a small tail)
                 std::string prefix = flush_prefix_if_needed();
                 if (!prefix.empty())
                 {
@@ -108,22 +118,33 @@ namespace vix::commands::RunCommand::detail
                 return {};
             }
 
-            // switch to runtime-only mode
             clearedForRuntime_ = true;
-
             buffer_.erase(0, first);
+            // clear terminal (policy: auto|always|never)
+            auto should_clear = []() -> bool
+            {
+                const char *mode = std::getenv("VIX_CLI_CLEAR");
+                if (!mode || !*mode)
+                    mode = "auto";
 
-            // clear terminal
-            const char *clearScreen = "\033[2J\033[H";
-            write_safe(STDOUT_FILENO, clearScreen,
-                       static_cast<ssize_t>(std::strlen(clearScreen)));
+                if (std::strcmp(mode, "never") == 0)
+                    return false;
 
-            // header (vite-ish)
-            std::string header;
-            header += "Vix.cpp runtime is ready 🚀\n\n";
-            header += "Logs:\n\n";
-            write_safe(STDOUT_FILENO, header.c_str(),
-                       static_cast<ssize_t>(header.size()));
+#ifndef _WIN32
+                if (std::strcmp(mode, "auto") == 0)
+                    return ::isatty(STDOUT_FILENO) != 0; // only clear when in a real terminal
+#endif
+
+                // "always" OR fallback
+                return true;
+            };
+
+            if (should_clear())
+            {
+                const char *clearScreen = "\033[2J\033[H";
+                write_safe(STDOUT_FILENO, clearScreen,
+                           static_cast<ssize_t>(std::strlen(clearScreen)));
+            }
 
             std::string out = buffer_;
             buffer_.clear();

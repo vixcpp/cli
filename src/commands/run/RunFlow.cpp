@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cctype>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -118,6 +119,19 @@ namespace vix::commands::RunCommand::detail
                 o.enableSanitizers = false;
             }
 
+            else if (a == "--clear" && i + 1 < args.size())
+            {
+                o.clearMode = args[++i];
+            }
+            else if (a.rfind("--clear=", 0) == 0)
+            {
+                o.clearMode = a.substr(std::string("--clear=").size());
+            }
+            else if (a == "--no-clear")
+            {
+                o.clearMode = "never";
+            }
+
             else if (!a.empty() && a != "--" && a[0] != '-')
             {
                 if (o.appName.empty())
@@ -146,6 +160,15 @@ namespace vix::commands::RunCommand::detail
             hint("Both --force-server and --force-script were provided; "
                  "preferring --force-server.");
             o.forceScriptLike = false;
+        }
+
+        // normalize clearMode
+        for (auto &c : o.clearMode)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (o.clearMode != "auto" && o.clearMode != "always" && o.clearMode != "never")
+        {
+            hint("Invalid value for --clear. Using 'auto'. Valid: auto|always|never.");
+            o.clearMode = "auto";
         }
 
         return o;

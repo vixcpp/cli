@@ -176,6 +176,12 @@ namespace vix::commands::RunCommand
         ensure_mode_env_for_run(opt);
         enable_line_buffered_stdout_for_apps();
 
+#ifndef _WIN32
+        ::setenv("VIX_CLI_CLEAR", opt.clearMode.c_str(), 1);
+#else
+        _putenv_s("VIX_CLI_CLEAR", opt.clearMode.c_str());
+#endif
+
         // 1) Mode single .cpp (scripts)
         if (opt.singleCpp && opt.watch)
         {
@@ -536,7 +542,10 @@ namespace vix::commands::RunCommand
         out << "  -d, --dir <path>        Explicit project directory\n";
         out << "  --preset <name>         Configure preset (CMakePresets.json), default: dev-ninja\n";
         out << "  --run-preset <name>     Build preset used to build target 'run'\n";
-        out << "  -j, --jobs <n>          Number of parallel build jobs\n\n";
+        out << "  -j, --jobs <n>          Number of parallel build jobs\n";
+        out << "  --clear <auto|always|never>  Control terminal clearing before runtime output (default: auto)\n";
+        out << "  --clear=auto|always|never    Same as above\n";
+        out << "  --no-clear                   Alias for --clear=never\n";
 
         out << "Watch / process mode:\n";
         out << "  --watch, --reload       Rebuild & restart on file changes (hot reload)\n";

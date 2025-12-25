@@ -51,10 +51,11 @@ namespace vix::cli::repl
     void clear_screen()
     {
 #if defined(_WIN32)
-        std::system("cls");
+        const int rc = std::system("cls");
 #else
-        std::system("clear");
+        const int rc = std::system("clear");
 #endif
+        (void)rc; // silence -Wunused-result / warn_unused_result
     }
 
     // Quote-aware split

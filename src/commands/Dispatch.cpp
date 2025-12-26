@@ -9,6 +9,7 @@
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 
 #include <stdexcept>
 
@@ -102,6 +103,13 @@ namespace vix::cli::dispatch
              { return vix::commands::VerifyCommand::run(a); },
              []()
              { return vix::commands::VerifyCommand::help(); }});
+        add({"install",
+             "Packaging",
+             "Install a package into the local store",
+             [](const Args &a)
+             { return vix::commands::InstallCommand::run(a); },
+             []()
+             { return vix::commands::InstallCommand::help(); }});
     }
 
     bool Dispatcher::has(const std::string &cmd) const

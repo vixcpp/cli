@@ -67,6 +67,7 @@
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -182,6 +183,8 @@ namespace vix
         { return commands::TestsCommand::run(args); };
         commands_["repl"] = [](auto args)
         { return commands::ReplCommand::run(args); };
+        commands_["install"] = [](auto args)
+        { return commands::InstallCommand::run(args); };
 
         // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
@@ -232,7 +235,6 @@ namespace vix
         {
             std::string arg = argv[index];
 
-            // ✅ global help/version should still work
             if (arg == "-h" || arg == "--help")
                 return help({});
 
@@ -360,6 +362,8 @@ namespace vix
                 return commands::TestsCommand::help();
             if (cmd == "repl")
                 return commands::ReplCommand::help();
+            if (cmd == "install")
+                return commands::InstallCommand::help();
         }
 
 #ifndef VIX_CLI_VERSION
@@ -394,12 +398,13 @@ namespace vix
         out << indent(3) << "run   [name] [--args]    Build (if needed) then run\n";
         out << indent(3) << "dev   [name]             Dev mode (watch, rebuild, reload)\n";
         out << indent(3) << "check [path]             Validate a project or compile a single .cpp (no execution)\n";
-        out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n\n";
-        out << indent(3) << "repl                      Start interactive Vix REPL\n";
+        out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n";
+        out << indent(3) << "repl                      Start interactive Vix REPL\n\n";
 
         out << indent(2) << "Packaging & security:\n";
         out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";
         out << indent(3) << "verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n\n";
+        out << indent(3) << "install [options]        Install dist/<name>@<version> or a .vixpkg into the local store\n";
 
         out << indent(2) << "Database (ORM):\n";
         out << indent(3) << "orm <subcommand>         Migrations/status/rollback\n\n";
@@ -420,12 +425,25 @@ namespace vix
         out << indent(2) << "VIX_MINISIGN_SECKEY=path Secret key used by `vix pack` to sign payload.digest\n";
         out << indent(2) << "VIX_MINISIGN_PUBKEY=path Public key used by `vix verify` if --pubkey not provided\n\n";
 
-        out << indent(1) << "Examples:\n";
+        out << indent(1) << "Tip:\n";
+        hint("Most examples can be run directly with `vix run <file>.cpp`.");
+        out << "\n";
+        section_title(out, "Examples:");
+        dim_note(out, "Run a single C++ file (script mode)");
+        out << indent(2) << "vix run server.cpp\n\n";
+        dim_note(out, "Dev mode (watch, rebuild, reload)");
+        out << indent(2) << "vix dev\n\n";
+        dim_note(out, "Minimal HTTP server");
+        out << indent(2) << "vix run examples/http_basic.cpp\n\n";
+        dim_note(out, "Middleware examples");
+        out << indent(2) << "vix run examples/jwt_app_simple.cpp\n";
+        out << indent(2) << "vix run examples/api_key_app_simple.cpp\n";
+        out << indent(2) << "vix run examples/http_cache_app.cpp\n\n";
+        dim_note(out, "Package & verify an app");
         out << indent(2) << "vix pack --name blog --version 1.0.0\n";
-        out << indent(2) << "vix pack --verbose               # show minisign prompt/output\n";
-        out << indent(2) << "vix verify --require-signature\n";
-        out << indent(2) << "vix help verify\n\n";
-
+        out << indent(2) << "vix verify --require-signature\n\n";
+        dim_note(out, "Help for a command");
+        out << indent(2) << "vix help run\n";
         out << indent(1);
         section_title(out, "Links:");
         out << indent(2) << "GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";

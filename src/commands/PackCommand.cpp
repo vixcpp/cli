@@ -1036,6 +1036,28 @@ namespace vix::commands::PackCommand
 
             // 2) Copy README
             copy_readme_if_exists(projectDir, packRoot);
+            // 1bis) Copy project root files (for vix run <folder>)
+            if (has_file(projectDir / "CMakeLists.txt"))
+            {
+                fs::copy_file(
+                    projectDir / "CMakeLists.txt",
+                    packRoot / "CMakeLists.txt",
+                    fs::copy_options::overwrite_existing);
+
+                if (opt.verbose)
+                    vix::cli::style::step("copied: CMakeLists.txt");
+            }
+
+            if (has_file(projectDir / "CMakePresets.json"))
+            {
+                fs::copy_file(
+                    projectDir / "CMakePresets.json",
+                    packRoot / "CMakePresets.json",
+                    fs::copy_options::overwrite_existing);
+
+                if (opt.verbose)
+                    vix::cli::style::step("copied: CMakePresets.json");
+            }
 
 #ifndef _WIN32
             // 3) payload digest + signature
@@ -1138,7 +1160,10 @@ namespace vix::commands::PackCommand
             if (!opt.noHash)
                 write_checksums_sha256_posix_excluding_self_and_manifest(packRoot);
 
-            // 5) zip artifact (optional)
+            // 5) manifest v2 (write BEFORE zip, so it's included)
+            write_manifest_v2(packRoot, projectDir, name, version, /*artifactPathOpt*/ std::nullopt, payloadDigest, signatureOk);
+
+            // 6) zip artifact (optional)
             std::optional<fs::path> artifactPath;
 
             if (!opt.noZip)

@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <algorithm>
 
 #ifndef _WIN32
 #include <cctype>   // std::isspace
@@ -52,6 +53,29 @@ namespace
     {
         std::error_code ec;
         return fs::exists(p, ec) && fs::is_regular_file(p, ec);
+    }
+    static void try_fix_pack_root_single_subdir(fs::path &root)
+    {
+        // If manifest is already at root, nothing to do.
+        if (has_file(root / "manifest.json"))
+            return;
+
+        std::error_code ec;
+        std::vector<fs::path> dirs;
+
+        for (const auto &e : fs::directory_iterator(root, ec))
+        {
+            if (ec)
+                break;
+
+            std::error_code ec2;
+            if (e.is_directory(ec2))
+                dirs.push_back(e.path());
+        }
+
+        // If the zip extracted to a single folder, use it as the pack root.
+        if (dirs.size() == 1 && has_file(dirs[0] / "manifest.json"))
+            root = dirs[0];
     }
 
     bool has_dir(const fs::path &p)
@@ -684,6 +708,16 @@ namespace
             }
         }
 
+        for (auto &ex : excludes)
+        {
+            ex = trim_copy(ex);
+            if (!ex.empty() && !starts_with(ex, "./"))
+                ex = "./" + ex;
+        }
+
+        std::sort(excludes.begin(), excludes.end());
+        excludes.erase(std::unique(excludes.begin(), excludes.end()), excludes.end());
+
         // 3) Compute digest from current payload
         const std::string listing = build_sha256_listing_posix(packRoot, excludes);
         if (listing.empty())
@@ -904,6 +938,7 @@ namespace vix::commands::VerifyCommand
         try
         {
             packRoot = resolve_pack_root_from_input(input, tmp);
+            try_fix_pack_root_single_subdir(packRoot);
         }
         catch (const std::exception &ex)
         {

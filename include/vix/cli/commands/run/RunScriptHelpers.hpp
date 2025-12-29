@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace vix::commands::RunCommand::detail
 {
@@ -12,9 +13,12 @@ namespace vix::commands::RunCommand::detail
     void print_watch_restart_banner(const fs::path &path, std::string_view label);
     std::string sanitizer_mode_string(bool enableSanitizers, bool enableUbsanOnly);
     bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly);
-    std::string make_script_config_signature(bool useVixRuntime,
-                                             bool enableSanitizers,
-                                             bool enableUbsanOnly);
+    std::string make_script_config_signature(
+        bool useVixRuntime,
+        bool enableSanitizers,
+        bool enableUbsanOnly,
+        const std::vector<std::string> &scriptFlags);
+
     void watch_spinner_start(std::string label);
     void watch_spinner_stop();
     void watch_spinner_pause_for_output();

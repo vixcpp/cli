@@ -58,7 +58,13 @@ namespace vix::commands::RunCommand::detail
         {
             const auto &a = args[i];
 
-            // --- Options spécifiques à run ---
+            if (a == "--")
+            {
+                for (size_t j = i + 1; j < args.size(); ++j)
+                    o.scriptFlags.push_back(args[j]);
+                break;
+            }
+
             if (a == "--preset" && i + 1 < args.size())
             {
                 o.preset = args[++i];
@@ -132,7 +138,7 @@ namespace vix::commands::RunCommand::detail
                 o.clearMode = "never";
             }
 
-            else if (!a.empty() && a != "--" && a[0] != '-')
+            else if (!a.empty() && a[0] != '-')
             {
                 if (o.appName.empty())
                 {

@@ -122,15 +122,31 @@ namespace vix::commands::RunCommand::detail
         return enableSanitizers || enableUbsanOnly;
     }
 
-    std::string make_script_config_signature(bool useVixRuntime,
-                                             bool enableSanitizers,
-                                             bool enableUbsanOnly)
+    std::string make_script_config_signature(
+        bool useVixRuntime,
+        bool enableSanitizers,
+        bool enableUbsanOnly,
+        const std::vector<std::string> &scriptFlags)
     {
         std::string sig;
-        sig.reserve(64);
-        sig += "useVix=" + std::string(useVixRuntime ? "1" : "0");
-        sig += ";san=" + std::string(want_sanitizers(enableSanitizers, enableUbsanOnly) ? "1" : "0");
-        sig += ";mode=" + sanitizer_mode_string(enableSanitizers, enableUbsanOnly);
+        sig.reserve(128);
+
+        sig += "useVix=";
+        sig += useVixRuntime ? "1" : "0";
+
+        sig += ";san=";
+        sig += want_sanitizers(enableSanitizers, enableUbsanOnly) ? "1" : "0";
+
+        sig += ";mode=";
+        sig += sanitizer_mode_string(enableSanitizers, enableUbsanOnly);
+
+        sig += ";flags=";
+        for (const auto &f : scriptFlags)
+        {
+            sig += f;
+            sig += ",";
+        }
+
         return sig;
     }
 

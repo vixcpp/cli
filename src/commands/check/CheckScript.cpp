@@ -80,8 +80,7 @@ namespace vix::commands::CheckCommand::detail
         fs::path cmakeLists = projectDir / "CMakeLists.txt";
         const bool useVixRuntime = run::script_uses_vix(script);
 
-        // Generate script project CMakeLists.txt
-        if (!write_file_or_report(cmakeLists, run::make_script_cmakelists(exeName, script, useVixRuntime)))
+        if (!write_file_or_report(cmakeLists, run::make_script_cmakelists(exeName, script, useVixRuntime, /*scriptFlags=*/{})))
             return 1;
 
         fs::path buildDir = projectDir / "build";
@@ -90,7 +89,8 @@ namespace vix::commands::CheckCommand::detail
         const bool enableUbsanOnly = opt.enableUbsanOnly;
 
         const std::string sig =
-            run::make_script_config_signature(useVixRuntime, enableSan, enableUbsanOnly);
+            run::make_script_config_signature(useVixRuntime, enableSan, enableUbsanOnly, /*scriptFlags=*/{});
+        ;
 
         bool needConfigure = true;
         {
@@ -103,7 +103,6 @@ namespace vix::commands::CheckCommand::detail
             }
         }
 
-        // Configure (only if needed)
         if (needConfigure)
         {
             std::ostringstream oss;
@@ -119,7 +118,6 @@ namespace vix::commands::CheckCommand::detail
                 oss << " -DVIX_ENABLE_SANITIZERS=OFF";
             }
 
-            // Keep output clean for "check" (build output is captured in build.log below)
             oss << null_redirect();
 
             const int code = run::normalize_exit_code(std::system(oss.str().c_str()));
@@ -133,7 +131,6 @@ namespace vix::commands::CheckCommand::detail
             (void)text::write_text_file(sigFile, sig);
         }
 
-        // Build only, capture output into build.log
         fs::path logPath = projectDir / "build.log";
 
         std::ostringstream b;

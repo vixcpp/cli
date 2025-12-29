@@ -37,6 +37,7 @@ namespace vix::commands::RunCommand::detail
         bool enableUbsanOnly = false;  // --ubsan (UBSan only)
 
         std::string clearMode = "auto";
+        std::vector<std::string> scriptFlags;
     };
 
     // Process / IO
@@ -85,9 +86,11 @@ namespace vix::commands::RunCommand::detail
     /// 🔹 Detect whether a .cpp script depends on Vix runtime
     bool script_uses_vix(const std::filesystem::path &cppPath);
 
-    std::string make_script_cmakelists(const std::string &exeName,
-                                       const std::filesystem::path &cppPath,
-                                       bool useVixRuntime);
+    std::string make_script_cmakelists(
+        const std::string &exeName,
+        const fs::path &cppPath,
+        bool useVixRuntime,
+        const std::vector<std::string> &scriptFlags);
 
     int run_single_cpp(const Options &opt);
     int run_single_cpp_watch(const Options &opt);

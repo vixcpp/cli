@@ -28,6 +28,37 @@ namespace vix::commands::RunCommand::detail
     namespace fs = std::filesystem;
     namespace text = vix::cli::commands::helpers;
 
+    struct ScriptLinkFlags
+    {
+        std::vector<std::string> libs;     // ssl, crypto
+        std::vector<std::string> libDirs;  // /usr/lib
+        std::vector<std::string> linkOpts; // -Wl,... autres
+    };
+
+    static ScriptLinkFlags parse_link_flags(const std::vector<std::string> &flags)
+    {
+        ScriptLinkFlags out;
+
+        for (const auto &f : flags)
+        {
+            if (f.rfind("-l", 0) == 0 && f.size() > 2)
+            {
+                out.libs.push_back(f.substr(2)); // -lssl -> "ssl"
+                continue;
+            }
+            if (f.rfind("-L", 0) == 0 && f.size() > 2)
+            {
+                out.libDirs.push_back(f.substr(2)); // -L/path -> "/path"
+                continue;
+            }
+
+            // tout le reste on le met en link options (ex: -Wl,...)
+            out.linkOpts.push_back(f);
+        }
+
+        return out;
+    }
+
     bool script_uses_vix(const fs::path &cppPath)
     {
         std::ifstream ifs(cppPath);
@@ -59,9 +90,11 @@ namespace vix::commands::RunCommand::detail
         return cwd / ".vix-scripts";
     }
 
-    std::string make_script_cmakelists(const std::string &exeName,
-                                       const fs::path &cppPath,
-                                       bool useVixRuntime)
+    std::string make_script_cmakelists(
+        const std::string &exeName,
+        const fs::path &cppPath,
+        bool useVixRuntime,
+        const std::vector<std::string> &scriptFlags)
     {
         std::string s;
         s.reserve(6200);
@@ -105,6 +138,31 @@ namespace vix::commands::RunCommand::detail
 
         // Executable
         s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
+        auto lf = parse_link_flags(scriptFlags);
+
+        if (!lf.libDirs.empty())
+        {
+            s += "target_link_directories(" + exeName + " PRIVATE\n";
+            for (const auto &d : lf.libDirs)
+                s += "  " + q(d) + "\n";
+            s += ")\n\n";
+        }
+
+        if (!lf.libs.empty())
+        {
+            s += "target_link_libraries(" + exeName + " PRIVATE\n";
+            for (const auto &L : lf.libs)
+                s += "  " + L + "\n"; // ssl crypto
+            s += ")\n\n";
+        }
+
+        if (!lf.linkOpts.empty())
+        {
+            s += "target_link_options(" + exeName + " PRIVATE\n";
+            for (const auto &o : lf.linkOpts)
+                s += "  " + o + "\n"; // ex: -Wl,--as-needed
+            s += ")\n\n";
+        }
 
         // Warnings
         s += "if (MSVC)\n";
@@ -237,13 +295,14 @@ namespace vix::commands::RunCommand::detail
 
         {
             ofstream ofs(cmakeLists);
-            ofs << make_script_cmakelists(exeName, script, useVixRuntime);
+            ofs << make_script_cmakelists(exeName, script, useVixRuntime, opt.scriptFlags);
         }
 
         fs::path buildDir = projectDir / "build";
         const fs::path sigFile = projectDir / ".vix-config.sig";
 
-        const std::string sig = make_script_config_signature(useVixRuntime, opt.enableSanitizers, opt.enableUbsanOnly);
+        const std::string sig = make_script_config_signature(
+            useVixRuntime, opt.enableSanitizers, opt.enableUbsanOnly, opt.scriptFlags);
 
         bool needConfigure = true;
         {
@@ -414,13 +473,13 @@ namespace vix::commands::RunCommand::detail
 
         {
             ofstream ofs(cmakeLists);
-            ofs << make_script_cmakelists(exeName, script, useVixRuntime);
+            ofs << make_script_cmakelists(exeName, script, useVixRuntime, opt.scriptFlags);
         }
 
         fs::path buildDir = projectDir / "build";
         const fs::path sigFile = projectDir / ".vix-config.sig";
-
-        const std::string sig = make_script_config_signature(useVixRuntime, opt.enableSanitizers, opt.enableUbsanOnly);
+        const std::string sig = make_script_config_signature(
+            useVixRuntime, opt.enableSanitizers, opt.enableUbsanOnly, opt.scriptFlags);
 
         bool needConfigure = true;
         {

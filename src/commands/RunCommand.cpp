@@ -515,7 +515,7 @@ namespace vix::commands::RunCommand
         std::ostream &out = std::cout;
 
         out << "Usage:\n";
-        out << "  vix run [name] [options] [-- app-args...]\n\n";
+        out << "  vix run [name|file.cpp] [options] [-- compiler/linker flags]\n\n";
 
         out << "Description:\n";
         out << "  Configure, build and run a Vix.cpp application using CMake presets.\n";
@@ -535,6 +535,14 @@ namespace vix::commands::RunCommand
         out << "  --watch, --reload             Rebuild & restart on file changes (hot reload)\n";
         out << "  --force-server                Force server-like mode (long-lived process)\n";
         out << "  --force-script                Force script-like mode (short-lived process)\n\n";
+
+        out << "Passing compiler / linker flags:\n";
+        out << "  Use `--` to separate Vix options from arguments passed to the compiler/linker.\n";
+        out << "  Everything after `--` is forwarded verbatim to the script build step.\n\n";
+        out << "  Examples:\n";
+        out << "    vix run main.cpp -- -lssl -lcrypto\n";
+        out << "    vix run main.cpp -- -L/usr/lib -lssl\n";
+        out << "    vix run main.cpp -- -DDEBUG\n\n";
 
         out << "Sanitizers (script mode only):\n";
         out << "  --san                         Enable ASan + UBSan for single-file .cpp scripts\n";
@@ -561,6 +569,7 @@ namespace vix::commands::RunCommand
         out << "  vix run example main              # in the umbrella repo, run ./build/main\n\n";
 
         out << "  vix run main.cpp                  # compile & run single-file script\n";
+        out << "  vix run main.cpp -- -lssl -lcrypto   # link against OpenSSL\n";
         out << "  vix run main.cpp --san            # script with ASan+UBSan\n";
         out << "  vix run main.cpp --ubsan          # script with UBSan only\n\n";
 

@@ -1033,6 +1033,7 @@ namespace vix::commands::PackCommand
             copy_tree_if_exists(projectDir / "src", packRoot / "src", opt.verbose);
             copy_tree_if_exists(projectDir / "lib", packRoot / "lib", opt.verbose);
             copy_tree_if_exists(projectDir / "modules", packRoot / "modules", opt.verbose);
+            copy_tree_if_exists(projectDir / "tests", packRoot / "tests", opt.verbose);
 
             // 2) Copy README
             copy_readme_if_exists(projectDir, packRoot);
@@ -1058,6 +1059,12 @@ namespace vix::commands::PackCommand
                 if (opt.verbose)
                     vix::cli::style::step("copied: CMakePresets.json");
             }
+
+            if (has_file(projectDir / "vix.toml"))
+                fs::copy_file(projectDir / "vix.toml", packRoot / "vix.toml", fs::copy_options::overwrite_existing);
+
+            if (has_file(projectDir / "LICENSE"))
+                fs::copy_file(projectDir / "LICENSE", packRoot / "LICENSE", fs::copy_options::overwrite_existing);
 
 #ifndef _WIN32
             // 3) payload digest + signature

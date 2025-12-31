@@ -7,8 +7,12 @@
 #include <vector>
 #include <optional>
 #include <sstream>
-#include <cstdio> // popen/pclose
+#include <fstream>
+#include <iostream>
 #include <algorithm>
+#include <map>
+
+#include <sys/wait.h>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -17,521 +21,857 @@ namespace vix::commands::BuildCommand
 {
     namespace
     {
-        // ---------------------------------------------------------------------
-        // Helpers
-        // ---------------------------------------------------------------------
-
-        std::optional<fs::path> find_vix_root(fs::path start)
+        // Platform helpers
+        static int normalize_exit_code(int raw) noexcept
         {
-            std::error_code ec;
+#ifdef __linux__
+            if (raw == -1)
+                return 127;
+            if (WIFEXITED(raw))
+                return WEXITSTATUS(raw);
+            if (WIFSIGNALED(raw))
+                return 128 + WTERMSIG(raw);
+            return raw;
+#else
+            return raw;
+#endif
+        }
+
+        static std::string quote(const std::string &s)
+        {
+            // POSIX shell single-quote safe quoting: ' -> '\'' sequence
+            if (s.empty())
+                return "''";
+
+            bool needs = false;
+            for (char c : s)
+            {
+                if (c == ' ' || c == '\t' || c == '\n' || c == '"' || c == '\'' ||
+                    c == '\\' || c == '$' || c == '`')
+                {
+                    needs = true;
+                    break;
+                }
+            }
+            if (!needs)
+                return s;
+
+            std::string out;
+            out.reserve(s.size() + 2);
+            out.push_back('\'');
+            for (char c : s)
+            {
+                if (c == '\'')
+                    out.append("'\\''");
+                else
+                    out.push_back(c);
+            }
+            out.push_back('\'');
+            return out;
+        }
+
+        static std::string infer_processor_from_triple(const std::string &triple)
+        {
+            // Examples:
+            //  - aarch64-linux-gnu -> aarch64
+            //  - arm-linux-gnueabihf -> arm
+            //  - x86_64-linux-gnu -> x86_64
+            //  - riscv64-linux-gnu -> riscv64
+            if (triple.rfind("aarch64", 0) == 0)
+                return "aarch64";
+            if (triple.rfind("arm", 0) == 0)
+                return "arm";
+            if (triple.rfind("x86_64", 0) == 0)
+                return "x86_64";
+            if (triple.rfind("riscv64", 0) == 0)
+                return "riscv64";
+            return "unknown";
+        }
+
+        static bool executable_on_path(const std::string &exeName)
+        {
+            std::string cmd = "sh -lc " + quote("command -v " + exeName + " >/dev/null 2>&1");
+            int raw = std::system(cmd.c_str());
+            return normalize_exit_code(raw) == 0;
+        }
+
+        static std::vector<std::string> detect_available_targets()
+        {
+            static const std::vector<std::string> known = {
+                "x86_64-linux-gnu",
+                "aarch64-linux-gnu",
+                "arm-linux-gnueabihf",
+                "riscv64-linux-gnu"};
+
+            std::vector<std::string> out;
+
+            for (const auto &t : known)
+            {
+                if (executable_on_path(t + "-gcc") &&
+                    executable_on_path(t + "-g++"))
+                {
+                    out.push_back(t);
+                }
+            }
+            return out;
+        }
+
+        static std::string trim(std::string s)
+        {
+            auto is_ws = [](unsigned char c)
+            { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+
+            while (!s.empty() && is_ws(static_cast<unsigned char>(s.front())))
+                s.erase(s.begin());
+            while (!s.empty() && is_ws(static_cast<unsigned char>(s.back())))
+                s.pop_back();
+            return s;
+        }
+
+        static bool file_exists(const fs::path &p)
+        {
+            std::error_code ec{};
+            return fs::exists(p, ec) && !ec;
+        }
+
+        static bool dir_exists(const fs::path &p)
+        {
+            std::error_code ec{};
+            return fs::exists(p, ec) && fs::is_directory(p, ec) && !ec;
+        }
+
+        static std::string read_text_file_or_empty(const fs::path &p)
+        {
+            std::ifstream ifs(p);
+            if (!ifs)
+                return {};
+            std::ostringstream oss;
+            oss << ifs.rdbuf();
+            return oss.str();
+        }
+
+        static bool write_text_file_atomic(const fs::path &p, const std::string &content)
+        {
+            std::error_code ec{};
+            if (!p.parent_path().empty())
+                fs::create_directories(p.parent_path(), ec);
+
+            const fs::path tmp = p.string() + ".tmp";
+            {
+                std::ofstream ofs(tmp, std::ios::binary);
+                if (!ofs)
+                    return false;
+                ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
+                ofs.flush();
+                if (!ofs)
+                    return false;
+            }
+
+            fs::rename(tmp, p, ec);
+            if (ec)
+            {
+                fs::remove(tmp, ec);
+                return false;
+            }
+            return true;
+        }
+
+        static bool ensure_dir(const fs::path &p, std::string &err)
+        {
+            if (dir_exists(p))
+                return true;
+
+            std::error_code ec{};
+            fs::create_directories(p, ec);
+            if (ec)
+            {
+                err = ec.message();
+                return false;
+            }
+            return true;
+        }
+
+        static std::optional<fs::path> find_project_root(fs::path start)
+        {
+            std::error_code ec{};
             start = fs::weakly_canonical(start, ec);
             if (ec)
                 return std::nullopt;
 
             for (fs::path p = start; !p.empty(); p = p.parent_path())
             {
-                if (p.filename() == "vix" && fs::exists(p / "modules"))
+                if (file_exists(p / "CMakeLists.txt"))
                     return p;
-                if (fs::exists(p / "modules") && fs::exists(p / "modules" / "cli"))
-                    if (p.filename() == "vix" || fs::exists(p / "CMakeLists.txt"))
-                        return p;
+
+                if (p == p.root_path())
+                    break;
             }
             return std::nullopt;
+        }
+
+        static std::string toolchain_contents_for_triple(const std::string &triple, const std::string &sysroot)
+        {
+            const std::string proc = infer_processor_from_triple(triple);
+
+            std::ostringstream tc;
+            if (!sysroot.empty())
+            {
+                tc << "set(CMAKE_SYSROOT \"" << sysroot << "\")\n";
+                tc << "set(CMAKE_FIND_ROOT_PATH \"" << sysroot << "\")\n";
+                tc << "set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)\n";
+                tc << "set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)\n";
+                tc << "set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)\n\n";
+            }
+
+            tc << "# Auto-generated by Vix (vix build --target " << triple << ")\n";
+            tc << "set(CMAKE_SYSTEM_NAME Linux)\n";
+            tc << "set(CMAKE_SYSTEM_PROCESSOR \"" << proc << "\")\n\n";
+            tc << "set(VIX_TARGET_TRIPLE \"" << triple << "\" CACHE STRING \"Vix target triple\")\n\n";
+            tc << "set(CMAKE_C_COMPILER   \"" << triple << "-gcc\" CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_CXX_COMPILER \"" << triple << "-g++\" CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_AR           \"" << triple << "-ar\"  CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_RANLIB       \"" << triple << "-ranlib\" CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_STRIP        \"" << triple << "-strip\"  CACHE FILEPATH \"\" FORCE)\n\n";
+            tc << "set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n";
+
+            return tc.str();
         }
 
         struct Options
         {
-            std::string appName;              // "" => auto-détection
-            std::string config = "Release";   // Debug / Release / RelWithDebInfo / MinSizeRel
-            std::string target;               // --target <name>
-            std::string generator;            // -G "Ninja", "Unix Makefiles", etc.
-            std::string preset = "dev-ninja"; // configure preset (CMakePresets.json)
-            std::string buildPreset;          // build preset (facultatif)
-            std::string dir;                  // --dir/-d chemin explicite du projet
-            int jobs = 0;                     // -j / --jobs
-            bool clean = false;               // --clean
-            bool quiet = false;               // --quiet/-q   ⬅️ NEW
+            // required by spec
+            std::string preset = "dev-ninja"; // dev | dev-ninja | release
+            std::string targetTriple;         // --target <triple>
+            std::string sysroot;
+            bool linkStatic = false; // --static
+
+            // build controls
+            int jobs = 0;       // -j / --jobs
+            bool clean = false; // --clean (force reconfigure)
+            bool quiet = false; // -q / --quiet
+            std::string dir;    // --dir/-d (optional)
         };
 
-        // ---------------------------------------------------------------------
-        // UX helpers (quiet mode + config cache)
-        // ---------------------------------------------------------------------
-
-        inline bool is_quiet(const Options &opt) noexcept
+        struct Preset
         {
-            return opt.quiet;
+            std::string name;         // "dev-ninja"
+            std::string generator;    // "Ninja"
+            std::string buildType;    // "Debug"/"Release"
+            std::string buildDirName; // "build-dev-ninja"
+        };
+
+        static std::map<std::string, Preset> builtin_presets()
+        {
+            std::map<std::string, Preset> m;
+
+            m.emplace("dev", Preset{
+                                 "dev",
+                                 "Ninja",
+                                 "Debug",
+                                 "build-dev"});
+
+            m.emplace("dev-ninja", Preset{
+                                       "dev-ninja",
+                                       "Ninja",
+                                       "Debug",
+                                       "build-dev-ninja"});
+
+            m.emplace("release", Preset{
+                                     "release",
+                                     "Ninja",
+                                     "Release",
+                                     "build-release"});
+
+            return m;
         }
 
-        inline void info_if(const Options &opt, const std::string &msg)
+        static bool is_option(const std::string &s)
         {
-            if (!is_quiet(opt))
-                info(msg);
+            return !s.empty() && s.front() == '-';
         }
 
-        inline void success_if(const Options &opt, const std::string &msg)
+        static std::optional<std::string> take_value(const std::vector<std::string> &args, size_t &i)
         {
-            if (!is_quiet(opt))
-                success(msg);
+            if (i + 1 >= args.size())
+                return std::nullopt;
+            if (is_option(args[i + 1]))
+                return std::nullopt;
+            ++i;
+            return args[i];
         }
 
-        inline void hint_if(const Options &opt, const std::string &msg)
-        {
-            if (!is_quiet(opt))
-                hint(msg);
-        }
-
-        inline void step_if(const Options &opt, const std::string &msg)
-        {
-            if (!is_quiet(opt))
-                step(msg);
-        }
-
-        // Dev preset → build dir heuristique (simple mais centralisé)
-        inline fs::path guess_binary_dir(const fs::path &projectDir, const Options &opt)
-        {
-            // Heuristique actuelle: dev-ninja → build-ninja
-            if (opt.preset.find("dev-ninja") != std::string::npos)
-                return projectDir / "build-ninja";
-
-            // Fallback générique
-            return projectDir / "build";
-        }
-
-        inline bool has_existing_config(const fs::path &binaryDir)
-        {
-            std::error_code ec;
-            return fs::exists(binaryDir / "CMakeCache.txt", ec);
-        }
-
-        std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
-        {
-            auto is_option = [](std::string_view sv)
-            { return !sv.empty() && sv.front() == '-'; };
-            for (size_t i = 0; i < args.size(); ++i)
-            {
-                const std::string &a = args[i];
-                if (a == "-d" || a == "--dir")
-                {
-                    if (i + 1 < args.size() && !is_option(args[i + 1]))
-                        return args[i + 1];
-                    return std::nullopt;
-                }
-                constexpr const char prefix[] = "--dir=";
-                if (a.rfind(prefix, 0) == 0)
-                {
-                    std::string val = a.substr(sizeof(prefix) - 1);
-                    if (val.empty())
-                        return std::nullopt;
-                    return val;
-                }
-            }
-            return std::nullopt;
-        }
-
-        Options parse_args(const std::vector<std::string> &args)
+        static Options parse_args_or_exit(const std::vector<std::string> &args, int &exitCode)
         {
             Options o;
+            exitCode = 0;
+
             for (size_t i = 0; i < args.size(); ++i)
             {
                 const std::string &a = args[i];
-                if (a == "--config" && i + 1 < args.size())
-                    o.config = args[++i];
-                else if ((a == "-j" || a == "--jobs") && i + 1 < args.size())
+
+                if (a == "--help" || a == "-h")
                 {
+                    exitCode = -2;
+                    return o;
+                }
+                else if (a == "--preset")
+                {
+                    auto v = take_value(args, i);
+                    if (!v)
+                    {
+                        error("Missing value for --preset");
+                        exitCode = 2;
+                        return o;
+                    }
+                    o.preset = *v;
+                }
+                else if (a.rfind("--preset=", 0) == 0)
+                {
+                    o.preset = a.substr(std::string("--preset=").size());
+                    if (o.preset.empty())
+                    {
+                        error("Missing value for --preset");
+                        exitCode = 2;
+                        return o;
+                    }
+                }
+                else if (a == "--target")
+                {
+                    auto v = take_value(args, i);
+                    if (!v)
+                    {
+                        error("Missing value for --target <triple>");
+                        exitCode = 2;
+                        return o;
+                    }
+                    o.targetTriple = *v;
+                }
+                else if (a == "--targets")
+                {
+                    auto targets = detect_available_targets();
+
+                    info("Detected build targets:");
+                    for (const auto &t : targets)
+                    {
+                        if (t == "x86_64-linux-gnu")
+                            step("  • " + t + " (native)");
+                        else
+                            step("  • " + t + " (cross)");
+                    }
+
+                    exitCode = -1; // exit cleanly
+                    return o;
+                }
+                else if (a == "--sysroot")
+                {
+                    auto v = take_value(args, i);
+                    if (!v)
+                    {
+                        error("Missing value for --sysroot <path>");
+                        exitCode = 2;
+                        return o;
+                    }
+                    o.sysroot = *v;
+                }
+                else if (a.rfind("--sysroot=", 0) == 0)
+                {
+                    o.sysroot = a.substr(std::string("--sysroot=").size());
+                }
+
+                else if (a.rfind("--target=", 0) == 0)
+                {
+                    o.targetTriple = a.substr(std::string("--target=").size());
+                    if (o.targetTriple.empty())
+                    {
+                        error("Missing value for --target <triple>");
+                        exitCode = 2;
+                        return o;
+                    }
+                }
+                else if (a == "--static")
+                {
+                    o.linkStatic = true;
+                }
+                else if (a == "-j" || a == "--jobs")
+                {
+                    auto v = take_value(args, i);
+                    if (!v)
+                    {
+                        error("Missing value for -j/--jobs");
+                        exitCode = 2;
+                        return o;
+                    }
                     try
                     {
-                        o.jobs = std::stoi(args[++i]);
+                        o.jobs = std::stoi(*v);
                     }
                     catch (...)
                     {
-                        o.jobs = 0;
+                        error("Invalid integer for -j/--jobs: " + *v);
+                        exitCode = 2;
+                        return o;
                     }
                 }
-                else if (a == "--target" && i + 1 < args.size())
-                    o.target = args[++i];
-                else if (a == "--generator" && i + 1 < args.size())
-                    o.generator = args[++i];
-                else if (a == "--preset" && i + 1 < args.size())
-                    o.preset = args[++i]; // configure
-                else if (a == "--build-preset" && i + 1 < args.size())
-                    o.buildPreset = args[++i];
+                else if (a.rfind("--jobs=", 0) == 0)
+                {
+                    auto v = a.substr(std::string("--jobs=").size());
+                    try
+                    {
+                        o.jobs = std::stoi(v);
+                    }
+                    catch (...)
+                    {
+                        error("Invalid integer for --jobs: " + v);
+                        exitCode = 2;
+                        return o;
+                    }
+                }
                 else if (a == "--clean")
+                {
                     o.clean = true;
-                else if (a == "--quiet" || a == "-q") // ⬅️ NEW
+                }
+                else if (a == "--quiet" || a == "-q")
+                {
                     o.quiet = true;
-                else if (o.appName.empty() && !a.empty() && a != "--")
-                    o.appName = a;
+                }
+                else if (a == "--dir" || a == "-d")
+                {
+                    auto v = take_value(args, i);
+                    if (!v)
+                    {
+                        error("Missing value for --dir <path>");
+                        exitCode = 2;
+                        return o;
+                    }
+                    o.dir = *v;
+                }
+                else if (a.rfind("--dir=", 0) == 0)
+                {
+                    o.dir = a.substr(std::string("--dir=").size());
+                    if (o.dir.empty())
+                    {
+                        error("Missing value for --dir <path>");
+                        exitCode = 2;
+                        return o;
+                    }
+                }
+                else
+                {
+                    // Keep the command predictable: reject unknown args
+                    error("Unknown argument: " + a);
+                    hint("Run: vix build --help");
+                    exitCode = 2;
+                    return o;
+                }
             }
-            if (auto d = pick_dir_opt_local(args))
-                o.dir = *d;
+
             return o;
         }
 
-        std::string quote(const std::string &s)
+        // Logging helpers
+        static void log_header_if(const Options &opt, const std::string &title)
         {
-#ifdef _WIN32
-            return "\"" + s + "\"";
-#else
-            if (s.find_first_of(" \t\"'\\$`") != std::string::npos)
-                return "'" + s + "'";
-            return s;
-#endif
+            if (opt.quiet)
+                return;
+            info(title);
         }
 
-        bool has_presets(const fs::path &projectDir)
+        static void log_bullet_if(const Options &opt, const std::string &line)
         {
-            return fs::exists(projectDir / "CMakePresets.json") ||
-                   fs::exists(projectDir / "CMakeUserPresets.json");
+            if (opt.quiet)
+                return;
+            step("  • " + line);
         }
 
-        std::optional<fs::path> choose_project_dir(const Options &opt, const fs::path &cwd)
+        static void log_success_if(const Options &opt, const std::string &msg)
         {
-            auto canonical_if = [](const fs::path &p) -> std::optional<fs::path>
-            {
-                std::error_code ec;
-                if (fs::exists(p / "CMakeLists.txt", ec))
-                    return fs::weakly_canonical(p, ec);
+            if (opt.quiet)
+                return;
+            success(msg);
+        }
+
+        static void log_hint_if(const Options &opt, const std::string &msg)
+        {
+            if (opt.quiet)
+                return;
+            hint(msg);
+        }
+
+        struct Plan
+        {
+            fs::path projectDir;
+            Preset preset;
+            fs::path buildDir;
+            fs::path configureLog;
+            fs::path buildLog;
+            fs::path sigFile;
+            fs::path toolchainFile;
+            std::vector<std::pair<std::string, std::string>> cmakeVars;
+            std::string signature;
+        };
+
+        static std::optional<Preset> resolve_preset(const std::string &name)
+        {
+            const auto presets = builtin_presets();
+            auto it = presets.find(name);
+            if (it == presets.end())
                 return std::nullopt;
-            };
-
-            if (!opt.dir.empty())
-                if (auto p = canonical_if(fs::path(opt.dir)))
-                    return p;
-            if (auto p = canonical_if(cwd))
-                return p;
-
-            if (!opt.appName.empty())
-            {
-                if (auto p = canonical_if(fs::path(opt.appName)))
-                    return p;
-                if (auto p = canonical_if(cwd / opt.appName))
-                    return p;
-                if (auto root = find_vix_root(cwd))
-                    if (auto p = canonical_if(*root / opt.appName))
-                        return p;
-            }
-
-            if (auto root = find_vix_root(cwd))
-                if (auto p = canonical_if(*root))
-                    return p;
-            return std::nullopt;
+            return it->second;
         }
 
-        // ---- util: exécuter et capturer stdout (POSIX)
-#ifndef _WIN32
-        static std::string run_and_capture(const std::string &cmd)
+        static std::vector<std::pair<std::string, std::string>> build_cmake_vars(
+            const Preset &p,
+            const Options &opt,
+            const fs::path &toolchainFile)
         {
-            std::string out;
-            FILE *pipe = popen(cmd.c_str(), "r");
-            if (!pipe)
-                return out;
-            char buf[4096];
-            while (fgets(buf, sizeof(buf), pipe))
-                out.append(buf);
-            pclose(pipe);
-            return out;
-        }
-#endif
+            std::vector<std::pair<std::string, std::string>> vars;
+            vars.reserve(16);
 
-        static std::vector<std::string> list_presets(const fs::path &projectDir, const std::string &kind)
+            vars.emplace_back("CMAKE_BUILD_TYPE", "\"" + p.buildType + "\"");
+            vars.emplace_back("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
+            if (opt.linkStatic)
+                vars.emplace_back("VIX_LINK_STATIC", "ON");
+            if (!opt.targetTriple.empty())
+                vars.emplace_back("VIX_TARGET_TRIPLE", "\"" + opt.targetTriple + "\"");
+            if (!opt.targetTriple.empty())
+                vars.emplace_back("CMAKE_TOOLCHAIN_FILE", "\"" + toolchainFile.string() + "\"");
+            std::sort(vars.begin(), vars.end(), [](const auto &a, const auto &b)
+                      { return a.first < b.first; });
+
+            return vars;
+        }
+
+        static std::string signature_join(const std::vector<std::pair<std::string, std::string>> &kvs)
         {
-#ifdef _WIN32
-            // Windows: cmake --list-presets n'imprime pas aisément parsable via popen ici.
-            // On retourne vide → on utilisera le mapping heuristique dev-* → build-*.
-            (void)projectDir;
-            (void)kind;
-            return {};
-#else
             std::ostringstream oss;
-            oss << "cd " << quote(projectDir.string()) << " && cmake --list-presets=" << kind;
-            const auto out = run_and_capture(oss.str());
-            std::vector<std::string> names;
-            std::istringstream is(out);
-            std::string line;
-            while (std::getline(is, line))
-            {
-                auto q1 = line.find('\"');
-                auto q2 = line.find('\"', q1 == std::string::npos ? q1 : q1 + 1);
-                if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1)
-                    names.emplace_back(line.substr(q1 + 1, q2 - (q1 + 1)));
-            }
-            return names;
-#endif
+            for (const auto &kv : kvs)
+                oss << kv.first << "=" << kv.second << "\n";
+            return oss.str();
         }
 
-        static std::string choose_build_preset(const fs::path &projectDir,
-                                               const std::string &configurePreset,
-                                               const std::string &userBuildPreset)
+        static std::string make_signature(
+            const Preset &p,
+            const Options &opt,
+            const std::vector<std::pair<std::string, std::string>> &vars,
+            const std::string &toolchainContent)
         {
-            auto builds = list_presets(projectDir, "build");
-            auto has = [&](const std::string &n)
+            std::ostringstream oss;
+            oss << "preset=" << p.name << "\n";
+            oss << "generator=" << p.generator << "\n";
+            oss << "static=" << (opt.linkStatic ? "1" : "0") << "\n";
+            oss << "targetTriple=" << opt.targetTriple << "\n";
+            oss << "vars:\n";
+            oss << signature_join(vars);
+
+            if (!opt.targetTriple.empty())
             {
-                return std::find(builds.begin(), builds.end(), n) != builds.end();
-            };
-
-            if (!userBuildPreset.empty() && (builds.empty() || has(userBuildPreset)))
-                return userBuildPreset;
-
-            if (!builds.empty())
-            {
-                if (has(configurePreset))
-                    return configurePreset;
-
-                // dev-* → build-*
-                if (configurePreset.rfind("dev-", 0) == 0)
-                {
-                    std::string mapped = configurePreset;
-                    mapped.replace(0, 4, "build-");
-                    if (has(mapped))
-                        return mapped;
-                }
-
-                // préférer un preset contenant "ninja"
-                for (auto &n : builds)
-                    if (n.find("ninja") != std::string::npos)
-                        return n;
-
-                // fallback: premier
-                return builds.front();
+                oss << "toolchain:\n";
+                oss << toolchainContent;
+                if (!toolchainContent.empty() && toolchainContent.back() != '\n')
+                    oss << "\n";
             }
 
-            // Pas de liste possible → heuristique simple
-            if (configurePreset.rfind("dev-", 0) == 0)
-            {
-                std::string mapped = configurePreset;
-                mapped.replace(0, 4, "build-");
-                return mapped; // on tentera quand même
-            }
-            return configurePreset; // dernier recours
+            return oss.str();
         }
-    } // namespace
 
-    // -------------------------------------------------------------------------
-    // Entrée principale
-    // -------------------------------------------------------------------------
-    int run(const std::vector<std::string> &args)
-    {
-        const Options opt = parse_args(args);
-        const fs::path cwd = fs::current_path();
-
-        auto projectDirOpt = choose_project_dir(opt, cwd);
-        if (!projectDirOpt)
+        static std::optional<Plan> make_plan(const Options &opt, const fs::path &cwd)
         {
-            error("Unable to determine the project directory.");
-            hint("Try: vix build --dir <path> or run the command from your project folder.");
-            return 1;
-        }
-        const fs::path projectDir = *projectDirOpt;
+            fs::path base = cwd;
+            if (!opt.dir.empty())
+                base = fs::path(opt.dir);
 
-        // Devine le dossier binaire pour le cache de configuration CMake
-        const fs::path binaryDir = guess_binary_dir(projectDir, opt);
+            auto root = find_project_root(base);
+            if (!root)
+                return std::nullopt;
 
-        info_if(opt, "Using project directory:");
-        step_if(opt, projectDir.string());
-        if (!is_quiet(opt))
-            std::cout << "\n";
+            auto presetOpt = resolve_preset(opt.preset);
+            if (!presetOpt)
+                return std::nullopt;
 
-        // ---------------------------------------------------------------------
-        // Path 1: CMakePresets.json present → modern configure / build flow
-        // ---------------------------------------------------------------------
-        if (has_presets(projectDir))
-        {
-            // 0) Faut-il vraiment re-configurer ?
-            bool needsConfigure = true;
-            if (!opt.clean && has_existing_config(binaryDir))
+            Plan plan;
+            plan.projectDir = *root;
+            plan.preset = *presetOpt;
+            if (!opt.targetTriple.empty())
             {
-                needsConfigure = false;
-            }
-
-            // 1) Configure (si nécessaire)
-            if (needsConfigure)
-            {
-                std::ostringstream oss;
-#ifdef _WIN32
-                oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && cmake --preset " << quote(opt.preset);
-                if (opt.quiet)
-                    oss << " --log-level=ERROR";
-                oss << "\"";
-#else
-                oss << "cd " << quote(projectDir.string())
-                    << " && cmake --preset " << quote(opt.preset);
-                if (opt.quiet)
-                    oss << " --log-level=ERROR";
-#endif
-                const std::string cmd = oss.str();
-
-                info_if(opt, "Configuring project (preset: " + opt.preset + ")...");
-                const int code = std::system(cmd.c_str());
-                if (code != 0)
-                {
-                    error("CMake configure failed with preset '" + opt.preset + "'.");
-                    if (!is_quiet(opt))
-                    {
-                        hint("Run the same command manually to inspect the error:");
-#ifdef _WIN32
-                        step("cmake --preset " + opt.preset);
-#else
-                        step("cd " + projectDir.string());
-                        step("cmake --preset " + opt.preset);
-#endif
-                    }
-                    return code != 0 ? code : 2;
-                }
-
-                success_if(opt, "Configure step completed.");
-                if (!is_quiet(opt))
-                    std::cout << "\n";
+                plan.buildDir =
+                    plan.projectDir /
+                    (plan.preset.buildDirName + "-" + opt.targetTriple);
             }
             else
             {
-                info_if(opt, "Using existing CMake configuration (preset: " + opt.preset + ").");
-                if (!is_quiet(opt))
-                    std::cout << "\n";
+                plan.buildDir =
+                    plan.projectDir / plan.preset.buildDirName;
             }
 
-            // 2) Choix du build preset
-            const std::string buildPreset =
-                choose_build_preset(projectDir, opt.preset, opt.buildPreset);
+            plan.configureLog = plan.buildDir / "configure.log";
+            plan.buildLog = plan.buildDir / "build.log";
+            plan.sigFile = plan.buildDir / ".vix-config.sig";
+            plan.toolchainFile = plan.buildDir / "vix-toolchain.cmake";
 
-            info_if(opt, "Using build preset:");
-            step_if(opt, buildPreset);
-            if (!is_quiet(opt))
-                std::cout << "\n";
+            std::string toolchainContent;
+            if (!opt.targetTriple.empty())
+                toolchainContent = toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
 
-            // 3) Build
-            {
-                std::ostringstream oss;
-#ifdef _WIN32
-                oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && cmake --build --preset " << quote(buildPreset);
-                if (!opt.target.empty())
-                    oss << " --target " << quote(opt.target);
-                if (!opt.config.empty())
-                    oss << " --config " << quote(opt.config);
-                oss << "\"";
-#else
-                oss << "cd " << quote(projectDir.string())
-                    << " && cmake --build --preset " << quote(buildPreset);
-                if (!opt.target.empty())
-                    oss << " --target " << quote(opt.target);
-                if (!opt.config.empty())
-                    oss << " --config " << quote(opt.config);
-                if (opt.jobs > 0)
-                    oss << " -- -j " << opt.jobs; // backend args (ninja/make)
-#endif
-                const std::string cmd = oss.str();
+            plan.cmakeVars = build_cmake_vars(plan.preset, opt, plan.toolchainFile);
+            plan.signature = trim(make_signature(plan.preset, opt, plan.cmakeVars, toolchainContent)) + "\n";
 
-                info_if(opt, "Building project...");
-                const int code = std::system(cmd.c_str());
-                if (code != 0)
-                {
-                    error("Build failed (build preset '" + buildPreset +
-                          "', code " + std::to_string(code) + ").");
-                    hint_if(opt, "Check the errors above or run the build command manually.");
-                    return code != 0 ? code : 3;
-                }
-            }
-
-            success_if(opt, "Build completed.");
-            hint_if(opt, "Config preset: " + opt.preset + ", build preset: " + buildPreset);
-            return 0;
+            return plan;
         }
 
-        // ---------------------------------------------------------------------
-        // Path 2: No CMakePresets → classic build/ directory flow
-        // ---------------------------------------------------------------------
-        fs::path buildDir = projectDir / "build";
-
-        // Clean build/ if requested
-        if (opt.clean && fs::exists(buildDir))
+        static bool has_cmake_cache(const fs::path &buildDir)
         {
-            info_if(opt, "Cleaning build directory:");
-            step_if(opt, buildDir.string());
-
-            std::error_code ec;
-            fs::remove_all(buildDir, ec);
-            if (ec)
-            {
-                error("Failed to clean build directory: " + ec.message());
-                return 1;
-            }
-            success_if(opt, "Build directory cleaned.");
+            return file_exists(buildDir / "CMakeCache.txt");
         }
 
-        // Ensure build directory exists
+        static bool signature_matches(const fs::path &sigFile, const std::string &sig)
         {
-            std::error_code ec;
-            fs::create_directories(buildDir, ec);
-            if (ec)
-            {
-                error("Unable to create build directory: " + ec.message());
-                return 1;
-            }
+            const std::string old = read_text_file_or_empty(sigFile);
+            return !old.empty() && old == sig;
         }
 
-        // Configure (fallback)
+        static bool need_configure(const Options &opt, const Plan &plan)
+        {
+            if (opt.clean)
+                return true;
+
+            if (!has_cmake_cache(plan.buildDir))
+                return true;
+
+            if (!signature_matches(plan.sigFile, plan.signature))
+                return true;
+
+            return false;
+        }
+
+        struct ExecResult
+        {
+            int exitCode = 0;
+            std::string command;
+        };
+
+        static ExecResult run_shell_to_log(const std::string &cmd, const fs::path &logPath)
         {
             std::ostringstream oss;
-#ifdef _WIN32
-            oss << "cmd /C \"cd /D " << quote(buildDir.string()) << " && cmake ..";
-#else
-            oss << "cd " << quote(buildDir.string()) << " && cmake ..";
-#endif
-            if (!opt.generator.empty())
-                oss << " -G " << quote(opt.generator);
-#ifdef _WIN32
-            oss << "\"";
-#endif
-            const std::string cmd = oss.str();
+            oss << "sh -lc " << quote(cmd) << " >" << quote(logPath.string()) << " 2>&1";
 
-            info_if(opt, "Configuring project (fallback mode)...");
-            const int code = std::system(cmd.c_str());
-            if (code != 0)
-            {
-                error("CMake configure failed (fallback build/, code " +
-                      std::to_string(code) + ").");
-                hint_if(opt, "Check your CMakeLists.txt or run the command manually.");
-                return code != 0 ? code : 4;
-            }
-
-            success_if(opt, "Configure step completed (fallback).");
-            if (!is_quiet(opt))
-                std::cout << "\n";
+            ExecResult r;
+            r.command = cmd;
+            const int raw = std::system(oss.str().c_str());
+            r.exitCode = normalize_exit_code(raw);
+            return r;
         }
 
-        // Build (fallback)
+        static void print_log_tail(const fs::path &logPath, size_t maxLines)
+        {
+            const std::string content = read_text_file_or_empty(logPath);
+            if (content.empty())
+                return;
+
+            std::vector<std::string> lines;
+            lines.reserve(maxLines + 16);
+
+            std::istringstream is(content);
+            std::string line;
+            while (std::getline(is, line))
+                lines.push_back(line);
+
+            const size_t start = (lines.size() > maxLines) ? (lines.size() - maxLines) : 0;
+
+            std::cerr << "\n--- " << logPath.string() << " (last " << (lines.size() - start) << " lines) ---\n";
+            for (size_t i = start; i < lines.size(); ++i)
+                std::cerr << lines[i] << "\n";
+            std::cerr << "--- end ---\n\n";
+        }
+
+        static std::string cmake_configure_cmd(const Plan &plan)
         {
             std::ostringstream oss;
-#ifdef _WIN32
-            oss << "cmd /C \"cd /D " << quote(buildDir.string())
-                << " && cmake --build . --config " << opt.config;
-            if (!opt.target.empty())
-                oss << " --target " << quote(opt.target);
-            oss << "\"";
-#else
-            oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
-            if (!opt.target.empty())
-                oss << " --target " << quote(opt.target);
+            oss << "cmake"
+                << " -S " << quote(plan.projectDir.string())
+                << " -B " << quote(plan.buildDir.string())
+                << " -G " << quote(plan.preset.generator);
+
+            for (const auto &kv : plan.cmakeVars)
+                oss << " -D" << kv.first << "=" << kv.second;
+
+            return oss.str();
+        }
+
+        static std::string cmake_build_cmd(const Plan &plan, const Options &opt)
+        {
+            std::ostringstream oss;
+            oss << "cmake"
+                << " --build " << quote(plan.buildDir.string());
+
             if (opt.jobs > 0)
-                oss << " -j " << opt.jobs;
-#endif
-            const std::string cmd = oss.str();
+                oss << " -- -j " << opt.jobs;
 
-            info_if(opt, "Building project (fallback mode)...");
-            const int code = std::system(cmd.c_str());
-            if (code != 0)
-            {
-                error("Build failed (fallback build/, code " +
-                      std::to_string(code) + ").");
-                hint_if(opt, "Check the build logs or run the command manually.");
-                return code != 0 ? code : 5;
-            }
+            return oss.str();
         }
 
-        success_if(opt, "Build completed for:");
-        step_if(opt, projectDir.string());
-        return 0;
+        static void print_preset_summary(const Options &opt, const Plan &plan)
+        {
+            if (opt.quiet)
+                return;
+
+            info("Preset CMake variables:");
+            for (const auto &kv : plan.cmakeVars)
+                step("  •   " + kv.first + "=" + kv.second);
+
+            std::cout << "\n";
+        }
+
+        class BuildCommand
+        {
+        public:
+            explicit BuildCommand(Options opt) : opt_(std::move(opt)) {}
+
+            int run()
+            {
+                const fs::path cwd = fs::current_path();
+
+                auto planOpt = make_plan(opt_, cwd);
+                if (!planOpt)
+                {
+                    error("Unable to determine the project directory (missing CMakeLists.txt?)");
+                    hint("Run from your project root, or pass: vix build --dir <path>");
+                    return 1;
+                }
+                plan_ = *planOpt;
+
+                if (!opt_.targetTriple.empty())
+                {
+                    const std::string gcc = opt_.targetTriple + "-gcc";
+                    const std::string gxx = opt_.targetTriple + "-g++";
+
+                    if (!executable_on_path(gcc) || !executable_on_path(gxx))
+                    {
+                        error("Cross toolchain not found on PATH for target: " + opt_.targetTriple);
+                        hint("Install the cross compiler and ensure binaries exist:");
+                        hint("  " + gcc);
+                        hint("  " + gxx);
+                        return 1;
+                    }
+                }
+
+                {
+                    std::string err;
+                    if (!ensure_dir(plan_.buildDir, err))
+                    {
+                        error("Unable to create build directory: " + plan_.buildDir.string());
+                        if (!err.empty())
+                            hint(err);
+                        return 1;
+                    }
+                }
+
+                log_header_if(opt_, "Using project directory:");
+                log_bullet_if(opt_, plan_.projectDir.string());
+                if (!opt_.quiet)
+                    std::cout << "\n";
+
+                if (!opt_.targetTriple.empty())
+                {
+                    const std::string tc = toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
+                    if (!write_text_file_atomic(plan_.toolchainFile, tc))
+                    {
+                        error("Failed to write toolchain file: " + plan_.toolchainFile.string());
+                        hint("Check filesystem permissions.");
+                        return 1;
+                    }
+                }
+
+                if (need_configure(opt_, plan_))
+                {
+                    log_header_if(opt_, "Configuring project (preset: " + plan_.preset.name + ")...");
+                    print_preset_summary(opt_, plan_);
+
+                    const std::string cmd = cmake_configure_cmd(plan_);
+                    const ExecResult r = run_shell_to_log(cmd, plan_.configureLog);
+
+                    if (r.exitCode != 0)
+                    {
+                        error("CMake configure failed.");
+                        log_hint_if(opt_, "Command:");
+                        if (!opt_.quiet)
+                            step("  " + cmd);
+
+                        if (!opt_.quiet)
+                            print_log_tail(plan_.configureLog, 160);
+
+                        return r.exitCode == 0 ? 2 : r.exitCode;
+                    }
+
+                    if (!write_text_file_atomic(plan_.sigFile, plan_.signature))
+                    {
+                        if (!opt_.quiet)
+                            hint("Warning: unable to write config signature file: " + plan_.sigFile.string());
+                    }
+
+                    log_success_if(opt_, "✔ Configure step completed.");
+                    if (!opt_.quiet)
+                        std::cout << "\n";
+                }
+                else
+                {
+                    log_header_if(opt_, "Using existing configuration (cache-friendly).");
+                    log_bullet_if(opt_, plan_.buildDir.string());
+                    if (!opt_.quiet)
+                        std::cout << "\n";
+                }
+
+                {
+                    log_header_if(opt_, "Building project...");
+
+                    const std::string cmd = cmake_build_cmd(plan_, opt_);
+                    const ExecResult r = run_shell_to_log(cmd, plan_.buildLog);
+
+                    if (r.exitCode != 0)
+                    {
+                        error("Build failed.");
+                        log_hint_if(opt_, "Command:");
+                        if (!opt_.quiet)
+                            step("  " + cmd);
+
+                        if (!opt_.quiet)
+                            print_log_tail(plan_.buildLog, 200);
+
+                        return r.exitCode == 0 ? 3 : r.exitCode;
+                    }
+
+                    log_success_if(opt_, "✔ Build completed.");
+                    if (!opt_.quiet)
+                        std::cout << "\n";
+                }
+
+                return 0;
+            }
+
+        private:
+            Options opt_;
+            Plan plan_{};
+        };
+    } // namespace
+
+    int run(const std::vector<std::string> &args)
+    {
+        int parseExit = 0;
+        Options opt = parse_args_or_exit(args, parseExit);
+
+        if (parseExit == -2)
+            return help();
+        if (parseExit != 0)
+            return parseExit;
+
+        if (!resolve_preset(opt.preset))
+        {
+            error("Unknown preset: " + opt.preset);
+            hint("Available presets: dev, dev-ninja, release");
+            return 2;
+        }
+
+        BuildCommand cmd(std::move(opt));
+        return cmd.run();
     }
 
     int help()
@@ -539,31 +879,35 @@ namespace vix::commands::BuildCommand
         std::ostream &out = std::cout;
 
         out << "Usage:\n";
-        out << "  vix build [name] [options]\n";
-        out << "\n";
+        out << "  vix build [options]\n\n";
 
         out << "Description:\n";
-        out << "  Configure and build a Vix.cpp project using CMake presets\n";
-        out << "  or a classic build/ directory as fallback.\n";
-        out << "\n";
+        out << "  Configure and build a CMake project using embedded Vix presets.\n";
+        out << "  Cache-friendly: reuses build directories and avoids unnecessary reconfigure.\n\n";
+
+        out << "Presets (embedded):\n";
+        out << "  dev        -> Ninja + Debug   (build-dev)\n";
+        out << "  dev-ninja  -> Ninja + Debug   (build-dev-ninja)\n";
+        out << "  release    -> Ninja + Release (build-release)\n\n";
 
         out << "Options:\n";
-        out << "  -d, --dir <path>        Explicit project directory\n";
-        out << "  --config <type>         Build configuration (Release, Debug, ...)\n";
-        out << "  --preset <name>         Configure preset (CMakePresets.json), default: dev-ninja\n";
-        out << "  --build-preset <name>   Build preset to use (overrides automatic choice)\n";
-        out << "  --target <name>         Build a specific CMake target\n";
-        out << "  -j, --jobs <n>          Number of parallel build jobs\n";
-        out << "  --clean                 Remove existing build directory (no-presets mode only)\n";
-        out << "\n";
+        out << "  --preset <name>     Preset to use (dev, dev-ninja, release)\n";
+        out << "  --target <triple>   Cross-compilation target triple (auto toolchain + VIX_TARGET_TRIPLE)\n";
+        out << "  --static            Request static linking (VIX_LINK_STATIC=ON)\n";
+        out << "  -j, --jobs <n>      Parallel build jobs (Ninja backend)\n";
+        out << "  --clean             Force reconfigure (ignore cache/signature)\n";
+        out << "  -d, --dir <path>    Project directory (where CMakeLists.txt lives)\n";
+        out << "  -q, --quiet         Minimal output\n";
+        out << "  -h, --help          Show this help\n\n";
 
         out << "Examples:\n";
         out << "  vix build\n";
-        out << "  vix build api --config Debug\n";
-        out << "  vix build --dir ./examples/blog\n";
-        out << "  vix build --preset dev-ninja --build-preset build-ninja\n";
-        out << "\n";
+        out << "  vix build --preset release\n";
+        out << "  vix build --preset release --static\n";
+        out << "  vix build --target aarch64-linux-gnu\n";
+        out << "  vix build --preset release --target aarch64-linux-gnu\n";
+        out << "  vix build -j 8\n\n";
 
         return 0;
     }
-}
+} // namespace vix::commands::BuildCommand

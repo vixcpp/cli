@@ -331,16 +331,28 @@ namespace vix::commands::RunCommand::detail
                 oss << " -DVIX_ENABLE_SANITIZERS=OFF";
             }
 
+            fs::path cfgLogPath = projectDir / "configure.log";
+
 #ifndef _WIN32
-            oss << " >/dev/null 2>&1";
+            oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
 #else
-            oss << " >nul 2>nul";
+            oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
 #endif
 
             const std::string cmd = oss.str();
             int code = std::system(cmd.c_str());
+            code = normalize_exit_code(code);
+
             if (code != 0)
             {
+                std::ifstream ifs(cfgLogPath);
+                if (ifs)
+                {
+                    std::ostringstream ss;
+                    ss << ifs.rdbuf();
+                    std::cout << ss.str() << "\n";
+                }
+
                 error("Script configure failed.");
                 handle_runtime_exit_code(code, "Script configure failed");
                 return code;
@@ -368,7 +380,9 @@ namespace vix::commands::RunCommand::detail
 
             const std::string buildCmd = oss.str();
             int code = std::system(buildCmd.c_str());
+            code = normalize_exit_code(code);
             if (code != 0)
+
             {
                 std::ifstream ifs(logPath);
                 std::string logContent;
@@ -508,17 +522,27 @@ namespace vix::commands::RunCommand::detail
                 oss << " -DVIX_ENABLE_SANITIZERS=OFF";
             }
 
+            fs::path cfgLogPath = projectDir / "configure.log";
 #ifndef _WIN32
-            oss << " >/dev/null 2>&1";
+            oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
 #else
-            oss << " >nul 2>nul";
+            oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
 #endif
 
             const std::string cmd = oss.str();
 
             int code = std::system(cmd.c_str());
+            code = normalize_exit_code(code);
             if (code != 0)
             {
+                std::ifstream ifs(cfgLogPath);
+                if (ifs)
+                {
+                    std::ostringstream ss;
+                    ss << ifs.rdbuf();
+                    std::cout << ss.str() << "\n";
+                }
+
                 error("Script configure failed.");
                 handle_runtime_exit_code(code, "Script configure failed");
                 return code;
@@ -547,33 +571,36 @@ namespace vix::commands::RunCommand::detail
 
         const std::string buildCmd = oss.str();
         int code = std::system(buildCmd.c_str());
+        code = normalize_exit_code(code);
         if (code != 0)
-        {
-            std::ifstream ifs(logPath);
-            std::string logContent;
 
-            if (ifs)
+            if (code != 0)
             {
-                std::ostringstream logStream;
-                logStream << ifs.rdbuf();
-                logContent = logStream.str();
-            }
+                std::ifstream ifs(logPath);
+                std::string logContent;
 
-            if (!logContent.empty())
-            {
-                vix::cli::ErrorHandler::printBuildErrors(
-                    logContent,
-                    script,
-                    "Script build failed");
-            }
-            else
-            {
-                error("Script build failed (no compiler log captured).");
-            }
+                if (ifs)
+                {
+                    std::ostringstream logStream;
+                    logStream << ifs.rdbuf();
+                    logContent = logStream.str();
+                }
 
-            handle_runtime_exit_code(code, "Script build failed");
-            return code;
-        }
+                if (!logContent.empty())
+                {
+                    vix::cli::ErrorHandler::printBuildErrors(
+                        logContent,
+                        script,
+                        "Script build failed");
+                }
+                else
+                {
+                    error("Script build failed (no compiler log captured).");
+                }
+
+                handle_runtime_exit_code(code, "Script build failed");
+                return code;
+            }
 
         exePath = buildDir / exeName;
 #ifdef _WIN32

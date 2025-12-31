@@ -239,7 +239,7 @@ int main()
   static std::string make_cmakelists(const std::string &projectName)
   {
     std::string s;
-    s.reserve(12000);
+    s.reserve(16000);
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + projectName + " LANGUAGES CXX)\n\n";
@@ -254,6 +254,8 @@ int main()
 
     s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" OFF)\n";
     s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n";
+    s += "option(VIX_LINK_STATIC \"Static libstdc++/libgcc (glibc-safe)\" OFF)\n";
+    s += "option(VIX_LINK_FULL_STATIC \"Full static link (-static). Prefer musl.\" OFF)\n";
     s += "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan | ubsan\")\n\n";
 
     s += "# Prefer lowercase package, fallback to legacy Vix\n";
@@ -262,15 +264,11 @@ int main()
     s += "  find_package(Vix CONFIG REQUIRED)\n";
     s += "endif()\n\n";
 
-    // ------------------------------------------------------
     // Main target
-    // ------------------------------------------------------
     s += "add_executable(" + projectName + " src/main.cpp)\n\n";
-
-    s += "# Always link Vix umbrella\n";
     s += "target_link_libraries(" + projectName + " PRIVATE vix::vix)\n\n";
 
-    s += "# Optional ORM\n";
+    // Optional ORM
     s += "if (VIX_USE_ORM)\n";
     s += "  if (TARGET vix::orm)\n";
     s += "    target_link_libraries(" + projectName + " PRIVATE vix::orm)\n";
@@ -280,22 +278,39 @@ int main()
     s += "  endif()\n";
     s += "endif()\n\n";
 
-    s += "# Warnings\n";
+    // Warnings
     s += "if (MSVC)\n";
     s += "  target_compile_options(" + projectName + " PRIVATE /W4 /permissive-)\n";
     s += "else()\n";
     s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
     s += "endif()\n\n";
 
-    // ------------------------------------------------------
-    // Sanitizers (robust + exports defs for tests)
-    // ------------------------------------------------------
+    // Static linking policy
+    s += "# ------------------------------------------------------\n";
+    s += "# Static linking (explicit)\n";
+    s += "# - VIX_LINK_STATIC: glibc-safe static C++ runtime only\n";
+    s += "# - VIX_LINK_FULL_STATIC: full -static (prefer musl toolchain)\n";
+    s += "# ------------------------------------------------------\n";
+    s += "function(vix_apply_static_link_flags tgt)\n";
+    s += "  if (MSVC)\n";
+    s += "    return()\n";
+    s += "  endif()\n";
+    s += "  if (VIX_LINK_FULL_STATIC)\n";
+    s += "    target_link_options(${tgt} PRIVATE -static)\n";
+    s += "    target_compile_definitions(${tgt} PRIVATE VIX_LINK_FULL_STATIC=1)\n";
+    s += "  elseif (VIX_LINK_STATIC)\n";
+    s += "    target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)\n";
+    s += "    target_compile_definitions(${tgt} PRIVATE VIX_LINK_STATIC=1)\n";
+    s += "  endif()\n";
+    s += "endfunction()\n\n";
+
+    s += "vix_apply_static_link_flags(" + projectName + ")\n\n";
+
+    // Sanitizers
     s += "# Sanitizers (mode-aware)\n";
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-    s += "  # Common sanitizer flags\n";
     s += "  target_compile_options(" + projectName + " PRIVATE -g3 -fno-omit-frame-pointer)\n";
     s += "  target_link_options(" + projectName + " PRIVATE -g)\n\n";
-
     s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
     s += "    target_compile_options(" + projectName + " PRIVATE -O0 -fsanitize=undefined -fno-sanitize-recover=undefined)\n";
     s += "    target_link_options(" + projectName + " PRIVATE -fsanitize=undefined)\n";
@@ -307,19 +322,14 @@ int main()
     s += "  endif()\n";
     s += "endif()\n\n";
 
-    // ------------------------------------------------------
-    // Tests (CTest) + 1 default test
-    // ------------------------------------------------------
-    s += "# ------------------------------------------------------\n";
-    s += "# Tests (CTest)\n";
-    s += "# ------------------------------------------------------\n";
+    // Tests
     s += "include(CTest)\n";
     s += "enable_testing()\n\n";
 
     s += "add_executable(" + projectName + "_basic_test tests/test_basic.cpp)\n";
-    s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n\n";
+    s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n";
+    s += "vix_apply_static_link_flags(" + projectName + "_basic_test)\n\n";
 
-    // Apply sanitizer flags to tests too (important!)
     s += "# Apply sanitizer flags to tests too\n";
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
     s += "  target_compile_options(" + projectName + "_basic_test PRIVATE -g3 -fno-omit-frame-pointer)\n";
@@ -335,14 +345,9 @@ int main()
     s += "  endif()\n";
     s += "endif()\n\n";
 
-    s += "add_test(\n";
-    s += "  NAME " + projectName + ".basic\n";
-    s += "  COMMAND " + projectName + "_basic_test\n";
-    s += ")\n\n";
+    s += "add_test(NAME " + projectName + ".basic COMMAND " + projectName + "_basic_test)\n\n";
 
-    // ------------------------------------------------------
     // Convenience run target
-    // ------------------------------------------------------
     s += "add_custom_target(run\n";
     s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
     s += "  DEPENDS " + projectName + "\n";
@@ -352,7 +357,84 @@ int main()
     return s;
   }
 
-  // CMakePresets.json generator (cross-platform presets: Ninja + MSVC)
+  static bool is_valid_ident_char(char c)
+  {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+  }
+
+  static std::string sanitize_for_path(std::string s)
+  {
+    for (char &c : s)
+    {
+      if (!is_valid_ident_char(c))
+        c = '_';
+    }
+    return s;
+  }
+
+  static std::string default_c_compiler_for_triple(const std::string &triple)
+  {
+    return triple + "-gcc";
+  }
+
+  static std::string default_cxx_compiler_for_triple(const std::string &triple)
+  {
+    return triple + "-g++";
+  }
+
+  static std::string default_ar_for_triple(const std::string &triple)
+  {
+    return triple + "-ar";
+  }
+
+  static std::string default_ranlib_for_triple(const std::string &triple)
+  {
+    return triple + "-ranlib";
+  }
+
+  static std::string make_toolchain_cmake(const std::string &triple)
+  {
+    std::ostringstream tc;
+    tc << "# Auto-generated by Vix CLI (vix build --target " << triple << ")\n";
+    tc << "set(CMAKE_SYSTEM_NAME Linux)\n";
+    tc << "set(VIX_TARGET_TRIPLE \"" << triple << "\" CACHE STRING \"Vix target triple\")\n\n";
+
+    tc << "set(CMAKE_C_COMPILER \"" << default_c_compiler_for_triple(triple) << "\" CACHE FILEPATH \"\")\n";
+    tc << "set(CMAKE_CXX_COMPILER \"" << default_cxx_compiler_for_triple(triple) << "\" CACHE FILEPATH \"\")\n";
+    tc << "set(CMAKE_AR \"" << default_ar_for_triple(triple) << "\" CACHE FILEPATH \"\")\n";
+    tc << "set(CMAKE_RANLIB \"" << default_ranlib_for_triple(triple) << "\" CACHE FILEPATH \"\")\n\n";
+
+    tc << "set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n";
+
+    return tc.str();
+  }
+
+  static bool write_text_file_atomic(const fs::path &p, const std::string &content)
+  {
+    std::error_code ec;
+    fs::create_directories(p.parent_path(), ec);
+
+    const fs::path tmp = p.string() + ".tmp";
+    {
+      std::ofstream ofs(tmp, std::ios::binary);
+      if (!ofs)
+        return false;
+      ofs.write(content.data(), static_cast<std::streamsize>(content.size()));
+      ofs.flush();
+      if (!ofs)
+        return false;
+    }
+
+    fs::rename(tmp, p, ec);
+    if (ec)
+    {
+      fs::remove(tmp, ec);
+      return false;
+    }
+    return true;
+  }
+
   std::string make_cmake_presets_json()
   {
     return R"JSON({
@@ -360,20 +442,22 @@ int main()
   "configurePresets": [
     {
       "name": "dev-ninja",
-      "displayName": "Dev (Ninja, Release)",
+      "displayName": "Dev (Ninja, Debug)",
       "generator": "Ninja",
-      "binaryDir": "build-ninja",
+      "binaryDir": "build-dev-ninja",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
       "name": "dev-ninja-san",
       "displayName": "Dev (Ninja, ASan+UBSan, Debug)",
       "generator": "Ninja",
-      "binaryDir": "build-ninja-san",
+      "binaryDir": "build-dev-ninja-san",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VIX_ENABLE_SANITIZERS": "ON",
         "VIX_SANITIZER_MODE": "asan_ubsan"
       }
@@ -382,11 +466,23 @@ int main()
       "name": "dev-ninja-ubsan",
       "displayName": "Dev (Ninja, UBSan, Debug)",
       "generator": "Ninja",
-      "binaryDir": "build-ninja-ubsan",
+      "binaryDir": "build-dev-ninja-ubsan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "VIX_ENABLE_SANITIZERS": "ON",
         "VIX_SANITIZER_MODE": "ubsan"
+      }
+    },
+
+    {
+      "name": "release",
+      "displayName": "Release (Ninja, Release)",
+      "generator": "Ninja",
+      "binaryDir": "build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
 
@@ -404,25 +500,37 @@ int main()
 
   "buildPresets": [
     {
-      "name": "build-ninja",
-      "displayName": "Build (ALL, Ninja)",
+      "name": "build-dev-ninja",
+      "displayName": "Build (ALL, Dev Ninja)",
       "configurePreset": "dev-ninja"
     },
     {
-      "name": "build-ninja-san",
-      "displayName": "Build (ALL, Ninja, ASan+UBSan)",
+      "name": "build-dev-ninja-san",
+      "displayName": "Build (ALL, Dev Ninja, ASan+UBSan)",
       "configurePreset": "dev-ninja-san"
     },
     {
-      "name": "build-ninja-ubsan",
-      "displayName": "Build (ALL, Ninja, UBSan)",
+      "name": "build-dev-ninja-ubsan",
+      "displayName": "Build (ALL, Dev Ninja, UBSan)",
       "configurePreset": "dev-ninja-ubsan"
     },
 
     {
-      "name": "run-ninja",
-      "displayName": "Run (target=run, Ninja)",
+      "name": "build-release",
+      "displayName": "Build (ALL, Release Ninja)",
+      "configurePreset": "release"
+    },
+
+    {
+      "name": "run-dev-ninja",
+      "displayName": "Run (target=run, Dev Ninja)",
       "configurePreset": "dev-ninja",
+      "targets": ["run"]
+    },
+    {
+      "name": "run-release",
+      "displayName": "Run (target=run, Release Ninja)",
+      "configurePreset": "release",
       "targets": ["run"]
     },
 
@@ -442,18 +550,24 @@ int main()
 
     {
       "name": "dev-ninja",
-      "displayName": "Alias: dev-ninja → build (Ninja)",
+      "displayName": "Alias: dev-ninja → build",
       "configurePreset": "dev-ninja"
     },
     {
       "name": "dev-ninja-san",
-      "displayName": "Alias: dev-ninja-san → build (ASan+UBSan)",
+      "displayName": "Alias: dev-ninja-san → build",
       "configurePreset": "dev-ninja-san"
     },
     {
       "name": "dev-ninja-ubsan",
-      "displayName": "Alias: dev-ninja-ubsan → build (UBSan)",
+      "displayName": "Alias: dev-ninja-ubsan → build",
       "configurePreset": "dev-ninja-ubsan"
+    },
+
+    {
+      "name": "release",
+      "displayName": "Alias: release → build",
+      "configurePreset": "release"
     },
 
     {
@@ -487,7 +601,6 @@ namespace vix::commands::NewCommand
     {
       fs::path dest;
 
-      // Si --dir est fourni, base + name/path
       if (baseOpt.has_value())
       {
         fs::path base = fs::path(*baseOpt);
@@ -503,7 +616,6 @@ namespace vix::commands::NewCommand
       }
       else
       {
-        // Sinon, on respecte abs/rel à partir du cwd
         fs::path np = fs::path(nameOrPath);
         dest = np.is_absolute() ? np : (fs::current_path() / np);
       }
@@ -518,7 +630,6 @@ namespace vix::commands::NewCommand
       const fs::path presetsFile = projectDir / "CMakePresets.json";
       const fs::path makefilePath = projectDir / "Makefile";
 
-      // Ne pas écraser un dossier non vide
       if (fs::exists(projectDir) && !is_dir_empty(projectDir))
       {
         error("Cannot create project in '" + projectDir.string() +
@@ -527,7 +638,6 @@ namespace vix::commands::NewCommand
         return 3;
       }
 
-      // Structure + fichiers
       fs::create_directories(srcDir);
       fs::create_directories(testsDir);
       write_text_file(mainCpp, kMainCpp);

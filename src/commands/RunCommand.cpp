@@ -455,7 +455,8 @@ namespace vix::commands::RunCommand
 #else
                     quote(exampleExe.string());
 #endif
-                const int code = std::system(cmd.c_str());
+                int code = std::system(cmd.c_str());
+                code = normalize_exit_code(code);
                 if (code != 0)
                 {
                     handle_runtime_exit_code(

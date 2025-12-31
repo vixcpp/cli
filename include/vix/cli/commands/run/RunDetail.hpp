@@ -8,6 +8,10 @@
 
 #include "vix/cli/ErrorHandler.hpp"
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
 namespace vix::commands::RunCommand::detail
 {
     namespace fs = std::filesystem;
@@ -71,13 +75,10 @@ namespace vix::commands::RunCommand::detail
         std::string stderrText;
     };
 
-#ifndef _WIN32
     LiveRunResult run_cmd_live_filtered_capture(const std::string &cmd,
                                                 const std::string &spinnerLabel,
                                                 bool passthroughRuntime,
                                                 int timeoutSec = 0);
-#endif
-
 #endif
 
     // Script mode (vix run foo.cpp)

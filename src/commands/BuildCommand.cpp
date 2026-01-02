@@ -808,7 +808,7 @@ namespace vix::commands::BuildCommand
                             hint("Warning: unable to write config signature file: " + plan_.sigFile.string());
                     }
 
-                    log_success_if(opt_, "✔ Configure step completed.");
+                    log_success_if(opt_, "Configure step completed.");
                     if (!opt_.quiet)
                         std::cout << "\n";
                 }
@@ -839,7 +839,7 @@ namespace vix::commands::BuildCommand
                         return r.exitCode == 0 ? 3 : r.exitCode;
                     }
 
-                    log_success_if(opt_, "✔ Build completed.");
+                    log_success_if(opt_, "Build completed.");
                     if (!opt_.quiet)
                         std::cout << "\n";
                 }

@@ -406,24 +406,31 @@ namespace vix::commands::RunCommand::detail
         return cwd;
     }
 
+    static std::string lower(std::string s)
+    {
+        for (auto &c : s)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    }
+
     void apply_log_level_env(const Options &opt)
     {
         std::string level;
 
         if (!opt.logLevel.empty())
-        {
-            level = opt.logLevel;
-        }
+            level = lower(opt.logLevel);
         else if (opt.quiet)
-        {
             level = "warn";
-        }
         else if (opt.verbose)
-        {
             level = "debug";
-        }
 
-        if (level == "unset" || level == "off" || level == "none")
+        if (level.empty())
+            return;
+
+        if (level == "never" || level == "silent" || level == "0")
+            level = "off";
+
+        if (level == "unset" || level == "default")
         {
 #if defined(_WIN32)
             _putenv_s("VIX_LOG_LEVEL", "");
@@ -433,27 +440,25 @@ namespace vix::commands::RunCommand::detail
             return;
         }
 
-        // ON = default logs
-        if (level == "on")
-        {
-            level = "debug";
-        }
+        if (level == "none")
+            level = "off";
 
-        if (level.empty())
-            return;
+        if (level == "on")
+            level = "info";
+
+        if (level != "trace" && level != "debug" && level != "info" &&
+            level != "warn" && level != "error" && level != "critical" &&
+            level != "off")
+        {
+            hint("Invalid value for --log-level. Using 'info'. Valid: trace|debug|info|warn|error|critical|off.");
+            level = "info";
+        }
 
 #if defined(_WIN32)
         _putenv_s("VIX_LOG_LEVEL", level.c_str());
 #else
         ::setenv("VIX_LOG_LEVEL", level.c_str(), 1);
 #endif
-    }
-
-    static std::string lower(std::string s)
-    {
-        for (auto &c : s)
-            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
     }
 
     void apply_log_format_env(const Options &opt)

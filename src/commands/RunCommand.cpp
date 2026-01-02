@@ -520,74 +520,69 @@ namespace vix::commands::RunCommand
         out << "  vix run [name|file.cpp] [options] [-- compiler/linker flags]\n\n";
 
         out << "Description:\n";
-        out << "  Configure, build and run a Vix.cpp application using CMake presets.\n";
-        out << "  The command ensures CMake is configured, then builds the 'run' target\n";
-        out << "  with the selected preset, and finally executes the resulting binary.\n\n";
+        out << "  Configure, build, and run a Vix.cpp application.\n";
+        out << "  - Project mode: uses CMake presets when available.\n";
+        out << "  - Script mode : compiles and runs a single .cpp file.\n\n";
 
         out << "Options:\n";
-        out << "  -d, --dir <path>              Explicit project directory\n";
-        out << "  --preset <name>               Configure preset (CMakePresets.json), default: dev-ninja\n";
-        out << "  --run-preset <name>           Build preset used to build target 'run'\n";
-        out << "  -j, --jobs <n>                Number of parallel build jobs\n";
-        out << "  --clear <auto|always|never>   Control terminal clearing before runtime output (default: auto)\n";
-        out << "  --clear=auto|always|never     Same as above\n";
+        out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
+        out << "  --preset <name>               Configure preset (default: dev-ninja)\n";
+        out << "  --run-preset <name>           Build preset for target 'run'\n";
+        out << "  -j, --jobs <n>                Parallel build jobs\n";
+        out << "  --clear <auto|always|never>   Clear terminal before runtime output (default: auto)\n";
         out << "  --no-clear                    Alias for --clear=never\n\n";
 
-        out << "Watch / process mode:\n";
-        out << "  --watch, --reload             Rebuild & restart on file changes (hot reload)\n";
-        out << "  --force-server                Force server-like mode (long-lived process)\n";
-        out << "  --force-script                Force script-like mode (short-lived process)\n\n";
+        out << "Watch / reload:\n";
+        out << "  --watch, --reload             Rebuild & restart on file changes\n";
+        out << "  --force-server                Treat process as long-lived (server-like)\n";
+        out << "  --force-script                Treat process as short-lived (script-like)\n\n";
 
-        out << "Passing compiler / linker flags:\n";
-        out << "  Use `--` to separate Vix options from arguments passed to the compiler/linker.\n";
-        out << "  Everything after `--` is forwarded verbatim to the script build step.\n\n";
+        out << "Script mode (single .cpp) flags:\n";
+        out << "  --san                         Enable ASan + UBSan\n";
+        out << "  --ubsan                       Enable UBSan only\n\n";
+
+        out << "Logging:\n";
+        out << "  --log-level <level>           debug | info | warn | error\n";
+        out << "  --verbose                     Alias for --log-level=debug\n";
+        out << "  -q, --quiet                   Alias for --log-level=warn\n";
+        out << "  --log-format <kv|json|json-pretty>\n";
+        out << "                               Structured output format (maps to VIX_LOG_FORMAT)\n";
+        out << "                               Default: kv\n";
+        out << "  --log-color <auto|always|never>\n";
+        out << "                               JSON pretty colors (maps to VIX_COLOR)\n";
+        out << "  --no-color                    Alias for --log-color=never (also respects NO_COLOR)\n\n";
+
+        out << "Passing compiler/linker flags (script mode):\n";
+        out << "  Use `--` to separate Vix options from compiler/linker flags.\n";
+        out << "  Everything after `--` is forwarded to the script build.\n\n";
         out << "  Examples:\n";
         out << "    vix run main.cpp -- -lssl -lcrypto\n";
         out << "    vix run main.cpp -- -L/usr/lib -lssl\n";
         out << "    vix run main.cpp -- -DDEBUG\n\n";
 
-        out << "Sanitizers (script mode only):\n";
-        out << "  --san                         Enable ASan + UBSan for single-file .cpp scripts\n";
-        out << "  --ubsan                       Enable UBSan only for single-file .cpp scripts\n\n";
-
-        out << "Logging:\n";
-        out << "  --log-level <level>           Set runtime log level\n";
-        out << "                               Levels: debug | info | warn | error\n";
-        out << "                               Aliases:\n";
-        out << "                                 on      -> debug\n";
-        out << "                                 off     -> disable logs (unset VIX_LOG_LEVEL)\n";
-        out << "                                 none    -> disable logs\n";
-        out << "                                 unset   -> disable logs\n";
-        out << "  --verbose                     Shortcut for --log-level=debug\n";
-        out << "  -q, --quiet                   Shortcut for --log-level=warn\n\n";
-        out << "Logging (structured):\n";
-        out << "  --log-format <kv|json|json-pretty>\n";
-        out << "                               Set runtime log output format (maps to VIX_LOG_FORMAT)\n";
-        out << "                               Default: kv\n";
-        out << "  --log-color <auto|always|never>\n";
-        out << "                               Control JSON coloring in TTY (maps to VIX_COLOR)\n";
-        out << "  --no-color                    Alias for --log-color=never\n\n";
-
         out << "Examples:\n";
+        out << "  # Project mode\n";
         out << "  vix run\n";
         out << "  vix run api -- --port 8080\n";
         out << "  vix run --dir ./examples/blog\n";
         out << "  vix run api --preset dev-ninja --run-preset run-ninja\n";
         out << "  vix run --watch api\n";
-        out << "  vix run --force-server --watch api\n";
-        out << "  vix run example main              # in the umbrella repo, run ./build/main\n\n";
+        out << "  vix run --force-server --watch api\n\n";
 
-        out << "  vix run main.cpp                  # compile & run single-file script\n";
-        out << "  vix run main.cpp -- -lssl -lcrypto   # link against OpenSSL\n";
-        out << "  vix run main.cpp --san            # script with ASan+UBSan\n";
-        out << "  vix run main.cpp --ubsan          # script with UBSan only\n\n";
+        out << "  # Umbrella repo examples\n";
+        out << "  vix run example main\n";
+        out << "  vix run example now_server\n\n";
 
-        out << "  vix --log-level debug run api     # run with debug logs\n";
-        out << "  vix run api --log-level=off       # disable runtime logs\n";
-        out << "  vix run api --log-level=on        # enable normal logs (info)\n";
-        out << "  vix run api --log-format=json        # JSON logs (one line)\n";
-        out << "  vix run api --log-format=json-pretty # pretty JSON logs\n";
-        out << "  vix run api --log-format=json --no-color\n";
+        out << "  # Script mode (.cpp)\n";
+        out << "  vix run http_ws.cpp\n";
+        out << "  vix run http_ws.cpp --log-level=info --log-format=json-pretty --log-color=always\n";
+        out << "  vix run http_ws.cpp --san\n\n";
+
+        out << "Environment:\n";
+        out << "  VIX_LOG_LEVEL   trace|debug|info|warn|error|critical|off\n";
+        out << "  VIX_LOG_FORMAT  kv|json|json-pretty\n";
+        out << "  VIX_COLOR       auto|always|never   (NO_COLOR disables colors)\n";
+        out << "  VIX_STDOUT_MODE line               (used by CLI for smoother live output)\n\n";
 
         return 0;
     }

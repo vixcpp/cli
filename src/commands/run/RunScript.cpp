@@ -30,9 +30,9 @@ namespace vix::commands::RunCommand::detail
 
     struct ScriptLinkFlags
     {
-        std::vector<std::string> libs;     // ssl, crypto
-        std::vector<std::string> libDirs;  // /usr/lib
-        std::vector<std::string> linkOpts; // -Wl,... autres
+        std::vector<std::string> libs;
+        std::vector<std::string> libDirs;
+        std::vector<std::string> linkOpts;
     };
 
     static ScriptLinkFlags parse_link_flags(const std::vector<std::string> &flags)
@@ -43,16 +43,15 @@ namespace vix::commands::RunCommand::detail
         {
             if (f.rfind("-l", 0) == 0 && f.size() > 2)
             {
-                out.libs.push_back(f.substr(2)); // -lssl -> "ssl"
+                out.libs.push_back(f.substr(2));
                 continue;
             }
             if (f.rfind("-L", 0) == 0 && f.size() > 2)
             {
-                out.libDirs.push_back(f.substr(2)); // -L/path -> "/path"
+                out.libDirs.push_back(f.substr(2));
                 continue;
             }
 
-            // tout le reste on le met en link options (ex: -Wl,...)
             out.linkOpts.push_back(f);
         }
 

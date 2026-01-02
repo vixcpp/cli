@@ -87,7 +87,7 @@ namespace vix::commands::RunCommand::detail
     // Script mode (vix run foo.cpp)
     std::filesystem::path get_scripts_root();
 
-    /// 🔹 Detect whether a .cpp script depends on Vix runtime
+    /// Detect whether a .cpp script depends on Vix runtime
     bool script_uses_vix(const std::filesystem::path &cppPath);
 
     std::string make_script_cmakelists(

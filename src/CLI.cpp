@@ -427,21 +427,16 @@ namespace vix
 
         out << indent(1) << "Tip:\n";
         hint("Most examples can be run directly with `vix run <file>.cpp`.");
-        out << "\n";
         section_title(out, "Examples:");
         dim_note(out, "Run a single C++ file (script mode)");
-        out << indent(2) << "vix run server.cpp\n\n";
+        out << indent(2) << "vix run server.cpp\n";
         dim_note(out, "Dev mode (watch, rebuild, reload)");
         out << indent(2) << "vix dev\n\n";
         dim_note(out, "Minimal HTTP server");
-        out << indent(2) << "vix run examples/http_basic.cpp\n\n";
-        dim_note(out, "Middleware examples");
-        out << indent(2) << "vix run examples/jwt_app_simple.cpp\n";
-        out << indent(2) << "vix run examples/api_key_app_simple.cpp\n";
-        out << indent(2) << "vix run examples/http_cache_app.cpp\n\n";
+        out << indent(2) << "vix run main.cpp\n";
         dim_note(out, "Package & verify an app");
         out << indent(2) << "vix pack --name blog --version 1.0.0\n";
-        out << indent(2) << "vix verify --require-signature\n\n";
+        out << indent(2) << "vix verify --require-signature\n";
         dim_note(out, "Help for a command");
         out << indent(2) << "vix help run\n";
         out << indent(1);

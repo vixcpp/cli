@@ -11,11 +11,11 @@
 
 #ifndef _WIN32
 #include <errno.h>
-#include <signal.h>     // sigaction, SIGINT, SIG_DFL, SIG_IGN
-#include <sys/select.h> // select, fd_set, FD_SET, FD_ZERO, FD_ISSET
-#include <sys/types.h>  // pid_t
-#include <sys/wait.h>   // waitpid, WIFEXITED, WEXITSTATUS
-#include <unistd.h>     // pipe, dup2, read, write, close
+#include <signal.h>
+#include <sys/select.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 using namespace vix::cli::style;
@@ -25,8 +25,6 @@ namespace vix::commands::RunCommand::detail
 
 #ifndef _WIN32
 
-    // RAII: ignore SIGINT in the parent while the child runs.
-    // This avoids double Ctrl+C handling when we forward SIGINT elsewhere.
     struct SigintGuard
     {
         struct sigaction oldAction{};
@@ -49,7 +47,6 @@ namespace vix::commands::RunCommand::detail
         }
     };
 
-    // Best-effort write (no throwing, no retry loops).
     static inline void write_safe(int fd, const char *buf, ssize_t n)
     {
         if (n <= 0)
@@ -67,8 +64,6 @@ namespace vix::commands::RunCommand::detail
         }
     }
 
-    // Filters build output until runtime markers appear; then clears screen + prints header
-    // and forwards runtime output only.
     class RuntimeOutputFilter
     {
     public:
@@ -79,7 +74,6 @@ namespace vix::commands::RunCommand::detail
 
             buffer_ += chunk;
 
-            // detect runtime markers (earliest)
             std::size_t first = std::string::npos;
             auto update_min = [&](std::size_t candidate)
             {
@@ -90,13 +84,10 @@ namespace vix::commands::RunCommand::detail
                 }
             };
 
-            // Legacy runtime markers
             update_min(buffer_.find("[I]"));
             update_min(buffer_.find("[W]"));
             update_min(buffer_.find("[E]"));
             update_min(buffer_.find("Using configuration file:"));
-
-            // ✅ New server banner markers (Vix READY block)
             update_min(buffer_.find("● VIX"));
             update_min(buffer_.find("VIX   READY"));
             update_min(buffer_.find("› HTTP:"));
@@ -120,7 +111,6 @@ namespace vix::commands::RunCommand::detail
 
             clearedForRuntime_ = true;
             buffer_.erase(0, first);
-            // clear terminal (policy: auto|always|never)
             auto should_clear = []() -> bool
             {
                 const char *mode = std::getenv("VIX_CLI_CLEAR");
@@ -132,10 +122,9 @@ namespace vix::commands::RunCommand::detail
 
 #ifndef _WIN32
                 if (std::strcmp(mode, "auto") == 0)
-                    return ::isatty(STDOUT_FILENO) != 0; // only clear when in a real terminal
+                    return ::isatty(STDOUT_FILENO) != 0;
 #endif
 
-                // "always" OR fallback
                 return true;
             };
 
@@ -169,7 +158,6 @@ namespace vix::commands::RunCommand::detail
         }
     };
 
-    // helper: read from fd into a chunk, return false if fd should be considered closed.
     static inline bool read_into(int fd, std::string &outChunk)
     {
         char buf[4096];
@@ -185,7 +173,6 @@ namespace vix::commands::RunCommand::detail
 
     static inline bool should_drop_chunk_default(const std::string &chunk)
     {
-        // avoid noisy stop messages when interrupted
         static const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
         if (chunk.find(ninjaStop) != std::string::npos)
             return true;
@@ -287,7 +274,6 @@ namespace vix::commands::RunCommand::detail
             ::close(outPipe[1]);
             ::close(errPipe[1]);
 
-            // Tell runtime which mode we are in (run by default)
             if (::getenv("VIX_MODE") == nullptr)
             {
                 ::setenv("VIX_MODE", "run", 1);
@@ -306,10 +292,8 @@ namespace vix::commands::RunCommand::detail
 
         RuntimeOutputFilter runtimeFilter;
 
-        // ---- Sanitizer suppressor (stateful) ----
         struct SanitizerSuppressor
         {
-            // Drop ONLY sanitizer report regions (keep normal runtime output).
             bool inReport = false;
             std::string carry;
 
@@ -444,7 +428,7 @@ namespace vix::commands::RunCommand::detail
                         if (is_report_start(line))
                         {
                             inReport = true;
-                            continue; // drop
+                            continue;
                         }
                         out.append(line.data(), line.size());
                     }
@@ -453,7 +437,7 @@ namespace vix::commands::RunCommand::detail
                         if (is_report_end(line))
                         {
                             inReport = false;
-                            continue; // drop end line too
+                            continue;
                         }
                     }
                 }
@@ -466,10 +450,9 @@ namespace vix::commands::RunCommand::detail
 
         bool running = true;
 
-        int finalStatus = 0; // RAW wait-status (waitpid format)
+        int finalStatus = 0;
         bool haveStatus = false;
 
-        // ---- Timeout state ----
         const bool enableTimeout = (timeoutSec > 0);
         const auto startTime = std::chrono::steady_clock::now();
         bool didTimeout = false;
@@ -492,7 +475,6 @@ namespace vix::commands::RunCommand::detail
 
         while (running)
         {
-            // ---- Timeout: SIGTERM then SIGKILL ----
             if (!didTimeout && enableTimeout && elapsed_sec() >= timeoutSec)
             {
                 didTimeout = true;
@@ -530,7 +512,6 @@ namespace vix::commands::RunCommand::detail
                 maxfd = std::max(maxfd, errPipe[0]);
             }
 
-            // If both pipes are closed, just wait for process end.
             if (maxfd < 0)
             {
                 int status = 0;
@@ -547,7 +528,6 @@ namespace vix::commands::RunCommand::detail
             struct timeval tv;
             struct timeval *tv_ptr = nullptr;
 
-            // wake up regularly for spinner or timeout checks
             if (spinnerActive || enableTimeout)
             {
                 tv.tv_sec = 0;
@@ -618,7 +598,6 @@ namespace vix::commands::RunCommand::detail
                     std::string chunk;
                     if (read_into(errPipe[0], chunk))
                     {
-                        // Always capture full stderr for detectors
                         result.stderrText += chunk;
 
                         if (!should_drop_chunk_default(chunk))
@@ -649,7 +628,6 @@ namespace vix::commands::RunCommand::detail
                 }
             }
 
-            // Check child status without blocking
             int status = 0;
             pid_t r = ::waitpid(pid, &status, WNOHANG);
             if (r == pid)
@@ -666,7 +644,6 @@ namespace vix::commands::RunCommand::detail
         close_safe(outPipe[0]);
         close_safe(errPipe[0]);
 
-        // If we never captured status, wait once
         if (!haveStatus)
         {
             int status = 0;
@@ -681,7 +658,6 @@ namespace vix::commands::RunCommand::detail
 
         if (didTimeout)
         {
-            // Conventional timeout code (stable, regardless of SIGTERM/SIGKILL)
             result.exitCode = 124;
             return result;
         }
@@ -692,7 +668,6 @@ namespace vix::commands::RunCommand::detail
 
 #endif // !_WIN32
 
-    // Non-capturing legacy API (declared in RunDetail.hpp)
     int run_cmd_live_filtered(const std::string &cmd,
                               const std::string &spinnerLabel)
     {

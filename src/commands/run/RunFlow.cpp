@@ -100,7 +100,27 @@ namespace vix::commands::RunCommand::detail
             {
                 o.logLevel = a.substr(std::string("--log-level=").size());
             }
-            // mode watch / reload
+            else if (a == "--log-format" && i + 1 < args.size())
+            {
+                o.logFormat = args[++i];
+            }
+            else if (a.rfind("--log-format=", 0) == 0)
+            {
+                o.logFormat = a.substr(std::string("--log-format=").size());
+            }
+            else if (a == "--log-color" && i + 1 < args.size())
+            {
+                o.logColor = args[++i]; // auto|always|never
+            }
+            else if (a.rfind("--log-color=", 0) == 0)
+            {
+                o.logColor = a.substr(std::string("--log-color=").size());
+            }
+            else if (a == "--no-color")
+            {
+                o.noColor = true;
+            }
+
             else if (a == "--watch" || a == "--reload")
             {
                 o.watch = true;
@@ -426,6 +446,67 @@ namespace vix::commands::RunCommand::detail
         _putenv_s("VIX_LOG_LEVEL", level.c_str());
 #else
         ::setenv("VIX_LOG_LEVEL", level.c_str(), 1);
+#endif
+    }
+
+    static std::string lower(std::string s)
+    {
+        for (auto &c : s)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    }
+
+    void apply_log_format_env(const Options &opt)
+    {
+        if (opt.logFormat.empty())
+            return;
+
+        std::string fmt = lower(opt.logFormat);
+
+        // aliases
+        if (fmt == "pretty" || fmt == "pretty-json" || fmt == "pretty_json")
+            fmt = "json-pretty";
+
+        if (fmt != "kv" && fmt != "json" && fmt != "json-pretty")
+        {
+            hint("Invalid value for --log-format. Using 'kv'. Valid: kv|json|json-pretty.");
+            fmt = "kv";
+        }
+
+#if defined(_WIN32)
+        _putenv_s("VIX_LOG_FORMAT", fmt.c_str());
+#else
+        ::setenv("VIX_LOG_FORMAT", fmt.c_str(), 1);
+#endif
+    }
+
+    void apply_log_color_env(const Options &opt)
+    {
+        // --no-color gagne sur tout
+        if (opt.noColor)
+        {
+#if defined(_WIN32)
+            _putenv_s("VIX_COLOR", "never");
+#else
+            ::setenv("VIX_COLOR", "never", 1);
+#endif
+            return;
+        }
+
+        if (opt.logColor.empty())
+            return;
+
+        std::string v = lower(opt.logColor);
+        if (v != "auto" && v != "always" && v != "never")
+        {
+            hint("Invalid value for --log-color. Using 'auto'. Valid: auto|always|never.");
+            v = "auto";
+        }
+
+#if defined(_WIN32)
+        _putenv_s("VIX_COLOR", v.c_str());
+#else
+        ::setenv("VIX_COLOR", v.c_str(), 1);
 #endif
     }
 

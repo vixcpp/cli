@@ -27,6 +27,9 @@ namespace vix::commands::RunCommand::detail
         bool quiet = false;
         bool verbose = false;
         std::string logLevel;
+        std::string logFormat;
+        std::string logColor; // --log-color (auto|always|never)
+        bool noColor = false; // --no-color
 
         std::string exampleName;
 
@@ -121,5 +124,16 @@ namespace vix::commands::RunCommand::detail
 
     // Build log analysis
     bool has_real_build_work(const std::string &log);
+
+    void apply_log_level_env(const Options &opt);
+    void apply_log_format_env(const Options &opt);
+    void apply_log_color_env(const Options &opt);
+
+    inline void apply_log_env(const Options &opt)
+    {
+        apply_log_level_env(opt);
+        apply_log_format_env(opt);
+        apply_log_color_env(opt);
+    }
 
 } // namespace vix::commands::RunCommand::detail

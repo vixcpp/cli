@@ -166,7 +166,8 @@ namespace vix::commands::RunCommand
         ensure_mode_env_for_run(opt);
         enable_line_buffered_stdout_for_apps();
 
-        apply_log_level_env(opt);
+        // apply_log_level_env(opt);
+        apply_log_env(opt);
 
 #ifndef _WIN32
         ::setenv("VIX_CLI_CLEAR", opt.clearMode.c_str(), 1);
@@ -553,12 +554,19 @@ namespace vix::commands::RunCommand
         out << "  --log-level <level>           Set runtime log level\n";
         out << "                               Levels: debug | info | warn | error\n";
         out << "                               Aliases:\n";
-        out << "                                 on      -> info\n";
+        out << "                                 on      -> debug\n";
         out << "                                 off     -> disable logs (unset VIX_LOG_LEVEL)\n";
         out << "                                 none    -> disable logs\n";
         out << "                                 unset   -> disable logs\n";
         out << "  --verbose                     Shortcut for --log-level=debug\n";
         out << "  -q, --quiet                   Shortcut for --log-level=warn\n\n";
+        out << "Logging (structured):\n";
+        out << "  --log-format <kv|json|json-pretty>\n";
+        out << "                               Set runtime log output format (maps to VIX_LOG_FORMAT)\n";
+        out << "                               Default: kv\n";
+        out << "  --log-color <auto|always|never>\n";
+        out << "                               Control JSON coloring in TTY (maps to VIX_COLOR)\n";
+        out << "  --no-color                    Alias for --log-color=never\n\n";
 
         out << "Examples:\n";
         out << "  vix run\n";
@@ -577,6 +585,9 @@ namespace vix::commands::RunCommand
         out << "  vix --log-level debug run api     # run with debug logs\n";
         out << "  vix run api --log-level=off       # disable runtime logs\n";
         out << "  vix run api --log-level=on        # enable normal logs (info)\n";
+        out << "  vix run api --log-format=json        # JSON logs (one line)\n";
+        out << "  vix run api --log-format=json-pretty # pretty JSON logs\n";
+        out << "  vix run api --log-format=json --no-color\n";
 
         return 0;
     }

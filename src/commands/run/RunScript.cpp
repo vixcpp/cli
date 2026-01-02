@@ -15,10 +15,10 @@
 #include <chrono>
 
 #ifndef _WIN32
-#include <unistd.h>    // fork, execl, _exit
-#include <sys/types.h> // pid_t
-#include <sys/wait.h>  // waitpid
-#include <signal.h>    // SIGINT, kill
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
 #endif
 
 using namespace vix::cli::style;

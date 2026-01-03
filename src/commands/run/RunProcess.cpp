@@ -158,6 +158,82 @@ namespace vix::commands::RunCommand::detail
         }
     };
 
+    static inline bool is_cmake_configure_cmd(const std::string &cmd) noexcept
+    {
+        // Configure = cmake ..  OR  cmake --preset <x>
+        // Build = cmake --build ...
+        const bool isCmake = (cmd.find("cmake") != std::string::npos);
+        const bool isBuild = (cmd.find("--build") != std::string::npos);
+        const bool isPreset = (cmd.find("--preset") != std::string::npos);
+        const bool isDotDot = (cmd.find("cmake ..") != std::string::npos) || (cmd.find("cmake  ..") != std::string::npos);
+
+        return isCmake && !isBuild && (isPreset || isDotDot);
+    }
+
+    static inline bool looks_like_error_or_warning(std::string_view line) noexcept
+    {
+        // (CMake Error:, CMake Warning:, error:, warning:, etc.)
+        auto has = [&](std::string_view s)
+        { return line.find(s) != std::string_view::npos; };
+
+        if (has("CMake Error") || has("CMake Warning"))
+            return true;
+        if (has("error:") || has("Error:") || has("ERROR:"))
+            return true;
+        if (has("warning:") || has("Warning:") || has("WARNING:"))
+            return true;
+
+        return false;
+    }
+
+    struct CMakeNoiseFilter
+    {
+        std::string carry;
+
+        std::string filter(const std::string &chunk)
+        {
+            std::string data = carry;
+            data += chunk;
+            carry.clear();
+
+            std::string out;
+            out.reserve(data.size());
+
+            std::size_t start = 0;
+            while (true)
+            {
+                const std::size_t nl = data.find('\n', start);
+                if (nl == std::string::npos)
+                {
+                    carry = data.substr(start);
+                    break;
+                }
+
+                std::string_view line(&data[start], (nl - start) + 1);
+                start = nl + 1;
+
+                if (looks_like_error_or_warning(line))
+                {
+                    out.append(line.data(), line.size());
+                    continue;
+                }
+
+                if (line.rfind("-- ", 0) == 0)
+                    continue;
+
+                if (line.find("Preset CMake variables:") != std::string_view::npos)
+                    continue;
+
+                if (line.rfind("  CMAKE_", 0) == 0)
+                    continue;
+
+                out.append(line.data(), line.size());
+            }
+
+            return out;
+        }
+    };
+
     static inline bool read_into(int fd, std::string &outChunk)
     {
         char buf[4096];
@@ -291,6 +367,9 @@ namespace vix::commands::RunCommand::detail
         std::size_t frameIndex = 0;
 
         RuntimeOutputFilter runtimeFilter;
+
+        const bool cmakeConfigure = is_cmake_configure_cmd(cmd);
+        CMakeNoiseFilter cmakeNoise;
 
         struct SanitizerSuppressor
         {
@@ -568,6 +647,9 @@ namespace vix::commands::RunCommand::detail
                         if (!should_drop_chunk_default(chunk))
                         {
                             std::string printable = sanitizer.filter_for_print(chunk);
+                            if (!printable.empty() && cmakeConfigure)
+                                printable = cmakeNoise.filter(printable);
+
                             if (!printable.empty())
                             {
                                 std::string filtered;

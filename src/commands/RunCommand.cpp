@@ -165,7 +165,7 @@ namespace vix::commands::RunCommand
                     << " && cmake --preset " << quote(opt.preset) << "\"";
 #else
                 oss << "cd " << quote(projectDir.string())
-                    << " && cmake --preset " << quote(opt.preset);
+                    << " && cmake --log-level=WARNING --preset " << quote(opt.preset);
 #endif
                 const std::string cmd = oss.str();
 
@@ -260,7 +260,8 @@ namespace vix::commands::RunCommand
 #ifdef _WIN32
             oss << "cmd /C \"cd /D " << quote(buildDir.string()) << " && cmake ..\"";
 #else
-            oss << "cd " << quote(buildDir.string()) << " && cmake ..";
+            oss << "cd " << quote(buildDir.string())
+                << " && cmake --log-level=WARNING ..";
 #endif
             const std::string cmd = oss.str();
             const int code = run_cmd_live_filtered(
@@ -293,7 +294,8 @@ namespace vix::commands::RunCommand
             if (opt.jobs > 0)
                 oss << " -j " << opt.jobs;
 #else
-            oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
+            oss << "cd " << quote(buildDir.string())
+                << " && cmake --log-level=WARNING --build .";
             if (opt.jobs > 0)
                 oss << " -j " << opt.jobs;
 #endif

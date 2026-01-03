@@ -713,6 +713,7 @@ namespace vix::commands::BuildCommand
         {
             std::ostringstream oss;
             oss << "cmake"
+                << " --log-level=WARNING"
                 << " -S " << quote(plan.projectDir.string())
                 << " -B " << quote(plan.buildDir.string())
                 << " -G " << quote(plan.preset.generator);

@@ -361,12 +361,13 @@ int main()
   {
     return R"JSON({
   "version": 6,
+
   "configurePresets": [
     {
       "name": "dev-ninja",
       "displayName": "Dev (Ninja, Debug)",
       "generator": "Ninja",
-      "binaryDir": "build-dev-ninja",
+      "binaryDir": "build-ninja",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
@@ -376,7 +377,7 @@ int main()
       "name": "dev-ninja-san",
       "displayName": "Dev (Ninja, ASan+UBSan, Debug)",
       "generator": "Ninja",
-      "binaryDir": "build-dev-ninja-san",
+      "binaryDir": "build-ninja-san",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -388,7 +389,7 @@ int main()
       "name": "dev-ninja-ubsan",
       "displayName": "Dev (Ninja, UBSan, Debug)",
       "generator": "Ninja",
-      "binaryDir": "build-dev-ninja-ubsan",
+      "binaryDir": "build-ninja-ubsan",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -422,36 +423,36 @@ int main()
 
   "buildPresets": [
     {
-      "name": "build-dev-ninja",
-      "displayName": "Build (ALL, Dev Ninja)",
+      "name": "build-ninja",
+      "displayName": "Build (ALL, Ninja Debug)",
       "configurePreset": "dev-ninja"
     },
     {
-      "name": "build-dev-ninja-san",
-      "displayName": "Build (ALL, Dev Ninja, ASan+UBSan)",
+      "name": "build-ninja-san",
+      "displayName": "Build (ALL, Ninja Debug, ASan+UBSan)",
       "configurePreset": "dev-ninja-san"
     },
     {
-      "name": "build-dev-ninja-ubsan",
-      "displayName": "Build (ALL, Dev Ninja, UBSan)",
+      "name": "build-ninja-ubsan",
+      "displayName": "Build (ALL, Ninja Debug, UBSan)",
       "configurePreset": "dev-ninja-ubsan"
     },
 
     {
       "name": "build-release",
-      "displayName": "Build (ALL, Release Ninja)",
+      "displayName": "Build (ALL, Ninja Release)",
       "configurePreset": "release"
     },
 
     {
       "name": "run-dev-ninja",
-      "displayName": "Run (target=run, Dev Ninja)",
+      "displayName": "Run (target=run, Ninja Debug)",
       "configurePreset": "dev-ninja",
       "targets": ["run"]
     },
     {
       "name": "run-release",
-      "displayName": "Run (target=run, Release Ninja)",
+      "displayName": "Run (target=run, Ninja Release)",
       "configurePreset": "release",
       "targets": ["run"]
     },
@@ -472,23 +473,23 @@ int main()
 
     {
       "name": "dev-ninja",
-      "displayName": "Alias: dev-ninja → build",
+      "displayName": "Alias: dev-ninja → build-ninja",
       "configurePreset": "dev-ninja"
     },
     {
       "name": "dev-ninja-san",
-      "displayName": "Alias: dev-ninja-san → build",
+      "displayName": "Alias: dev-ninja-san → build-ninja-san",
       "configurePreset": "dev-ninja-san"
     },
     {
       "name": "dev-ninja-ubsan",
-      "displayName": "Alias: dev-ninja-ubsan → build",
+      "displayName": "Alias: dev-ninja-ubsan → build-ninja-ubsan",
       "configurePreset": "dev-ninja-ubsan"
     },
 
     {
       "name": "release",
-      "displayName": "Alias: release → build",
+      "displayName": "Alias: release → build-release",
       "configurePreset": "release"
     },
 

@@ -21,7 +21,6 @@ namespace vix::commands::BuildCommand
 {
     namespace
     {
-        // Platform helpers
         static int normalize_exit_code(int raw) noexcept
         {
 #ifdef __linux__
@@ -468,7 +467,6 @@ namespace vix::commands::BuildCommand
             return o;
         }
 
-        // Logging helpers
         static void log_header_if(const Options &opt, const std::string &title)
         {
             if (opt.quiet)
@@ -480,14 +478,40 @@ namespace vix::commands::BuildCommand
         {
             if (opt.quiet)
                 return;
-            step("  • " + line);
+            step(line);
         }
 
-        static void log_success_if(const Options &opt, const std::string &msg)
+        static std::string format_seconds(long long ms)
+        {
+            std::ostringstream oss;
+            oss.setf(std::ios::fixed);
+            oss.precision(1);
+            oss << (static_cast<double>(ms) / 1000.0) << "s";
+            return oss.str();
+        }
+
+        static std::string ninja_status_env_if_needed(const Preset &p)
+        {
+            if (p.generator == "Ninja")
+                return "NINJA_STATUS='[%f/%t %p%%] '";
+            return "";
+        }
+
+        static void status_line(const Options &opt, const std::string &tag, const std::string &msg)
         {
             if (opt.quiet)
                 return;
-            success(msg);
+
+            std::cout << PAD << BOLD << CYAN << tag << RESET << " " << msg << "\n";
+        }
+
+        static void finished_line(const Options &opt, const std::string &profile, const std::string &took)
+        {
+            if (opt.quiet)
+                return;
+
+            std::cout << PAD << GREEN << "Finished" << RESET
+                      << " " << profile << " in " << took << "\n";
         }
 
         static void log_hint_if(const Options &opt, const std::string &msg)
@@ -649,10 +673,12 @@ namespace vix::commands::BuildCommand
             std::string command;
         };
 
-        static ExecResult run_shell_to_log(const std::string &cmd, const fs::path &logPath)
+        static ExecResult run_shell_live_to_log(const std::string &cmd,
+                                                const std::string &envPrefix,
+                                                const fs::path &logPath)
         {
             std::ostringstream oss;
-            oss << "sh -lc " << quote(cmd) << " >" << quote(logPath.string()) << " 2>&1";
+            oss << "sh -lc " << quote(envPrefix + " " + cmd + " 2>&1 | tee " + quote(logPath.string()));
 
             ExecResult r;
             r.command = cmd;
@@ -714,9 +740,8 @@ namespace vix::commands::BuildCommand
             if (opt.quiet)
                 return;
 
-            info("Preset CMake variables:");
             for (const auto &kv : plan.cmakeVars)
-                step("  •   " + kv.first + "=" + kv.second);
+                step(kv.first + "=" + kv.second);
 
             std::cout << "\n";
         }
@@ -783,32 +808,45 @@ namespace vix::commands::BuildCommand
 
                 if (need_configure(opt_, plan_))
                 {
-                    log_header_if(opt_, "Configuring project (preset: " + plan_.preset.name + ")...");
+                    status_line(
+                        opt_,
+                        "Configuring",
+                        plan_.projectDir.filename().string() +
+                            " (" + plan_.preset.name + ")");
+
                     print_preset_summary(opt_, plan_);
 
+                    const auto t0 = std::chrono::steady_clock::now();
                     const std::string cmd = cmake_configure_cmd(plan_);
+
+#ifndef _WIN32
+                    const ExecResult r = run_shell_live_to_log(cmd, "", plan_.configureLog);
+#else
                     const ExecResult r = run_shell_to_log(cmd, plan_.configureLog);
+#endif
 
                     if (r.exitCode != 0)
                     {
                         error("CMake configure failed.");
                         log_hint_if(opt_, "Command:");
                         if (!opt_.quiet)
-                            step("  " + cmd);
-
+                            step(cmd);
                         if (!opt_.quiet)
                             print_log_tail(plan_.configureLog, 160);
-
                         return r.exitCode == 0 ? 2 : r.exitCode;
                     }
 
                     if (!write_text_file_atomic(plan_.sigFile, plan_.signature))
                     {
                         if (!opt_.quiet)
-                            hint("Warning: unable to write config signature file: " + plan_.sigFile.string());
+                            hint("Warning: unable to write config signature file");
                     }
 
-                    log_success_if(opt_, "Configure step completed.");
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - t0)
+                                        .count();
+
+                    success("Configured in " + format_seconds(ms));
                     if (!opt_.quiet)
                         std::cout << "\n";
                 }
@@ -821,25 +859,43 @@ namespace vix::commands::BuildCommand
                 }
 
                 {
-                    log_header_if(opt_, "Building project...");
+                    status_line(
+                        opt_,
+                        "Building",
+                        plan_.projectDir.filename().string() +
+                            " [" + plan_.preset.name + "]");
 
+                    const auto t0 = std::chrono::steady_clock::now();
                     const std::string cmd = cmake_build_cmd(plan_, opt_);
+
+#ifndef _WIN32
+                    const std::string env = ninja_status_env_if_needed(plan_.preset);
+                    const ExecResult r = run_shell_live_to_log(cmd, env, plan_.buildLog);
+#else
                     const ExecResult r = run_shell_to_log(cmd, plan_.buildLog);
+#endif
+
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - t0)
+                                        .count();
 
                     if (r.exitCode != 0)
                     {
                         error("Build failed.");
                         log_hint_if(opt_, "Command:");
                         if (!opt_.quiet)
-                            step("  " + cmd);
-
+                            step(cmd);
                         if (!opt_.quiet)
                             print_log_tail(plan_.buildLog, 200);
-
                         return r.exitCode == 0 ? 3 : r.exitCode;
                     }
 
-                    log_success_if(opt_, "Build completed.");
+                    const std::string profile =
+                        (plan_.preset.buildType == "Release")
+                            ? "release [optimized]"
+                            : "dev [unoptimized + debuginfo]";
+
+                    finished_line(opt_, profile, format_seconds(ms));
                     if (!opt_.quiet)
                         std::cout << "\n";
                 }

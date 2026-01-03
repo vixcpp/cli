@@ -46,6 +46,112 @@ namespace vix::commands::CheckCommand::detail
         return projectDir / ("build-" + preset);
     }
 
+    static std::vector<std::string> list_build_presets(const fs::path &projectDir)
+    {
+        std::vector<std::string> out;
+
+        std::ostringstream cmd;
+#ifdef _WIN32
+        cmd << "cmd /C \"cd /D " << quote(projectDir.string()) << " && cmake --list-presets\"";
+#else
+        cmd << "cd " << quote(projectDir.string()) << " && cmake --list-presets";
+#endif
+
+        int code = 0;
+        const std::string s = run_and_capture_with_code(cmd.str(), code);
+        if (code != 0 || s.empty())
+            return out;
+
+        std::istringstream iss(s);
+        std::string line;
+        while (std::getline(iss, line))
+        {
+            auto q1 = line.find('"');
+            if (q1 == std::string::npos)
+                continue;
+            auto q2 = line.find('"', q1 + 1);
+            if (q2 == std::string::npos)
+                continue;
+
+            const std::string name = line.substr(q1 + 1, q2 - (q1 + 1));
+            if (!name.empty())
+                out.push_back(name);
+        }
+
+        return out;
+    }
+
+    static bool contains_preset(const std::vector<std::string> &presets, const std::string &name)
+    {
+        for (const auto &p : presets)
+            if (p == name)
+                return true;
+        return false;
+    }
+
+    static std::string pick_build_preset_smart(const fs::path &projectDir,
+                                               const std::string &configurePreset,
+                                               const std::string &userBuildPresetOverride)
+    {
+        if (!userBuildPresetOverride.empty())
+            return userBuildPresetOverride;
+
+        const auto presets = list_build_presets(projectDir);
+        if (presets.empty())
+        {
+            if (configurePreset == "dev-ninja")
+                return "build-ninja";
+            if (configurePreset == "dev-ninja-san")
+                return "build-ninja-san";
+            if (configurePreset == "dev-ninja-ubsan")
+                return "build-ninja-ubsan";
+            return configurePreset;
+        }
+
+        if (configurePreset == "dev-ninja")
+        {
+            if (contains_preset(presets, "build-ninja"))
+                return "build-ninja";
+            if (contains_preset(presets, "build-dev-ninja"))
+                return "build-dev-ninja";
+            if (contains_preset(presets, "dev-ninja"))
+                return "dev-ninja";
+            return "build-ninja";
+        }
+
+        if (configurePreset == "dev-ninja-san")
+        {
+            if (contains_preset(presets, "build-ninja-san"))
+                return "build-ninja-san";
+            if (contains_preset(presets, "build-dev-ninja-san"))
+                return "build-dev-ninja-san";
+            if (contains_preset(presets, "dev-ninja-san"))
+                return "dev-ninja-san";
+            return "build-ninja-san";
+        }
+
+        if (configurePreset == "dev-ninja-ubsan")
+        {
+            if (contains_preset(presets, "build-ninja-ubsan"))
+                return "build-ninja-ubsan";
+            if (contains_preset(presets, "build-dev-ninja-ubsan"))
+                return "build-dev-ninja-ubsan";
+            if (contains_preset(presets, "dev-ninja-ubsan"))
+                return "dev-ninja-ubsan";
+            return "build-ninja-ubsan";
+        }
+
+        {
+            const std::string a = "build-" + configurePreset;
+            if (contains_preset(presets, a))
+                return a;
+            if (contains_preset(presets, configurePreset))
+                return configurePreset;
+        }
+
+        return configurePreset;
+    }
+
     static std::string guess_project_name_from_dir(const fs::path &projectDir)
     {
         // blog/ -> "blog"
@@ -57,7 +163,6 @@ namespace vix::commands::CheckCommand::detail
 
     static std::string read_cmake_cache_value(const fs::path &cacheFile, const std::string &key)
     {
-        // Format: KEY:TYPE=VALUE
         std::ifstream in(cacheFile);
         if (!in.is_open())
             return {};
@@ -144,7 +249,6 @@ namespace vix::commands::CheckCommand::detail
             }
         }
 
-        // Last resort: what we *expect* to exist (so error is readable)
         return buildDir / exeName;
     }
 
@@ -193,9 +297,17 @@ namespace vix::commands::CheckCommand::detail
             step("Preset: " + preset);
 
             // 1) build dir (from configure preset)
-            const fs::path buildDir = guess_build_dir_from_configure_preset(projectDir, preset);
+            fs::path buildDir = guess_build_dir_from_configure_preset(projectDir, preset);
 
-            // 2) configure only if cache missing
+            // Legacy fallback: older generated projects used build-dev-*
+            if (!has_cmake_cache(buildDir) && preset.rfind("dev-", 0) == 0)
+            {
+                const fs::path legacy = projectDir / ("build-dev-" + preset.substr(4)); // dev-ninja -> build-dev-ninja
+                if (has_cmake_cache(legacy))
+                    buildDir = legacy;
+            }
+
+            // 2) configure only if cache missing (for the chosen buildDir)
             if (!has_cmake_cache(buildDir))
             {
                 info("No CMake cache detected for preset — configuring...");
@@ -240,24 +352,9 @@ namespace vix::commands::CheckCommand::detail
                 step("Build dir: " + buildDir.string());
             }
 
-            // 3) choose build preset (never run preset)
-            std::string buildPreset;
-            if (!opt.buildPreset.empty())
-            {
-                buildPreset = opt.buildPreset;
-            }
-            else
-            {
-                // map configure preset -> build preset names in your JSON
-                if (preset == "dev-ninja")
-                    buildPreset = "build-ninja";
-                else if (preset == "dev-ninja-san")
-                    buildPreset = "build-ninja-san";
-                else if (preset == "dev-ninja-ubsan")
-                    buildPreset = "build-ninja-ubsan";
-                else
-                    buildPreset = preset; // fallback if user uses custom presets/aliases
-            }
+            // 3) choose build preset
+            const std::string buildPreset =
+                pick_build_preset_smart(projectDir, preset, opt.buildPreset);
 
             // 4) build
             std::ostringstream b;
@@ -305,8 +402,6 @@ namespace vix::commands::CheckCommand::detail
                 const fs::path ctestPresets = projectDir / "CTestPresets.json";
                 const bool hasCTestPresets = fs::exists(ctestPresets);
 
-                // Helper: decide if we should add --output-on-failure
-                // (When listing tests, this is not needed and can be confusing.)
                 auto wants_listing_only = [&]() -> bool
                 {
                     for (const auto &x : opt.ctestArgs)
@@ -319,7 +414,6 @@ namespace vix::commands::CheckCommand::detail
 
                 const bool listingOnly = wants_listing_only();
 
-                // Helper: append extra args
                 auto append_ctest_args = [&](std::ostringstream &os)
                 {
                     for (const auto &x : opt.ctestArgs)
@@ -392,17 +486,11 @@ namespace vix::commands::CheckCommand::detail
 #ifndef _WIN32
             if (opt.runAfterBuild)
             {
-                // Important: appliquer env ASAN/UBSAN avant d'exécuter
-                // run::apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
-
                 const std::string projectName = guess_project_name_from_dir(projectDir);
                 const std::string configName = resolve_build_type_from_cache_or_default(buildDir, "Debug");
                 const fs::path exePath = compute_runtime_executable_path(buildDir, projectName, configName);
-
-                // timeout (seconds)
                 const int timeoutSec = (opt.runTimeoutSec > 0) ? opt.runTimeoutSec : 15;
 
-                // Run from buildDir (better for relative paths/resources)
                 std::ostringstream r;
                 r << "cd " << quote(buildDir.string()) << " && " << quote(exePath.string());
 

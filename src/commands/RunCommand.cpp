@@ -10,8 +10,6 @@
 #include <vector>
 #include <chrono>
 #include <iomanip>
-#include <thread>
-#include <atomic>
 #include <cstdlib>
 
 using namespace vix::cli::style;
@@ -19,63 +17,6 @@ namespace fs = std::filesystem;
 
 namespace
 {
-    struct Spinner
-    {
-        std::atomic<bool> running{false};
-        std::thread worker;
-
-        explicit Spinner(const std::string &text)
-        {
-            start(text);
-        }
-
-        void start(const std::string &text)
-        {
-            bool expected = false;
-            if (!running.compare_exchange_strong(expected, true,
-                                                 std::memory_order_acq_rel))
-                return;
-
-            worker = std::thread(
-                [this, text]()
-                {
-                    static const char *frames[] = {
-                        "⠋", "⠙", "⠹", "⠸",
-                        "⠼", "⠴", "⠦", "⠧",
-                        "⠇", "⠏"};
-                    const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
-
-                    std::size_t idx = 0;
-
-                    while (running.load(std::memory_order_relaxed))
-                    {
-                        std::cout << "\r┃   " << frames[idx] << " " << text << "   "
-                                  << std::flush;
-
-                        idx = (idx + 1) % frameCount;
-                        std::this_thread::sleep_for(std::chrono::milliseconds(80));
-                    }
-                });
-        }
-
-        void stop()
-        {
-            bool expected = true;
-            if (!running.compare_exchange_strong(expected, false))
-                return;
-
-            if (worker.joinable())
-                worker.join();
-
-            std::cout << "\r" << std::string(80, ' ') << "\r" << std::flush;
-        }
-
-        ~Spinner()
-        {
-            stop();
-        }
-    };
-
     struct RunProgress
     {
         using Clock = std::chrono::steady_clock;
@@ -166,7 +107,6 @@ namespace vix::commands::RunCommand
         ensure_mode_env_for_run(opt);
         enable_line_buffered_stdout_for_apps();
 
-        // apply_log_level_env(opt);
         apply_log_env(opt);
 
 #ifndef _WIN32
@@ -229,18 +169,12 @@ namespace vix::commands::RunCommand
 #endif
                 const std::string cmd = oss.str();
 
-                Spinner spinner("Configuring project with preset \"" + opt.preset + "\"");
-
-                int code = 0;
-                std::string configureLog = run_and_capture_with_code(cmd, code);
-
-                spinner.stop();
+                const int code = run_cmd_live_filtered(
+                    cmd,
+                    "Configuring project (preset \"" + opt.preset + "\")");
 
                 if (code != 0)
                 {
-                    if (!configureLog.empty())
-                        std::cout << configureLog;
-
                     error("CMake configure failed with preset '" + opt.preset + "'.");
                     hint("Run the same command manually to inspect the error:");
 #ifdef _WIN32
@@ -251,9 +185,6 @@ namespace vix::commands::RunCommand
 #endif
                     return code != 0 ? code : 2;
                 }
-
-                if (opt.verbose && !configureLog.empty())
-                    std::cout << configureLog;
 
                 progress.phase_done("Configure project", "completed");
             }
@@ -307,10 +238,8 @@ namespace vix::commands::RunCommand
             return 0;
         }
 
-        // ----- CAS 2 : Fallback build/ + cmake .. -----
         fs::path buildDir = projectDir / "build";
 
-        // 3 main phases: configure (if needed) + build + run
         RunProgress progress(/*totalSteps=*/3);
 
         {
@@ -334,10 +263,10 @@ namespace vix::commands::RunCommand
             oss << "cd " << quote(buildDir.string()) << " && cmake ..";
 #endif
             const std::string cmd = oss.str();
+            const int code = run_cmd_live_filtered(
+                cmd,
+                "Configuring project (fallback)");
 
-            Spinner spinner("Configuring project (fallback)");
-
-            const int code = run_cmd_live_filtered(cmd);
             if (code != 0)
             {
                 error("CMake configure failed (fallback build/, code " + std::to_string(code) + ").");
@@ -370,18 +299,11 @@ namespace vix::commands::RunCommand
 #endif
             const std::string cmd = oss.str();
 
-            int code = 0;
             std::string buildLog;
 
-            if (opt.quiet)
-            {
-                Spinner spinner("Building project (fallback)");
-                buildLog = run_and_capture_with_code(cmd, code);
-            }
-            else
-            {
-                code = run_cmd_live_filtered(cmd, "Building project (fallback)");
-            }
+            const int code = run_cmd_live_filtered(
+                cmd,
+                "Building project (fallback)");
 
             if (code != 0)
             {

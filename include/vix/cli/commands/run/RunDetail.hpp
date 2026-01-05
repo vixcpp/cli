@@ -128,6 +128,9 @@ namespace vix::commands::RunCommand::detail
 
     void apply_log_level_env(const Options &opt);
 
+    std::optional<fs::path> preset_binary_dir(const fs::path &projectDir,
+                                              const std::string &configurePreset);
+
     // Execution helpers (capturing output)
     std::string run_and_capture_with_code(const std::string &cmd, int &exitCode);
     std::string run_and_capture(const std::string &cmd);

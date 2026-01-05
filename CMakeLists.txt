@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(vix_cli VERSION 1.8.0 LANGUAGES CXX)
+project(vix_cli VERSION 1.16.5 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)

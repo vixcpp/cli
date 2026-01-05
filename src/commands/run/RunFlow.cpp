@@ -419,13 +419,92 @@ namespace vix::commands::RunCommand::detail
     }
 #endif
 
-    // Presets & project selection
-
     bool has_presets(const fs::path &projectDir)
     {
         std::error_code ec;
         return fs::exists(projectDir / "CMakePresets.json", ec) ||
                fs::exists(projectDir / "CMakeUserPresets.json", ec);
+    }
+
+    std::optional<fs::path> preset_binary_dir(const fs::path &projectDir,
+                                              const std::string &configurePreset)
+    {
+#ifdef _WIN32
+        (void)projectDir;
+        (void)configurePreset;
+        return std::nullopt;
+#else
+        std::error_code ec;
+
+        const fs::path presetsPath = projectDir / "CMakePresets.json";
+        if (!fs::exists(presetsPath, ec) || ec)
+            return std::nullopt;
+
+        std::ifstream in(presetsPath.string());
+        if (!in)
+            return std::nullopt;
+
+        std::string json((std::istreambuf_iterator<char>(in)),
+                         std::istreambuf_iterator<char>());
+
+        // Find object containing: "name": "<configurePreset>"
+        const std::string nameKey = "\"name\"";
+        const std::string binKey = "\"binaryDir\"";
+        const std::string targetName = "\"" + configurePreset + "\"";
+
+        std::size_t pos = 0;
+        while (true)
+        {
+            pos = json.find(nameKey, pos);
+            if (pos == std::string::npos)
+                break;
+
+            const std::size_t namePos = json.find(targetName, pos);
+            if (namePos == std::string::npos)
+                break;
+
+            // attempt to isolate the object
+            const std::size_t objStart = json.rfind('{', namePos);
+            const std::size_t objEnd = json.find('}', namePos);
+            if (objStart == std::string::npos || objEnd == std::string::npos || objEnd <= objStart)
+            {
+                pos = namePos + 1;
+                continue;
+            }
+
+            const std::string obj = json.substr(objStart, objEnd - objStart + 1);
+            const std::size_t b = obj.find(binKey);
+            if (b == std::string::npos)
+                return std::nullopt;
+
+            // locate value: "binaryDir": "..."
+            std::size_t q = obj.find('"', b + binKey.size());
+            if (q == std::string::npos)
+                return std::nullopt;
+            q = obj.find('"', q + 1); // opening quote of value
+            if (q == std::string::npos)
+                return std::nullopt;
+            const std::size_t q2 = obj.find('"', q + 1);
+            if (q2 == std::string::npos)
+                return std::nullopt;
+
+            std::string val = obj.substr(q + 1, q2 - (q + 1));
+            if (val.empty())
+                return std::nullopt;
+
+            fs::path p = fs::path(val);
+            if (p.is_relative())
+                p = projectDir / p;
+
+            p = fs::weakly_canonical(p, ec);
+            if (ec)
+                p = fs::absolute(p);
+
+            return p;
+        }
+
+        return std::nullopt;
+#endif
     }
 
     static std::vector<std::string> list_presets(const fs::path &dir, const std::string &kind)

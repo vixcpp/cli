@@ -8,17 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## 1.16.5
+
+### Fixed
+
+• Fixed `--linker lld|mold` integration: Vix now applies fast linker flags via `CMAKE_*_LINKER_FLAGS` (exe/shared/module), ensuring the linker is used reliably at link time.
+• Removed incorrect propagation of linker flags through `CMAKE_C_FLAGS` / `CMAKE_CXX_FLAGS`, avoiding CMake “unused variables” warnings and inconsistent behavior.
+• Improved run/build flow integration (RunDetail / RunFlow / RunCommand) to keep preset/build-dir resolution consistent and prevent missing helper symbol errors.
+
 ## [1.16.4] - 2026-01-06
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 ## v1.16.4
 

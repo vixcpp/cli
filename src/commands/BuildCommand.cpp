@@ -467,11 +467,12 @@ namespace vix::commands::BuildCommand
             const std::vector<std::string> &argv,
             const std::vector<std::pair<std::string, std::string>> &extraEnv,
             const fs::path &logPath,
-            bool quiet)
+            bool quiet,
+            bool cmakeVerbose)
         {
             ExecResult r;
             r.displayCommand = join_display_cmd(argv);
-            const bool filterCMakeSummary = is_configure_cmd(argv);
+            const bool filterCMakeSummary = is_configure_cmd(argv) && !cmakeVerbose;
             std::string consoleLineBuf;
             consoleLineBuf.reserve(4096);
 
@@ -783,8 +784,9 @@ namespace vix::commands::BuildCommand
             bool useCache = true; // --no-cache to disable signature shortcut
             LinkerMode linker = LinkerMode::Auto;
             LauncherMode launcher = LauncherMode::Auto;
-            bool status = true;      // --no-status to disable NINJA_STATUS
-            bool dryUpToDate = true; // up-to-date detection via ninja -n
+            bool status = true;        // --no-status to disable NINJA_STATUS
+            bool dryUpToDate = true;   // up-to-date detection via ninja -n
+            bool cmakeVerbose = false; // --cmake-verbose to show raw CMake summary lines
         };
 
         struct Preset
@@ -937,6 +939,10 @@ namespace vix::commands::BuildCommand
 
                     exitCode = -1;
                     return o;
+                }
+                else if (a == "--cmake-verbose")
+                {
+                    o.cmakeVerbose = true;
                 }
                 else if (a == "--sysroot")
                 {
@@ -1611,7 +1617,7 @@ namespace vix::commands::BuildCommand
                     const auto t0 = std::chrono::steady_clock::now();
                     auto argv = cmake_configure_argv(plan_);
 
-                    const ExecResult r = run_process_live_to_log(argv, {}, plan_.configureLog, opt_.quiet);
+                    const ExecResult r = run_process_live_to_log(argv, {}, plan_.configureLog, opt_.quiet, opt_.cmakeVerbose);
                     if (r.exitCode != 0)
                     {
                         error("CMake configure failed.");
@@ -1666,8 +1672,7 @@ namespace vix::commands::BuildCommand
                     auto argv = cmake_build_argv(plan_, opt_);
                     auto env = ninja_env(opt_, plan_);
 
-                    const ExecResult r = run_process_live_to_log(argv, env, plan_.buildLog, opt_.quiet);
-
+                    const ExecResult r = run_process_live_to_log(argv, env, plan_.buildLog, opt_.quiet, opt_.cmakeVerbose);
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         std::chrono::steady_clock::now() - t0)
                                         .count();
@@ -1761,6 +1766,7 @@ namespace vix::commands::BuildCommand
         out << "  -d, --dir <path>      Project directory (where CMakeLists.txt lives)\n";
         out << "  -q, --quiet           Minimal output (still logs to files)\n";
         out << "  --targets             List detected cross toolchains on PATH\n";
+        out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
         out << "  -h, --help            Show this help\n\n";
 
         out << "Examples:\n";

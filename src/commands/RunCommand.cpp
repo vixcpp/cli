@@ -178,38 +178,48 @@ namespace vix::commands::RunCommand
         {
             RunProgress progress(/*totalSteps=*/2);
 
-            // 1) Configure
+            // 1) Configure (only if needed)
             {
                 progress.phase_start("Configure project (preset: " + opt.preset + ")");
 
-                std::ostringstream oss;
-#ifdef _WIN32
-                oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                    << " && cmake --preset " << quote(opt.preset) << "\"";
-#else
-                oss << "cd " << quote(projectDir.string())
-                    << " && cmake --log-level=WARNING --preset " << quote(opt.preset);
-#endif
-                const std::string cmd = oss.str();
-
-                const int code = run_cmd_live_filtered(
-                    cmd,
-                    "Configuring project (preset \"" + opt.preset + "\")");
-
-                if (code != 0)
+                bool needConfigure = true;
+                if (auto binDir = detail::preset_binary_dir(projectDir, opt.preset))
                 {
-                    error("CMake configure failed with preset '" + opt.preset + "'.");
-                    hint("Run the same command manually to inspect the error:");
-#ifdef _WIN32
-                    step("cmake --preset " + opt.preset);
-#else
-                    step("cd " + projectDir.string());
-                    step("cmake --preset " + opt.preset);
-#endif
-                    return code != 0 ? code : 2;
+                    if (detail::has_cmake_cache(*binDir))
+                        needConfigure = false;
                 }
 
-                progress.phase_done("Configure project", "completed");
+                if (!needConfigure)
+                {
+                    progress.phase_done("Configure project", "cache already present");
+                }
+                else
+                {
+                    std::ostringstream oss;
+#ifdef _WIN32
+                    oss << "cmd /C \"cd /D " << quote(projectDir.string())
+                        << " && cmake --preset " << quote(opt.preset) << "\"";
+#else
+                    oss << "cd " << quote(projectDir.string())
+                        << " && cmake --log-level=WARNING --preset " << quote(opt.preset);
+#endif
+                    const std::string cmd = oss.str();
+
+                    const int code = run_cmd_live_filtered(
+                        cmd,
+                        "Configuring project (preset \"" + opt.preset + "\")");
+
+                    if (code != 0)
+                    {
+                        error("CMake configure failed with preset '" + opt.preset + "'.");
+                        hint("Run the same command manually to inspect the error:");
+                        step("cd " + projectDir.string());
+                        step("cmake --preset " + opt.preset);
+                        return code != 0 ? code : 2;
+                    }
+
+                    progress.phase_done("Configure project", "completed");
+                }
             }
 
             // 2) run preset

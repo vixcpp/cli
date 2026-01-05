@@ -1280,30 +1280,26 @@ namespace vix::commands::BuildCommand
             vars.emplace_back("CMAKE_BUILD_TYPE", p.buildType);
             vars.emplace_back("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
-            // Cross toolchain
             if (!opt.targetTriple.empty())
                 vars.emplace_back("CMAKE_TOOLCHAIN_FILE", toolchainFile.string());
 
-            // Static linking request (project may map this)
             if (opt.linkStatic)
                 vars.emplace_back("VIX_LINK_STATIC", "ON");
 
-            // Provide triple to project if needed
             if (!opt.targetTriple.empty())
                 vars.emplace_back("VIX_TARGET_TRIPLE", opt.targetTriple);
 
-            // Compiler cache launcher (Cargo-like)
             if (launcher && !launcher->empty())
             {
                 vars.emplace_back("CMAKE_C_COMPILER_LAUNCHER", *launcher);
                 vars.emplace_back("CMAKE_CXX_COMPILER_LAUNCHER", *launcher);
             }
 
-            // Fast linker (mold/lld) — must go through the compiler driver
             if (fastLinkerFlag && !fastLinkerFlag->empty())
             {
-                vars.emplace_back("CMAKE_C_FLAGS", *fastLinkerFlag);
-                vars.emplace_back("CMAKE_CXX_FLAGS", *fastLinkerFlag);
+                vars.emplace_back("CMAKE_EXE_LINKER_FLAGS", *fastLinkerFlag);
+                vars.emplace_back("CMAKE_SHARED_LINKER_FLAGS", *fastLinkerFlag);
+                vars.emplace_back("CMAKE_MODULE_LINKER_FLAGS", *fastLinkerFlag);
             }
 
             std::sort(vars.begin(), vars.end(),

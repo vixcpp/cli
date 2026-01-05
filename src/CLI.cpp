@@ -76,9 +76,10 @@
 #include <vector>
 #include <string>
 #include <optional>
-#include <cstdlib>   // std::getenv
-#include <algorithm> // std::transform
-#include <cctype>    // std::tolower
+#include <cstdlib>
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 
 namespace vix
 {
@@ -284,7 +285,6 @@ namespace vix
             break; // command starts here
         }
 
-        // apply verbosity
         switch (verbosity)
         {
         case VerbosityMode::Verbose:
@@ -306,7 +306,16 @@ namespace vix
         std::string cmd = argv[index];
         std::vector<std::string> args(argv + index + 1, argv + argc);
 
-        // per-command help
+        {
+            std::filesystem::path p{cmd};
+            const auto ext = p.extension().string();
+            if (ext == ".vix" || ext == ".cpp")
+            {
+                args.insert(args.begin(), cmd);
+                cmd = "run";
+            }
+        }
+
         if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
         {
             if (!dispatcher.has(cmd))
@@ -420,26 +429,6 @@ namespace vix
         out << indent(2) << "-h, --help               Show CLI help (or: vix help)\n";
         out << indent(2) << "-v, --version            Show version info\n\n";
 
-        out << indent(1) << "Environment:\n";
-        out << indent(2) << "VIX_LOG_LEVEL=level      Default log level (if --log-level not provided)\n";
-        out << indent(2) << "VIX_MINISIGN_SECKEY=path Secret key used by `vix pack` to sign payload.digest\n";
-        out << indent(2) << "VIX_MINISIGN_PUBKEY=path Public key used by `vix verify` if --pubkey not provided\n\n";
-
-        out << indent(1) << "Tip:\n";
-        hint("Most examples can be run directly with `vix run <file>.cpp`.");
-        section_title(out, "Examples:");
-        dim_note(out, "Run a single C++ file (script mode)");
-        out << indent(2) << "vix run server.cpp\n";
-        dim_note(out, "Dev mode (watch, rebuild, reload)");
-        out << indent(2) << "vix dev\n\n";
-        dim_note(out, "Minimal HTTP server");
-        out << indent(2) << "vix run main.cpp\n";
-        dim_note(out, "Package & verify an app");
-        out << indent(2) << "vix pack --name blog --version 1.0.0\n";
-        out << indent(2) << "vix verify --require-signature\n";
-        dim_note(out, "Help for a command");
-        out << indent(2) << "vix help run\n";
-        out << indent(1);
         section_title(out, "Links:");
         out << indent(2) << "GitHub: " << link("https://github.com/vixcpp/vix") << "\n\n";
 

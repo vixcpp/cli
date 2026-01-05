@@ -434,7 +434,7 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
         apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
-        auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", true);
+        auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", true, opt.timeoutSec);
         runCode = normalize_exit_code(rr.exitCode);
 
         if (runCode != 0)

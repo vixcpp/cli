@@ -504,6 +504,33 @@ int main()
 )JSON";
   }
 
+  static std::string make_project_manifest(const std::string &name)
+  {
+    return "version = 1\n\n"
+           "[app]\n"
+           "kind = \"project\"\n"
+           "dir = \".\"\n"
+           "name = \"" +
+           name + "\"\n"
+                  "entry = \"src/main.cpp\"\n\n"
+                  "[build]\n"
+                  "preset = \"dev-ninja\"\n"
+                  "run_preset = \"run-dev-ninja\"\n"
+                  "jobs = 8\n\n"
+                  "[dev]\n"
+                  "watch = true\n"
+                  "force = \"server\"\n"
+                  "clear = \"auto\"\n\n"
+                  "[logging]\n"
+                  "level = \"info\"\n"
+                  "format = \"json-pretty\"\n"
+                  "color = \"auto\"\n\n"
+                  "[run]\n"
+                  "args = [\"--port\",\"8080\"]\n"
+                  "env = []\n"
+                  "timeout_sec = 0\n";
+  }
+
 } // namespace
 
 namespace vix::commands::NewCommand
@@ -551,7 +578,6 @@ namespace vix::commands::NewCommand
       const fs::path cmakeLists = projectDir / "CMakeLists.txt";
       const fs::path readmeFile = projectDir / "README.md";
       const fs::path presetsFile = projectDir / "CMakePresets.json";
-      const fs::path makefilePath = projectDir / "Makefile";
 
       if (fs::exists(projectDir) && !is_dir_empty(projectDir))
       {
@@ -570,12 +596,16 @@ namespace vix::commands::NewCommand
       write_text_file(presetsFile, make_cmake_presets_json());
 
       const std::string projName = projectDir.filename().string();
+      const fs::path manifestPath = projectDir / (projName + ".vix");
+      write_text_file(manifestPath, make_project_manifest(projName));
 
       success("Project '" + projName + "' created.");
       info("Location: " + projectDir.string());
       std::cout << "\n";
       info("Next steps:");
       step("cd \"" + projectDir.string() + "\"");
+      step("vix " + projName + ".vix");
+      step("vix dev " + projName + ".vix");
       step("vix build");
       step("vix run");
       std::cout << "\n";

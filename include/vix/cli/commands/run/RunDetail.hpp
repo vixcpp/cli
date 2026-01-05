@@ -45,11 +45,21 @@ namespace vix::commands::RunCommand::detail
 
         std::string clearMode = "auto";
         std::vector<std::string> scriptFlags;
+
+        // .vix manifest mode (vix run app.vix)
+        bool manifestMode = false;
+        std::filesystem::path manifestFile;
+
+        // Run extras from manifest (V1)
+        std::vector<std::string> runArgs; // [run] args = ["--port","8080"]
+        std::vector<std::string> runEnv;  // [run] env  = ["K=V","X=1"]
+        int timeoutSec = 0;               // [run] timeout_sec = 15
     };
 
     // Process / IO
     int run_cmd_live_filtered(const std::string &cmd,
                               const std::string &spinnerLabel = {});
+    std::filesystem::path manifest_entry_cpp(const std::filesystem::path &manifestFile);
 
     inline int normalize_exit_code(int code) noexcept
     {

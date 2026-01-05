@@ -8,94 +8,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## v1.16.3 — Manifest-driven workflows
+
+### ✨ New
+
+- Added native support for **`.vix` manifest files**
+  - Run apps directly with `vix run app.vix`
+  - Dev mode supported: `vix dev app.vix`
+  - Supports both `kind="project"` and `kind="script"`
+- New project scaffolding now generates a **`<name>.vix` manifest** by default
+- CLI now auto-detects `.vix` and `.cpp` files without requiring `run`
+
+### 🔧 Improvements
+
+- Unified option resolution via **manifest + CLI merge**
+  - CLI flags always override manifest values
+- Improved entry-point resolution for project manifests
+- Extended `vix run --help` with detailed manifest documentation
+- Clear separation between:
+  - Manifest mode
+  - Project mode (CMake)
+  - Script mode (single `.cpp`)
+
+### 🧠 Developer Experience
+
+- Cleaner run flow for mixed repositories (apps, scripts, examples)
+- More explicit and predictable execution model
+- Better defaults for dev/watch/server workflows
+
+### ⚠️ Notes
+
+- CMake presets are still supported and recommended for advanced builds
+- `.vix` is now the preferred source of truth for runtime configuration
+
 ## [1.16.2] - 2026-01-03
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.16.1] - 2026-01-03
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.16.0] - 2026-01-02
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.15.7] - 2026-01-02
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.15.6] - 2026-01-02
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.15.5] - 2025-12-31
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.15.4] - 2025-12-29
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
+
+-
 
 ## [1.15.3] - 2025-12-29
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 ## [1.15.2] - 2025-12-26
 

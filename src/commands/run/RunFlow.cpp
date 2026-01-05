@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 #include <cctype>
+#include <fstream>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -48,6 +49,107 @@ namespace vix::commands::RunCommand::detail
             }
         }
         return std::nullopt;
+    }
+
+    std::filesystem::path manifest_entry_cpp(const std::filesystem::path &manifestFile)
+    {
+        namespace fs = std::filesystem;
+
+        const fs::path root = manifestFile.parent_path();
+
+        auto abs_if_exists = [&](fs::path p) -> std::optional<fs::path>
+        {
+            std::error_code ec;
+            if (p.is_relative())
+                p = root / p;
+            p = fs::weakly_canonical(p, ec);
+            if (ec)
+                p = fs::absolute(p);
+
+            if (fs::exists(p, ec) && !ec)
+                return p;
+
+            return std::nullopt;
+        };
+
+        auto trim = [](std::string s) -> std::string
+        {
+            auto is_space = [](unsigned char c)
+            { return std::isspace(c) != 0; };
+
+            while (!s.empty() && is_space((unsigned char)s.front()))
+                s.erase(s.begin());
+            while (!s.empty() && is_space((unsigned char)s.back()))
+                s.pop_back();
+            return s;
+        };
+
+        auto strip_quotes = [&](std::string s) -> std::string
+        {
+            s = trim(std::move(s));
+            if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
+                return s.substr(1, s.size() - 2);
+            return s;
+        };
+
+        // Better fallbacks for typical layouts
+        const fs::path fallback1 = root / "main.cpp";
+        const fs::path fallback2 = root / "src" / "main.cpp";
+
+        // If manifest missing, best-effort fallback
+        {
+            std::error_code ec;
+            if (!fs::exists(manifestFile, ec) || ec)
+            {
+                if (auto p = abs_if_exists(fallback2))
+                    return *p;
+                if (auto p = abs_if_exists(fallback1))
+                    return *p;
+                return fs::absolute(fallback2); // last resort (even if missing)
+            }
+        }
+
+        // Parse minimal: find `entry = "..."` anywhere (ignore comments, spaces)
+        std::ifstream in(manifestFile.string());
+        std::string line;
+
+        while (std::getline(in, line))
+        {
+            line = trim(line);
+            if (line.empty() || line[0] == '#')
+                continue;
+
+            // drop inline comment: foo = "bar" # comment
+            if (auto hash = line.find('#'); hash != std::string::npos)
+                line = trim(line.substr(0, hash));
+
+            // accept: entry = "main.cpp" or entry=main.cpp
+            // also accept: entry : "main.cpp" (nice-to-have)
+            if (line.rfind("entry", 0) != 0)
+                continue;
+
+            auto pos_eq = line.find('=');
+            auto pos_cl = line.find(':');
+            auto pos = (pos_eq == std::string::npos) ? pos_cl : pos_eq;
+            if (pos == std::string::npos)
+                continue;
+
+            std::string rhs = strip_quotes(line.substr(pos + 1));
+            if (rhs.empty())
+                continue;
+
+            if (auto p = abs_if_exists(fs::path(rhs)))
+                return *p;
+        }
+
+        // Default fallbacks
+        if (auto p = abs_if_exists(fallback2))
+            return *p;
+        if (auto p = abs_if_exists(fallback1))
+            return *p;
+
+        // last resort: keep consistent output
+        return fs::absolute(fallback2);
     }
 
     Options parse(const std::vector<std::string> &args)
@@ -174,6 +276,22 @@ namespace vix::commands::RunCommand::detail
                 else if (o.appName == "example" && o.exampleName.empty())
                 {
                     o.exampleName = a;
+                }
+
+                std::filesystem::path p{a};
+
+                if (p.extension() == ".vix")
+                {
+                    o.manifestMode = true;
+                    o.manifestFile = std::filesystem::absolute(p);
+
+                    // On ne force pas singleCpp ici
+                    // Le manifest va décider project/script
+                }
+                else if (p.extension() == ".cpp")
+                {
+                    o.singleCpp = true;
+                    o.cppFile = std::filesystem::absolute(p);
                 }
             }
         }

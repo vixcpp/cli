@@ -2,6 +2,8 @@
 #include <vix/cli/Style.hpp>
 
 #include "vix/cli/commands/run/RunDetail.hpp"
+#include "vix/cli/manifest/VixManifest.hpp"
+#include "vix/cli/manifest/RunManifestMerge.hpp"
 
 #include <filesystem>
 #include <iostream>
@@ -102,12 +104,33 @@ namespace vix::commands::RunCommand
 
     int run(const std::vector<std::string> &args)
     {
-        const Options opt = parse(args);
+        Options opt = parse(args);
+
+        if (opt.manifestMode)
+        {
+            vix::cli::manifest::Manifest mf{};
+            auto err = vix::cli::manifest::load_manifest(opt.manifestFile, mf);
+            if (err)
+            {
+                error("Invalid .vix manifest: " + err->message);
+                hint("File: " + opt.manifestFile.string());
+                return 1;
+            }
+
+            opt = vix::cli::manifest::merge_options(mf, opt);
+        }
+
+        if (opt.manifestMode && !opt.singleCpp)
+        {
+            opt.singleCpp = true;
+            opt.cppFile = detail::manifest_entry_cpp(opt.manifestFile);
+        }
 
         ensure_mode_env_for_run(opt);
         enable_line_buffered_stdout_for_apps();
 
         apply_log_env(opt);
+        vix::cli::manifest::apply_env_pairs(opt.runEnv);
 
 #ifndef _WIN32
         ::setenv("VIX_CLI_CLEAR", opt.clearMode.c_str(), 1);
@@ -407,13 +430,29 @@ namespace vix::commands::RunCommand
 
             info("Running executable: " + exePath.string());
 
+            auto join_args = [&](const std::vector<std::string> &a) -> std::string
+            {
+                std::string s;
+                for (const auto &x : a)
+                {
+                    if (x.empty())
+                        continue;
+                    s += " ";
+                    s += quote(x);
+                }
+                return s;
+            };
+
             std::string cmd =
 #ifdef _WIN32
                 "\"" + exePath.string() + "\"";
 #else
                 quote(exePath.string());
 #endif
+            cmd += join_args(opt.runArgs);
+
             const int code = std::system(cmd.c_str());
+
             if (code != 0)
             {
                 handle_runtime_exit_code(
@@ -441,12 +480,20 @@ namespace vix::commands::RunCommand
         std::ostream &out = std::cout;
 
         out << "Usage:\n";
-        out << "  vix run [name|file.cpp] [options] [-- compiler/linker flags]\n\n";
+        out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags]\n\n";
 
         out << "Description:\n";
         out << "  Configure, build, and run a Vix.cpp application.\n";
-        out << "  - Project mode: uses CMake presets when available.\n";
-        out << "  - Script mode : compiles and runs a single .cpp file.\n\n";
+        out << "  - Manifest mode: runs a .vix file (script/project) and merges options.\n";
+        out << "  - Project mode : builds a CMake project (presets when available).\n";
+        out << "  - Script mode  : compiles and runs a single .cpp file.\n\n";
+
+        out << "Manifest mode (.vix):\n";
+        out << "  - Script manifest : [app].kind=\"script\"  with entry pointing to a .cpp file.\n";
+        out << "  - Project manifest: [app].kind=\"project\" with entry like \"src/main.cpp\".\n";
+        out << "  Notes:\n";
+        out << "    • CLI flags override manifest values.\n";
+        out << "    • Use `--` to pass runtime args after Vix options.\n\n";
 
         out << "Options:\n";
         out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
@@ -479,17 +526,23 @@ namespace vix::commands::RunCommand
         out << "Passing compiler/linker flags (script mode):\n";
         out << "  Use `--` to separate Vix options from compiler/linker flags.\n";
         out << "  Everything after `--` is forwarded to the script build.\n\n";
+
         out << "  Examples:\n";
         out << "    vix run main.cpp -- -lssl -lcrypto\n";
         out << "    vix run main.cpp -- -L/usr/lib -lssl\n";
         out << "    vix run main.cpp -- -DDEBUG\n\n";
 
         out << "Examples:\n";
-        out << "  # Project mode\n";
+        out << "  # Manifest mode (.vix)\n";
+        out << "  vix run api.vix\n";
+        out << "  vix run api.vix -- --port 8080\n";
+        out << "  vix dev api.vix\n\n";
+
+        out << "  # Project mode (auto-detect)\n";
         out << "  vix run\n";
         out << "  vix run api -- --port 8080\n";
         out << "  vix run --dir ./examples/blog\n";
-        out << "  vix run api --preset dev-ninja --run-preset run-ninja\n";
+        out << "  vix run api --preset dev-ninja --run-preset run-dev-ninja\n";
         out << "  vix run --watch api\n";
         out << "  vix run --force-server --watch api\n\n";
 

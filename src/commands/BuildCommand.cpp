@@ -787,6 +787,7 @@ namespace vix::commands::BuildCommand
             bool status = true;        // --no-status to disable NINJA_STATUS
             bool dryUpToDate = true;   // up-to-date detection via ninja -n
             bool cmakeVerbose = false; // --cmake-verbose to show raw CMake summary lines
+            std::string buildTarget;   // --build-target <name>
         };
 
         struct Preset
@@ -802,7 +803,7 @@ namespace vix::commands::BuildCommand
             std::map<std::string, Preset> m;
 
             m.emplace("dev", Preset{"dev", "Ninja", "Debug", "build-dev"});
-            m.emplace("dev-ninja", Preset{"dev-ninja", "Ninja", "Debug", "build-dev-ninja"});
+            m.emplace("dev-ninja", Preset{"dev-ninja", "Ninja", "Debug", "build-ninja"});
             m.emplace("release", Preset{"release", "Ninja", "Release", "build-release"});
 
             return m;
@@ -920,6 +921,27 @@ namespace vix::commands::BuildCommand
                     if (o.targetTriple.empty())
                     {
                         error("Missing value for --target <triple>");
+                        exitCode = 2;
+                        return o;
+                    }
+                }
+                else if (a == "--build-target")
+                {
+                    auto v = take_value(args, i);
+                    if (!v)
+                    {
+                        error("Missing value for --build-target <name>");
+                        exitCode = 2;
+                        return o;
+                    }
+                    o.buildTarget = *v;
+                }
+                else if (a.rfind("--build-target=", 0) == 0)
+                {
+                    o.buildTarget = a.substr(std::string("--build-target=").size());
+                    if (o.buildTarget.empty())
+                    {
+                        error("Missing value for --build-target <name>");
                         exitCode = 2;
                         return o;
                     }
@@ -1277,12 +1299,11 @@ namespace vix::commands::BuildCommand
                 vars.emplace_back("CMAKE_CXX_COMPILER_LAUNCHER", *launcher);
             }
 
-            // Fast linker (mold/lld)
+            // Fast linker (mold/lld) — must go through the compiler driver
             if (fastLinkerFlag && !fastLinkerFlag->empty())
             {
-                // Append safely without ${...} expansions
-                vars.emplace_back("CMAKE_EXE_LINKER_FLAGS", "-Wl," + *fastLinkerFlag);
-                vars.emplace_back("CMAKE_SHARED_LINKER_FLAGS", "-Wl," + *fastLinkerFlag);
+                vars.emplace_back("CMAKE_C_FLAGS", *fastLinkerFlag);
+                vars.emplace_back("CMAKE_CXX_FLAGS", *fastLinkerFlag);
             }
 
             std::sort(vars.begin(), vars.end(),
@@ -1449,6 +1470,12 @@ namespace vix::commands::BuildCommand
             int jobs = opt.jobs;
             if (jobs <= 0)
                 jobs = default_jobs();
+
+            if (!opt.buildTarget.empty())
+            {
+                argv.push_back("--target");
+                argv.push_back(opt.buildTarget);
+            }
 
             argv.push_back("--");
             argv.push_back("-j");
@@ -1767,6 +1794,7 @@ namespace vix::commands::BuildCommand
         out << "  -q, --quiet           Minimal output (still logs to files)\n";
         out << "  --targets             List detected cross toolchains on PATH\n";
         out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
+        out << "  --build-target <name> Build only a specific CMake target (ex: blog)\n";
         out << "  -h, --help            Show this help\n\n";
 
         out << "Examples:\n";

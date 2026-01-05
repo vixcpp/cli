@@ -8,17 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## [Unreleased]
+
+## v1.16.4
+
+### 🐛 Fixes
+
+- Fixed a `-Wshadow` warning in the CLI build command by removing duplicate
+  toolchain variable declarations.
+- Ensured a single, consistent toolchain content buffer is used for both
+  toolchain file generation and build signature computation.
+- Improved code clarity and robustness when handling cross-compilation
+  toolchains.
+
+### 🛠 Internal
+
+- Cleaner build flow under strict compiler warnings (`-Wshadow`).
+- No behavior change for users; internal correctness and maintainability
+  improved.
+
 ## [1.16.3] - 2026-01-05
 
 ### Added
-- 
+
+-
 
 ### Changed
-- 
+
+-
 
 ### Removed
-- 
 
+-
 
 ## v1.16.3 — Manifest-driven workflows
 

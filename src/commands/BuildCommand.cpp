@@ -97,6 +97,26 @@ namespace vix::commands::BuildCommand
             return oss.str();
         }
 
+        static bool is_cmake_configure_summary_line(const std::string &line)
+        {
+            return (line.rfind("-- Configuring done", 0) == 0) ||
+                   (line.rfind("-- Generating done", 0) == 0) ||
+                   (line.find("Build files have been written to:") != std::string::npos);
+        }
+
+        static bool is_configure_cmd(const std::vector<std::string> &argv)
+        {
+            bool hasS = false, hasB = false;
+            for (const auto &a : argv)
+            {
+                if (a == "-S")
+                    hasS = true;
+                if (a == "-B")
+                    hasB = true;
+            }
+            return !argv.empty() && argv[0] == "cmake" && hasS && hasB;
+        }
+
         static bool write_text_file_atomic(const fs::path &p, const std::string &content)
         {
             std::error_code ec{};
@@ -262,7 +282,7 @@ namespace vix::commands::BuildCommand
         {
             if (quiet)
                 return;
-            step("  • " + line);
+            step(line);
         }
 
         static void log_hint_if(bool quiet, const std::string &msg)
@@ -451,6 +471,9 @@ namespace vix::commands::BuildCommand
         {
             ExecResult r;
             r.displayCommand = join_display_cmd(argv);
+            const bool filterCMakeSummary = is_configure_cmd(argv);
+            std::string consoleLineBuf;
+            consoleLineBuf.reserve(4096);
 
             int pipefd[2];
             if (::pipe(pipefd) != 0)
@@ -511,7 +534,36 @@ namespace vix::commands::BuildCommand
                     (void)::write(logfd, buf.data(), static_cast<size_t>(n));
 
                     if (!quiet)
-                        (void)::write(STDOUT_FILENO, buf.data(), static_cast<size_t>(n));
+                    {
+                        if (!filterCMakeSummary)
+                        {
+                            (void)::write(STDOUT_FILENO, buf.data(), static_cast<size_t>(n));
+                        }
+                        else
+                        {
+                            consoleLineBuf.append(buf.data(), static_cast<size_t>(n));
+
+                            size_t start = 0;
+                            while (true)
+                            {
+                                size_t nl = consoleLineBuf.find('\n', start);
+                                if (nl == std::string::npos)
+                                    break;
+
+                                std::string line = consoleLineBuf.substr(start, nl - start);
+                                if (!is_cmake_configure_summary_line(line))
+                                {
+                                    line.push_back('\n');
+                                    (void)::write(STDOUT_FILENO, line.data(), line.size());
+                                }
+
+                                start = nl + 1;
+                            }
+
+                            if (start > 0)
+                                consoleLineBuf.erase(0, start);
+                        }
+                    }
 
                     if (!gotFirstLine)
                     {
@@ -878,9 +930,9 @@ namespace vix::commands::BuildCommand
                     for (const auto &t : targets)
                     {
                         if (t == "x86_64-linux-gnu")
-                            step("  • " + t + " (native)");
+                            step(t + " (native)");
                         else
-                            step("  • " + t + " (cross)");
+                            step(t + " (cross)");
                     }
 
                     exitCode = -1;
@@ -1440,12 +1492,12 @@ namespace vix::commands::BuildCommand
                 return;
 
             if (plan.launcher)
-                step(std::string("  • compiler cache: ") + *plan.launcher);
+                step(std::string("compiler cache: ") + *plan.launcher);
             if (plan.fastLinkerFlag)
-                step(std::string("  • fast linker: ") + *plan.fastLinkerFlag);
+                step(std::string("fast linker: ") + *plan.fastLinkerFlag);
 
             for (const auto &kv : plan.cmakeVars)
-                step("  • " + kv.first + "=" + kv.second);
+                step(kv.first + "=" + kv.second);
 
             std::cout << "\n";
         }
@@ -1565,7 +1617,7 @@ namespace vix::commands::BuildCommand
                         error("CMake configure failed.");
                         log_hint_if(opt_.quiet, "Command:");
                         if (!opt_.quiet)
-                            step("  • " + r.displayCommand);
+                            step(r.displayCommand);
                         if (!opt_.quiet)
                             print_log_tail_fast(plan_.configureLog, 160);
                         return (r.exitCode == 0) ? 2 : r.exitCode;
@@ -1625,7 +1677,7 @@ namespace vix::commands::BuildCommand
                         error("Build failed.");
                         log_hint_if(opt_.quiet, "Command:");
                         if (!opt_.quiet)
-                            step("  • " + r.displayCommand);
+                            step(r.displayCommand);
                         if (!opt_.quiet)
                             print_log_tail_fast(plan_.buildLog, 200);
                         return (r.exitCode == 0) ? 3 : r.exitCode;

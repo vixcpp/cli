@@ -219,7 +219,15 @@ namespace vix::commands::RunCommand::detail
                 }
 
                 if (line.rfind("-- ", 0) == 0)
+                {
+                    if (line.find("Configuring done") != std::string_view::npos ||
+                        line.find("Generating done") != std::string_view::npos ||
+                        line.find("Build files have been written to:") != std::string_view::npos)
+                    {
+                        out.append(line.data(), line.size());
+                    }
                     continue;
+                }
 
                 if (line.find("Preset CMake variables:") != std::string_view::npos)
                     continue;

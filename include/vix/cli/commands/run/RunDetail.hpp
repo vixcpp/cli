@@ -138,7 +138,6 @@ namespace vix::commands::RunCommand::detail
     // Build log analysis
     bool has_real_build_work(const std::string &log);
 
-    void apply_log_level_env(const Options &opt);
     void apply_log_format_env(const Options &opt);
     void apply_log_color_env(const Options &opt);
 

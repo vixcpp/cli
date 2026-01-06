@@ -148,4 +148,10 @@ namespace vix::commands::RunCommand::detail
         apply_log_color_env(opt);
     }
 
+    std::string choose_configure_preset_smart(const std::filesystem::path &projectDir,
+                                              const std::string &userPreset);
+
+    std::filesystem::path resolve_build_dir_smart(const std::filesystem::path &projectDir,
+                                                  const std::string &configurePreset);
+
 } // namespace vix::commands::RunCommand::detail

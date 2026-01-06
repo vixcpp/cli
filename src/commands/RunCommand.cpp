@@ -176,18 +176,22 @@ namespace vix::commands::RunCommand
 
         if (has_presets(projectDir))
         {
+            const std::string configurePreset =
+                choose_configure_preset_smart(projectDir, opt.preset);
+
+            const std::string runPreset =
+                choose_run_preset(projectDir, configurePreset, opt.runPreset);
+
+            const fs::path buildDir = resolve_build_dir_smart(projectDir, configurePreset);
+            const bool alreadyConfigured = has_cmake_cache(buildDir);
+
             RunProgress progress(/*totalSteps=*/2);
 
             // 1) Configure (only if needed)
             {
-                progress.phase_start("Configure project (preset: " + opt.preset + ")");
+                progress.phase_start("Configure project (preset: " + configurePreset + ")");
 
-                bool needConfigure = true;
-                if (auto binDir = detail::preset_binary_dir(projectDir, opt.preset))
-                {
-                    if (detail::has_cmake_cache(*binDir))
-                        needConfigure = false;
-                }
+                bool needConfigure = !alreadyConfigured;
 
                 if (!needConfigure)
                 {
@@ -198,23 +202,23 @@ namespace vix::commands::RunCommand
                     std::ostringstream oss;
 #ifdef _WIN32
                     oss << "cmd /C \"cd /D " << quote(projectDir.string())
-                        << " && cmake --preset " << quote(opt.preset) << "\"";
+                        << " && cmake --preset " << quote(configurePreset) << "\"";
 #else
                     oss << "cd " << quote(projectDir.string())
-                        << " && cmake --log-level=WARNING --preset " << quote(opt.preset);
+                        << " && cmake --log-level=WARNING --preset " << quote(configurePreset);
 #endif
                     const std::string cmd = oss.str();
 
                     const int code = run_cmd_live_filtered(
                         cmd,
-                        "Configuring project (preset \"" + opt.preset + "\")");
+                        "Configuring project (preset \"" + configurePreset + "\")");
 
                     if (code != 0)
                     {
-                        error("CMake configure failed with preset '" + opt.preset + "'.");
+                        error("CMake configure failed with preset '" + configurePreset + "'.");
                         hint("Run the same command manually to inspect the error:");
                         step("cd " + projectDir.string());
-                        step("cmake --preset " + opt.preset);
+                        step("cmake --preset " + configurePreset);
                         return code != 0 ? code : 2;
                     }
 
@@ -222,10 +226,7 @@ namespace vix::commands::RunCommand
                 }
             }
 
-            // 2) run preset
-            const std::string runPreset =
-                choose_run_preset(projectDir, opt.preset, opt.runPreset);
-
+            // 2) Build & run preset
             {
                 progress.phase_start("Build & run (preset: " + runPreset + ")");
                 const std::string mode = opt.watch ? "dev" : "run";
@@ -489,7 +490,7 @@ namespace vix::commands::RunCommand
     {
         std::ostream &out = std::cout;
 
-        out << "Usage:\n";
+        out << "Usageddd:\n";
         out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags]\n\n";
 
         out << "Description:\n";

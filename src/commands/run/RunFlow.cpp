@@ -15,6 +15,7 @@
 
 #ifndef _WIN32
 #include <sys/wait.h>
+#include <chrono>
 #endif
 
 using namespace vix::cli::style;
@@ -507,6 +508,28 @@ namespace vix::commands::RunCommand::detail
 #endif
     }
 
+    fs::path resolve_build_dir_smart(const fs::path &projectDir,
+                                     const std::string &configurePreset)
+    {
+        fs::path buildDir = projectDir / "build";
+
+        if (auto binDir = preset_binary_dir(projectDir, configurePreset))
+            return *binDir;
+
+        fs::path p = projectDir / ("build-" + configurePreset);
+        if (fs::exists(p))
+            return p;
+
+        if (configurePreset.rfind("dev-", 0) == 0)
+        {
+            fs::path p2 = projectDir / ("build-" + configurePreset.substr(4));
+            if (fs::exists(p2))
+                return p2;
+        }
+
+        return buildDir;
+    }
+
     static std::vector<std::string> list_presets(const fs::path &dir, const std::string &kind)
     {
 #ifdef _WIN32
@@ -576,6 +599,87 @@ namespace vix::commands::RunCommand::detail
         std::error_code ec;
         return fs::exists(buildDir / "CMakeCache.txt", ec);
     }
+
+#ifndef _WIN32
+    static std::optional<std::chrono::file_clock::time_point>
+    mtime_if_exists(const fs::path &p)
+    {
+        std::error_code ec;
+        if (!fs::exists(p, ec) || ec)
+            return std::nullopt;
+        auto t = fs::last_write_time(p, ec);
+        if (ec)
+            return std::nullopt;
+        return t;
+    }
+
+    std::string choose_configure_preset_smart(const fs::path &projectDir,
+                                              const std::string &userPreset)
+    {
+
+        // Respect user choice always
+        if (!userPreset.empty())
+            return userPreset;
+
+        auto cfgs = list_presets(projectDir, "configure");
+        if (cfgs.empty())
+            return "dev-ninja";
+
+        struct Candidate
+        {
+            std::string preset;
+            fs::path buildDir;
+            std::chrono::file_clock::time_point stamp{};
+        };
+
+        std::optional<Candidate> best;
+
+        for (const auto &preset : cfgs)
+        {
+            // IMPORTANT: do NOT rely on parsing binaryDir from presets json
+            const fs::path buildDir = resolve_build_dir_smart(projectDir, preset);
+
+            if (!has_cmake_cache(buildDir))
+                continue;
+
+            auto t = mtime_if_exists(buildDir / "CMakeCache.txt");
+            if (!t)
+                continue;
+
+            Candidate c{preset, buildDir, *t};
+
+            if (!best || c.stamp > best->stamp)
+                best = c;
+        }
+
+        if (std::getenv("VIX_DEBUG_PRESET"))
+        {
+            info("Preset candidates:");
+            for (const auto &preset : cfgs)
+            {
+                const auto buildDir = resolve_build_dir_smart(projectDir, preset);
+                step("• " + preset + " -> " + buildDir.string() +
+                     (has_cmake_cache(buildDir) ? " [cache]" : " [no-cache]"));
+            }
+        }
+
+        // If we found an existing configured preset, prefer it.
+        if (best)
+            return best->preset;
+
+        // Otherwise keep a stable default:
+        if (std::find(cfgs.begin(), cfgs.end(), "dev-ninja") != cfgs.end())
+            return "dev-ninja";
+
+        return cfgs.front();
+    }
+
+#else
+    std::string choose_configure_preset_smart(const fs::path &, const std::string &userPreset)
+    {
+        return userPreset.empty() ? std::string("dev-ninja") : userPreset;
+    }
+#endif
 
     std::optional<fs::path> choose_project_dir(const Options &opt, const fs::path &cwd)
     {

@@ -486,35 +486,50 @@ namespace vix::commands::RunCommand::detail
 
         {
             ofstream ofs(cmakeLists);
-            ofs << make_script_cmakelists(exeName, script, useVixRuntime, opt.scriptFlags);
+            ofs << make_script_cmakelists(
+                exeName,
+                script,
+                useVixRuntime,
+                opt.scriptFlags);
         }
 
         fs::path buildDir = projectDir / "build";
         const fs::path sigFile = projectDir / ".vix-config.sig";
+
         const std::string sig = make_script_config_signature(
-            useVixRuntime, opt.enableSanitizers, opt.enableUbsanOnly, opt.scriptFlags);
+            useVixRuntime,
+            opt.enableSanitizers,
+            opt.enableUbsanOnly,
+            opt.scriptFlags);
 
         bool needConfigure = true;
         {
             std::error_code ec{};
             if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
             {
-                const std::string oldSig = text::read_text_file_or_empty(sigFile);
+                const std::string oldSig =
+                    text::read_text_file_or_empty(sigFile);
+
                 if (!oldSig.empty() && oldSig == sig)
                     needConfigure = false;
             }
         }
 
+        // Configure (if needed)
         if (needConfigure)
         {
             std::ostringstream oss;
 
-            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build";
+            oss << "cd " << quote(projectDir.string())
+                << " && cmake -S . -B build";
 
             if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
             {
                 oss << " -DVIX_ENABLE_SANITIZERS=ON"
-                    << " -DVIX_SANITIZER_MODE=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
+                    << " -DVIX_SANITIZER_MODE="
+                    << sanitizer_mode_string(
+                           opt.enableSanitizers,
+                           opt.enableUbsanOnly);
             }
             else
             {
@@ -522,16 +537,12 @@ namespace vix::commands::RunCommand::detail
             }
 
             fs::path cfgLogPath = projectDir / "configure.log";
-#ifndef _WIN32
             oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
-#else
-            oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
-#endif
 
             const std::string cmd = oss.str();
-
             int code = std::system(cmd.c_str());
             code = normalize_exit_code(code);
+
             if (code != 0)
             {
                 std::ifstream ifs(cfgLogPath);
@@ -571,35 +582,34 @@ namespace vix::commands::RunCommand::detail
         const std::string buildCmd = oss.str();
         int code = std::system(buildCmd.c_str());
         code = normalize_exit_code(code);
+
         if (code != 0)
+        {
+            std::ifstream ifs(logPath);
+            std::string logContent;
 
-            if (code != 0)
+            if (ifs)
             {
-                std::ifstream ifs(logPath);
-                std::string logContent;
-
-                if (ifs)
-                {
-                    std::ostringstream logStream;
-                    logStream << ifs.rdbuf();
-                    logContent = logStream.str();
-                }
-
-                if (!logContent.empty())
-                {
-                    vix::cli::ErrorHandler::printBuildErrors(
-                        logContent,
-                        script,
-                        "Script build failed");
-                }
-                else
-                {
-                    error("Script build failed (no compiler log captured).");
-                }
-
-                handle_runtime_exit_code(code, "Script build failed");
-                return code;
+                std::ostringstream logStream;
+                logStream << ifs.rdbuf();
+                logContent = logStream.str();
             }
+
+            if (!logContent.empty())
+            {
+                vix::cli::ErrorHandler::printBuildErrors(
+                    logContent,
+                    script,
+                    "Script build failed");
+            }
+            else
+            {
+                error("Script build failed (no compiler log captured).");
+            }
+
+            handle_runtime_exit_code(code, "Script build failed");
+            return code;
+        }
 
         exePath = buildDir / exeName;
 #ifdef _WIN32

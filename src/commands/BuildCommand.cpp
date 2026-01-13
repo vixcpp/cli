@@ -1,29 +1,29 @@
-#include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/commands/BuildCommand.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
-#include <string>
-#include <vector>
-#include <optional>
-#include <sstream>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <algorithm>
 #include <map>
-#include <chrono>
+#include <optional>
+#include <sstream>
+#include <string>
 #include <thread>
-#include <cctype>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <sys/wait.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -51,7 +51,9 @@ namespace vix::commands::BuildCommand
         static std::string trim(std::string s)
         {
             auto is_ws = [](unsigned char c)
-            { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+            {
+                return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+            };
 
             while (!s.empty() && is_ws(static_cast<unsigned char>(s.front())))
                 s.erase(s.begin());
@@ -117,7 +119,8 @@ namespace vix::commands::BuildCommand
             return !argv.empty() && argv[0] == "cmake" && hasS && hasB;
         }
 
-        static bool write_text_file_atomic(const fs::path &p, const std::string &content)
+        static bool write_text_file_atomic(const fs::path &p,
+                                           const std::string &content)
         {
             std::error_code ec{};
             if (!p.parent_path().empty())
@@ -242,7 +245,8 @@ namespace vix::commands::BuildCommand
                         struct stat sb{};
                         if (::stat(candidate.c_str(), &sb) == 0)
                         {
-                            if ((sb.st_mode & S_IXUSR) || (sb.st_mode & S_IXGRP) || (sb.st_mode & S_IXOTH))
+                            if ((sb.st_mode & S_IXUSR) || (sb.st_mode & S_IXGRP) ||
+                                (sb.st_mode & S_IXOTH))
                                 return true;
                         }
                     }
@@ -257,9 +261,7 @@ namespace vix::commands::BuildCommand
         static std::vector<std::string> detect_available_targets()
         {
             static const std::vector<std::string> known = {
-                "x86_64-linux-gnu",
-                "aarch64-linux-gnu",
-                "arm-linux-gnueabihf",
+                "x86_64-linux-gnu", "aarch64-linux-gnu", "arm-linux-gnueabihf",
                 "riscv64-linux-gnu"};
 
             std::vector<std::string> out;
@@ -292,7 +294,8 @@ namespace vix::commands::BuildCommand
             hint(msg);
         }
 
-        static void status_line(bool quiet, const std::string &tag, const std::string &msg)
+        static void status_line(bool quiet, const std::string &tag,
+                                const std::string &msg)
         {
             if (quiet)
                 return;
@@ -322,7 +325,8 @@ namespace vix::commands::BuildCommand
 
             const std::streamoff chunkSize = 64 * 1024; // 64 KB
             std::string buffer;
-            buffer.reserve(static_cast<size_t>(std::min<std::streamoff>(size, chunkSize)));
+            buffer.reserve(
+                static_cast<size_t>(std::min<std::streamoff>(size, chunkSize)));
 
             std::streamoff pos = size;
             size_t linesFound = 0;
@@ -364,7 +368,8 @@ namespace vix::commands::BuildCommand
 
             size_t start = (lines.size() > maxLines) ? (lines.size() - maxLines) : 0;
 
-            std::cerr << "\n--- " << logPath.string() << " (last " << (lines.size() - start) << " lines) ---\n";
+            std::cerr << "\n--- " << logPath.string() << " (last "
+                      << (lines.size() - start) << " lines) ---\n";
             for (size_t i = start; i < lines.size(); ++i)
                 std::cerr << lines[i] << "\n";
             std::cerr << "--- end ---\n\n";
@@ -412,23 +417,22 @@ namespace vix::commands::BuildCommand
                 std::streamsize got = ifs.gcount();
                 if (got <= 0)
                     break;
-                h = fnv1a64_bytes(buf.data(), static_cast<size_t>(got)) ^ (h * 1099511628211ull); // mix
+                h = fnv1a64_bytes(buf.data(), static_cast<size_t>(got)) ^
+                    (h * 1099511628211ull); // mix
             }
             return hex64(h);
         }
 
-        static void collect_files_recursive(
-            const fs::path &root,
-            const std::string &ext,
-            std::vector<fs::path> &out)
+        static void collect_files_recursive(const fs::path &root,
+                                            const std::string &ext,
+                                            std::vector<fs::path> &out)
         {
             std::error_code ec{};
             if (!dir_exists(root))
                 return;
 
             for (auto it = fs::recursive_directory_iterator(root, ec);
-                 it != fs::recursive_directory_iterator();
-                 it.increment(ec))
+                 it != fs::recursive_directory_iterator(); it.increment(ec))
             {
                 if (ec)
                     break;
@@ -466,9 +470,7 @@ namespace vix::commands::BuildCommand
         static ExecResult run_process_live_to_log(
             const std::vector<std::string> &argv,
             const std::vector<std::pair<std::string, std::string>> &extraEnv,
-            const fs::path &logPath,
-            bool quiet,
-            bool cmakeVerbose)
+            const fs::path &logPath, bool quiet, bool cmakeVerbose)
         {
             ExecResult r;
             r.displayCommand = join_display_cmd(argv);
@@ -665,8 +667,7 @@ namespace vix::commands::BuildCommand
         static ExecResult run_process_live_to_log(
             const std::vector<std::string> &argv,
             const std::vector<std::pair<std::string, std::string>> & /*extraEnv*/,
-            const fs::path &logPath,
-            bool quiet)
+            const fs::path &logPath, bool quiet)
         {
             ExecResult r;
             r.displayCommand = join_display_cmd(argv);
@@ -721,7 +722,8 @@ namespace vix::commands::BuildCommand
         }
 #endif
 
-        static std::string toolchain_contents_for_triple(const std::string &triple, const std::string &sysroot)
+        static std::string toolchain_contents_for_triple(const std::string &triple,
+                                                         const std::string &sysroot)
         {
             const std::string proc = infer_processor_from_triple(triple);
 
@@ -738,12 +740,18 @@ namespace vix::commands::BuildCommand
             tc << "# Auto-generated by Vix (vix build --target " << triple << ")\n";
             tc << "set(CMAKE_SYSTEM_NAME Linux)\n";
             tc << "set(CMAKE_SYSTEM_PROCESSOR \"" << proc << "\")\n\n";
-            tc << "set(VIX_TARGET_TRIPLE \"" << triple << "\" CACHE STRING \"Vix target triple\")\n\n";
-            tc << "set(CMAKE_C_COMPILER   \"" << triple << "-gcc\" CACHE FILEPATH \"\" FORCE)\n";
-            tc << "set(CMAKE_CXX_COMPILER \"" << triple << "-g++\" CACHE FILEPATH \"\" FORCE)\n";
-            tc << "set(CMAKE_AR           \"" << triple << "-ar\"  CACHE FILEPATH \"\" FORCE)\n";
-            tc << "set(CMAKE_RANLIB       \"" << triple << "-ranlib\" CACHE FILEPATH \"\" FORCE)\n";
-            tc << "set(CMAKE_STRIP        \"" << triple << "-strip\"  CACHE FILEPATH \"\" FORCE)\n\n";
+            tc << "set(VIX_TARGET_TRIPLE \"" << triple
+               << "\" CACHE STRING \"Vix target triple\")\n\n";
+            tc << "set(CMAKE_C_COMPILER   \"" << triple
+               << "-gcc\" CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_CXX_COMPILER \"" << triple
+               << "-g++\" CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_AR           \"" << triple
+               << "-ar\"  CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_RANLIB       \"" << triple
+               << "-ranlib\" CACHE FILEPATH \"\" FORCE)\n";
+            tc << "set(CMAKE_STRIP        \"" << triple
+               << "-strip\"  CACHE FILEPATH \"\" FORCE)\n\n";
             tc << "set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)\n";
 
             return tc.str();
@@ -788,6 +796,7 @@ namespace vix::commands::BuildCommand
             bool dryUpToDate = true;   // up-to-date detection via ninja -n
             bool cmakeVerbose = false; // --cmake-verbose to show raw CMake summary lines
             std::string buildTarget;   // --build-target <name>
+            std::vector<std::string> cmakeArgs;
         };
 
         struct Preset
@@ -823,7 +832,8 @@ namespace vix::commands::BuildCommand
             return !s.empty() && s.front() == '-';
         }
 
-        static std::optional<std::string> take_value(const std::vector<std::string> &args, size_t &i)
+        static std::optional<std::string>
+        take_value(const std::vector<std::string> &args, size_t &i)
         {
             if (i + 1 >= args.size())
                 return std::nullopt;
@@ -836,8 +846,7 @@ namespace vix::commands::BuildCommand
         static std::optional<LinkerMode> parse_linker_mode(const std::string &v)
         {
             std::string s = v;
-            std::transform(s.begin(), s.end(), s.begin(),
-                           [](unsigned char c)
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c)
                            { return static_cast<char>(std::tolower(c)); });
 
             if (s == "auto")
@@ -854,8 +863,7 @@ namespace vix::commands::BuildCommand
         static std::optional<LauncherMode> parse_launcher_mode(const std::string &v)
         {
             std::string s = v;
-            std::transform(s.begin(), s.end(), s.begin(),
-                           [](unsigned char c)
+            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c)
                            { return static_cast<char>(std::tolower(c)); });
 
             if (s == "auto")
@@ -869,7 +877,8 @@ namespace vix::commands::BuildCommand
             return std::nullopt;
         }
 
-        static Options parse_args_or_exit(const std::vector<std::string> &args, int &exitCode)
+        static Options parse_args_or_exit(const std::vector<std::string> &args,
+                                          int &exitCode)
         {
             Options o;
             exitCode = 0;
@@ -877,6 +886,13 @@ namespace vix::commands::BuildCommand
             for (size_t i = 0; i < args.size(); ++i)
             {
                 const std::string &a = args[i];
+
+                if (a == "--")
+                {
+                    for (size_t j = i + 1; j < args.size(); ++j)
+                        o.cmakeArgs.push_back(args[j]);
+                    break;
+                }
 
                 if (a == "--help" || a == "-h")
                 {
@@ -1147,9 +1163,11 @@ namespace vix::commands::BuildCommand
             case LauncherMode::None:
                 return std::nullopt;
             case LauncherMode::Sccache:
-                return executable_on_path("sccache") ? std::optional<std::string>("sccache") : std::nullopt;
+                return executable_on_path("sccache") ? std::optional<std::string>("sccache")
+                                                     : std::nullopt;
             case LauncherMode::Ccache:
-                return executable_on_path("ccache") ? std::optional<std::string>("ccache") : std::nullopt;
+                return executable_on_path("ccache") ? std::optional<std::string>("ccache")
+                                                    : std::nullopt;
             case LauncherMode::Auto:
             default:
                 if (executable_on_path("sccache"))
@@ -1173,10 +1191,12 @@ namespace vix::commands::BuildCommand
                 return std::nullopt;
 
             if (opt.linker == LinkerMode::Mold)
-                return has_mold ? std::optional<std::string>("-fuse-ld=mold") : std::nullopt;
+                return has_mold ? std::optional<std::string>("-fuse-ld=mold")
+                                : std::nullopt;
 
             if (opt.linker == LinkerMode::Lld)
-                return has_ld_lld ? std::optional<std::string>("-fuse-ld=lld") : std::nullopt;
+                return has_ld_lld ? std::optional<std::string>("-fuse-ld=lld")
+                                  : std::nullopt;
 
             if (has_mold)
                 return std::optional<std::string>("-fuse-ld=mold");
@@ -1209,7 +1229,8 @@ namespace vix::commands::BuildCommand
             return tool + ":" + out + "\n";
         }
 
-        static std::string compute_project_files_fingerprint(const fs::path &projectDir)
+        static std::string
+        compute_project_files_fingerprint(const fs::path &projectDir)
         {
             std::vector<fs::path> files;
 
@@ -1267,12 +1288,11 @@ namespace vix::commands::BuildCommand
             return !old.empty() && old == sig;
         }
 
-        static std::vector<std::pair<std::string, std::string>> build_cmake_vars(
-            const Preset &p,
-            const Options &opt,
-            const fs::path &toolchainFile,
-            const std::optional<std::string> &launcher,
-            const std::optional<std::string> &fastLinkerFlag)
+        static std::vector<std::pair<std::string, std::string>>
+        build_cmake_vars(const Preset &p, const Options &opt,
+                         const fs::path &toolchainFile,
+                         const std::optional<std::string> &launcher,
+                         const std::optional<std::string> &fastLinkerFlag)
         {
             std::vector<std::pair<std::string, std::string>> vars;
             vars.reserve(32);
@@ -1309,7 +1329,8 @@ namespace vix::commands::BuildCommand
             return vars;
         }
 
-        static std::string signature_join(const std::vector<std::pair<std::string, std::string>> &kvs)
+        static std::string
+        signature_join(const std::vector<std::pair<std::string, std::string>> &kvs)
         {
             std::ostringstream oss;
             for (const auto &kv : kvs)
@@ -1317,10 +1338,8 @@ namespace vix::commands::BuildCommand
             return oss.str();
         }
 
-        static std::string make_signature(
-            const Plan &plan,
-            const Options &opt,
-            const std::string &toolchainContent)
+        static std::string make_signature(const Plan &plan, const Options &opt,
+                                          const std::string &toolchainContent)
         {
             std::ostringstream oss;
 
@@ -1390,7 +1409,8 @@ namespace vix::commands::BuildCommand
             plan.projectFingerprint = compute_project_files_fingerprint(plan.projectDir);
 
             if (!opt.targetTriple.empty())
-                plan.buildDir = plan.projectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
+                plan.buildDir =
+                    plan.projectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
             else
                 plan.buildDir = plan.projectDir / plan.preset.buildDirName;
 
@@ -1401,9 +1421,11 @@ namespace vix::commands::BuildCommand
 
             std::string toolchainContent;
             if (!opt.targetTriple.empty())
-                toolchainContent = toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
+                toolchainContent =
+                    toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
 
-            plan.cmakeVars = build_cmake_vars(plan.preset, opt, plan.toolchainFile, plan.launcher, plan.fastLinkerFlag);
+            plan.cmakeVars = build_cmake_vars(plan.preset, opt, plan.toolchainFile,
+                                              plan.launcher, plan.fastLinkerFlag);
             plan.signature = make_signature(plan, opt, toolchainContent);
 
             return plan;
@@ -1422,13 +1444,17 @@ namespace vix::commands::BuildCommand
             return false;
         }
 
-        static std::vector<std::string> cmake_configure_argv(const Plan &plan)
+        static std::vector<std::string> cmake_configure_argv(const Plan &plan,
+                                                             const Options &opt)
         {
             std::vector<std::string> argv;
             argv.reserve(32);
 
             argv.push_back("cmake");
-            argv.push_back("--log-level=WARNING");
+
+            // utilise opt → plus de warning
+            argv.push_back(opt.cmakeVerbose ? "--log-level=VERBOSE" : "--log-level=WARNING");
+
             argv.push_back("-S");
             argv.push_back(plan.projectDir.string());
             argv.push_back("-B");
@@ -1437,9 +1463,10 @@ namespace vix::commands::BuildCommand
             argv.push_back(plan.preset.generator);
 
             for (const auto &kv : plan.cmakeVars)
-            {
                 argv.push_back("-D" + kv.first + "=" + kv.second);
-            }
+
+            for (const auto &a : opt.cmakeArgs)
+                argv.push_back(a);
 
             return argv;
         }
@@ -1454,7 +1481,8 @@ namespace vix::commands::BuildCommand
             return static_cast<int>(hc);
         }
 
-        static std::vector<std::string> cmake_build_argv(const Plan &plan, const Options &opt)
+        static std::vector<std::string> cmake_build_argv(const Plan &plan,
+                                                         const Options &opt)
         {
             std::vector<std::string> argv;
             argv.reserve(16);
@@ -1480,13 +1508,15 @@ namespace vix::commands::BuildCommand
             return argv;
         }
 
-        static std::vector<std::string> ninja_dry_run_argv(const Plan &plan, const Options &opt)
+        static std::vector<std::string> ninja_dry_run_argv(const Plan &plan,
+                                                           const Options &opt)
         {
             (void)opt;
             return {"ninja", "-C", plan.buildDir.string(), "-n"};
         }
 
-        static std::vector<std::pair<std::string, std::string>> ninja_env(const Options &opt, const Plan &plan)
+        static std::vector<std::pair<std::string, std::string>>
+        ninja_env(const Options &opt, const Plan &plan)
         {
             std::vector<std::pair<std::string, std::string>> env;
 
@@ -1507,7 +1537,8 @@ namespace vix::commands::BuildCommand
                 return false;
 
             std::string out;
-            ExecResult r = run_process_capture(ninja_dry_run_argv(plan, opt), ninja_env(opt, plan), out);
+            ExecResult r = run_process_capture(ninja_dry_run_argv(plan, opt),
+                                               ninja_env(opt, plan), out);
             if (r.exitCode != 0)
                 return false;
 
@@ -1543,7 +1574,8 @@ namespace vix::commands::BuildCommand
                 auto planOpt = make_plan(opt_, cwd);
                 if (!planOpt)
                 {
-                    error("Unable to determine the project directory (missing CMakeLists.txt?)");
+                    error("Unable to determine the project directory (missing "
+                          "CMakeLists.txt?)");
                     hint("Run from your project root, or pass: vix build --dir <path>");
                     return 1;
                 }
@@ -1559,27 +1591,32 @@ namespace vix::commands::BuildCommand
                     }
                 }
 
-                if (plan_.fastLinkerFlag && *plan_.fastLinkerFlag == "-fuse-ld=lld" && !executable_on_path("ld.lld"))
+                if (plan_.fastLinkerFlag && *plan_.fastLinkerFlag == "-fuse-ld=lld" &&
+                    !executable_on_path("ld.lld"))
                 {
                     if (!opt_.quiet)
                     {
-                        hint("Requested lld but 'ld.lld' is missing -> falling back to default linker.");
+                        hint("Requested lld but 'ld.lld' is missing -> falling back to default "
+                             "linker.");
                         hint("Install optional speedup: sudo apt install -y lld");
                     }
                     plan_.fastLinkerFlag.reset();
                 }
 
-                if (plan_.fastLinkerFlag && *plan_.fastLinkerFlag == "-fuse-ld=mold" && !executable_on_path("mold"))
+                if (plan_.fastLinkerFlag && *plan_.fastLinkerFlag == "-fuse-ld=mold" &&
+                    !executable_on_path("mold"))
                 {
                     if (!opt_.quiet)
                     {
-                        hint("Requested mold but 'mold' is missing -> falling back to default linker.");
+                        hint("Requested mold but 'mold' is missing -> falling back to default "
+                             "linker.");
                         hint("Install optional speedup: sudo apt install -y mold");
                     }
                     plan_.fastLinkerFlag.reset();
                 }
 
-                plan_.cmakeVars = build_cmake_vars(plan_.preset, opt_, plan_.toolchainFile, plan_.launcher, plan_.fastLinkerFlag);
+                plan_.cmakeVars = build_cmake_vars(plan_.preset, opt_, plan_.toolchainFile,
+                                                   plan_.launcher, plan_.fastLinkerFlag);
 
                 std::string tc;
                 if (!opt_.targetTriple.empty())
@@ -1595,7 +1632,8 @@ namespace vix::commands::BuildCommand
                     const std::string gxx = opt_.targetTriple + "-g++";
                     if (!executable_on_path(gcc) || !executable_on_path(gxx))
                     {
-                        error("Cross toolchain not found on PATH for target: " + opt_.targetTriple);
+                        error("Cross toolchain not found on PATH for target: " +
+                              opt_.targetTriple);
                         hint("Install the cross compiler and ensure binaries exist:");
                         hint("  " + gcc);
                         hint("  " + gxx);
@@ -1624,7 +1662,8 @@ namespace vix::commands::BuildCommand
                     tc = toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
                     if (!write_text_file_atomic(plan_.toolchainFile, tc))
                     {
-                        error("Failed to write toolchain file: " + plan_.toolchainFile.string());
+                        error("Failed to write toolchain file: " +
+                              plan_.toolchainFile.string());
                         hint("Check filesystem permissions.");
                         return 1;
                     }
@@ -1633,14 +1672,16 @@ namespace vix::commands::BuildCommand
                 if (need_configure(opt_, plan_))
                 {
                     status_line(opt_.quiet, "Configuring",
-                                plan_.projectDir.filename().string() + " (" + plan_.preset.name + ")");
+                                plan_.projectDir.filename().string() + " (" +
+                                    plan_.preset.name + ")");
 
                     print_preset_summary(opt_, plan_);
 
                     const auto t0 = std::chrono::steady_clock::now();
-                    auto argv = cmake_configure_argv(plan_);
+                    auto argv = cmake_configure_argv(plan_, opt_);
 
-                    const ExecResult r = run_process_live_to_log(argv, {}, plan_.configureLog, opt_.quiet, opt_.cmakeVerbose);
+                    const ExecResult r = run_process_live_to_log(
+                        argv, {}, plan_.configureLog, opt_.quiet, opt_.cmakeVerbose);
                     if (r.exitCode != 0)
                     {
                         error("CMake configure failed.");
@@ -1671,7 +1712,8 @@ namespace vix::commands::BuildCommand
                 }
                 else
                 {
-                    log_header_if(opt_.quiet, "Using existing configuration (cache-friendly).");
+                    log_header_if(opt_.quiet,
+                                  "Using existing configuration (cache-friendly).");
                     log_bullet_if(opt_.quiet, plan_.buildDir.string());
                     if (!opt_.quiet)
                         std::cout << "\n";
@@ -1681,21 +1723,23 @@ namespace vix::commands::BuildCommand
                 {
                     if (!opt_.quiet)
                     {
-                        std::cout << PAD << GREEN << "Up to date" << RESET
-                                  << " (" << plan_.preset.name << ")\n\n";
+                        std::cout << PAD << GREEN << "Up to date" << RESET << " ("
+                                  << plan_.preset.name << ")\n\n";
                     }
                     return 0;
                 }
 
                 {
                     status_line(opt_.quiet, "Building",
-                                plan_.projectDir.filename().string() + " [" + plan_.preset.name + "]");
+                                plan_.projectDir.filename().string() + " [" +
+                                    plan_.preset.name + "]");
 
                     const auto t0 = std::chrono::steady_clock::now();
                     auto argv = cmake_build_argv(plan_, opt_);
                     auto env = ninja_env(opt_, plan_);
 
-                    const ExecResult r = run_process_live_to_log(argv, env, plan_.buildLog, opt_.quiet, opt_.cmakeVerbose);
+                    const ExecResult r = run_process_live_to_log(
+                        argv, env, plan_.buildLog, opt_.quiet, opt_.cmakeVerbose);
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                         std::chrono::steady_clock::now() - t0)
                                         .count();
@@ -1711,15 +1755,14 @@ namespace vix::commands::BuildCommand
                         return (r.exitCode == 0) ? 3 : r.exitCode;
                     }
 
-                    const std::string profile =
-                        (plan_.preset.buildType == "Release")
-                            ? "release [optimized]"
-                            : "dev [unoptimized + debuginfo]";
+                    const std::string profile = (plan_.preset.buildType == "Release")
+                                                    ? "release [optimized]"
+                                                    : "dev [unoptimized + debuginfo]";
 
                     if (!opt_.quiet)
                     {
-                        std::cout << PAD << GREEN << "Finished" << RESET
-                                  << " " << profile << " in " << format_seconds(ms) << "\n\n";
+                        std::cout << PAD << GREEN << "Finished" << RESET << " " << profile
+                                  << " in " << format_seconds(ms) << "\n\n";
                     }
                 }
 
@@ -1758,7 +1801,7 @@ namespace vix::commands::BuildCommand
         std::ostream &out = std::cout;
 
         out << "Usage:\n";
-        out << "  vix build [options]\n\n";
+        out << "  vix build [options] -- [cmake args...]\n\n";
 
         out << "Description:\n";
         out << "  Configure and build a CMake project using embedded Vix presets.\n";
@@ -1775,22 +1818,31 @@ namespace vix::commands::BuildCommand
 
         out << "Options:\n";
         out << "  --preset <name>       Preset to use (dev, dev-ninja, release)\n";
-        out << "  --target <triple>     Cross-compilation target triple (auto toolchain)\n";
+        out << "  --target <triple>     Cross-compilation target triple (auto "
+               "toolchain)\n";
         out << "  --sysroot <path>      Sysroot for cross toolchain (optional)\n";
-        out << "  --static              Request static linking (VIX_LINK_STATIC=ON)\n";
-        out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, clamped)\n";
+        out << "  --static              Request static linking "
+               "(VIX_LINK_STATIC=ON)\n";
+        out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, "
+               "clamped)\n";
         out << "  --clean               Force reconfigure (ignore cache/signature)\n";
         out << "  --no-cache            Disable signature cache shortcut\n";
-        out << "  --fast                Fast loop: if Ninja says up-to-date, exit immediately\n";
-        out << "  --linker <mode>       auto|default|mold|lld (auto prefers mold then lld)\n";
-        out << "  --launcher <mode>     auto|none|sccache|ccache (auto prefers sccache)\n";
+        out << "  --fast                Fast loop: if Ninja says up-to-date, exit "
+               "immediately\n";
+        out << "  --linker <mode>       auto|default|mold|lld (auto prefers mold "
+               "then lld)\n";
+        out << "  --launcher <mode>     auto|none|sccache|ccache (auto prefers "
+               "sccache)\n";
         out << "  --no-status           Disable NINJA_STATUS progress format\n";
         out << "  --no-up-to-date       Disable Ninja dry-run up-to-date detection\n";
-        out << "  -d, --dir <path>      Project directory (where CMakeLists.txt lives)\n";
+        out << "  -d, --dir <path>      Project directory (where CMakeLists.txt "
+               "lives)\n";
         out << "  -q, --quiet           Minimal output (still logs to files)\n";
         out << "  --targets             List detected cross toolchains on PATH\n";
-        out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
-        out << "  --build-target <name> Build only a specific CMake target (ex: blog)\n";
+        out << "  --cmake-verbose       Show raw CMake configure output (no summary "
+               "filtering)\n";
+        out << "  --build-target <name> Build only a specific CMake target (ex: "
+               "blog)\n";
         out << "  -h, --help            Show this help\n\n";
 
         out << "Examples:\n";
@@ -1800,7 +1852,9 @@ namespace vix::commands::BuildCommand
         out << "  vix build --preset release --static\n";
         out << "  vix build --launcher sccache --linker mold\n";
         out << "  vix build --target aarch64-linux-gnu\n";
-        out << "  vix build --preset release --target aarch64-linux-gnu\n";
+        out << "  vix build --preset release -target aarch64-linux-gnu\n";
+        out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
+
         out << "  vix build -j 8\n\n";
 
         out << "Logs:\n";

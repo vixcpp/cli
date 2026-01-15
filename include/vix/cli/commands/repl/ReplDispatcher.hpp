@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_DISPATCHER_HPP
+#define RELP_DISPATCHER_HPP
+
 #include <string>
 #include <vector>
 #include <functional>
@@ -20,3 +22,5 @@ namespace vix::cli::repl
         std::unordered_map<std::string, DispatchFn> map_;
     };
 }
+
+#endif

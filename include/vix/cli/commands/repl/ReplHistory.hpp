@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_HISTORY_HPP
+#define RELP_HISTORY_HPP
+
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -24,3 +26,5 @@ namespace vix::cli::repl
         std::vector<std::string> items_;
     };
 }
+
+#endif

@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_DETAIL_HPP
+#define RELP_DETAIL_HPP
+
 #include <string>
 #include <cstddef>
 
@@ -22,3 +24,5 @@ namespace vix::cli::repl
         bool enableCompletion = false;
     };
 }
+
+#endif

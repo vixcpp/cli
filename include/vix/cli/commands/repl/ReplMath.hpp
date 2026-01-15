@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_MATH_HPP
+#define RELP_MATH_HPP
+
 #include <string>
 #include <optional>
 
@@ -17,3 +19,5 @@ namespace vix::cli::repl
     // returns error message on failure
     std::optional<CalcResult> eval_expression(const std::string &expr, std::string &error);
 }
+
+#endif

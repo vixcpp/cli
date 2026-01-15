@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_API_HPP
+#define RELP_API_HPP
+
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,3 +20,5 @@ namespace vix::cli::repl::api
     std::filesystem::path pwd();
     bool cd(const std::filesystem::path &p, std::string *err = nullptr);
 }
+
+#endif

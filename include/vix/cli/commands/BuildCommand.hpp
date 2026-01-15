@@ -1,5 +1,5 @@
-#ifndef VIX_BUILD_COMMAND_HPP
-#define VIX_BUILD_COMMAND_HPP
+#ifndef BUILD_COMMAND_HPP
+#define BUILD_COMMAND_HPP
 
 #include <string>
 #include <vector>
@@ -10,4 +10,4 @@ namespace vix::commands::BuildCommand
     int help();
 }
 
-#endif // VIX_BUILD_COMMAND_HPP
+#endif // BUILD_COMMAND_HPP

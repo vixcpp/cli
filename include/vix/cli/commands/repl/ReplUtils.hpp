@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_UTILS_HPP
+#define RELP_UTILS_HPP
+
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -24,3 +26,5 @@ namespace vix::cli::repl
     std::string trim_copy(std::string s);
     bool starts_with(const std::string &s, const std::string &prefix);
 }
+
+#endif

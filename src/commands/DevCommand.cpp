@@ -19,11 +19,12 @@ namespace vix::commands::DevCommand
     {
         bool has_watch_flag(const std::vector<std::string> &args)
         {
-            return std::any_of(args.begin(), args.end(),
-                               [](const std::string &s)
-                               {
-                                   return s == "--watch" || s == "--reload";
-                               });
+            return std::any_of(
+                args.begin(), args.end(),
+                [](const std::string &s)
+                {
+                    return s == "--watch" || s == "--reload";
+                });
         }
 
     } // namespace

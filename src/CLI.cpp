@@ -1,60 +1,17 @@
 /**
- * @file CLI.cpp
- * @brief Core implementation of the Vix.cpp Command Line Interface (CLI).
  *
- * This module provides the main entry point for the Vix.cpp CLI tool,
- * allowing developers to create, build, and run C++ projects powered by Vix.
+ *  @file CLI.cpp
+ *  @author Gaspard Kirira
  *
- * ## Available Commands
- * - `vix new <name>` — Create a new Vix project template.
- * - `vix build [name]` — Build an existing project or application.
- * - `vix run [name] [--args]` — Run a project or service.
- * - `vix version` — Display the current CLI version.
- * - `vix help` — Show this help message.
+ *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
  *
- * ## Architecture
- * The CLI uses an internal hash map (`commands_`) that associates each
- * command string with a callable function object:
+ *  Vix.cpp
  *
- * ```cpp
- * std::unordered_map<std::string, std::function<int(std::vector<std::string>)>>;
- * ```
- *
- * This design makes it easy to extend the CLI — simply register a new
- * command and its associated function during initialization.
- *
- * ## Error Handling
- * All command executions are wrapped in try/catch blocks.
- * If an exception occurs, it is logged using the global `Vix::Logger`
- * with clear contextual information (module name, severity level, and message).
- *
- * ## Example usage
- * ```bash
- * vix new blog
- * vix build blog --config Release
- * vix run blog -- --port 8080
- * ```
- *
- * @namespace Vix
- * @class CLI
- * @details
- * The `Vix::CLI` class encapsulates the logic for command registration,
- * argument parsing, and runtime execution of subcommands.
- *
- * It also provides convenient aliases such as:
- * - `-h` or `--help` → same as `help`
- * - `-v` or `--version` → same as `version`
- *
- * @note
- * All user-facing messages are displayed through the central
- * `Vix::Logger` instance, which ensures consistent formatting
- * and module-based colorized output.
- *
- * @version 1.3.0
- * @date 2025
- * @authors
- * SoftAdAstra
  */
+
 #include <vix/cli/CLI.hpp>
 #include <vix/cli/commands/NewCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
@@ -88,8 +45,6 @@ namespace vix
 
     namespace
     {
-        // Helpers for log-level parsing
-
         std::string to_lower_copy(std::string s)
         {
             std::transform(s.begin(), s.end(), s.begin(),
@@ -150,7 +105,6 @@ namespace vix
 
     } // namespace
 
-    // CLI constructor — register commands
     CLI::CLI()
     {
         // Base commands
@@ -159,7 +113,6 @@ namespace vix
         commands_["version"] = [this](auto args)
         { return version(args); };
 
-        // Main CLI commands
         commands_["new"] = [](auto args)
         { return commands::NewCommand::run(args); };
         commands_["run"] = [](auto args)
@@ -167,9 +120,7 @@ namespace vix
         commands_["build"] = [](auto args)
         { return commands::BuildCommand::run(args); };
         commands_["dev"] = [](auto args)
-        {
-            return commands::DevCommand::run(args);
-        };
+        { return commands::DevCommand::run(args); };
         commands_["orm"] = [](auto args)
         { return commands::OrmCommand::run(args); };
         commands_["pack"] = [](auto args)
@@ -187,7 +138,6 @@ namespace vix
         commands_["install"] = [](auto args)
         { return commands::InstallCommand::run(args); };
 
-        // Useful aliases (treated as commands)
         commands_["-h"] = [this](auto args)
         { return help(args); };
         commands_["--help"] = [this](auto args)
@@ -197,7 +147,6 @@ namespace vix
         commands_["--version"] = [this](auto args)
         { return version(args); };
 
-        // Internal demo command (optional)
         commands_["hello"] = [](auto)
         {
             auto &logger = Logger::getInstance();
@@ -282,7 +231,7 @@ namespace vix
                 continue;
             }
 
-            break; // command starts here
+            break;
         }
 
         switch (verbosity)

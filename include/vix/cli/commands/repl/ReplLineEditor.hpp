@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_LINE_EDITOR_HPP
+#define RELP_LINE_EDITOR_HPP
+
 #include <string>
 #include <vector>
 #include <functional>
@@ -32,3 +34,5 @@ namespace vix::cli::repl
         const HistoryNavFn &onHistoryUp,
         const HistoryNavFn &onHistoryDown);
 }
+
+#endif

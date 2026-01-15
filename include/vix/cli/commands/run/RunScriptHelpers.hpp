@@ -1,4 +1,5 @@
-#pragma once
+#ifndef RUN_SCRIPT_HELPERS_HPP
+#define RUN_SCRIPT_HELPERS_HPP
 
 #include <filesystem>
 #include <string>
@@ -27,3 +28,5 @@ namespace vix::commands::RunCommand::detail
     void apply_sanitizer_env_if_needed(bool enableSanitizers, bool enableUbsanOnly);
 #endif
 } // namespace vix::commands::RunCommand::detail
+
+#endif

@@ -1,13 +1,13 @@
-#pragma once
+#ifndef ORM_COMMAND_PHP
+#define ORM_COMMAND_HPP
+
 #include <string>
 #include <vector>
 
-namespace vix::commands
+namespace vix::commands::OrmCommand
 {
-    class OrmCommand
-    {
-    public:
-        static int run(const std::vector<std::string> &args);
-        static int help();
-    };
+    int run(const std::vector<std::string> &args);
+    int help();
 }
+
+#endif

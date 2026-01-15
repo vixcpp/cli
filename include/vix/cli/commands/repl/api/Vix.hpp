@@ -1,4 +1,6 @@
-#pragma once
+#ifndef VIX_HPP
+#define VIX_HPP
+
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -45,3 +47,5 @@ namespace vix::cli::repl::api
         std::vector<std::string> args_;
     };
 }
+
+#endif

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef PROCESS_HELPERS_HPP
+#define PROCESS_HELPERS_HPP
 
 #include <filesystem>
 #include <string>
@@ -10,3 +11,5 @@ namespace vix::cli::commands::helpers
     std::string run_and_capture_with_code(const std::string &cmd, int &outCode);
 
 } // namespace vix::cli::commands::helpers
+
+#endif

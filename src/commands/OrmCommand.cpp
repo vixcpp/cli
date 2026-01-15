@@ -5,7 +5,7 @@
 
 namespace fs = std::filesystem;
 
-namespace vix::commands
+namespace
 {
     static const char *env_or(const char *k, const char *defv)
     {
@@ -16,7 +16,6 @@ namespace vix::commands
 
     static std::string shell_quote(const std::string &s)
     {
-        // simple safe quoting
         std::string out = "'";
         for (char c : s)
         {
@@ -70,27 +69,20 @@ namespace vix::commands
 
     static std::string find_migrator_tool()
     {
-        // 0) override (debug/dev)
         if (const char *t = std::getenv("VIX_ORM_TOOL"))
             return std::string(t);
 
-        // 1) installed layout relative to the vix executable
-        //    ex: /usr/local/bin/vix
-        //        /usr/local/libexec/vix/vix_orm_migrator
         if (fs::path binDir = get_exe_dir(); !binDir.empty())
         {
-            fs::path prefix = binDir.parent_path(); // .../usr/local (or .../usr)
+            fs::path prefix = binDir.parent_path();
 
             std::vector<fs::path> installed = {
-                // recommended (GNUInstallDirs -> CMAKE_INSTALL_LIBEXECDIR)
                 prefix / "libexec" / "vix" / "vix_orm_migrator",
                 prefix / "libexec" / "vix" / "vix_orm_migrate_init",
 
-                // fallback variants
                 prefix / "lib" / "vix" / "libexec" / "vix_orm_migrator",
                 prefix / "lib" / "vix" / "vix_orm_migrator",
 
-                // same dir (portable)
                 binDir / "vix_orm_migrator",
             };
 
@@ -99,11 +91,6 @@ namespace vix::commands
                     return p.string();
         }
 
-        // 2) dev mode (monorepo)
-        // NOTE: in your repo you have:
-        //   ./build/orm_build/migrate_init
-        //   ./modules/orm/build/migrate_init
-        // once you switch to tools/migrator, update these paths accordingly.
         std::vector<fs::path> dev = {
             fs::path("build/orm_build/vix_orm_migrator"),
             fs::path("modules/orm/build/vix_orm_migrator"),
@@ -121,8 +108,6 @@ namespace vix::commands
             if (fs::exists(p))
                 return p.string();
 
-        // 3) PATH fallback (installed in PATH)
-        // (If you decide to install vix_orm_migrator into bin instead of libexec.)
         return "vix_orm_migrator";
     }
 
@@ -143,7 +128,6 @@ namespace vix::commands
     }
     static bool looks_like_app_root(const fs::path &p)
     {
-        // heuristiques app
         if (fs::exists(p / "CMakePresets.json"))
             return true;
         if (fs::exists(p / "src") && fs::is_directory(p / "src") && fs::exists(p / "CMakeLists.txt"))
@@ -160,12 +144,11 @@ namespace vix::commands
         for (int depth = 0; depth < 12; ++depth)
         {
             if (looks_like_vix_repo_root(p))
-                bestVix = p; // on continue à remonter pour garder la vraie racine
+                bestVix = p;
 
             if (looks_like_app_root(p))
-                best = p; // app root (plus spécifique)
+                best = p;
 
-            // fallback: n'importe quel CMakeLists
             if (best.empty() && fs::exists(p / "CMakeLists.txt"))
                 best = p;
 
@@ -177,10 +160,6 @@ namespace vix::commands
             p = parent;
         }
 
-        // priorité:
-        // 1) racine Vix si trouvée
-        // 2) app root si trouvée
-        // 3) fallback cmake
         if (!bestVix.empty())
             return bestVix;
         if (!best.empty())
@@ -190,17 +169,14 @@ namespace vix::commands
 
     static fs::path detect_migrations_dir(const fs::path &projectDir)
     {
-        // Si on est dans le repo Vix → on ne devine PAS
         if (looks_like_vix_repo_root(projectDir))
             return {};
 
-        // Cas normal : projet applicatif
         std::vector<fs::path> candidates = {
             projectDir / "migrations",
             projectDir / "db" / "migrations",
             projectDir / "database" / "migrations",
 
-            // extras utiles (souvent vus)
             projectDir / "sql" / "migrations",
             projectDir / "db" / "sql",
             projectDir / "migrations" / "mysql",
@@ -214,49 +190,11 @@ namespace vix::commands
 
         return {};
     }
+}
 
-    int OrmCommand::help()
-    {
-        std::cout
-            << "Vix ORM\n"
-            << "Database migrations & schema management\n\n"
-
-            << "Usage:\n"
-            << "  vix orm migrate   [options]\n"
-            << "  vix orm rollback  --steps <n> [options]\n"
-            << "  vix orm status    [options]\n\n"
-
-            << "Common options:\n"
-            << "  --db <name>           Database name (overrides VIX_ORM_DB)\n"
-            << "  --dir <path>          Migrations directory (overrides VIX_ORM_DIR)\n"
-            << "  --host <uri>          MySQL URI (default: tcp://127.0.0.1:3306)\n"
-            << "  --user <name>         Database user (default: root)\n"
-            << "  --pass <pass>         Database password\n"
-            << "  --project-dir <path>  Force project root detection\n"
-            << "  --tool <path>         Override migrator executable path\n"
-            << "  -h, --help            Show this help\n\n"
-
-            << "Rollback options:\n"
-            << "  --steps <n>           Rollback last N applied migrations (required)\n\n"
-
-            << "Environment defaults:\n"
-            << "  VIX_ORM_HOST   Default DB host (tcp://127.0.0.1:3306)\n"
-            << "  VIX_ORM_USER   Default DB user (root)\n"
-            << "  VIX_ORM_PASS   Default DB password\n"
-            << "  VIX_ORM_DB     Default DB name (vixdb)\n"
-            << "  VIX_ORM_DIR    Default migrations dir (migrations)\n"
-            << "  VIX_ORM_TOOL   Default migrator executable path\n\n"
-
-            << "Examples:\n"
-            << "  vix orm migrate --db blog_db --dir ./migrations\n"
-            << "  vix orm rollback --steps 1 --db blog_db --dir ./migrations\n"
-            << "  vix orm status --db blog_db\n"
-            << "  VIX_ORM_DB=blog_db vix orm migrate --dir ./migrations\n";
-
-        return 0;
-    }
-
-    int OrmCommand::run(const std::vector<std::string> &args)
+namespace vix::commands::OrmCommand
+{
+    int run(const std::vector<std::string> &args)
     {
         if (args.empty() || args[0] == "-h" || args[0] == "--help")
             return help();
@@ -269,7 +207,6 @@ namespace vix::commands
             return 1;
         }
 
-        // Small helper to avoid calling get_flag(...) twice everywhere
         auto flag_or_env = [&](const std::string &flag,
                                const char *envKey,
                                const char *defv) -> std::string
@@ -280,13 +217,11 @@ namespace vix::commands
             return env_or(envKey, defv);
         };
 
-        // Connection settings: flags override env defaults
         const std::string host = flag_or_env("--host", "VIX_ORM_HOST", "tcp://127.0.0.1:3306");
         const std::string user = flag_or_env("--user", "VIX_ORM_USER", "root");
         const std::string pass = flag_or_env("--pass", "VIX_ORM_PASS", "");
         const std::string db = flag_or_env("--db", "VIX_ORM_DB", "vixdb");
 
-        // project dir: --project-dir or auto from cwd
         fs::path projectDir;
         const std::string projFlag = get_flag(args, "--project-dir");
         if (!projFlag.empty())
@@ -301,11 +236,6 @@ namespace vix::commands
             return 1;
         }
 
-        // migrations dir:
-        //   a) --dir <path>
-        //   b) VIX_ORM_DIR (abs or relative resolved from projectDir)
-        //   c) auto-detect
-        //   d) fallback: projectDir/migrations
         fs::path migDir;
 
         const std::string dirFlag = get_flag(args, "--dir");
@@ -348,8 +278,6 @@ namespace vix::commands
             return 1;
         }
 
-        // migrator tool:
-        //   --tool overrides env/tool discovery
         std::string tool = get_flag(args, "--tool");
         if (tool.empty())
             tool = find_migrator_tool();
@@ -375,11 +303,51 @@ namespace vix::commands
             cmd += " --steps " + shell_quote(steps);
         }
 
-        // Always pass dir explicitly (absolute/canonical)
         cmd += " --dir " + shell_quote(migDir.string());
 
         int rc = std::system(cmd.c_str());
         return rc == 0 ? 0 : 1;
+    }
+
+    int help()
+    {
+        std::ostream &out = std::cout;
+        out << "Vix ORM\n";
+        out << "Database migrations & schema management\n\n";
+
+        out << "Usage:\n";
+        out << "  vix orm migrate   [options]\n";
+        out << "  vix orm rollback  --steps <n> [options]\n";
+        out << "  vix orm status    [options]\n\n";
+
+        out << "Common options:\n";
+        out << "  --db <name>           Database name (overrides VIX_ORM_DB)\n";
+        out << "  --dir <path>          Migrations directory (overrides VIX_ORM_DIR)\n";
+        out << "  --host <uri>          MySQL URI (default: tcp://127.0.0.1:3306)\n";
+        out << "  --user <name>         Database user (default: root)\n";
+        out << "  --pass <pass>         Database password\n";
+        out << "  --project-dir <path>  Force project root detection\n";
+        out << "  --tool <path>         Override migrator executable path\n";
+        out << "  -h, --help            Show this help\n\n";
+
+        out << "Rollback options:\n";
+        out << "  --steps <n>           Rollback last N applied migrations (required)\n\n";
+
+        out << "Environment defaults:\n";
+        out << "  VIX_ORM_HOST   Default DB host (tcp://127.0.0.1:3306)\n";
+        out << "  VIX_ORM_USER   Default DB user (root)\n";
+        out << "  VIX_ORM_PASS   Default DB password\n";
+        out << "  VIX_ORM_DB     Default DB name (vixdb)\n";
+        out << "  VIX_ORM_DIR    Default migrations dir (migrations)\n";
+        out << "  VIX_ORM_TOOL   Default migrator executable path\n\n";
+
+        out << "Examples:\n";
+        out << "  vix orm migrate --db blog_db --dir ./migrations\n";
+        out << "  vix orm rollback --steps 1 --db blog_db --dir ./migrations\n";
+        out << "  vix orm status --db blog_db\n";
+        out << "  VIX_ORM_DB=blog_db vix orm migrate --dir ./migrations\n";
+
+        return 0;
     }
 
 }

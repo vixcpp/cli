@@ -1,4 +1,6 @@
-#pragma once
+#ifndef REPL_CALL_PARSER_HPP
+#define REPL_CALL_PARSER_HPP
+
 #include <optional>
 #include <string>
 #include <string_view>
@@ -55,3 +57,5 @@ namespace vix::cli::repl::api
     // Helper: detect if input looks like a call at all.
     bool looks_like_call(std::string_view input);
 }
+
+#endif

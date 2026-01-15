@@ -1,4 +1,5 @@
-#pragma once
+#ifndef ERROR_CONTEXT_HPP
+#define ERROR_CONTEXT_HPP
 
 #include <filesystem>
 #include <string>
@@ -12,3 +13,5 @@ namespace vix::cli::errors
         std::string buildLog;
     };
 } // namespace vix::cli::errors
+
+#endif

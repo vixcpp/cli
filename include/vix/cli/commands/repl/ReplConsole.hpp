@@ -1,4 +1,6 @@
-#pragma once
+#ifndef RELP_CONSOLE_HPP
+#define RELP_CONSOLE_HPP
+
 #include <string_view>
 #include <string>
 
@@ -15,3 +17,5 @@ namespace vix::cli::repl
         static void println_err(std::string_view s = {});
     };
 }
+
+#endif

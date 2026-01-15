@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CHECK_DETAIL_HPP
+#define CHECK_DETAIL_HPP
 
 #include <filesystem>
 #include <string>
@@ -43,3 +44,5 @@ namespace vix::commands::CheckCommand::detail
     int check_project(const Options &opt, const fs::path &projectDir);
 
 } // namespace vix::commands::CheckCommand::detail
+
+#endif

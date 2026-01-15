@@ -1,8 +1,9 @@
-#pragma once
+#ifndef RULES_FACTORY_HPP
+#define RULES_FACTORY_HPP
 
 #include <memory>
 
-#include "vix/cli/errors/IErrorRule.hpp"
+#include <vix/cli/errors/IErrorRule.hpp>
 
 namespace vix::cli::errors
 {
@@ -23,3 +24,5 @@ namespace vix::cli::errors
     std::unique_ptr<IErrorRule> makeUseOfUninitializedRule();
 
 } // namespace vix::cli::errors
+
+#endif

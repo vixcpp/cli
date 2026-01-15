@@ -1,7 +1,7 @@
-#include "vix/cli/commands/run/RunDetail.hpp"
+#include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
-#include "vix/cli/commands/run/RunScriptHelpers.hpp"
-#include "vix/cli/commands/helpers/TextHelpers.hpp"
+#include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/cli/commands/helpers/TextHelpers.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <filesystem>
@@ -133,7 +133,7 @@ namespace vix::commands::RunCommand::detail
         s += "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan)\n";
         s += "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)\n";
         s += "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)\n";
-        s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" OFF)\n\n";
+        s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" ON)\n\n";
 
         // Executable
         s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
@@ -297,7 +297,7 @@ namespace vix::commands::RunCommand::detail
             ofs << make_script_cmakelists(exeName, script, useVixRuntime, opt.scriptFlags);
         }
 
-        fs::path buildDir = projectDir / "build";
+        fs::path buildDir = projectDir / "build-ninja";
         const fs::path sigFile = projectDir / ".vix-config.sig";
 
         const std::string sig = make_script_config_signature(
@@ -318,7 +318,7 @@ namespace vix::commands::RunCommand::detail
         {
             std::ostringstream oss;
 
-            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build";
+            oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build-ninja";
 
             if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
             {
@@ -366,7 +366,7 @@ namespace vix::commands::RunCommand::detail
 
             std::ostringstream oss;
             oss << "cd " << quote(projectDir.string())
-                << " && cmake --build build --target " << exeName;
+                << " && cmake --build build-ninja --target " << exeName;
 
             if (opt.jobs > 0)
                 oss << " -- -j " << opt.jobs;
@@ -493,7 +493,7 @@ namespace vix::commands::RunCommand::detail
                 opt.scriptFlags);
         }
 
-        fs::path buildDir = projectDir / "build";
+        fs::path buildDir = projectDir / "build-ninja";
         const fs::path sigFile = projectDir / ".vix-config.sig";
 
         const std::string sig = make_script_config_signature(
@@ -521,7 +521,7 @@ namespace vix::commands::RunCommand::detail
             std::ostringstream oss;
 
             oss << "cd " << quote(projectDir.string())
-                << " && cmake -S . -B build";
+                << " && cmake -S . -B build-ninja";
 
             if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
             {
@@ -567,13 +567,13 @@ namespace vix::commands::RunCommand::detail
         std::ostringstream oss;
 #ifndef _WIN32
         oss << "cd " << quote(projectDir.string())
-            << " && cmake --build build --target " << exeName;
+            << " && cmake --build build-ninja --target " << exeName;
         if (opt.jobs > 0)
             oss << " -- -j " << opt.jobs;
         oss << " >" << quote(logPath.string()) << " 2>&1";
 #else
         oss << "cd " << quote(projectDir.string())
-            << " && cmake --build build --target " << exeName;
+            << " && cmake --build build-ninja --target " << exeName;
         if (opt.jobs > 0)
             oss << " -- /m:" << opt.jobs;
         oss << " >" << quote(logPath.string()) << " 2>&1";

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef COMPILER_ERROR_HPP
+#define COMPILER_ERROR_HPP
 
 #include <string>
 
@@ -19,3 +20,5 @@ namespace vix::cli::errors
         std::string raw;
     };
 } // namespace vix::cli::errors
+
+#endif

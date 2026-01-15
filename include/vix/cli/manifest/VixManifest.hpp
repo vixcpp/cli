@@ -1,4 +1,5 @@
-#pragma once
+#ifndef VIX_MANIFEST_HPP
+#define VIX_MANIFEST_HPP
 
 #include <filesystem>
 #include <optional>
@@ -55,3 +56,5 @@ namespace vix::cli::manifest
     void apply_env_pairs(const std::vector<std::string> &pairs);
 
 } // namespace vix::cli::manifest
+
+#endif

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef RUN_DETAIL_HPP
+#define RUN_DETAIL_HPP
 
 #include <filesystem>
 #include <optional>
@@ -155,3 +156,5 @@ namespace vix::commands::RunCommand::detail
                                                   const std::string &configurePreset);
 
 } // namespace vix::commands::RunCommand::detail
+
+#endif

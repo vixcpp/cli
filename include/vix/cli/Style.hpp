@@ -1,5 +1,5 @@
-#ifndef VIX_CLI_STYLE_HPP
-#define VIX_CLI_STYLE_HPP
+#ifndef CLI_STYLE_HPP
+#define CLI_STYLE_HPP
 
 #include <iostream>
 #include <string>
@@ -59,4 +59,4 @@ namespace vix::cli::style
 
 } // namespace vix::cli::style
 
-#endif // VIX_CLI_STYLE_HPP
+#endif // CLI_STYLE_HPP

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef I_ERROR_RULE_HPP
+#define I_ERROR_RULE_HPP
 
 #include "vix/cli/errors/CompilerError.hpp"
 #include "vix/cli/errors/ErrorContext.hpp"
@@ -17,3 +18,5 @@ namespace vix::cli::errors
         virtual bool handle(const CompilerError &err, const ErrorContext &ctx) const = 0;
     };
 } // namespace vix::cli::errors
+
+#endif

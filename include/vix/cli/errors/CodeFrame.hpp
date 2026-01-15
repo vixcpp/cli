@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CODE_FRAME_HPP
+#define CODE_FRAME_HPP
 
 #include <string>
 #include "vix/cli/errors/CompilerError.hpp"
@@ -19,3 +20,5 @@ namespace vix::cli::errors
                         const ErrorContext &ctx,
                         const CodeFrameOptions &opt = {});
 }
+
+#endif

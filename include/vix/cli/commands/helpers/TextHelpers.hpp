@@ -1,4 +1,5 @@
-#pragma once
+#ifndef TEXT_HELPERS_HPP
+#define TEXT_HELPERS_HPP
 
 #include <filesystem>
 #include <string>
@@ -13,3 +14,5 @@ namespace vix::cli::commands::helpers
     bool write_text_file(const fs::path &p, const std::string &text);
 
 } // namespace vix::cli::commands::helpers
+
+#endif

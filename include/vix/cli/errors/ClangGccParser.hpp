@@ -1,4 +1,5 @@
-#pragma once
+#ifndef CLANG_GCC_PARSER_HPP
+#define CLANG_GCC_PARSER_HPP
 
 #include <string>
 #include <vector>
@@ -15,3 +16,5 @@ namespace vix::cli::errors
         static std::vector<CompilerError> parse(const std::string &buildLog);
     };
 } // namespace vix::cli::errors
+
+#endif

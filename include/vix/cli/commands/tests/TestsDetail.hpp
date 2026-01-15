@@ -1,4 +1,5 @@
-#pragma once
+#ifndef TESTS_DETAIL_HPP
+#define TESTS_DETAIL_HPP
 
 #include <filesystem>
 #include <string>
@@ -21,3 +22,5 @@ namespace vix::commands::TestsCommand::detail
 
     Options parse(const std::vector<std::string> &args);
 }
+
+#endif

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef RAW_LOG_DETECTORS_HPP
+#define RAW_LOG_DETECTORS_HPP
 
 #include <filesystem>
 #include <string>
@@ -19,3 +20,5 @@ namespace vix::cli::errors
             const std::string &contextMessage);
     };
 } // namespace vix::cli::errors
+
+#endif

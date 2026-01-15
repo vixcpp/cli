@@ -1,4 +1,5 @@
-#pragma once
+#ifndef OWNERSHIP_RULES_HPP
+#define OWNERSHIP_RULES_HPP
 
 #include <memory>
 
@@ -13,3 +14,5 @@ namespace vix::cli::errors
     std::unique_ptr<IErrorRule> makeReturnLocalRefRule();
     std::unique_ptr<IErrorRule> makeUseOfUninitializedRule();
 } // namespace vix::cli::errors
+
+#endif

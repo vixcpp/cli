@@ -1,5 +1,5 @@
-#ifndef VIX_RUN_COMMAND_HPP
-#define VIX_RUN_COMMAND_HPP
+#ifndef RUN_COMMAND_HPP
+#define RUN_COMMAND_HPP
 
 #include <string>
 #include <vector>
@@ -10,4 +10,4 @@ namespace vix::commands::RunCommand
     int help();
 }
 
-#endif // VIX_RUN_COMMAND_HPP
+#endif // RUN_COMMAND_HPP

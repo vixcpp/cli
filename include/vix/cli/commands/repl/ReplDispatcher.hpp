@@ -1,5 +1,5 @@
-#ifndef RELP_DISPATCHER_HPP
-#define RELP_DISPATCHER_HPP
+#ifndef VIX_RELP_DISPATCHER_HPP
+#define VIX_RELP_DISPATCHER_HPP
 
 #include <string>
 #include <vector>
@@ -8,19 +8,19 @@
 
 namespace vix::cli::repl
 {
-    using DispatchFn = std::function<int(const std::vector<std::string> &)>;
+  using DispatchFn = std::function<int(const std::vector<std::string> &)>;
 
-    class Dispatcher
-    {
-    public:
-        Dispatcher();
+  class Dispatcher
+  {
+  public:
+    Dispatcher();
 
-        bool has(const std::string &cmd) const;
-        int dispatch(const std::string &cmd, const std::vector<std::string> &args) const;
+    bool has(const std::string &cmd) const;
+    int dispatch(const std::string &cmd, const std::vector<std::string> &args) const;
 
-    private:
-        std::unordered_map<std::string, DispatchFn> map_;
-    };
+  private:
+    std::unordered_map<std::string, DispatchFn> map_;
+  };
 }
 
 #endif

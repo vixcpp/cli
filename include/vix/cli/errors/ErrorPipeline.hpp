@@ -1,5 +1,5 @@
-#ifndef ERROR_PIPELINE_HPP
-#define ERROR_PIPELINE_HPP
+#ifndef VIX_ERROR_PIPELINE_HPP
+#define VIX_ERROR_PIPELINE_HPP
 
 #include <memory>
 #include <vector>
@@ -10,15 +10,15 @@
 
 namespace vix::cli::errors
 {
-    class ErrorPipeline
-    {
-    public:
-        ErrorPipeline();
-        bool tryHandle(const std::vector<CompilerError> &errors, const ErrorContext &ctx) const;
+  class ErrorPipeline
+  {
+  public:
+    ErrorPipeline();
+    bool tryHandle(const std::vector<CompilerError> &errors, const ErrorContext &ctx) const;
 
-    private:
-        std::vector<std::unique_ptr<IErrorRule>> rules_;
-    };
+  private:
+    std::vector<std::unique_ptr<IErrorRule>> rules_;
+  };
 } // namespace vix::cli::errors
 
 #endif

@@ -1,17 +1,17 @@
-#ifndef ERROR_CONTEXT_HPP
-#define ERROR_CONTEXT_HPP
+#ifndef VIX_ERROR_CONTEXT_HPP
+#define VIX_ERROR_CONTEXT_HPP
 
 #include <filesystem>
 #include <string>
 
 namespace vix::cli::errors
 {
-    struct ErrorContext
-    {
-        std::filesystem::path sourceFile;
-        std::string contextMessage;
-        std::string buildLog;
-    };
+  struct ErrorContext
+  {
+    std::filesystem::path sourceFile;
+    std::string contextMessage;
+    std::string buildLog;
+  };
 } // namespace vix::cli::errors
 
 #endif

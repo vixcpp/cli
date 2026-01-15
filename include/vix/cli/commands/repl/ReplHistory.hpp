@@ -1,5 +1,5 @@
-#ifndef RELP_HISTORY_HPP
-#define RELP_HISTORY_HPP
+#ifndef VIX_RELP_HISTORY_HPP
+#define VIX_RELP_HISTORY_HPP
 
 #include <string>
 #include <vector>
@@ -8,23 +8,23 @@
 
 namespace vix::cli::repl
 {
-    class History
-    {
-    public:
-        explicit History(std::size_t maxItems);
+  class History
+  {
+  public:
+    explicit History(std::size_t maxItems);
 
-        void add(const std::string &line);
-        void clear();
+    void add(const std::string &line);
+    void clear();
 
-        const std::vector<std::string> &items() const noexcept;
+    const std::vector<std::string> &items() const noexcept;
 
-        bool loadFromFile(const std::filesystem::path &file, std::string *err = nullptr);
-        bool saveToFile(const std::filesystem::path &file, std::string *err = nullptr) const;
+    bool loadFromFile(const std::filesystem::path &file, std::string *err = nullptr);
+    bool saveToFile(const std::filesystem::path &file, std::string *err = nullptr) const;
 
-    private:
-        std::size_t max_;
-        std::vector<std::string> items_;
-    };
+  private:
+    std::size_t max_;
+    std::vector<std::string> items_;
+  };
 }
 
 #endif

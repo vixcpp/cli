@@ -1,13 +1,13 @@
-#ifndef TESTS_COMMAND_HPP
-#define TESTS_COMMAND_HPP
+#ifndef VIX_TESTS_COMMAND_HPP
+#define VIX_TESTS_COMMAND_HPP
 
 #include <vector>
 #include <string>
 
 namespace vix::commands::TestsCommand
 {
-    int run(const std::vector<std::string> &args);
-    int help();
+  int run(const std::vector<std::string> &args);
+  int help();
 }
 
 #endif

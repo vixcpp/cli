@@ -6,8 +6,8 @@
 
 namespace vix::commands::NewCommand
 {
-    int run(const std::vector<std::string> &args);
-    int help();
+  int run(const std::vector<std::string> &args);
+  int help();
 
 } // namespace Vix::Commands::NewCommand
 

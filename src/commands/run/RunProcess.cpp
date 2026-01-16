@@ -102,7 +102,7 @@ namespace vix::commands::RunCommand::detail
       update_min(buffer_.find("[E]"));
       update_min(buffer_.find("Using configuration file:"));
       update_min(buffer_.find("● VIX"));
-      update_min(buffer_.find("VIX   READY"));
+      update_min(buffer_.find("VIX.cpp   READY"));
       update_min(buffer_.find("› HTTP:"));
       update_min(buffer_.find("› WS:"));
       update_min(buffer_.find("i Threads:"));

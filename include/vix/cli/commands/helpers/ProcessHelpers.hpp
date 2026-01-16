@@ -1,3 +1,15 @@
+/**
+ *
+ *  @file ProcessHelpers.hpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Vix.cpp
+ */
 #ifndef VIX_PROCESS_HELPERS_HPP
 #define VIX_PROCESS_HELPERS_HPP
 

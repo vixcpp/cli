@@ -232,11 +232,23 @@ namespace vix::commands::RunCommand::detail
 
     static std::size_t find_first_vix_marker(const std::string &text)
     {
-      static const char *markers[] = {
-          "● VIX",
-          "VIX.cpp   READY",
+      static const char *priority[] = {
+          "● Vix.cpp   READY",
           "Vix.cpp   READY",
+          "● VIX.cpp   READY",
+          "VIX.cpp   READY",
+          "● VIX   READY",
           "VIX   READY",
+          nullptr};
+
+      for (int i = 0; priority[i] != nullptr; ++i)
+      {
+        const std::size_t pos = text.find(priority[i]);
+        if (pos != std::string::npos)
+          return pos;
+      }
+
+      static const char *fallback[] = {
           "› HTTP:",
           "› WS:",
           "i Threads:",
@@ -246,13 +258,16 @@ namespace vix::commands::RunCommand::detail
           "Using configuration file:",
           "Vix.cpp runtime",
           "Vix.cpp v",
+          "● Vix.cpp",
+          "● VIX.cpp",
+          "● VIX",
           nullptr};
 
       std::size_t firstPos = std::string::npos;
 
-      for (int i = 0; markers[i] != nullptr; ++i)
+      for (int i = 0; fallback[i] != nullptr; ++i)
       {
-        const std::size_t pos = text.find(markers[i]);
+        const std::size_t pos = text.find(fallback[i]);
         if (pos != std::string::npos)
         {
           if (firstPos == std::string::npos || pos < firstPos)
@@ -710,20 +725,29 @@ namespace vix::commands::RunCommand::detail
     const auto startTime = std::chrono::steady_clock::now();
     bool didTimeout = false;
 
+    bool sentInt = false;
     bool sentTerm = false;
     bool sentKill = false;
+
+    auto intTime = startTime;
     auto termTime = startTime;
 
-    auto elapsed_sec = [&]() -> long long
+    auto int_elapsed_ms = [&]() -> long long
     {
       using namespace std::chrono;
-      return duration_cast<seconds>(steady_clock::now() - startTime).count();
+      return duration_cast<milliseconds>(steady_clock::now() - intTime).count();
     };
 
     auto term_elapsed_ms = [&]() -> long long
     {
       using namespace std::chrono;
       return duration_cast<milliseconds>(steady_clock::now() - termTime).count();
+    };
+
+    auto elapsed_sec = [&]() -> long long
+    {
+      using namespace std::chrono;
+      return duration_cast<seconds>(steady_clock::now() - startTime).count();
     };
 
     auto icontains_sv = [](std::string_view hay, std::string_view needle) -> bool
@@ -766,12 +790,32 @@ namespace vix::commands::RunCommand::detail
 
     while (running)
     {
-      if (!sentTerm && g_sigint_requested)
+      if (!sentInt && g_sigint_requested)
       {
         userInterrupted = true;
         ::kill(-pid, SIGINT);
-        sentTerm = true;
-        termTime = std::chrono::steady_clock::now();
+        sentInt = true;
+        intTime = std::chrono::steady_clock::now();
+      }
+
+      if (sentInt && !sentTerm)
+      {
+        if (int_elapsed_ms() >= 300)
+        {
+          ::kill(-pid, SIGTERM);
+          sentTerm = true;
+          termTime = std::chrono::steady_clock::now();
+        }
+      }
+
+      if ((sentTerm || sentInt) && !sentKill)
+      {
+        const long long ms = sentTerm ? term_elapsed_ms() : int_elapsed_ms();
+        if (ms >= 1200)
+        {
+          ::kill(-pid, SIGKILL);
+          sentKill = true;
+        }
       }
 
       if (!didTimeout && enableTimeout && elapsed_sec() >= timeoutSec)
@@ -782,20 +826,9 @@ namespace vix::commands::RunCommand::detail
             "\n[vix] runtime timeout (" + std::to_string(timeoutSec) + "s)\n";
         result.stderrText += msg;
 
-        ::kill(pid, SIGTERM);
+        ::kill(-pid, SIGTERM);
         sentTerm = true;
         termTime = std::chrono::steady_clock::now();
-      }
-
-      if (sentTerm && !sentKill)
-      {
-        const long long graceMs = userInterrupted ? 2000 : 500;
-
-        if (term_elapsed_ms() >= graceMs)
-        {
-          ::kill(-pid, SIGKILL);
-          sentKill = true;
-        }
       }
 
       fd_set fds;
@@ -935,15 +968,17 @@ namespace vix::commands::RunCommand::detail
 
     result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
 
-    if (userInterrupted && result.exitCode == 130)
-      result.exitCode = 0;
-
     if (printedSomething &&
         lastPrintedChar != '\n' &&
         ::isatty(STDOUT_FILENO) != 0)
     {
       const char nl = '\n';
       write_all(STDOUT_FILENO, &nl, 1);
+    }
+
+    if (userInterrupted)
+    {
+      result.exitCode = 130;
     }
 
     return result;

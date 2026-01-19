@@ -920,25 +920,36 @@ namespace vix::cli::errors
       }
 
       std::cerr << RED << "runtime error: port already in use" << RESET << "\n\n";
+
       std::cerr << GRAY
-                << "Another process is already listening on this port.\n"
-                << "This usually means your server is already running in another terminal.\n"
+                << "Another process is already listening on this address/port.\n"
+                << "This typically happens when a server is already running in another terminal.\n"
                 << RESET << "\n";
 
       if (!port.empty())
-        std::cerr << GREEN << "port:" << RESET << " " << port << "\n";
+        std::cerr << GREEN << "port: " << RESET << port << "\n";
 
-      std::cerr << YELLOW << "fix:" << RESET << "\n"
-                << GRAY
-                << "  • Stop the other server (Ctrl+C in the other terminal)\n"
-                << "  • Or change the port (e.g. PORT=8081 or --port 8081)\n"
+      std::cerr << YELLOW << "fix:" << RESET << "\n";
+
+      std::cerr << GRAY
+                << "  Option A: stop the other server (Ctrl+C in the other terminal)\n"
+                << "  Option B: change the port (e.g. PORT=8081 or --port 8081)\n"
+                << "  Option C: find the process using the port:\n";
+
 #ifndef _WIN32
-                << "  • Find the process: lsof -iTCP:" << (port.empty() ? "<port>" : port) << " -sTCP:LISTEN\n"
-                << "    or: ss -ltnp | grep :" << (port.empty() ? "<port>" : port) << "\n"
+      if (!port.empty())
+      {
+        std::cerr << "    lsof -iTCP:" << port << " -sTCP:LISTEN\n"
+                  << "    ss -ltnp | grep :" << port << "\n";
+      }
 #else
-                << "  • Find the process: netstat -ano | findstr :" << (port.empty() ? "<port>" : port) << "\n"
+      if (!port.empty())
+      {
+        std::cerr << "    netstat -ano | findstr :" << port << "\n";
+      }
 #endif
-                << RESET << "\n";
+
+      std::cerr << RESET << "\n";
 
       if (!sourceFile.empty())
         std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
@@ -946,70 +957,11 @@ namespace vix::cli::errors
       return true;
     }
 
-    static std::string extract_port(const std::string &log)
-    {
-      {
-        static const std::regex re(R"(http://[^:\s]+:([0-9]{2,5}))", std::regex::icase);
-        std::smatch m;
-        if (std::regex_search(log, m, re))
-          return m[1].str();
-      }
-      {
-        static const std::regex re(R"(:([0-9]{2,5}))");
-        std::smatch m;
-        if (std::regex_search(log, m, re))
-          return m[1].str();
-      }
-      return {};
-    }
-
-    static bool handle_port_in_use(const std::string &log)
-    {
-      const bool hit =
-          icontains(log, "address already in use") ||
-          icontains(log, "eaddrinuse") ||
-          (icontains(log, "bind") && icontains(log, "already in use"));
-
-      if (!hit)
-        return false;
-
-      const std::string port = extract_port(log);
-
-      error("Port déjà utilisé.");
-      if (!port.empty())
-        step("  • Port : " + port);
-
-      hint("Un autre serveur écoute déjà sur ce port (probablement lancé dans un autre terminal).");
-      step("Solutions :");
-      step("  1) Arrêter l'autre serveur (Ctrl+C dans l'autre terminal)");
-      step("  2) Changer de port (ex: PORT=8081 ou --port 8081)");
-
-#ifndef _WIN32
-      if (!port.empty())
-      {
-        step("  3) Trouver le processus :");
-        step("     lsof -iTCP:" + port + " -sTCP:LISTEN");
-        step("     ss -ltnp | grep :" + port);
-      }
-#else
-      if (!port.empty())
-      {
-        step("  3) Trouver le processus :");
-        step("     netstat -ano | findstr :" + port);
-      }
-#endif
-
-      return true;
-    }
-
   } // namespace
 
-  bool RawLogDetectors::handleKnownRunFailure(const std::string &log, const std::filesystem::path &)
+  bool RawLogDetectors::handleKnownRunFailure(const std::string &log, const std::filesystem::path &ctx)
   {
-    if (handle_port_in_use(log))
-      return true;
-
-    return false;
+    return handleRuntimePortAlreadyInUse(log, ctx);
   }
 
   bool RawLogDetectors::handleRuntimeCrash(
@@ -1017,10 +969,11 @@ namespace vix::cli::errors
       const std::filesystem::path &sourceFile,
       [[maybe_unused]] const std::string &contextMessage)
   {
+
+    // Order matters: keep specific ones first.
     if (handleRuntimePortAlreadyInUse(runtimeLog, sourceFile))
       return true;
 
-    // Order matters: keep specific ones first.
     if (handleRuntimeAllocDeallocMismatch(runtimeLog, sourceFile))
       return true;
 

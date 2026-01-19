@@ -274,8 +274,9 @@ namespace vix::commands::RunCommand
         progress.phase_start("Build & run (preset: " + runPreset + ")");
 
         const std::string mode = opt.watch ? "dev" : "run";
+        bool started = false;
 
-        // 2.1) Build only (NO --target run)
+        // 2.1) Build only
         {
           std::ostringstream oss;
 #ifdef _WIN32
@@ -288,6 +289,30 @@ namespace vix::commands::RunCommand
             oss << " -- -j " << opt.jobs;
 
           oss << "\"";
+
+          const std::string buildCmd = oss.str();
+          const int buildCode = run_cmd_live_filtered(
+              buildCmd,
+              "Building (preset \"" + runPreset + "\")");
+
+          const int buildExit = normalize_exit_code(buildCode);
+
+          if (buildExit == 130)
+          {
+            hint("Stopped (SIGINT).");
+            return 0;
+          }
+
+          if (buildExit != 0)
+          {
+            error("Build failed (preset '" + runPreset + "') (exit code " +
+                  std::to_string(buildExit) + ").");
+            hint("Run the same command manually:");
+            step("cd " + projectDir.string());
+            step("cmake --build --preset " + runPreset);
+            return buildExit;
+          }
+
 #else
           oss << "cd " << quote(projectDir.string())
               << " && VIX_STDOUT_MODE=line"
@@ -296,30 +321,52 @@ namespace vix::commands::RunCommand
 
           if (opt.jobs > 0)
             oss << " -- -j " << opt.jobs;
-#endif
 
           const std::string buildCmd = oss.str();
 
-          const int buildCode = run_cmd_live_filtered(
-              buildCmd,
-              "Building (preset \"" + runPreset + "\")");
+          clear_terminal_if_enabled();
 
-          const int buildExit = normalize_exit_code(buildCode);
+          const LiveRunResult br = run_cmd_live_filtered_capture(
+              buildCmd,
+              "Building (preset \"" + runPreset + "\")",
+              /*passthroughRuntime=*/true,
+              /*timeoutSec=*/0);
+
+          const int buildExit = normalize_exit_code(br.exitCode);
+
+          if (buildExit == 130)
+          {
+            hint("Stopped (SIGINT).");
+            return 0;
+          }
 
           if (buildExit != 0)
           {
-            error("Build failed (preset '" + runPreset + "') (exit code " + std::to_string(buildExit) + ").");
+            std::string log = br.stderrText;
+            if (!br.stdoutText.empty())
+              log += br.stdoutText;
+
+            if (!log.empty())
+            {
+              if (vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, fs::path{}))
+              {
+                return 1;
+              }
+            }
+
+            error("Build failed (preset '" + runPreset + "') (exit code " +
+                  std::to_string(buildExit) + ").");
             hint("Run the same command manually:");
             step("cd " + projectDir.string());
             step("cmake --build --preset " + runPreset);
             return buildExit;
           }
+#endif
         }
 
-        // 2.2) Run executable directly (CLI controls Ctrl+C)
+        // 2.2) Run executable directly
         {
           const std::string exeName = projectDir.filename().string();
-
           fs::path exePath = buildDir / exeName;
 #ifdef _WIN32
           exePath += ".exe";
@@ -333,21 +380,26 @@ namespace vix::commands::RunCommand
             return 1;
           }
 
+#ifdef _WIN32
           clear_terminal_if_enabled();
 
-#ifdef _WIN32
           std::string runCmd = "\"" + exePath.string() + "\"";
           int runCode = std::system(runCmd.c_str());
           int runExit = normalize_exit_code(runCode);
 
           if (runExit == 130)
+          {
+            hint("Stopped (SIGINT).");
             return 0;
+          }
 
           if (runExit != 0)
           {
             handle_runtime_exit_code(runExit, "Execution failed");
             return runExit;
           }
+
+          started = true;
 #else
           std::string runCmd = quote(exePath.string());
 
@@ -360,7 +412,10 @@ namespace vix::commands::RunCommand
           int runExit = normalize_exit_code(rr.exitCode);
 
           if (runExit == 130)
+          {
+            hint("Stopped (SIGINT).");
             return 0;
+          }
 
           if (runExit != 0)
           {
@@ -369,16 +424,34 @@ namespace vix::commands::RunCommand
               log += rr.stdoutText;
 
             if (!log.empty())
+            {
+              if (vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, exePath))
+              {
+                return 1;
+              }
               std::cout << log << "\n";
+            }
 
             error("Execution failed (exit code " + std::to_string(runExit) + ").");
             hint("Check the logs above or run the executable manually.");
             return runExit;
           }
+
+          started = true;
 #endif
         }
 
-        progress.phase_done("Build & run", "application started");
+        if (started)
+        {
+          progress.phase_done("Build & run", "application started");
+          success("🏃 Application started (preset: " + runPreset + ").");
+        }
+        else
+        {
+          progress.phase_done("Build & run", "stopped");
+        }
+
+        return 0;
       }
 
       success("🏃 Application started (preset: " + runPreset + ").");

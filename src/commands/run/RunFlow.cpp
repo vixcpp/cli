@@ -480,7 +480,6 @@ namespace vix::commands::RunCommand::detail
       if (namePos == std::string::npos)
         break;
 
-      // isolate likely object bounds (best-effort)
       const std::size_t objStart = json.rfind('{', namePos);
       const std::size_t objEnd = json.find('}', namePos);
       if (objStart == std::string::npos || objEnd == std::string::npos || objEnd <= objStart)
@@ -495,17 +494,14 @@ namespace vix::commands::RunCommand::detail
       if (b == std::string::npos)
         return std::nullopt;
 
-      // find ':' after "binaryDir"
       std::size_t colon = obj.find(':', b + binKey.size());
       if (colon == std::string::npos)
         return std::nullopt;
 
-      // find opening quote of value
       std::size_t q1 = obj.find('"', colon);
       if (q1 == std::string::npos)
         return std::nullopt;
 
-      // find closing quote of value
       std::size_t q2 = obj.find('"', q1 + 1);
       if (q2 == std::string::npos || q2 <= q1 + 1)
         return std::nullopt;
@@ -594,7 +590,6 @@ namespace vix::commands::RunCommand::detail
       if (has("run-" + configurePreset))
         return "run-" + configurePreset;
 
-      // dev-ninja → run-ninja
       if (configurePreset.rfind("dev-", 0) == 0)
       {
         std::string mapped = "run-" + configurePreset.substr(4);

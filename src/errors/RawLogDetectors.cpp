@@ -11,9 +11,9 @@
  *  Vix.cpp
  *
  */
-#include "vix/cli/errors/RawLogDetectors.hpp"
-#include "vix/cli/errors/CodeFrame.hpp"
-#include "vix/cli/errors/CompilerError.hpp"
+#include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/cli/errors/CodeFrame.hpp>
+#include <vix/cli/errors/CompilerError.hpp>
 
 #include <algorithm>
 #include <cctype>

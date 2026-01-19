@@ -42,6 +42,24 @@ namespace vix::commands::RunCommand::detail
   namespace fs = std::filesystem;
   namespace text = vix::cli::commands::helpers;
 
+  static inline bool is_sigint_exit_code(int code) noexcept
+  {
+    return code == 130; // standard: 128 + SIGINT(2)
+  }
+
+  static inline bool log_looks_like_interrupt(const std::string &log)
+  {
+    const bool isMakeInterrupt =
+        (log.find("gmake") != std::string::npos ||
+         log.find("make") != std::string::npos) &&
+        log.find("Interrupt") != std::string::npos;
+
+    return log.find(" Interrupt") != std::string::npos ||
+           isMakeInterrupt ||
+           log.find("ninja: interrupted") != std::string::npos ||
+           log.find("interrupted by user") != std::string::npos;
+  }
+
   int run_single_cpp(const Options &opt)
   {
     using namespace std;
@@ -165,6 +183,13 @@ namespace vix::commands::RunCommand::detail
           std::ostringstream logStream;
           logStream << ifs.rdbuf();
           logContent = logStream.str();
+        }
+
+        if (is_sigint_exit_code(code) || log_looks_like_interrupt(logContent))
+        {
+          error("Build interrupted by user (SIGINT).");
+          hint("Nothing is wrong: you stopped the build.");
+          return code;
         }
 
         if (!logContent.empty())
@@ -320,12 +345,24 @@ namespace vix::commands::RunCommand::detail
       if (code != 0)
       {
         std::ifstream ifs(cfgLogPath);
+        std::string logContent;
+
         if (ifs)
         {
           std::ostringstream ss;
           ss << ifs.rdbuf();
-          std::cout << ss.str() << "\n";
+          logContent = ss.str();
         }
+
+        if (is_sigint_exit_code(code) || log_looks_like_interrupt(logContent))
+        {
+          error("Configure interrupted by user (SIGINT).");
+          hint("Nothing is wrong: you stopped the configure step.");
+          return code;
+        }
+
+        if (!logContent.empty())
+          std::cout << logContent << "\n";
 
         error("Script configure failed.");
         handle_runtime_exit_code(code, "Script configure failed");

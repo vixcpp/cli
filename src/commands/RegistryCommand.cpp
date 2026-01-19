@@ -133,11 +133,33 @@ namespace vix::commands
     std::cout
         << "Usage:\n"
         << "  vix registry <subcommand>\n\n"
+
         << "Subcommands:\n"
-        << "  sync        Clone/pull the registry index into ~/.vix/registry/index\n"
-        << "  path        Print local registry path\n\n"
+        << "  sync        Clone or update the registry index (git-based)\n"
+        << "  path        Print local registry index path\n\n"
+
+        << "Description:\n"
+        << "  The Vix registry is a Git repository containing package metadata.\n"
+        << "  It maps <namespace>/<name>@<version> to immutable git commits.\n\n"
+
         << "Notes:\n"
-        << "  - V1 is Git-based: registry is a repo, not a server.\n";
+        << "  - Registry is Git-based (V1): no server, no API, no auth.\n"
+        << "  - All searches are local after 'vix registry sync'.\n"
+        << "  - Packages are pinned to commits for reproducible builds.\n\n"
+
+        << "Related commands:\n"
+        << "  vix search <query>      Search packages in the local registry index\n"
+        << "  vix add <pkg>@<ver>     Add a dependency from the registry\n"
+        << "  vix list                List project dependencies (from vix.lock)\n"
+        << "  vix remove <pkg>        Remove a dependency from the project\n\n"
+
+        << "Examples:\n"
+        << "  vix registry sync\n"
+        << "  vix registry path\n"
+        << "  vix search tree\n"
+        << "  vix add gaspardkirira/tree@0.1.0\n";
+
     return 0;
   }
+
 }

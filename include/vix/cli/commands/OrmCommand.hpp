@@ -10,7 +10,7 @@
  *
  *  Vix.cpp
  */
-#ifndef VIX_ORM_COMMAND_PHP
+#ifndef VIX_ORM_COMMAND_HPP
 #define VIX_ORM_COMMAND_HPP
 
 #include <string>

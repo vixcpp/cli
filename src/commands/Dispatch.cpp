@@ -22,6 +22,7 @@
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/commands/OrmCommand.hpp>
 
 #include <stdexcept>
 
@@ -98,6 +99,14 @@ namespace vix::cli::dispatch
          { return vix::commands::ReplCommand::run(a); },
          []()
          { return vix::commands::ReplCommand::help(); }});
+
+    add({"orm",
+         "Database",
+         "Migrations/status/rollback",
+         [](const Args &a)
+         { return vix::commands::OrmCommand::run(a); },
+         []()
+         { return vix::commands::OrmCommand::help(); }});
 
     // Packaging & security
     add({"pack",

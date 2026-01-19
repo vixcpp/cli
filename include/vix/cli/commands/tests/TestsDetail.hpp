@@ -30,6 +30,7 @@ namespace vix::commands::TestsCommand::detail
 
     fs::path projectDir;                // resolved path (or cwd)
     std::vector<std::string> forwarded; // args forwarded to `vix check`
+    std::vector<std::string> ctestArgs; // args forwarded to `ctest` (after `--`)
   };
 
   Options parse(const std::vector<std::string> &args);

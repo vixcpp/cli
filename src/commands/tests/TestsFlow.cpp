@@ -13,27 +13,77 @@
  */
 #include <vix/cli/commands/tests/TestsDetail.hpp>
 
+#include <filesystem>
+#include <string>
+#include <vector>
+#include <system_error>
+
 namespace vix::commands::TestsCommand::detail
 {
-  static fs::path pick_project_dir_from_args_or_cwd(const std::vector<std::string> &args)
+  namespace fs = std::filesystem;
+
+  static bool looks_like_path(const std::string &s)
   {
-    for (const auto &a : args)
-    {
-      // first non-flag token is treated as a path
-      if (!a.empty() && a[0] != '-')
-        return fs::absolute(fs::path(a));
-    }
-    return fs::current_path();
+    if (s.empty())
+      return false;
+
+    if (s[0] == '-')
+      return false;
+
+    if (s.find('/') != std::string::npos)
+      return true;
+
+    if (s.rfind("./", 0) == 0 || s.rfind("../", 0) == 0)
+      return true;
+
+    std::error_code ec;
+    return fs::exists(fs::path(s), ec);
+  }
+
+  static fs::path normalize_project_dir(const fs::path &p)
+  {
+    std::error_code ec;
+
+    fs::path abs = fs::absolute(p, ec);
+    if (ec)
+      abs = p;
+
+    fs::path canon = fs::weakly_canonical(abs, ec);
+    if (ec)
+      return abs;
+
+    return canon;
   }
 
   Options parse(const std::vector<std::string> &args)
   {
     Options opt{};
-    opt.forwarded.reserve(args.size() + 12);
+    opt.forwarded.reserve(args.size() + 8);
+    opt.ctestArgs.reserve(16);
 
-    for (std::size_t i = 0; i < args.size(); ++i)
+    std::vector<std::string> left;
+    left.reserve(args.size());
+
+    bool afterSep = false;
+    for (const auto &a : args)
     {
-      const std::string &a = args[i];
+      if (!afterSep && a == "--")
+      {
+        afterSep = true;
+        continue;
+      }
+
+      if (afterSep)
+        opt.ctestArgs.push_back(a);
+      else
+        left.push_back(a);
+    }
+
+    bool projectSet = false;
+
+    for (std::size_t i = 0; i < left.size(); ++i)
+    {
+      const std::string &a = left[i];
 
       if (a == "--watch")
       {
@@ -56,32 +106,29 @@ namespace vix::commands::TestsCommand::detail
         continue;
       }
 
-      // everything else is forwarded to `vix check`
+      if (!projectSet && looks_like_path(a))
+      {
+        opt.projectDir = normalize_project_dir(fs::path(a));
+        projectSet = true;
+        continue;
+      }
+
       opt.forwarded.push_back(a);
     }
 
-    // resolve project dir BEFORE injecting "--tests"
-    opt.projectDir = pick_project_dir_from_args_or_cwd(opt.forwarded);
-    // Always run tests (alias)
-    opt.forwarded.insert(opt.forwarded.begin(), "--tests");
-    // Map tests flags -> ctest args
+    if (!projectSet)
+      opt.projectDir = normalize_project_dir(fs::current_path());
+
     if (opt.list)
-    {
-      opt.forwarded.push_back("--ctest-arg");
-      opt.forwarded.push_back("-N");
-    }
+      opt.ctestArgs.insert(opt.ctestArgs.begin(), "--show-only");
 
     if (opt.failFast)
-    {
-      opt.forwarded.push_back("--ctest-arg");
-      opt.forwarded.push_back("--stop-on-failure");
-    }
+      opt.ctestArgs.push_back("--stop-on-failure");
 
     if (opt.runAfter)
-    {
       opt.forwarded.push_back("--run");
-    }
 
     return opt;
   }
-}
+
+} // namespace vix::commands::TestsCommand::detail

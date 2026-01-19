@@ -16,6 +16,8 @@
 #include <vix/cli/commands/tests/TestsDetail.hpp>
 #include <vix/cli/Style.hpp>
 
+#include <vix/cli/process/Process.hpp>
+
 #include <filesystem>
 #include <unordered_map>
 #include <vector>
@@ -25,6 +27,12 @@
 #include <atomic>
 #include <csignal>
 #include <iostream>
+#include <fstream>
+#include <sstream>
+#include <optional>
+#include <cstdlib>
+
+#include <nlohmann/json.hpp>
 
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
@@ -44,15 +52,13 @@ namespace
     if (name.empty())
       return true;
 
-    // ignore common noise
     if (name == ".git" || name == ".idea" || name == ".vscode")
       return true;
 
-    // ignore build dirs
-    if (name.rfind("build", 0) == 0) // build, build-ninja, build-ninja-san...
+    // ignore "build*" dirs (legacy / noise)
+    if (name.rfind("build", 0) == 0)
       return true;
 
-    // dist artifacts
     if (name == "dist")
       return true;
 
@@ -78,7 +84,6 @@ namespace
     if (ec)
       return 0;
 
-    // Convert file_time_type to a stable integer stamp
     return static_cast<std::uintmax_t>(t.time_since_epoch().count());
   }
 
@@ -136,6 +141,233 @@ namespace
     return false;
   }
 
+  static std::optional<std::string> value_after_flag(
+      const std::vector<std::string> &args,
+      const std::string &flag)
+  {
+    for (std::size_t i = 0; i < args.size(); ++i)
+    {
+      if (args[i] == flag)
+      {
+        if (i + 1 < args.size())
+          return args[i + 1];
+        return std::nullopt;
+      }
+
+      const std::string prefix = flag + "=";
+      if (args[i].rfind(prefix, 0) == 0 && args[i].size() > prefix.size())
+        return args[i].substr(prefix.size());
+    }
+    return std::nullopt;
+  }
+
+  static std::string resolve_preset_name(const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    if (auto p = value_after_flag(opt.forwarded, "--preset"))
+      return *p;
+
+    if (auto p = value_after_flag(opt.forwarded, "-p"))
+      return *p;
+
+    return "dev-ninja";
+  }
+
+  static fs::path normalize_binary_dir(const fs::path &projectDir, const std::string &binaryDirRaw)
+  {
+    // CMakePresets often uses:
+    //   "${sourceDir}/out/dev-ninja"
+    // or relative "out/dev-ninja"
+    std::string s = binaryDirRaw;
+
+    const std::string tokenSourceDir = "${sourceDir}";
+    const std::string proj = projectDir.generic_string();
+
+    for (;;)
+    {
+      auto pos = s.find(tokenSourceDir);
+      if (pos == std::string::npos)
+        break;
+      s.replace(pos, tokenSourceDir.size(), proj);
+    }
+
+    while (s.find("//") != std::string::npos)
+      s.replace(s.find("//"), 2, "/");
+
+    fs::path p = fs::path(s);
+
+    if (p.is_relative())
+      p = projectDir / p;
+
+    return fs::weakly_canonical(p);
+  }
+
+  static fs::path resolve_build_dir_or_fallback(
+      const fs::path &projectDir,
+      const std::string &presetName)
+  {
+    const fs::path presetsPath = projectDir / "CMakePresets.json";
+
+    std::error_code ec;
+    if (!fs::exists(presetsPath, ec))
+    {
+      const std::vector<fs::path> candidates = {
+          projectDir / "out" / presetName,
+          projectDir / "out",
+          projectDir / "bld" / presetName,
+          projectDir / "bld",
+          projectDir / ("cmake-build-" + presetName),
+      };
+
+      for (const auto &c : candidates)
+      {
+        if (fs::exists(c, ec) && fs::is_directory(c, ec))
+          return fs::weakly_canonical(c);
+      }
+
+      return projectDir;
+    }
+
+    std::ifstream in(presetsPath);
+    if (!in)
+    {
+      return projectDir;
+    }
+
+    nlohmann::json j;
+    try
+    {
+      in >> j;
+    }
+    catch (...)
+    {
+      return projectDir;
+    }
+
+    try
+    {
+      if (!j.contains("configurePresets") || !j["configurePresets"].is_array())
+        return projectDir;
+
+      for (const auto &p : j["configurePresets"])
+      {
+        if (!p.is_object())
+          continue;
+
+        const std::string name = p.value("name", "");
+        if (name != presetName)
+          continue;
+
+        const std::string binaryDir = p.value("binaryDir", "");
+        if (!binaryDir.empty())
+          return normalize_binary_dir(projectDir, binaryDir);
+
+        const std::string buildDirectory = p.value("buildDirectory", "");
+        if (!buildDirectory.empty())
+          return normalize_binary_dir(projectDir, buildDirectory);
+
+        return projectDir;
+      }
+
+      return projectDir;
+    }
+    catch (...)
+    {
+      return projectDir;
+    }
+  }
+
+  struct ScopedCwd
+  {
+    fs::path prev;
+    bool changed{false};
+
+    explicit ScopedCwd(const fs::path &p)
+    {
+      std::error_code ec;
+      prev = fs::current_path(ec);
+      if (!ec)
+      {
+        fs::current_path(p, ec);
+        changed = !ec;
+      }
+    }
+
+    ~ScopedCwd()
+    {
+      if (!changed)
+        return;
+      std::error_code ec;
+      fs::current_path(prev, ec);
+    }
+  };
+
+  static std::string shell_join(const std::vector<std::string> &argv)
+  {
+    std::ostringstream oss;
+    for (std::size_t i = 0; i < argv.size(); ++i)
+    {
+      if (i)
+        oss << ' ';
+      const std::string &a = argv[i];
+      const bool needQuotes = (a.find(' ') != std::string::npos) || (a.find('\t') != std::string::npos);
+      if (!needQuotes)
+      {
+        oss << a;
+      }
+      else
+      {
+        oss << '"';
+        for (char c : a)
+        {
+          if (c == '"')
+            oss << "\\\"";
+          else
+            oss << c;
+        }
+        oss << '"';
+      }
+    }
+    return oss.str();
+  }
+
+  static int run_in_dir(const fs::path &cwd, const std::vector<std::string> &argv)
+  {
+    ScopedCwd sc(cwd);
+
+    const std::string cmd = shell_join(argv);
+    step(std::string("Exec: ") + cmd);
+
+    const int raw = std::system(cmd.c_str());
+    return vix::cli::process::normalize_exit_code(raw);
+  }
+
+  static int run_ctest(const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    const std::string presetName = resolve_preset_name(opt);
+    const fs::path buildDir = resolve_build_dir_or_fallback(opt.projectDir, presetName);
+
+    std::error_code ec;
+    if (!fs::exists(buildDir, ec) || !fs::is_directory(buildDir, ec))
+    {
+      error("Build directory does not exist.");
+      hint("Run: vix check (or vix build) first to configure/build the project.");
+      step(buildDir.string());
+      return 1;
+    }
+
+    info("Running tests (CTest).");
+    hint(std::string("Preset: ") + presetName);
+    hint(std::string("Build dir: ") + buildDir.string());
+
+    std::vector<std::string> argv;
+    argv.push_back("ctest");
+
+    for (const auto &a : opt.ctestArgs)
+      argv.push_back(a);
+
+    return run_in_dir(buildDir, argv);
+  }
+
 } // namespace
 
 namespace vix::commands::TestsCommand
@@ -144,14 +376,23 @@ namespace vix::commands::TestsCommand
   {
     const auto opt = vix::commands::TestsCommand::detail::parse(args);
 
-    // One-shot mode
     if (!opt.watch)
     {
-      info("Running tests (alias of `vix check --tests`).");
-      return vix::commands::CheckCommand::run(opt.forwarded);
+      const int code = run_ctest(opt);
+
+      // --run (tests + runtime)
+      if (opt.runAfter)
+      {
+        if (code != 0)
+          return code;
+
+        info("Running runtime checks after tests (--run).");
+        return vix::commands::CheckCommand::run(opt.forwarded);
+      }
+
+      return code;
     }
 
-    // Watch mode
     info("Watching project files and re-running tests on changes...");
     hint("Press Ctrl+C to stop.");
     hint("Flags: --list (ctest --show-only), --fail-fast, --run (tests + runtime)");
@@ -161,11 +402,8 @@ namespace vix::commands::TestsCommand
 
     const fs::path projectDir = opt.projectDir;
 
-    // initial snapshot
     StampMap prev = snapshot_tree(projectDir);
-
-    // run once immediately
-    int lastCode = vix::commands::CheckCommand::run(opt.forwarded);
+    int lastCode = run_ctest(opt);
 
     // debounce
     const auto pollEvery = std::chrono::milliseconds(250);
@@ -182,7 +420,6 @@ namespace vix::commands::TestsCommand
         prev = std::move(now);
         lastChange = std::chrono::steady_clock::now();
 
-        // Wait debounce window for burst saves
         while (!g_stop.load())
         {
           std::this_thread::sleep_for(std::chrono::milliseconds(80));
@@ -205,7 +442,17 @@ namespace vix::commands::TestsCommand
 
         std::cout << "\n";
         section_title(std::cout, "Tests re-run");
-        lastCode = vix::commands::CheckCommand::run(opt.forwarded);
+
+        lastCode = run_ctest(opt);
+
+        if (opt.runAfter)
+        {
+          if (lastCode == 0)
+          {
+            info("Runtime checks after tests (--run).");
+            lastCode = vix::commands::CheckCommand::run(opt.forwarded);
+          }
+        }
       }
     }
 
@@ -223,7 +470,7 @@ namespace vix::commands::TestsCommand
 
     out << "Description:\n";
     out << "  Run project tests using CTest.\n";
-    out << "  This command is a test-oriented alias of `vix check --tests`.\n\n";
+    out << "  Build directory is resolved from CMakePresets.json (binaryDir).\n\n";
 
     out << "Tests flags:\n";
     out << "  --watch                   Watch files and re-run tests on changes\n";
@@ -231,21 +478,27 @@ namespace vix::commands::TestsCommand
     out << "  --fail-fast               Stop on first failure (ctest --stop-on-failure)\n";
     out << "  --run                     Run runtime check after tests (tests + runtime)\n\n";
 
-    out << "Other options:\n";
-    out << "  All options supported by `vix check` are supported here.\n";
-    out << "  (presets, jobs, sanitizers, ctest preset, etc.)\n\n";
+    out << "CTest passthrough:\n";
+    out << "  Use `--` to pass raw arguments to ctest.\n";
+    out << "  Example: vix tests -- --output-on-failure -R MySuite\n\n";
+
+    out << "Notes:\n";
+    out << "  - Preset is taken from forwarded args (e.g. --preset release)\n";
+    out << "    or defaults to dev-ninja.\n";
+    out << "  - All other options supported by `vix check` can still be forwarded.\n\n";
 
     out << "Examples:\n";
     out << "  vix tests\n";
     out << "  vix tests --watch\n";
     out << "  vix tests --list\n";
     out << "  vix tests --fail-fast\n";
-    out << "  vix tests --run --san\n";
-    out << "  vix tests ./examples/blog\n\n";
+    out << "  vix tests --run\n";
+    out << "  vix tests ./examples/blog\n";
+    out << "  vix tests --preset release\n\n";
 
     out << "See also:\n";
     out << "  vix check --tests\n";
 
     return 0;
   }
-}
+} // namespace vix::commands::TestsCommand

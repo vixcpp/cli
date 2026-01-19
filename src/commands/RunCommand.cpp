@@ -25,12 +25,44 @@
 #include <chrono>
 #include <iomanip>
 #include <cstdlib>
+#include <cstring>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
 
 namespace
 {
+  static bool should_clear_terminal_now()
+  {
+    const char *mode = std::getenv("VIX_CLI_CLEAR");
+    if (!mode || !*mode)
+      mode = "auto";
+
+    if (std::strcmp(mode, "never") == 0)
+      return false;
+
+#ifndef _WIN32
+    if (std::strcmp(mode, "auto") == 0)
+      return ::isatty(STDOUT_FILENO) != 0;
+#endif
+
+    // "always" (ou tout autre valeur non "never"/"auto")
+    return true;
+  }
+
+  static void clear_terminal_if_enabled()
+  {
+    if (!should_clear_terminal_now())
+      return;
+
+    // Clear + home
+    std::cout << "\033[2J\033[H" << std::flush;
+  }
+
   struct RunProgress
   {
     using Clock = std::chrono::steady_clock;
@@ -264,6 +296,8 @@ namespace vix::commands::RunCommand
           oss << " -- -j " << opt.jobs;
 #endif
         const std::string cmd = oss.str();
+
+        clear_terminal_if_enabled();
 
         const int code = run_cmd_live_filtered(
             cmd,

@@ -124,29 +124,6 @@ namespace vix::commands::RunCommand::detail
 
       clearedForRuntime_ = true;
       buffer_.erase(0, first);
-      auto should_clear = []() -> bool
-      {
-        const char *mode = std::getenv("VIX_CLI_CLEAR");
-        if (!mode || !*mode)
-          mode = "auto";
-
-        if (std::strcmp(mode, "never") == 0)
-          return false;
-
-#ifndef _WIN32
-        if (std::strcmp(mode, "auto") == 0)
-          return ::isatty(STDOUT_FILENO) != 0;
-#endif
-
-        return true;
-      };
-
-      if (should_clear())
-      {
-        const char *clearScreen = "\033[2J\033[H";
-        write_safe(STDOUT_FILENO, clearScreen,
-                   static_cast<ssize_t>(std::strlen(clearScreen)));
-      }
 
       std::string out = buffer_;
       buffer_.clear();
@@ -273,6 +250,31 @@ namespace vix::commands::RunCommand::detail
     static const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
     if (chunk.find(ninjaStop) != std::string::npos)
       return true;
+
+    // Drop Ninja command echo lines like:
+    // [0/1] cd ... && /path/to/bin
+    // [1/2] Linking CXX executable ...
+    if (!chunk.empty() && chunk[0] == '[')
+    {
+      const auto rb = chunk.find(']');
+      if (rb != std::string::npos)
+      {
+        // cheap heuristic: "[digits/...]" then space
+        bool ok = true;
+        for (std::size_t i = 1; i < rb; ++i)
+        {
+          const char c = chunk[i];
+          if (!(c >= '0' && c <= '9') && c != '/')
+          {
+            ok = false;
+            break;
+          }
+        }
+
+        if (ok)
+          return true;
+      }
+    }
 
     const bool hasInterrupt = (chunk.find("Interrupt") != std::string::npos);
     if (hasInterrupt &&
@@ -550,6 +552,8 @@ namespace vix::commands::RunCommand::detail
     SanitizerSuppressor sanitizer;
 
     bool running = true;
+    bool printedSomething = false;
+    char lastPrintedChar = '\n';
 
     int finalStatus = 0;
     bool haveStatus = false;
@@ -685,8 +689,13 @@ namespace vix::commands::RunCommand::detail
                 }
 
                 if (!filtered.empty())
+                {
                   write_safe(STDOUT_FILENO, filtered.data(),
                              static_cast<ssize_t>(filtered.size()));
+
+                  printedSomething = true;
+                  lastPrintedChar = filtered.back();
+                }
               }
             }
           }
@@ -720,8 +729,13 @@ namespace vix::commands::RunCommand::detail
                 }
 
                 if (!filtered.empty())
+                {
                   write_safe(STDERR_FILENO, filtered.data(),
                              static_cast<ssize_t>(filtered.size()));
+
+                  printedSomething = true;
+                  lastPrintedChar = filtered.back();
+                }
               }
             }
           }
@@ -767,6 +781,17 @@ namespace vix::commands::RunCommand::detail
     }
 
     result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
+#ifndef _WIN32
+    if (printedSomething &&
+        lastPrintedChar != '\n' &&
+        lastPrintedChar != '\r' &&
+        ::isatty(STDOUT_FILENO) != 0)
+    {
+      const char nl = '\n';
+      write_safe(STDOUT_FILENO, &nl, 1);
+    }
+#endif
+
     return result;
   }
 

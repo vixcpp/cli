@@ -19,7 +19,7 @@
 #include <string_view>
 #include <vector>
 
-#include "vix/cli/ErrorHandler.hpp"
+#include <vix/cli/ErrorHandler.hpp>
 
 #ifndef _WIN32
 #include <sys/wait.h>

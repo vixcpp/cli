@@ -12,7 +12,6 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
-
 #include <vix/cli/Style.hpp>
 
 #include <algorithm>
@@ -60,12 +59,53 @@ namespace vix::commands::RunCommand::detail
     }
   };
 
-  static inline void write_safe(int fd, const char *buf, ssize_t n)
+  static inline void write_all(int fd, const char *buf, std::size_t n)
   {
-    if (n <= 0)
-      return;
-    const ssize_t written = ::write(fd, buf, static_cast<size_t>(n));
-    (void)written;
+    while (n > 0)
+    {
+      const ssize_t r = ::write(fd, buf, n);
+      if (r > 0)
+      {
+        buf += static_cast<std::size_t>(r);
+        n -= static_cast<std::size_t>(r);
+        continue;
+      }
+
+      if (r < 0 && errno == EINTR)
+        continue;
+
+      break;
+    }
+  }
+
+  static inline std::size_t utf8_safe_prefix_len(const std::string &s, std::size_t want)
+  {
+    if (want >= s.size())
+      return s.size();
+    std::size_t cut = want;
+
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80)
+      --cut;
+
+    if (cut == 0)
+      return 0;
+
+    const unsigned char lead = static_cast<unsigned char>(s[cut]);
+    std::size_t need = 1;
+
+    if ((lead & 0x80) == 0x00)
+      need = 1;
+    else if ((lead & 0xE0) == 0xC0)
+      need = 2;
+    else if ((lead & 0xF0) == 0xE0)
+      need = 3;
+    else if ((lead & 0xF8) == 0xF0)
+      need = 4;
+
+    if (cut + need > want)
+      return cut;
+
+    return want;
   }
 
   static inline void close_safe(int &fd)
@@ -80,70 +120,159 @@ namespace vix::commands::RunCommand::detail
   class RuntimeOutputFilter
   {
   public:
-    std::string process(const std::string &chunk, int fdForBuildAndRuntime)
+    RuntimeOutputFilter()
+        : startTime_(std::chrono::steady_clock::now())
     {
-      if (clearedForRuntime_)
+    }
+
+    std::string process(const std::string &chunk)
+    {
+      static const bool debugMode = []()
+      {
+        const char *env = std::getenv("VIX_DEBUG_FILTER");
+        return env && std::strcmp(env, "1") == 0;
+      }();
+      if (debugMode)
+        return chunk;
+
+      if (passthrough_)
         return chunk;
 
       buffer_ += chunk;
 
-      std::size_t first = std::string::npos;
-      auto update_min = [&](std::size_t candidate)
+      const auto now = std::chrono::steady_clock::now();
+      const auto elapsed =
+          std::chrono::duration_cast<std::chrono::seconds>(now - startTime_).count();
+      if (elapsed >= FORCE_PASSTHROUGH_TIMEOUT_SEC)
       {
-        if (candidate != std::string::npos &&
-            (first == std::string::npos || candidate < first))
-        {
-          first = candidate;
-        }
-      };
+        std::string out = flush_all_buffer_as_is();
+        passthrough_ = true;
 
-      update_min(buffer_.find("[I]"));
-      update_min(buffer_.find("[W]"));
-      update_min(buffer_.find("[E]"));
-      update_min(buffer_.find("Using configuration file:"));
-      update_min(buffer_.find("● VIX"));
-      update_min(buffer_.find("VIX.cpp   READY"));
-      update_min(buffer_.find("› HTTP:"));
-      update_min(buffer_.find("› WS:"));
-      update_min(buffer_.find("i Threads:"));
-      update_min(buffer_.find("i Mode:"));
-      update_min(buffer_.find("i Status:"));
-      update_min(buffer_.find("Vix.cpp v"));
+        if (should_clear() && !emittedAnything_)
+          out = std::string("\033[2J\033[H") + out;
 
-      if (first == std::string::npos)
-      {
-        std::string prefix = flush_prefix_if_needed();
-        if (!prefix.empty())
-        {
-          write_safe(fdForBuildAndRuntime,
-                     prefix.data(),
-                     static_cast<ssize_t>(prefix.size()));
-        }
-        return {};
+        emittedAnything_ = true;
+        return out;
       }
 
-      clearedForRuntime_ = true;
-      buffer_.erase(0, first);
+      const std::size_t first = find_first_vix_marker(buffer_);
+      if (first == std::string::npos)
+      {
+        std::string out = flush_lines_keep_tail();
+        if (!out.empty())
+          emittedAnything_ = true;
+        return out;
+      }
 
-      std::string out = buffer_;
+      runtimeDetected_ = true;
+      passthrough_ = true;
+
+      std::string out = buffer_.substr(first);
       buffer_.clear();
+
+      if (should_clear() && !emittedAnything_)
+        out = std::string("\033[2J\033[H") + out;
+
+      emittedAnything_ = true;
       return out;
     }
 
-  private:
-    static constexpr std::size_t KEEP_TAIL = 8;
-
-    bool clearedForRuntime_ = false;
-    std::string buffer_;
-
-    std::string flush_prefix_if_needed()
+    void reset()
     {
-      if (buffer_.size() <= KEEP_TAIL)
+      buffer_.clear();
+      emittedAnything_ = false;
+      runtimeDetected_ = false;
+      passthrough_ = false;
+      startTime_ = std::chrono::steady_clock::now();
+    }
+
+    bool isRuntimeMode() const { return runtimeDetected_; }
+
+  private:
+    static constexpr std::size_t TAIL_BUFFER_SIZE = 1024;
+
+    static constexpr int FORCE_PASSTHROUGH_TIMEOUT_SEC = 10;
+
+    bool runtimeDetected_ = false;
+    bool passthrough_ = false;
+    bool emittedAnything_ = false;
+    std::string buffer_;
+    std::chrono::steady_clock::time_point startTime_;
+
+    static bool should_clear()
+    {
+      const char *mode = std::getenv("VIX_CLI_CLEAR");
+      if (!mode || !*mode)
+        mode = "auto";
+
+      if (std::strcmp(mode, "never") == 0)
+        return false;
+
+      if (std::strcmp(mode, "always") == 0)
+        return true;
+
+#ifndef _WIN32
+      if (std::strcmp(mode, "auto") == 0)
+        return ::isatty(STDOUT_FILENO) != 0;
+#endif
+
+      return false;
+    }
+
+    static std::size_t find_first_vix_marker(const std::string &text)
+    {
+      static const char *markers[] = {
+          "● VIX",
+          "VIX.cpp   READY",
+          "Vix.cpp   READY",
+          "VIX   READY",
+          "› HTTP:",
+          "› WS:",
+          "i Threads:",
+          "i Mode:",
+          "i Status:",
+          "i Hint:",
+          "Using configuration file:",
+          "Vix.cpp runtime",
+          "Vix.cpp v",
+          nullptr};
+
+      std::size_t firstPos = std::string::npos;
+
+      for (int i = 0; markers[i] != nullptr; ++i)
+      {
+        const std::size_t pos = text.find(markers[i]);
+        if (pos != std::string::npos)
+        {
+          if (firstPos == std::string::npos || pos < firstPos)
+            firstPos = pos;
+        }
+      }
+
+      return firstPos;
+    }
+
+    std::string flush_lines_keep_tail()
+    {
+      if (buffer_.size() <= TAIL_BUFFER_SIZE)
         return {};
 
-      const std::size_t flushLen = buffer_.size() - KEEP_TAIL;
+      const std::size_t keepFrom = buffer_.size() - TAIL_BUFFER_SIZE;
+
+      const std::size_t lastNl = buffer_.rfind('\n', keepFrom);
+      if (lastNl == std::string::npos)
+        return {};
+
+      const std::size_t flushLen = lastNl + 1;
       std::string out = buffer_.substr(0, flushLen);
       buffer_.erase(0, flushLen);
+      return out;
+    }
+
+    std::string flush_all_buffer_as_is()
+    {
+      std::string out = buffer_;
+      buffer_.clear();
       return out;
     }
   };
@@ -288,7 +417,11 @@ namespace vix::commands::RunCommand::detail
     return false;
   }
 
-  static inline void spinner_draw(const std::string &label, std::size_t &frameIndex)
+  static inline void spinner_draw(
+      const std::string &label,
+      std::size_t &frameIndex,
+      bool &printedSomething,
+      char &lastPrintedChar)
   {
     static const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
     const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
@@ -298,18 +431,22 @@ namespace vix::commands::RunCommand::detail
     line += " ";
     line += label;
     line += "   ";
-    write_safe(STDOUT_FILENO, line.c_str(),
-               static_cast<ssize_t>(line.size()));
+
+    write_all(STDOUT_FILENO, line.c_str(), line.size());
+
+    printedSomething = true;
+    lastPrintedChar = '\r';
 
     frameIndex = (frameIndex + 1) % frameCount;
   }
 
-  static inline void spinner_clear()
+  static inline void spinner_clear(bool &printedSomething, char &lastPrintedChar)
   {
-    const char *clearLine =
-        "\r                                                                                \r";
-    write_safe(STDOUT_FILENO, clearLine,
-               static_cast<ssize_t>(std::strlen(clearLine)));
+    const char *clearLine = "\r                                                                                \r";
+    write_all(STDOUT_FILENO, clearLine, std::strlen(clearLine));
+
+    printedSomething = true;
+    lastPrintedChar = '\r';
   }
 
   LiveRunResult run_cmd_live_filtered_capture(
@@ -652,16 +789,21 @@ namespace vix::commands::RunCommand::detail
       if (ready == 0)
       {
         if (spinnerActive)
-          spinner_draw(spinnerLabel, frameIndex);
+          spinner_draw(spinnerLabel, frameIndex, printedSomething, lastPrintedChar);
       }
       else
       {
         if (spinnerActive)
         {
-          spinner_clear();
+          spinner_clear(printedSomething, lastPrintedChar);
           spinnerActive = false;
-        }
 
+          if (::isatty(STDOUT_FILENO) != 0)
+          {
+            const char cr = '\r';
+            write_all(STDOUT_FILENO, &cr, 1);
+          }
+        }
         // stdout
         if (outPipe[0] >= 0 && FD_ISSET(outPipe[0], &fds))
         {
@@ -685,13 +827,12 @@ namespace vix::commands::RunCommand::detail
                 }
                 else
                 {
-                  filtered = runtimeFilter.process(printable, STDOUT_FILENO);
+                  filtered = runtimeFilter.process(printable);
                 }
 
                 if (!filtered.empty())
                 {
-                  write_safe(STDOUT_FILENO, filtered.data(),
-                             static_cast<ssize_t>(filtered.size()));
+                  write_all(STDOUT_FILENO, filtered.data(), filtered.size());
 
                   printedSomething = true;
                   lastPrintedChar = filtered.back();
@@ -725,13 +866,12 @@ namespace vix::commands::RunCommand::detail
                 }
                 else
                 {
-                  filtered = runtimeFilter.process(printable, STDERR_FILENO);
+                  filtered = runtimeFilter.process(printable);
                 }
 
                 if (!filtered.empty())
                 {
-                  write_safe(STDERR_FILENO, filtered.data(),
-                             static_cast<ssize_t>(filtered.size()));
+                  write_all(STDERR_FILENO, filtered.data(), filtered.size());
 
                   printedSomething = true;
                   lastPrintedChar = filtered.back();
@@ -756,8 +896,8 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
-    if (useSpinner)
-      spinner_clear();
+    if (spinnerActive)
+      spinner_clear(printedSomething, lastPrintedChar);
 
     close_safe(outPipe[0]);
     close_safe(errPipe[0]);
@@ -784,11 +924,10 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
     if (printedSomething &&
         lastPrintedChar != '\n' &&
-        lastPrintedChar != '\r' &&
         ::isatty(STDOUT_FILENO) != 0)
     {
       const char nl = '\n';
-      write_safe(STDOUT_FILENO, &nl, 1);
+      write_all(STDOUT_FILENO, &nl, 1);
     }
 #endif
 

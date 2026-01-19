@@ -40,8 +40,8 @@ int main()
     App app;
 
     // GET /
-    app.get("/", [](auto&, auto& res) {
-        res.json({"message", "Hello world"});
+    app.get("/", [](Request& req, Response& res) {
+        res.send("message", "Hello world");
     });
 
     app.run(8080);

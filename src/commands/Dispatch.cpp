@@ -23,6 +23,9 @@
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
+#include <vix/cli/commands/RegistryCommand.hpp>
+#include <vix/cli/commands/AddCommand.hpp>
+#include <vix/cli/commands/SearchCommand.hpp>
 
 #include <stdexcept>
 
@@ -131,6 +134,31 @@ namespace vix::cli::dispatch
          { return vix::commands::InstallCommand::run(a); },
          []()
          { return vix::commands::InstallCommand::help(); }});
+
+    // Registry
+    add({"registry",
+         "Registry",
+         "Sync/search the Git-based registry index",
+         [](const Args &a)
+         { return vix::commands::RegistryCommand::run(a); },
+         []()
+         { return vix::commands::RegistryCommand::help(); }});
+
+    add({"add",
+         "Registry",
+         "Add a dependency from registry (pins commit)",
+         [](const Args &a)
+         { return vix::commands::AddCommand::run(a); },
+         []()
+         { return vix::commands::AddCommand::help(); }});
+
+    add({"search",
+         "Registry",
+         "Search packages in local registry index (offline)",
+         [](const Args &a)
+         { return vix::commands::SearchCommand::run(a); },
+         []()
+         { return vix::commands::SearchCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const

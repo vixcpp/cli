@@ -25,6 +25,11 @@
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/commands/SearchCommand.hpp>
+
+#include <vix/cli/commands/RegistryCommand.hpp>
+#include <vix/cli/commands/AddCommand.hpp>
+
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -322,6 +327,12 @@ namespace vix
         return commands::ReplCommand::help();
       if (cmd == "install")
         return commands::InstallCommand::help();
+      if (cmd == "registry")
+        return commands::RegistryCommand::help();
+      if (cmd == "add")
+        return commands::AddCommand::help();
+      if (cmd == "search")
+        return commands::SearchCommand::help();
     }
 
 #ifndef VIX_CLI_VERSION
@@ -358,6 +369,10 @@ namespace vix
     out << indent(3) << "check [path]             Validate a project or compile a single .cpp (no execution)\n";
     out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n";
     out << indent(3) << "repl                      Start interactive Vix REPL\n\n";
+    out << indent(2) << "Registry:\n";
+    out << indent(3) << "registry <subcommand>     Sync/search registry index (git-based)\n";
+    out << indent(3) << "add <pkg>@<version>       Add a dependency from registry (pins commit)\n\n";
+    out << indent(3) << "search <query>            Search packages in local registry index (offline)\n";
 
     out << indent(2) << "Packaging & security:\n";
     out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";

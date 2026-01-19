@@ -50,7 +50,6 @@ namespace
       return ::isatty(STDOUT_FILENO) != 0;
 #endif
 
-    // "always" (ou tout autre valeur non "never"/"auto")
     return true;
   }
 
@@ -59,7 +58,6 @@ namespace
     if (!should_clear_terminal_now())
       return;
 
-    // Clear + home
     std::cout << "\033[2J\033[H" << std::flush;
   }
 

@@ -82,15 +82,18 @@ namespace vix::commands::RunCommand::detail
   {
     if (want >= s.size())
       return s.size();
+    if (want == 0)
+      return 0;
+
     std::size_t cut = want;
 
-    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80)
+    while (cut > 0 && (static_cast<unsigned char>(s[cut - 1]) & 0xC0) == 0x80)
       --cut;
 
     if (cut == 0)
       return 0;
 
-    const unsigned char lead = static_cast<unsigned char>(s[cut]);
+    const unsigned char lead = static_cast<unsigned char>(s[cut - 1]);
     std::size_t need = 1;
 
     if ((lead & 0x80) == 0x00)
@@ -102,8 +105,8 @@ namespace vix::commands::RunCommand::detail
     else if ((lead & 0xF8) == 0xF0)
       need = 4;
 
-    if (cut + need > want)
-      return cut;
+    if ((cut - 1) + need > want)
+      return cut - 1;
 
     return want;
   }
@@ -254,18 +257,30 @@ namespace vix::commands::RunCommand::detail
 
     std::string flush_lines_keep_tail()
     {
-      if (buffer_.size() <= TAIL_BUFFER_SIZE)
-        return {};
-
-      const std::size_t keepFrom = buffer_.size() - TAIL_BUFFER_SIZE;
-
-      const std::size_t lastNl = buffer_.rfind('\n', keepFrom);
+      const std::size_t lastNl = buffer_.rfind('\n');
       if (lastNl == std::string::npos)
+      {
+        if (buffer_.size() > TAIL_BUFFER_SIZE)
+        {
+          const std::size_t flushLen = buffer_.size() - TAIL_BUFFER_SIZE;
+          const std::size_t safeLen = utf8_safe_prefix_len(buffer_, flushLen);
+          std::string out = buffer_.substr(0, safeLen);
+          buffer_.erase(0, safeLen);
+          return out;
+        }
         return {};
+      }
 
-      const std::size_t flushLen = lastNl + 1;
-      std::string out = buffer_.substr(0, flushLen);
-      buffer_.erase(0, flushLen);
+      std::string out = buffer_.substr(0, lastNl + 1);
+      buffer_.erase(0, lastNl + 1);
+
+      if (buffer_.size() > TAIL_BUFFER_SIZE)
+      {
+        const std::size_t trimLen = buffer_.size() - TAIL_BUFFER_SIZE;
+        const std::size_t safeTrim = utf8_safe_prefix_len(buffer_, trimLen);
+        buffer_.erase(0, safeTrim);
+      }
+
       return out;
     }
 

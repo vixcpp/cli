@@ -117,6 +117,41 @@ namespace vix::cli::util
     }
   }
 
+  inline void dep_line(
+      std::ostream &os,
+      std::string_view id,
+      std::string_view version,
+      std::string_view commit,
+      std::string_view repo)
+  {
+    os << "  " << CYAN << BOLD << id << RESET;
+
+    // Secondary: version
+    if (!version.empty())
+    {
+      os << "  "
+         << GRAY << "(" << RESET
+         << YELLOW << "version" << RESET
+         << GRAY << ": " << RESET
+         << YELLOW << BOLD << version << RESET
+         << GRAY << ")" << RESET;
+    }
+
+    os << "\n";
+
+    if (!commit.empty())
+    {
+      os << "    " << GRAY << "commit: " << RESET
+         << YELLOW << commit << RESET << "\n";
+    }
+
+    if (!repo.empty())
+    {
+      os << "    " << GRAY << "repo: " << RESET
+         << CYAN << UNDERLINE << repo << RESET << "\n";
+    }
+  }
+
 } // namespace vix::cli::util
 
 #endif

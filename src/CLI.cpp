@@ -25,10 +25,13 @@
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
-#include <vix/cli/commands/SearchCommand.hpp>
 
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
+#include <vix/cli/commands/SearchCommand.hpp>
+#include <vix/cli/commands/RemoveCommand.hpp>
+#include <vix/cli/commands/ListCommand.hpp>
+#include <vix/cli/commands/StoreCommand.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -333,6 +336,12 @@ namespace vix
         return commands::AddCommand::help();
       if (cmd == "search")
         return commands::SearchCommand::help();
+      if (cmd == "remove")
+        return commands::RemoveCommand::help();
+      if (cmd == "list")
+        return commands::ListCommand::help();
+      if (cmd == "store")
+        return commands::StoreCommand::help();
     }
 
 #ifndef VIX_CLI_VERSION
@@ -373,6 +382,9 @@ namespace vix
     out << indent(3) << "registry <subcommand>     Sync/search registry index (git-based)\n";
     out << indent(3) << "add <pkg>@<version>       Add a dependency from registry (pins commit)\n\n";
     out << indent(3) << "search <query>            Search packages in local registry index (offline)\n";
+    out << indent(3) << "remove <pkg>             Remove a dependency from vix.lock\n";
+    out << indent(3) << "list                     List project dependencies from vix.lock\n";
+    out << indent(3) << "store <subcommand>       Manage local store cache (gc/path)\n";
 
     out << indent(2) << "Packaging & security:\n";
     out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";

@@ -26,6 +26,9 @@
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/SearchCommand.hpp>
+#include <vix/cli/commands/RemoveCommand.hpp>
+#include <vix/cli/commands/ListCommand.hpp>
+#include <vix/cli/commands/StoreCommand.hpp>
 
 #include <stdexcept>
 
@@ -159,6 +162,30 @@ namespace vix::cli::dispatch
          { return vix::commands::SearchCommand::run(a); },
          []()
          { return vix::commands::SearchCommand::help(); }});
+
+    add({"remove",
+         "Registry",
+         "Remove a dependency from vix.lock",
+         [](const Args &a)
+         { return vix::commands::RemoveCommand::run(a); },
+         []()
+         { return vix::commands::RemoveCommand::help(); }});
+
+    add({"list",
+         "Registry",
+         "List project dependencies from vix.lock",
+         [](const Args &a)
+         { return vix::commands::ListCommand::run(a); },
+         []()
+         { return vix::commands::ListCommand::help(); }});
+
+    add({"store",
+         "Registry",
+         "Manage local store cache (gc/path)",
+         [](const Args &a)
+         { return vix::commands::StoreCommand::run(a); },
+         []()
+         { return vix::commands::StoreCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const

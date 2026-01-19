@@ -1,4 +1,20 @@
+/**
+ *
+ *  @file RegistryCommand.cpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Vix.cpp
+ *
+ */
 #include <vix/cli/commands/RegistryCommand.hpp>
+#include <vix/cli/util/Shell.hpp>
+#include <vix/cli/util/Ui.hpp>
+#include <vix/cli/Style.hpp>
 
 #include <cstdlib>
 #include <filesystem>
@@ -6,14 +22,12 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
-#include <unistd.h>
-#endif
-
 namespace fs = std::filesystem;
 
 namespace vix::commands
 {
+  using namespace vix::cli::style;
+
   namespace
   {
     std::string home_dir()
@@ -34,12 +48,6 @@ namespace vix::commands
       return fs::path(h) / ".vix";
     }
 
-    int run_cmd(const std::string &cmd)
-    {
-      const int rc = std::system(cmd.c_str());
-      return rc == 0 ? 0 : 1;
-    }
-
     fs::path registry_dir()
     {
       return vix_root() / "registry" / "index";
@@ -52,17 +60,48 @@ namespace vix::commands
 
     int sync_registry()
     {
-      fs::path dir = registry_dir();
+      const fs::path dir = registry_dir();
       fs::create_directories(dir.parent_path());
+
+      vix::cli::util::section(std::cout, "Registry");
+      vix::cli::util::kv(std::cout, "path", dir.string());
 
       if (!fs::exists(dir))
       {
-        const std::string cmd = "git clone --depth 1 " + registry_repo_url() + " " + dir.string();
-        return run_cmd(cmd);
+        step("cloning index (depth=1)...");
+        const std::string cmd =
+            "git clone -q --depth 1 " + registry_repo_url() + " " + dir.string();
+
+        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
+        if (rc != 0)
+        {
+          vix::cli::util::err_line(std::cerr, "registry sync failed");
+          vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
+          if (!vix::cli::util::debug_enabled())
+            vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+          return rc;
+        }
+
+        vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
+        return 0;
       }
 
-      const std::string cmd = "git -C " + dir.string() + " pull --ff-only";
-      return run_cmd(cmd);
+      step("updating index (ff-only)...");
+      const std::string cmd =
+          "git -C " + dir.string() + " pull -q --ff-only";
+
+      const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
+      if (rc != 0)
+      {
+        vix::cli::util::err_line(std::cerr, "registry sync failed");
+        vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
+        if (!vix::cli::util::debug_enabled())
+          vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+        return rc;
+      }
+
+      vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
+      return 0;
     }
   }
 
@@ -74,22 +113,18 @@ namespace vix::commands
     const std::string sub = args[0];
 
     if (sub == "sync")
-    {
-      const int rc = sync_registry();
-      if (rc == 0)
-        std::cout << "✓ registry synced: " << registry_dir().string() << "\n";
-      else
-        std::cerr << "✖ registry sync failed\n";
-      return rc;
-    }
+      return sync_registry();
 
     if (sub == "path")
     {
-      std::cout << registry_dir().string() << "\n";
+      vix::cli::util::section(std::cout, "Registry");
+      vix::cli::util::kv(std::cout, "path", registry_dir().string());
       return 0;
     }
 
-    std::cerr << "vix: unknown registry subcommand '" << sub << "'\n\n";
+    vix::cli::util::err_line(std::cerr, "unknown registry subcommand: " + sub);
+    vix::cli::util::warn_line(std::cerr, "Try: vix registry sync");
+    vix::cli::util::warn_line(std::cerr, "Try: vix registry path");
     return help();
   }
 

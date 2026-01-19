@@ -1,4 +1,19 @@
+/**
+ *
+ *  @file SearchCommand.cpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Vix.cpp
+ *
+ */
 #include <vix/cli/commands/SearchCommand.hpp>
+#include <vix/cli/util/Ui.hpp>
+#include <vix/cli/Style.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -7,7 +22,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <string>
 #include <vector>
 
@@ -16,6 +30,8 @@ using json = nlohmann::json;
 
 namespace vix::commands
 {
+  using namespace vix::cli::style;
+
   namespace
   {
     std::string to_lower(std::string s)
@@ -61,6 +77,11 @@ namespace vix::commands
       return registry_repo_dir() / "index";
     }
 
+    bool registry_ready(const fs::path &repoDir, const fs::path &idxDir)
+    {
+      return fs::exists(repoDir) && fs::exists(idxDir);
+    }
+
     json read_json_or_throw(const fs::path &p)
     {
       std::ifstream in(p);
@@ -89,8 +110,12 @@ namespace vix::commands
 
     std::string latest_version(const json &entry)
     {
+      if (entry.contains("latest") && entry["latest"].is_string())
+        return entry["latest"].get<std::string>();
+
       if (!entry.contains("versions") || !entry["versions"].is_object())
         return {};
+
       std::string best;
       for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
       {
@@ -143,22 +168,26 @@ namespace vix::commands
 
   int SearchCommand::run(const std::vector<std::string> &args)
   {
+    vix::cli::util::section(std::cout, "Search");
+
     if (args.empty())
       return help();
+
+    const std::string query = args[0];
+    vix::cli::util::kv(std::cout, "query", vix::cli::util::quote(query));
 
     const fs::path repoDir = registry_repo_dir();
     const fs::path idxDir = registry_index_dir();
 
-    if (!fs::exists(repoDir) || !fs::exists(idxDir))
+    if (!registry_ready(repoDir, idxDir))
     {
-      std::cerr << "vix: registry not synced. Run: vix registry sync\n";
+      error("registry not synced");
+      hint("Run: vix registry sync");
       return 1;
     }
 
-    std::string query = args[0];
-    const std::string qLower = to_lower(query);
-
     std::vector<Hit> hits;
+    const std::string qLower = to_lower(query);
 
     for (const auto &it : fs::directory_iterator(idxDir))
     {
@@ -196,14 +225,19 @@ namespace vix::commands
 
     std::sort(hits.begin(), hits.end(), [](const Hit &a, const Hit &b)
               {
-      if (a.score != b.score) return a.score > b.score;
-      return a.id < b.id; });
+                if (a.score != b.score)
+                  return a.score > b.score;
+                return a.id < b.id; });
 
     if (hits.empty())
     {
-      std::cout << "No results for '" << query << "'.\n";
+      error(std::string("no results for ") + vix::cli::util::quote(query));
+      hint("Tip: search by namespace, name, description, or keywords");
+      hint("Example: vix search gaspardkirira");
       return 0;
     }
+
+    vix::cli::util::one_line_spacer(std::cout);
 
     const std::size_t limit = 20;
     const std::size_t n = std::min<std::size_t>(hits.size(), limit);
@@ -211,20 +245,14 @@ namespace vix::commands
     for (std::size_t i = 0; i < n; ++i)
     {
       const auto &h = hits[i];
-      std::cout << h.id;
-      if (!h.latest.empty())
-        std::cout << "  (latest: " << h.latest << ")";
-      std::cout << "\n";
-
-      if (!h.desc.empty())
-        std::cout << "  " << h.desc << "\n";
-      if (!h.repo.empty())
-        std::cout << "  repo: " << h.repo << "\n";
+      vix::cli::util::pkg_line(std::cout, h.id, h.latest, h.desc, h.repo);
       std::cout << "\n";
     }
 
     if (hits.size() > limit)
-      std::cout << "Showing " << limit << " of " << hits.size() << " results.\n";
+      vix::cli::util::ok_line(std::cout, "Showing " + std::to_string(limit) + " of " + std::to_string(hits.size()) + " result(s).");
+    else
+      vix::cli::util::ok_line(std::cout, "Found " + std::to_string(hits.size()) + " result(s).");
 
     return 0;
   }

@@ -15,11 +15,13 @@
 #include <vix/cli/Style.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <chrono>
+#include <string_view>
 
 #ifndef _WIN32
 #include <errno.h>
@@ -37,6 +39,10 @@ namespace vix::commands::RunCommand::detail
 
 #ifndef _WIN32
 
+  static volatile sig_atomic_t g_sigint_requested = 0;
+
+  static void on_sigint(int) { g_sigint_requested = 1; }
+
   struct SigintGuard
   {
     struct sigaction oldAction{};
@@ -44,10 +50,13 @@ namespace vix::commands::RunCommand::detail
 
     SigintGuard()
     {
+      g_sigint_requested = 0;
+
       struct sigaction sa{};
-      sa.sa_handler = SIG_IGN;
+      sa.sa_handler = on_sigint;
       sigemptyset(&sa.sa_mask);
       sa.sa_flags = 0;
+
       if (sigaction(SIGINT, &sa, &oldAction) == 0)
         installed = true;
     }
@@ -135,6 +144,7 @@ namespace vix::commands::RunCommand::detail
         const char *env = std::getenv("VIX_DEBUG_FILTER");
         return env && std::strcmp(env, "1") == 0;
       }();
+
       if (debugMode)
         return chunk;
 
@@ -146,6 +156,7 @@ namespace vix::commands::RunCommand::detail
       const auto now = std::chrono::steady_clock::now();
       const auto elapsed =
           std::chrono::duration_cast<std::chrono::seconds>(now - startTime_).count();
+
       if (elapsed >= FORCE_PASSTHROUGH_TIMEOUT_SEC)
       {
         std::string out = flush_all_buffer_as_is();
@@ -193,7 +204,6 @@ namespace vix::commands::RunCommand::detail
 
   private:
     static constexpr std::size_t TAIL_BUFFER_SIZE = 1024;
-
     static constexpr int FORCE_PASSTHROUGH_TIMEOUT_SEC = 10;
 
     bool runtimeDetected_ = false;
@@ -214,10 +224,8 @@ namespace vix::commands::RunCommand::detail
       if (std::strcmp(mode, "always") == 0)
         return true;
 
-#ifndef _WIN32
       if (std::strcmp(mode, "auto") == 0)
         return ::isatty(STDOUT_FILENO) != 0;
-#endif
 
       return false;
     }
@@ -294,19 +302,17 @@ namespace vix::commands::RunCommand::detail
 
   static inline bool is_cmake_configure_cmd(const std::string &cmd) noexcept
   {
-    // Configure = cmake ..  OR  cmake --preset <x>
-    // Build = cmake --build ...
     const bool isCmake = (cmd.find("cmake") != std::string::npos);
     const bool isBuild = (cmd.find("--build") != std::string::npos);
     const bool isPreset = (cmd.find("--preset") != std::string::npos);
-    const bool isDotDot = (cmd.find("cmake ..") != std::string::npos) || (cmd.find("cmake  ..") != std::string::npos);
+    const bool isDotDot = (cmd.find("cmake ..") != std::string::npos) ||
+                          (cmd.find("cmake  ..") != std::string::npos);
 
     return isCmake && !isBuild && (isPreset || isDotDot);
   }
 
   static inline bool looks_like_error_or_warning(std::string_view line) noexcept
   {
-    // (CMake Error:, CMake Warning:, error:, warning:, etc.)
     auto has = [&](std::string_view s)
     { return line.find(s) != std::string_view::npos; };
 
@@ -395,15 +401,11 @@ namespace vix::commands::RunCommand::detail
     if (chunk.find(ninjaStop) != std::string::npos)
       return true;
 
-    // Drop Ninja command echo lines like:
-    // [0/1] cd ... && /path/to/bin
-    // [1/2] Linking CXX executable ...
     if (!chunk.empty() && chunk[0] == '[')
     {
       const auto rb = chunk.find(']');
       if (rb != std::string::npos)
       {
-        // cheap heuristic: "[digits/...]" then space
         bool ok = true;
         for (std::size_t i = 1; i < rb; ++i)
         {
@@ -475,9 +477,8 @@ namespace vix::commands::RunCommand::detail
     LiveRunResult result;
 
     int outPipe[2] = {-1, -1};
-    int errPipe[2] = {-1, -1};
 
-    if (::pipe(outPipe) != 0 || ::pipe(errPipe) != 0)
+    if (::pipe(outPipe) != 0)
     {
       result.exitCode = std::system(cmd.c_str());
       return result;
@@ -488,8 +489,7 @@ namespace vix::commands::RunCommand::detail
     {
       close_safe(outPipe[0]);
       close_safe(outPipe[1]);
-      close_safe(errPipe[0]);
-      close_safe(errPipe[1]);
+
       result.exitCode = std::system(cmd.c_str());
       return result;
     }
@@ -501,6 +501,8 @@ namespace vix::commands::RunCommand::detail
       sigemptyset(&saChild.sa_mask);
       saChild.sa_flags = 0;
       ::sigaction(SIGINT, &saChild, nullptr);
+
+      ::setpgid(0, 0);
 
       ::setenv("ASAN_OPTIONS",
                "abort_on_error=1:"
@@ -518,25 +520,21 @@ namespace vix::commands::RunCommand::detail
                1);
 
       ::close(outPipe[0]);
-      ::close(errPipe[0]);
 
       ::dup2(outPipe[1], STDOUT_FILENO);
-      ::dup2(errPipe[1], STDERR_FILENO);
+      ::dup2(outPipe[1], STDERR_FILENO);
 
       ::close(outPipe[1]);
-      ::close(errPipe[1]);
 
       if (::getenv("VIX_MODE") == nullptr)
-      {
         ::setenv("VIX_MODE", "run", 1);
-      }
+
       ::execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
       _exit(127);
     }
 
-    // ===== Parent =====
     close_safe(outPipe[1]);
-    close_safe(errPipe[1]);
+    ::setpgid(pid, pid);
 
     const bool useSpinner = !spinnerLabel.empty();
     bool spinnerActive = useSpinner;
@@ -625,7 +623,6 @@ namespace vix::commands::RunCommand::detail
         if (is_all_equals_line(line))
           return true;
 
-        // Typical "==PID==ERROR/HINT/WARNING: ..."
         if (line.rfind("==", 0) == 0 &&
             (line.find("ERROR:") != std::string_view::npos ||
              line.find("HINT:") != std::string_view::npos ||
@@ -638,7 +635,6 @@ namespace vix::commands::RunCommand::detail
         if (is_sanitizer_keyword_line(line))
           return true;
 
-        // UBSan sometimes prints: "runtime error: ..."
         if (line.find("runtime error:") != std::string_view::npos)
           return true;
 
@@ -730,8 +726,54 @@ namespace vix::commands::RunCommand::detail
       return duration_cast<milliseconds>(steady_clock::now() - termTime).count();
     };
 
+    auto icontains_sv = [](std::string_view hay, std::string_view needle) -> bool
+    {
+      if (needle.empty())
+        return true;
+      if (hay.size() < needle.size())
+        return false;
+
+      for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i)
+      {
+        bool ok = true;
+        for (std::size_t j = 0; j < needle.size(); ++j)
+        {
+          unsigned char a = static_cast<unsigned char>(hay[i + j]);
+          unsigned char b = static_cast<unsigned char>(needle[j]);
+          a = static_cast<unsigned char>(std::tolower(a));
+          b = static_cast<unsigned char>(std::tolower(b));
+          if (a != b)
+          {
+            ok = false;
+            break;
+          }
+        }
+        if (ok)
+          return true;
+      }
+      return false;
+    };
+
+    bool suppress_known_failure_output = false;
+    bool userInterrupted = false;
+
+    auto is_known_runtime_port_in_use = [&](std::string_view s) -> bool
+    {
+      return icontains_sv(s, "address already in use") ||
+             icontains_sv(s, "eaddrinuse") ||
+             (icontains_sv(s, "bind") && icontains_sv(s, "acceptor") && icontains_sv(s, "address already in use"));
+    };
+
     while (running)
     {
+      if (!sentTerm && g_sigint_requested)
+      {
+        userInterrupted = true;
+        ::kill(-pid, SIGINT);
+        sentTerm = true;
+        termTime = std::chrono::steady_clock::now();
+      }
+
       if (!didTimeout && enableTimeout && elapsed_sec() >= timeoutSec)
       {
         didTimeout = true;
@@ -745,11 +787,13 @@ namespace vix::commands::RunCommand::detail
         termTime = std::chrono::steady_clock::now();
       }
 
-      if (didTimeout && sentTerm && !sentKill)
+      if (sentTerm && !sentKill)
       {
-        if (term_elapsed_ms() >= 500)
+        const long long graceMs = userInterrupted ? 2000 : 500;
+
+        if (term_elapsed_ms() >= graceMs)
         {
-          ::kill(pid, SIGKILL);
+          ::kill(-pid, SIGKILL);
           sentKill = true;
         }
       }
@@ -761,12 +805,7 @@ namespace vix::commands::RunCommand::detail
       if (outPipe[0] >= 0)
       {
         FD_SET(outPipe[0], &fds);
-        maxfd = std::max(maxfd, outPipe[0]);
-      }
-      if (errPipe[0] >= 0)
-      {
-        FD_SET(errPipe[0], &fds);
-        maxfd = std::max(maxfd, errPipe[0]);
+        maxfd = outPipe[0];
       }
 
       if (maxfd < 0)
@@ -788,7 +827,7 @@ namespace vix::commands::RunCommand::detail
       if (spinnerActive || enableTimeout)
       {
         tv.tv_sec = 0;
-        tv.tv_usec = 100000; // 100ms
+        tv.tv_usec = 100000;
         tv_ptr = &tv;
       }
 
@@ -819,13 +858,20 @@ namespace vix::commands::RunCommand::detail
             write_all(STDOUT_FILENO, &cr, 1);
           }
         }
-        // stdout
+
         if (outPipe[0] >= 0 && FD_ISSET(outPipe[0], &fds))
         {
           std::string chunk;
           if (read_into(outPipe[0], chunk))
           {
             result.stdoutText += chunk;
+            result.stderrText += chunk;
+
+            if (!suppress_known_failure_output && is_known_runtime_port_in_use(chunk))
+              suppress_known_failure_output = true;
+
+            if (suppress_known_failure_output)
+              continue;
 
             if (!should_drop_chunk_default(chunk))
             {
@@ -835,20 +881,12 @@ namespace vix::commands::RunCommand::detail
 
               if (!printable.empty())
               {
-                std::string filtered;
-                if (passthroughRuntime)
-                {
-                  filtered = printable;
-                }
-                else
-                {
-                  filtered = runtimeFilter.process(printable);
-                }
+                std::string filtered =
+                    passthroughRuntime ? printable : runtimeFilter.process(printable);
 
                 if (!filtered.empty())
                 {
                   write_all(STDOUT_FILENO, filtered.data(), filtered.size());
-
                   printedSomething = true;
                   lastPrintedChar = filtered.back();
                 }
@@ -858,45 +896,6 @@ namespace vix::commands::RunCommand::detail
           else
           {
             close_safe(outPipe[0]);
-          }
-        }
-
-        // stderr
-        if (errPipe[0] >= 0 && FD_ISSET(errPipe[0], &fds))
-        {
-          std::string chunk;
-          if (read_into(errPipe[0], chunk))
-          {
-            result.stderrText += chunk;
-
-            if (!should_drop_chunk_default(chunk))
-            {
-              std::string printable = sanitizer.filter_for_print(chunk);
-              if (!printable.empty())
-              {
-                std::string filtered;
-                if (passthroughRuntime)
-                {
-                  filtered = printable;
-                }
-                else
-                {
-                  filtered = runtimeFilter.process(printable);
-                }
-
-                if (!filtered.empty())
-                {
-                  write_all(STDERR_FILENO, filtered.data(), filtered.size());
-
-                  printedSomething = true;
-                  lastPrintedChar = filtered.back();
-                }
-              }
-            }
-          }
-          else
-          {
-            close_safe(errPipe[0]);
           }
         }
       }
@@ -915,7 +914,6 @@ namespace vix::commands::RunCommand::detail
       spinner_clear(printedSomething, lastPrintedChar);
 
     close_safe(outPipe[0]);
-    close_safe(errPipe[0]);
 
     if (!haveStatus)
     {
@@ -936,7 +934,10 @@ namespace vix::commands::RunCommand::detail
     }
 
     result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
-#ifndef _WIN32
+
+    if (userInterrupted && result.exitCode == 130)
+      result.exitCode = 0;
+
     if (printedSomething &&
         lastPrintedChar != '\n' &&
         ::isatty(STDOUT_FILENO) != 0)
@@ -944,12 +945,11 @@ namespace vix::commands::RunCommand::detail
       const char nl = '\n';
       write_all(STDOUT_FILENO, &nl, 1);
     }
-#endif
 
     return result;
   }
 
-#endif // !_WIN32
+#endif
 
   int run_cmd_live_filtered(const std::string &cmd,
                             const std::string &spinnerLabel)
@@ -958,9 +958,8 @@ namespace vix::commands::RunCommand::detail
     (void)spinnerLabel;
     return std::system(cmd.c_str());
 #else
-    LiveRunResult r = run_cmd_live_filtered_capture(cmd, spinnerLabel, false);
+    LiveRunResult r = run_cmd_live_filtered_capture(cmd, spinnerLabel, false, /*timeoutSec=*/0);
     return r.exitCode;
-
 #endif
   }
 

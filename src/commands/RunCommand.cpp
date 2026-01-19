@@ -16,6 +16,7 @@
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/manifest/RunManifestMerge.hpp>
+#include <vix/cli/errors/RawLogDetectors.hpp>
 
 #include <filesystem>
 #include <iostream>
@@ -271,42 +272,110 @@ namespace vix::commands::RunCommand
       // 2) Build & run preset
       {
         progress.phase_start("Build & run (preset: " + runPreset + ")");
+
         const std::string mode = opt.watch ? "dev" : "run";
 
-        std::ostringstream oss;
-#ifdef _WIN32
-        oss << "cmd /C \"cd /D " << quote(projectDir.string())
-            << " && set VIX_STDOUT_MODE=line"
-            << " && set VIX_MODE=" << mode
-            << " && cmake --build --preset " << quote(runPreset) << " --target run";
-
-        if (opt.jobs > 0)
-          oss << " -- -j " << opt.jobs;
-
-        oss << "\"";
-#else
-        oss << "cd " << quote(projectDir.string())
-            << " && VIX_STDOUT_MODE=line"
-            << " VIX_MODE=" << mode
-            << " cmake --build --preset " << quote(runPreset) << " --target run";
-
-        if (opt.jobs > 0)
-          oss << " -- -j " << opt.jobs;
-#endif
-        const std::string cmd = oss.str();
-
-        clear_terminal_if_enabled();
-
-        const int code = run_cmd_live_filtered(
-            cmd,
-            "Building & running with preset \"" + runPreset + "\"");
-
-        if (code != 0)
+        // 2.1) Build only (NO --target run)
         {
-          handle_runtime_exit_code(
-              code,
-              "Execution failed (run preset '" + runPreset + "')");
-          return code;
+          std::ostringstream oss;
+#ifdef _WIN32
+          oss << "cmd /C \"cd /D " << quote(projectDir.string())
+              << " && set VIX_STDOUT_MODE=line"
+              << " && set VIX_MODE=" << mode
+              << " && cmake --build --preset " << quote(runPreset);
+
+          if (opt.jobs > 0)
+            oss << " -- -j " << opt.jobs;
+
+          oss << "\"";
+#else
+          oss << "cd " << quote(projectDir.string())
+              << " && VIX_STDOUT_MODE=line"
+              << " VIX_MODE=" << mode
+              << " cmake --build --preset " << quote(runPreset);
+
+          if (opt.jobs > 0)
+            oss << " -- -j " << opt.jobs;
+#endif
+
+          const std::string buildCmd = oss.str();
+
+          const int buildCode = run_cmd_live_filtered(
+              buildCmd,
+              "Building (preset \"" + runPreset + "\")");
+
+          const int buildExit = normalize_exit_code(buildCode);
+
+          if (buildExit != 0)
+          {
+            error("Build failed (preset '" + runPreset + "') (exit code " + std::to_string(buildExit) + ").");
+            hint("Run the same command manually:");
+            step("cd " + projectDir.string());
+            step("cmake --build --preset " + runPreset);
+            return buildExit;
+          }
+        }
+
+        // 2.2) Run executable directly (CLI controls Ctrl+C)
+        {
+          const std::string exeName = projectDir.filename().string();
+
+          fs::path exePath = buildDir / exeName;
+#ifdef _WIN32
+          exePath += ".exe";
+#endif
+
+          if (!fs::exists(exePath))
+          {
+            error("Built executable not found: " + exePath.string());
+            hint("Resolved build directory: " + buildDir.string());
+            hint("If your binary name differs from the folder name, adjust it or add a manifest field to specify target.");
+            return 1;
+          }
+
+          clear_terminal_if_enabled();
+
+#ifdef _WIN32
+          std::string runCmd = "\"" + exePath.string() + "\"";
+          int runCode = std::system(runCmd.c_str());
+          int runExit = normalize_exit_code(runCode);
+
+          if (runExit == 130)
+            return 0;
+
+          if (runExit != 0)
+          {
+            handle_runtime_exit_code(runExit, "Execution failed");
+            return runExit;
+          }
+#else
+          std::string runCmd = quote(exePath.string());
+
+          const LiveRunResult rr = run_cmd_live_filtered_capture(
+              runCmd,
+              /*spinnerLabel=*/"",
+              /*passthroughRuntime=*/true,
+              /*timeoutSec=*/opt.timeoutSec);
+
+          int runExit = normalize_exit_code(rr.exitCode);
+
+          if (runExit == 130)
+            return 0;
+
+          if (runExit != 0)
+          {
+            std::string log = rr.stderrText;
+            if (!rr.stdoutText.empty())
+              log += rr.stdoutText;
+
+            if (!log.empty())
+              std::cout << log << "\n";
+
+            error("Execution failed (exit code " + std::to_string(runExit) + ").");
+            hint("Check the logs above or run the executable manually.");
+            return runExit;
+          }
+#endif
         }
 
         progress.phase_done("Build & run", "application started");
@@ -381,6 +450,7 @@ namespace vix::commands::RunCommand
 
       std::string buildLog;
 
+      clear_terminal_if_enabled();
       const int code = run_cmd_live_filtered(
           cmd,
           "Building project (fallback)");

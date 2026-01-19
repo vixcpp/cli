@@ -30,6 +30,8 @@ namespace vix::cli::errors
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile,
         const std::string &contextMessage);
+
+    static bool handleKnownRunFailure(const std::string &log, const std::filesystem::path &ctx);
   };
 } // namespace vix::cli::errors
 

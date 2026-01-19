@@ -332,10 +332,8 @@ namespace vix::commands::RunCommand::detail
     return o;
   }
 
-  // Runtime exit code
   void handle_runtime_exit_code(int code, const std::string &context)
   {
-    // code is expected to be an already-normalized exit code (0..255 or 128+signal)
     if (code == 0)
       return;
 
@@ -388,11 +386,16 @@ namespace vix::commands::RunCommand::detail
   std::string run_and_capture_with_code(const std::string &cmd, int &exitCode)
   {
     std::string out;
+
+    std::string captureCmd = cmd;
+    captureCmd += " 2>&1";
+
 #if defined(_WIN32)
-    FILE *p = _popen(cmd.c_str(), "r");
+    FILE *p = _popen(captureCmd.c_str(), "r");
 #else
-    FILE *p = popen(cmd.c_str(), "r");
+    FILE *p = popen(captureCmd.c_str(), "r");
 #endif
+
     if (!p)
     {
       exitCode = -1;
@@ -406,8 +409,9 @@ namespace vix::commands::RunCommand::detail
 #if defined(_WIN32)
     exitCode = _pclose(p);
 #else
-    exitCode = normalize_exit_code(pclose(p));
+    exitCode = pclose(p);
 #endif
+
     return out;
   }
 
@@ -461,7 +465,6 @@ namespace vix::commands::RunCommand::detail
     std::string json((std::istreambuf_iterator<char>(in)),
                      std::istreambuf_iterator<char>());
 
-    // Find object containing: "name": "<configurePreset>"
     const std::string nameKey = "\"name\"";
     const std::string binKey = "\"binaryDir\"";
     const std::string targetName = "\"" + configurePreset + "\"";
@@ -477,7 +480,7 @@ namespace vix::commands::RunCommand::detail
       if (namePos == std::string::npos)
         break;
 
-      // attempt to isolate the object
+      // isolate likely object bounds (best-effort)
       const std::size_t objStart = json.rfind('{', namePos);
       const std::size_t objEnd = json.find('}', namePos);
       if (objStart == std::string::npos || objEnd == std::string::npos || objEnd <= objStart)
@@ -487,22 +490,27 @@ namespace vix::commands::RunCommand::detail
       }
 
       const std::string obj = json.substr(objStart, objEnd - objStart + 1);
+
       const std::size_t b = obj.find(binKey);
       if (b == std::string::npos)
         return std::nullopt;
 
-      // locate value: "binaryDir": "..."
-      std::size_t q = obj.find('"', b + binKey.size());
-      if (q == std::string::npos)
-        return std::nullopt;
-      q = obj.find('"', q + 1); // opening quote of value
-      if (q == std::string::npos)
-        return std::nullopt;
-      const std::size_t q2 = obj.find('"', q + 1);
-      if (q2 == std::string::npos)
+      // find ':' after "binaryDir"
+      std::size_t colon = obj.find(':', b + binKey.size());
+      if (colon == std::string::npos)
         return std::nullopt;
 
-      std::string val = obj.substr(q + 1, q2 - (q + 1));
+      // find opening quote of value
+      std::size_t q1 = obj.find('"', colon);
+      if (q1 == std::string::npos)
+        return std::nullopt;
+
+      // find closing quote of value
+      std::size_t q2 = obj.find('"', q1 + 1);
+      if (q2 == std::string::npos || q2 <= q1 + 1)
+        return std::nullopt;
+
+      std::string val = obj.substr(q1 + 1, q2 - (q1 + 1));
       if (val.empty())
         return std::nullopt;
 

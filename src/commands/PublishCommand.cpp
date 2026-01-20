@@ -1,3 +1,16 @@
+/**
+ *
+ *  @file PublishCommand.cpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Vix.cpp
+ *
+ */
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Shell.hpp>
@@ -147,10 +160,18 @@ namespace vix::commands
 
     static bool git_tag_exists(const std::string &tag)
     {
-      std::string out;
-      const std::string cmd = "git rev-parse -q --verify " + tag + "^{tag} >/dev/null 2>&1";
-      const int rc = std::system(cmd.c_str());
-      return rc == 0;
+      // Accept annotated tags AND lightweight tags.
+      // Annotated: tag^{tag} works
+      // Lightweight: tag^{tag} fails, but refs/tags/<tag> exists.
+      {
+        const std::string cmd = "git rev-parse -q --verify " + tag + "^{tag} >/dev/null 2>&1";
+        if (std::system(cmd.c_str()) == 0)
+          return true;
+      }
+      {
+        const std::string cmd = "git rev-parse -q --verify refs/tags/" + tag + " >/dev/null 2>&1";
+        return std::system(cmd.c_str()) == 0;
+      }
     }
 
     static std::optional<std::string> git_commit_for_tag(const std::string &tag)

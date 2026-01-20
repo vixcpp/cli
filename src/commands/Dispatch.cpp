@@ -30,6 +30,7 @@
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
+#include <vix/cli/commands/DepsCommand.hpp>
 
 #include <stdexcept>
 
@@ -195,6 +196,14 @@ namespace vix::cli::dispatch
          { return vix::commands::PublishCommand::run(a); },
          []()
          { return vix::commands::PublishCommand::help(); }});
+
+    add({"deps",
+         "Registry",
+         "Install deps from vix.lock into .vix/ and generate CMake file",
+         [](const Args &a)
+         { return vix::commands::DepsCommand::run(a); },
+         []()
+         { return vix::commands::DepsCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const

@@ -83,7 +83,18 @@ namespace vix::commands
       return s;
     }
 
-    bool parse_pkg_spec(const std::string &raw, PkgSpec &out)
+    static std::string trim_copy(std::string s)
+    {
+      auto isws = [](unsigned char c)
+      { return std::isspace(c) != 0; };
+      while (!s.empty() && isws(static_cast<unsigned char>(s.front())))
+        s.erase(s.begin());
+      while (!s.empty() && isws(static_cast<unsigned char>(s.back())))
+        s.pop_back();
+      return s;
+    }
+
+    static bool parse_pkg_spec(const std::string &raw, PkgSpec &out)
     {
       const auto slash = raw.find('/');
       if (slash == std::string::npos)
@@ -97,13 +108,17 @@ namespace vix::commands
       out.name = raw.substr(slash + 1, at - (slash + 1));
       out.version = raw.substr(at + 1);
 
+      out.ns = trim_copy(out.ns);
+      out.name = trim_copy(out.name);
+      out.version = trim_copy(out.version);
+
       if (out.ns.empty() || out.name.empty() || out.version.empty())
         return false;
 
       return true;
     }
 
-    json read_json_file_or_throw(const fs::path &p)
+    static json read_json_file_or_throw(const fs::path &p)
     {
       std::ifstream in(p);
       if (!in)
@@ -114,17 +129,17 @@ namespace vix::commands
       return j;
     }
 
-    fs::path entry_path(const std::string &ns, const std::string &name)
+    static fs::path entry_path(const std::string &ns, const std::string &name)
     {
       return registry_index_dir() / (ns + "." + name + ".json");
     }
 
-    fs::path lock_path()
+    static fs::path lock_path()
     {
       return fs::current_path() / "vix.lock";
     }
 
-    void write_lockfile_append(
+    static void write_lockfile_append(
         const PkgSpec &spec,
         const std::string &repoUrl,
         const std::string &commitSha,
@@ -146,16 +161,19 @@ namespace vix::commands
 
       auto &deps = lock["dependencies"];
       json filtered = json::array();
+
+      const std::string wantedId = spec.ns + "/" + spec.name;
+
       for (const auto &d : deps)
       {
         const std::string id = d.value("id", "");
-        if (id != (spec.ns + "/" + spec.name))
+        if (id != wantedId)
           filtered.push_back(d);
       }
       deps = filtered;
 
       json dep;
-      dep["id"] = spec.ns + "/" + spec.name;
+      dep["id"] = wantedId;
       dep["version"] = spec.version;
       dep["repo"] = repoUrl;
       dep["tag"] = tag;
@@ -167,7 +185,7 @@ namespace vix::commands
       out << lock.dump(2) << "\n";
     }
 
-    int ensure_registry_present()
+    static int ensure_registry_present()
     {
       if (fs::exists(registry_dir()) && fs::exists(registry_index_dir()))
         return 0;
@@ -177,37 +195,12 @@ namespace vix::commands
       return 1;
     }
 
-    int clone_checkout(
-        const std::string &repoUrl,
-        const std::string &id,
-        const std::string &commit)
+    static bool contains_any_icase(std::string hay, const std::string &needleLower)
     {
-      fs::create_directories(store_git_dir());
-
-      const fs::path dst = store_git_dir() / id / commit;
-      if (fs::exists(dst))
-        return 0;
-
-      fs::create_directories(dst.parent_path());
-
-      {
-        const std::string cmd =
-            "git clone -q --depth 1 " + repoUrl + " " + dst.string();
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
-          return rc;
-      }
-
-      {
-        const std::string cmd =
-            "git -C " + dst.string() +
-            " -c advice.detachedHead=false checkout -q " + commit;
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
-          return rc;
-      }
-
-      return 0;
+      if (needleLower.empty())
+        return true;
+      hay = to_lower(hay);
+      return hay.find(needleLower) != std::string::npos;
     }
 
     struct SearchHit
@@ -226,7 +219,7 @@ namespace vix::commands
       if (!fs::exists(dir))
         return hits;
 
-      const std::string q = to_lower(query_raw);
+      const std::string q = to_lower(trim_copy(query_raw));
 
       for (const auto &it : fs::directory_iterator(dir))
       {
@@ -241,17 +234,23 @@ namespace vix::commands
         {
           const json entry = read_json_file_or_throw(p);
 
-          const std::string id = entry.value("id", "");
+          const std::string ns = entry.value("namespace", "");
+          const std::string name = entry.value("name", "");
+          const std::string id = (ns.empty() || name.empty()) ? "" : (ns + "/" + name);
+
           const std::string desc = entry.value("description", "");
-          const std::string repo = entry.contains("repo") ? entry["repo"].value("url", "") : "";
+          const std::string repo = (entry.contains("repo") && entry["repo"].is_object())
+                                       ? entry["repo"].value("url", "")
+                                       : "";
 
           std::string latest;
-          if (entry.contains("latest"))
-            latest = entry.value("latest", "");
+          if (entry.contains("latest") && entry["latest"].is_string())
+            latest = entry["latest"].get<std::string>();
 
-          const std::string hay = to_lower(id + " " + desc + " " + repo + " " + p.filename().string());
+          const std::string hay =
+              id + " " + desc + " " + repo + " " + p.filename().string();
 
-          if (q.empty() || hay.find(q) != std::string::npos)
+          if (contains_any_icase(hay, q))
           {
             SearchHit h;
             h.id = id;
@@ -266,13 +265,18 @@ namespace vix::commands
         }
       }
 
+      hits.erase(std::remove_if(hits.begin(), hits.end(),
+                                [](const SearchHit &h)
+                                { return h.id.empty(); }),
+                 hits.end());
+
       std::sort(hits.begin(), hits.end(), [](const SearchHit &a, const SearchHit &b)
                 { return a.id < b.id; });
 
       return hits;
     }
 
-    static void print_search_hits(const std::vector<SearchHit> &hits)
+    static void print_search_hits(const std::vector<SearchHit> &hits, std::size_t limit = 15)
     {
       if (hits.empty())
       {
@@ -280,11 +284,19 @@ namespace vix::commands
         return;
       }
 
-      for (const auto &h : hits)
+      const std::size_t n = std::min<std::size_t>(hits.size(), limit);
+
+      for (std::size_t i = 0; i < n; ++i)
       {
+        const auto &h = hits[i];
         vix::cli::util::pkg_line(std::cout, h.id, h.latest, h.description, h.repo);
         std::cout << "\n";
       }
+
+      if (hits.size() > limit)
+        vix::cli::util::ok_line(std::cout, "Showing " + std::to_string(n) + " of " + std::to_string(hits.size()) + " result(s).");
+      else
+        vix::cli::util::ok_line(std::cout, "Found " + std::to_string(hits.size()) + " result(s).");
     }
 
     static std::string find_latest_version(const json &entry)
@@ -298,7 +310,7 @@ namespace vix::commands
         for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
         {
           const std::string v = it.key();
-          if (v > best)
+          if (best.empty() || v > best)
             best = v;
         }
         return best;
@@ -317,6 +329,61 @@ namespace vix::commands
 
       std::sort(out.begin(), out.end());
       return out;
+    }
+
+    static int clone_checkout(
+        const std::string &repoUrl,
+        const std::string &idDot,
+        const std::string &commit,
+        std::string &outDir)
+    {
+      fs::create_directories(store_git_dir());
+
+      const fs::path dst = store_git_dir() / idDot / commit;
+      outDir = dst.string();
+
+      if (fs::exists(dst))
+        return 0;
+
+      fs::create_directories(dst.parent_path());
+
+      {
+        const std::string cmd =
+            "git clone -q " + repoUrl + " " + dst.string();
+        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
+        if (rc != 0)
+          return rc;
+      }
+
+      {
+        const std::string cmd =
+            "git -C " + dst.string() +
+            " -c advice.detachedHead=false checkout -q " + commit;
+        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
+        if (rc != 0)
+          return rc;
+      }
+
+      return 0;
+    }
+
+    static void print_commit_missing_help(
+        const std::string &pkgId,
+        const std::string &repoUrl,
+        const std::string &tag,
+        const std::string &commit)
+    {
+      vix::cli::util::warn_line(std::cerr, "The registry entry points to a commit that is not reachable in the remote repository.");
+      vix::cli::util::warn_line(std::cerr, "This usually happens when the tag/commit was not pushed, or history was rewritten (force-push/rebase).");
+      std::cerr << "\n";
+      vix::cli::util::kv(std::cout, "package", pkgId);
+      vix::cli::util::kv(std::cout, "repo", repoUrl);
+      vix::cli::util::kv(std::cout, "tag", tag);
+      vix::cli::util::kv(std::cout, "commit", commit);
+      std::cout << "\n";
+      vix::cli::util::warn_line(std::cerr, "Fix:");
+      vix::cli::util::warn_line(std::cerr, "  - Ensure the tag exists on origin: git push --tags");
+      vix::cli::util::warn_line(std::cerr, "  - Or publish a new version with a valid tag/commit (recommended).");
     }
   }
 
@@ -386,29 +453,40 @@ namespace vix::commands
       const json v = versions.at(spec.version);
       const std::string tag = v.at("tag").get<std::string>();
       const std::string commit = v.at("commit").get<std::string>();
-      const std::string id = spec.ns + "." + spec.name;
+
+      const std::string pkgId = spec.ns + "/" + spec.name;
+      const std::string idDot = spec.ns + "." + spec.name;
 
       vix::cli::util::section(std::cout, "Add");
-      vix::cli::util::kv(std::cout, "id", spec.ns + "/" + spec.name);
+      vix::cli::util::kv(std::cout, "id", pkgId);
       vix::cli::util::kv(std::cout, "version", spec.version);
       vix::cli::util::kv(std::cout, "tag", tag);
       vix::cli::util::kv(std::cout, "commit", commit);
 
       step("fetching sources...");
 
-      const int rc = clone_checkout(repoUrl, id, commit);
+      std::string outDir;
+      const int rc = clone_checkout(repoUrl, idDot, commit, outDir);
       if (rc != 0)
       {
         vix::cli::util::err_line(std::cerr, "fetch failed");
-        vix::cli::util::warn_line(std::cerr, "Check your git access and network, then retry.");
+
+        print_commit_missing_help(pkgId, repoUrl, tag, commit);
+
+        vix::cli::util::section(std::cout, "Search");
+        vix::cli::util::kv(std::cout, "query", vix::cli::util::quote(spec.name));
+        const auto hits = search_registry_local(spec.name);
+        print_search_hits(hits);
+
+        vix::cli::util::warn_line(std::cerr, "Then retry: vix add " + pkgId + "@" + spec.version);
         return rc;
       }
 
       write_lockfile_append(spec, repoUrl, commit, tag);
 
-      vix::cli::util::ok_line(std::cout, "added: " + spec.ns + "/" + spec.name + " (pinned " + commit + ")");
+      vix::cli::util::ok_line(std::cout, "added: " + pkgId + " (pinned " + commit + ")");
       vix::cli::util::ok_line(std::cout, "lock:  " + lock_path().string());
-      vix::cli::util::ok_line(std::cout, "store: " + (store_git_dir() / id / commit).string());
+      vix::cli::util::ok_line(std::cout, "store: " + outDir);
 
       return 0;
     }

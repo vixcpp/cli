@@ -25,7 +25,6 @@
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
-
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/SearchCommand.hpp>
@@ -33,6 +32,7 @@
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
+#include <vix/cli/commands/DepsCommand.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -345,6 +345,8 @@ namespace vix
         return commands::StoreCommand::help();
       if (cmd == "publish")
         return commands::PublishCommand::help();
+      if (cmd == "deps")
+        return commands::DepsCommand::help();
     }
 
 #ifndef VIX_CLI_VERSION
@@ -381,14 +383,16 @@ namespace vix
     out << indent(3) << "check [path]             Validate a project or compile a single .cpp (no execution)\n";
     out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n";
     out << indent(3) << "repl                      Start interactive Vix REPL\n\n";
+
     out << indent(2) << "Registry:\n";
     out << indent(3) << "registry <subcommand>     Sync/search registry index (git-based)\n";
-    out << indent(3) << "add <pkg>@<version>       Add a dependency from registry (pins commit)\n\n";
+    out << indent(3) << "add <pkg>@<version>       Add a dependency from registry (pins commit)\n";
     out << indent(3) << "search <query>            Search packages in local registry index (offline)\n";
     out << indent(3) << "remove <pkg>             Remove a dependency from vix.lock\n";
     out << indent(3) << "list                     List project dependencies from vix.lock\n";
     out << indent(3) << "store <subcommand>       Manage local store cache (gc/path)\n";
     out << indent(3) << "publish <version>         Publish current repo to registry (JSON + PR)\n";
+    out << indent(3) << "deps                     Install deps from vix.lock (generate .vix/vix_deps.cmake)\n\n";
 
     out << indent(2) << "Packaging & security:\n";
     out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";

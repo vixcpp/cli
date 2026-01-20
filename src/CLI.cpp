@@ -32,6 +32,7 @@
 #include <vix/cli/commands/RemoveCommand.hpp>
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
+#include <vix/cli/commands/PublishCommand.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -342,6 +343,8 @@ namespace vix
         return commands::ListCommand::help();
       if (cmd == "store")
         return commands::StoreCommand::help();
+      if (cmd == "publish")
+        return commands::PublishCommand::help();
     }
 
 #ifndef VIX_CLI_VERSION
@@ -385,6 +388,7 @@ namespace vix
     out << indent(3) << "remove <pkg>             Remove a dependency from vix.lock\n";
     out << indent(3) << "list                     List project dependencies from vix.lock\n";
     out << indent(3) << "store <subcommand>       Manage local store cache (gc/path)\n";
+    out << indent(3) << "publish <version>         Publish current repo to registry (JSON + PR)\n";
 
     out << indent(2) << "Packaging & security:\n";
     out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";

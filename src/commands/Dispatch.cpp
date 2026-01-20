@@ -29,6 +29,7 @@
 #include <vix/cli/commands/RemoveCommand.hpp>
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
+#include <vix/cli/commands/PublishCommand.hpp>
 
 #include <stdexcept>
 
@@ -186,6 +187,14 @@ namespace vix::cli::dispatch
          { return vix::commands::StoreCommand::run(a); },
          []()
          { return vix::commands::StoreCommand::help(); }});
+
+    add({"publish",
+         "Registry",
+         "Publish a package version to the registry (JSON + PR)",
+         [](const Args &a)
+         { return vix::commands::PublishCommand::run(a); },
+         []()
+         { return vix::commands::PublishCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const

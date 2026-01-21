@@ -238,7 +238,7 @@ namespace vix::commands::RunCommand::detail
 
     if (runCode != 0)
     {
-      const std::string runtimeLog = rr.stdoutText + "\n" + rr.stderrText;
+      const std::string runtimeLog = rr.stdoutText;
 
       vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
           runtimeLog, script, "Script execution failed");

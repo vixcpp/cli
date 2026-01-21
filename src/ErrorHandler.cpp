@@ -18,12 +18,14 @@
 #include "vix/cli/errors/ErrorContext.hpp"
 #include "vix/cli/errors/ErrorPipeline.hpp"
 #include "vix/cli/errors/RawLogDetectors.hpp"
+#include "vix/cli/errors/CodeFrame.hpp"
 
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 #include <algorithm>
+#include <cstring>
 
 #include <vix/cli/Style.hpp>
 
@@ -39,9 +41,20 @@ namespace
     error(oss.str());
   }
 
+  static bool hints_verbose_enabled() noexcept
+  {
+    const char *lvl = std::getenv("VIX_LOG_LEVEL");
+    if (!lvl || !*lvl)
+      return false;
+
+    return std::strcmp(lvl, "debug") == 0 ||
+           std::strcmp(lvl, "trace") == 0;
+  }
+
   static void printHints(const vix::cli::errors::CompilerError &err)
   {
     const std::string &msg = err.message;
+    const bool verbose = hints_verbose_enabled();
 
     auto printHintHeader = []()
     {
@@ -52,29 +65,63 @@ namespace
     if (msg.find("use of undeclared identifier 'std'") != std::string::npos)
     {
       printHintHeader();
-      std::cerr << "It looks like the C++ standard library namespace `std` is not visible here.\n"
+      std::cerr << "The C++ standard library namespace `std` is not visible here.\n"
                 << GRAY
-                << "  • Did you forget to include <iostream> ?\n"
-                << "  • Or to use 'std::cout' / 'std::endl' correctly ?\n"
+                << "Fix:\n"
+                << "  #include <iostream>\n"
                 << RESET;
+      return;
     }
-    else if (msg.find("expected ';'") != std::string::npos)
+
+    if (msg.find("expected ';'") != std::string::npos)
     {
       printHintHeader();
-      std::cerr << "The compiler expected a ';' at this location.\n"
+      std::cerr << "A ';' is missing at this location.\n"
                 << GRAY
-                << "  • Check the previous line for a missing semicolon.\n"
+                << "Check the previous line.\n"
                 << RESET;
+      return;
     }
-    else if (msg.find("no matching function for call to") != std::string::npos)
+
+    if (msg.find("no matching function for call to") != std::string::npos)
     {
+      const bool isVixJson =
+          (msg.find("vix::vhttp::ResponseWrapper::json") != std::string::npos) ||
+          (msg.find("ResponseWrapper::json") != std::string::npos);
+
+      if (isVixJson)
+      {
+        printHintHeader();
+        std::cerr
+            << "Response::json() expects ONE JSON object. You passed (key, value).\n"
+            << GRAY
+            << "Did you mean:\n"
+            << "  res.json({\"message\", \"Hello, world\"});\n"
+            << RESET;
+
+        if (verbose)
+        {
+          std::cerr
+              << GRAY
+              << "\nOther valid forms:\n"
+              << "  res.json({ vix::json::kv(\"message\", \"Hello, world\") });\n"
+              << "  return vix::json::o(\"message\", \"Hello, world\");\n"
+              << "\nWhy:\n"
+              << "  json() accepts a JSON container/value (Vix tokens/builders), not two separate strings.\n"
+              << RESET;
+        }
+        return;
+      }
+
       printHintHeader();
-      std::cerr << "The function you are calling does not match any known overload.\n"
+      std::cerr << "The function call does not match any known overload.\n"
                 << GRAY
-                << "  • Check parameter types and const/reference qualifiers.\n"
+                << "Check argument types and qualifiers.\n"
                 << RESET;
+      return;
     }
   }
+
 } // namespace
 
 namespace vix::cli
@@ -138,21 +185,40 @@ namespace vix::cli
     // Generic build error header
     error(contextMessage + ":");
 
+    CodeFrameOptions cf;
+    cf.contextLines = 2;
+    cf.maxLineWidth = 120;
+    cf.tabWidth = 4;
+
     std::size_t maxToShow = std::min<std::size_t>(unique.size(), 3);
+
     for (std::size_t i = 0; i < maxToShow; ++i)
     {
       const auto &err = unique[i];
 
       std::cerr << "\n";
+
       ::printSingleError(err);
+
       ::printHints(err);
 
-      std::string key = err.file + "|" + err.message;
+      {
+        ErrorContext frameCtx{
+            err.file,
+            contextMessage,
+            buildLog};
+
+        printCodeFrame(err, frameCtx, cf);
+      }
+
+      const std::string key = err.file + "|" + err.message;
       auto it = counts.find(key);
       if (it != counts.end() && it->second > 1)
       {
-        std::cerr << "\n  (" << (it->second - 1)
-                  << " similar error(s) with the same message hidden)\n";
+        std::cerr << GRAY
+                  << "\n  (" << (it->second - 1)
+                  << " similar error(s) hidden)\n"
+                  << RESET;
       }
     }
 

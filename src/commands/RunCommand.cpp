@@ -407,7 +407,9 @@ namespace vix::commands::RunCommand
         // 2.1) Build only
         {
           std::ostringstream oss;
+
 #ifdef _WIN32
+          // Windows: keep live output (cmd) — OK
           oss << "cmd /C \"cd /D " << quote(projectDir.string())
               << " && set VIX_STDOUT_MODE=line"
               << " && set VIX_MODE=" << mode
@@ -442,6 +444,7 @@ namespace vix::commands::RunCommand
           }
 
 #else
+          // Linux/macOS: SILENT capture to avoid raw ninja spam; then pretty-print errors.
           oss << "cd " << quote(projectDir.string())
               << " && VIX_STDOUT_MODE=line"
               << " VIX_MODE=" << mode
@@ -461,13 +464,10 @@ namespace vix::commands::RunCommand
 
           clear_terminal_if_enabled();
 
-          const LiveRunResult br = run_cmd_live_filtered_capture(
-              buildCmd,
-              /*spinnerLabel=*/"",
-              /*passthroughRuntime=*/false,
-              /*timeoutSec=*/0);
+          int rawCode = 0;
+          std::string log = run_and_capture_with_code(buildCmd + " 2>&1", rawCode);
 
-          const int buildExit = br.exitCode;
+          const int buildExit = normalize_exit_code(rawCode);
 
           if (buildExit == 130)
           {
@@ -477,23 +477,31 @@ namespace vix::commands::RunCommand
 
           if (buildExit != 0)
           {
-            std::string log = br.stderrText;
-            if (!br.stdoutText.empty())
-              log += br.stdoutText;
+            if (!log.empty() &&
+                vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, fs::path{}))
+            {
+              return 1;
+            }
 
             if (!log.empty())
             {
-              if (vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, fs::path{}))
-                return 1;
-
-              std::cout << log << "\n";
+              vix::cli::ErrorHandler::printBuildErrors(
+                  log,
+                  projectDir,
+                  "Build failed (preset '" + buildPreset + "')");
+            }
+            else
+            {
+              error("Build failed (preset '" + buildPreset + "') (exit code " +
+                    std::to_string(buildExit) + ").");
             }
 
-            error("Build failed (preset '" + buildPreset + "') (exit code " +
-                  std::to_string(buildExit) + ").");
-            return buildExit;
-          }
+            hint("Run the same command manually:");
+            step("cd " + projectDir.string());
+            step("cmake --build --preset " + buildPreset);
 
+            return buildExit != 0 ? buildExit : 2;
+          }
 #endif
         }
 

@@ -786,12 +786,20 @@ namespace vix::commands::RunCommand::detail
              (icontains_sv(s, "bind") && icontains_sv(s, "acceptor") && icontains_sv(s, "address already in use"));
     };
 
+    auto kill_group_or_pid = [&](int sig)
+    {
+      if (::kill(-pid, sig) != 0)
+      {
+        ::kill(pid, sig);
+      }
+    };
+
     while (running)
     {
       if (!sentInt && g_sigint_requested)
       {
         userInterrupted = true;
-        ::kill(-pid, SIGINT);
+        kill_group_or_pid(SIGINT);
         sentInt = true;
         intTime = std::chrono::steady_clock::now();
       }
@@ -882,12 +890,6 @@ namespace vix::commands::RunCommand::detail
         {
           spinner_clear(printedSomething, lastPrintedChar);
           spinnerActive = false;
-
-          if (::isatty(STDOUT_FILENO) != 0)
-          {
-            const char cr = '\r';
-            write_all(STDOUT_FILENO, &cr, 1);
-          }
         }
 
         if (outPipe[0] >= 0 && FD_ISSET(outPipe[0], &fds))
@@ -896,7 +898,6 @@ namespace vix::commands::RunCommand::detail
           if (read_into(outPipe[0], chunk))
           {
             result.stdoutText += chunk;
-            result.stderrText += chunk;
 
             if (!suppress_known_failure_output && is_known_runtime_port_in_use(chunk))
               suppress_known_failure_output = true;
@@ -906,9 +907,13 @@ namespace vix::commands::RunCommand::detail
 
             if (!should_drop_chunk_default(chunk))
             {
-              std::string printable = sanitizer.filter_for_print(chunk);
-              if (!printable.empty() && cmakeConfigure)
+              std::string printable = chunk;
+
+              if (cmakeConfigure)
                 printable = cmakeNoise.filter(printable);
+
+              if (!printable.empty())
+                printable = sanitizer.filter_for_print(printable);
 
               if (!printable.empty())
               {

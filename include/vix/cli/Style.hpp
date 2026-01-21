@@ -56,8 +56,12 @@ namespace vix::cli::style
 
   inline void section_title(std::ostream &out, const std::string &label)
   {
-    out << "\n"
-        << PAD << BOLD << CYAN << label << RESET << "\n";
+    out << PAD << BOLD << CYAN << label << RESET << "\n";
+  }
+
+  inline void blank(std::ostream &out = std::cout)
+  {
+    out << "\n";
   }
 
   inline void dim_note(std::ostream &out, const std::string &label)

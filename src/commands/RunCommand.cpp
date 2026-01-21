@@ -30,6 +30,7 @@
 
 #ifndef _WIN32
 #include <unistd.h>
+#include <sys/stat.h>
 #endif
 
 using namespace vix::cli::style;
@@ -66,14 +67,15 @@ namespace
   {
     using Clock = std::chrono::steady_clock;
 
+    bool enabled = false;
     int total;
     int current = 0;
 
     std::string currentLabel;
     Clock::time_point phaseStart{};
 
-    explicit RunProgress(int totalSteps)
-        : total(totalSteps)
+    RunProgress(int totalSteps, bool enableUi)
+        : enabled(enableUi), total(totalSteps)
     {
     }
 
@@ -83,24 +85,28 @@ namespace
       currentLabel = label;
       phaseStart = Clock::now();
 
-      std::cout << std::endl;
+      if (!enabled)
+        return;
 
+      std::cout << std::endl;
       info("┏ [" + std::to_string(current) + "/" +
            std::to_string(total) + "] " + label);
     }
 
     void phase_log(const std::string &msg)
     {
+      if (!enabled)
+        return;
       step("┃   " + msg);
     }
 
     void phase_done(const std::string &label, const std::string &extra = {})
     {
       const auto end = Clock::now();
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - phaseStart).count();
 
-      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                          end - phaseStart)
-                          .count();
+      if (!enabled)
+        return;
 
       std::string msg =
           "┗ [" + std::to_string(current) + "/" +
@@ -126,6 +132,108 @@ namespace
 #endif
   }
 
+  static bool is_executable_file(const std::filesystem::path &p)
+  {
+    std::error_code ec{};
+    if (!std::filesystem::is_regular_file(p, ec) || ec)
+      return false;
+
+#ifdef _WIN32
+    return p.extension() == ".exe";
+#else
+    auto perms = std::filesystem::status(p, ec).permissions();
+    if (ec)
+      return false;
+
+    using pr = std::filesystem::perms;
+    return (perms & pr::owner_exec) != pr::none ||
+           (perms & pr::group_exec) != pr::none ||
+           (perms & pr::others_exec) != pr::none;
+#endif
+  }
+
+  static bool looks_like_test_binary(const std::filesystem::path &p)
+  {
+    const std::string n = p.filename().string();
+    return n.find("_test") != std::string::npos ||
+           n.find("_tests") != std::string::npos ||
+           n.rfind("test_", 0) == 0;
+  }
+
+  static std::optional<std::filesystem::path> find_single_test_binary(const std::filesystem::path &buildDir)
+  {
+    std::error_code ec{};
+    if (!std::filesystem::exists(buildDir, ec) || ec)
+      return std::nullopt;
+
+    std::vector<std::filesystem::path> candidates;
+
+    for (auto it = std::filesystem::directory_iterator(buildDir, ec);
+         !ec && it != std::filesystem::directory_iterator(); ++it)
+    {
+      const auto &p = it->path();
+      if (!is_executable_file(p))
+        continue;
+      if (!looks_like_test_binary(p))
+        continue;
+      candidates.push_back(p);
+    }
+
+    if (candidates.size() == 1)
+      return candidates.front();
+
+    return std::nullopt;
+  }
+
+  static std::optional<std::string> try_choose_run_preset(
+      const fs::path &projectDir,
+      const std::string &configurePreset,
+      const std::string &userRunPreset)
+  {
+    if (!userRunPreset.empty())
+      return userRunPreset;
+
+    try
+    {
+      const std::string p = vix::commands::RunCommand::detail::choose_run_preset(
+          projectDir, configurePreset, userRunPreset);
+      if (!p.empty())
+        return p;
+    }
+    catch (...)
+    {
+    }
+
+    return std::nullopt;
+  }
+
+  static std::string default_build_preset_for_configure(const std::string &configurePreset)
+  {
+    if (configurePreset == "release")
+      return "build-release";
+    if (configurePreset == "dev-ninja-san")
+      return "build-ninja-san";
+    if (configurePreset == "dev-ninja-ubsan")
+      return "build-ninja-ubsan";
+    if (configurePreset == "dev-msvc")
+      return "build-msvc";
+    return "build-ninja";
+  }
+
+  static bool ui_enabled()
+  {
+    const char *v = std::getenv("VIX_RUN_UI");
+    if (!v || !*v)
+      return false;
+    if (std::strcmp(v, "0") == 0)
+      return false;
+    if (std::strcmp(v, "false") == 0)
+      return false;
+    if (std::strcmp(v, "no") == 0)
+      return false;
+    return true;
+  }
+
 } // namespace
 
 namespace vix::commands::RunCommand
@@ -148,6 +256,7 @@ namespace vix::commands::RunCommand
   int run(const std::vector<std::string> &args)
   {
     Options opt = parse(args);
+    const bool showUi = ui_enabled();
 
     if (opt.manifestMode)
     {
@@ -205,8 +314,11 @@ namespace vix::commands::RunCommand
 
     const fs::path projectDir = *projectDirOpt;
 
-    info("Using project directory:");
-    step(projectDir.string());
+    if (showUi)
+    {
+      info("Using project directory:");
+      step(projectDir.string());
+    }
 
     if (!opt.singleCpp && opt.watch)
     {
@@ -222,13 +334,18 @@ namespace vix::commands::RunCommand
       const std::string configurePreset =
           choose_configure_preset_smart(projectDir, opt.preset);
 
-      const std::string runPreset =
-          choose_run_preset(projectDir, configurePreset, opt.runPreset);
+      const std::string buildPreset =
+          default_build_preset_for_configure(configurePreset);
 
-      const fs::path buildDir = resolve_build_dir_smart(projectDir, configurePreset);
+      const auto runPresetOpt =
+          try_choose_run_preset(projectDir, configurePreset, opt.runPreset);
+
+      const fs::path buildDir =
+          resolve_build_dir_smart(projectDir, configurePreset);
+
       const bool alreadyConfigured = has_cmake_cache(buildDir);
 
-      RunProgress progress(/*totalSteps=*/2);
+      RunProgress progress(/*totalSteps=*/3, showUi);
 
       // 1) Configure (only if needed)
       {
@@ -252,12 +369,23 @@ namespace vix::commands::RunCommand
 #endif
           const std::string cmd = oss.str();
 
-          const int code = run_cmd_live_filtered(
+          const LiveRunResult cr = run_cmd_live_filtered_capture(
               cmd,
-              "Configuring project (preset \"" + configurePreset + "\")");
+              /*spinnerLabel=*/"",
+              /*passthroughRuntime=*/false,
+              /*timeoutSec=*/0);
+
+          const int code = cr.exitCode;
 
           if (code != 0)
           {
+            std::string log = cr.stderrText;
+            if (!cr.stdoutText.empty())
+              log += cr.stdoutText;
+
+            if (!log.empty())
+              std::cout << log << "\n";
+
             error("CMake configure failed with preset '" + configurePreset + "'.");
             hint("Run the same command manually to inspect the error:");
             step("cd " + projectDir.string());
@@ -271,7 +399,7 @@ namespace vix::commands::RunCommand
 
       // 2) Build & run preset
       {
-        progress.phase_start("Build & run (preset: " + runPreset + ")");
+        progress.phase_start("Build project (preset: " + buildPreset + ")");
 
         const std::string mode = opt.watch ? "dev" : "run";
         bool started = false;
@@ -283,7 +411,7 @@ namespace vix::commands::RunCommand
           oss << "cmd /C \"cd /D " << quote(projectDir.string())
               << " && set VIX_STDOUT_MODE=line"
               << " && set VIX_MODE=" << mode
-              << " && cmake --build --preset " << quote(runPreset);
+              << " && cmake --build --preset " << quote(buildPreset);
 
           if (opt.jobs > 0)
             oss << " -- -j " << opt.jobs;
@@ -293,7 +421,7 @@ namespace vix::commands::RunCommand
           const std::string buildCmd = oss.str();
           const int buildCode = run_cmd_live_filtered(
               buildCmd,
-              "Building (preset \"" + runPreset + "\")");
+              "Building (preset \"" + buildPreset + "\")");
 
           const int buildExit = normalize_exit_code(buildCode);
 
@@ -305,11 +433,11 @@ namespace vix::commands::RunCommand
 
           if (buildExit != 0)
           {
-            error("Build failed (preset '" + runPreset + "') (exit code " +
+            error("Build failed (preset '" + buildPreset + "') (exit code " +
                   std::to_string(buildExit) + ").");
             hint("Run the same command manually:");
             step("cd " + projectDir.string());
-            step("cmake --build --preset " + runPreset);
+            step("cmake --build --preset " + buildPreset);
             return buildExit;
           }
 
@@ -317,10 +445,17 @@ namespace vix::commands::RunCommand
           oss << "cd " << quote(projectDir.string())
               << " && VIX_STDOUT_MODE=line"
               << " VIX_MODE=" << mode
-              << " cmake --build --preset " << quote(runPreset);
+              << " cmake --build --preset " << quote(buildPreset);
 
+          oss << " --";
           if (opt.jobs > 0)
-            oss << " -- -j " << opt.jobs;
+            oss << " -j " << opt.jobs;
+
+          if (configurePreset.find("ninja") != std::string::npos ||
+              buildPreset.find("ninja") != std::string::npos)
+          {
+            oss << " --quiet";
+          }
 
           const std::string buildCmd = oss.str();
 
@@ -328,11 +463,11 @@ namespace vix::commands::RunCommand
 
           const LiveRunResult br = run_cmd_live_filtered_capture(
               buildCmd,
-              "Building (preset \"" + runPreset + "\")",
-              /*passthroughRuntime=*/true,
+              /*spinnerLabel=*/"",
+              /*passthroughRuntime=*/false,
               /*timeoutSec=*/0);
 
-          const int buildExit = normalize_exit_code(br.exitCode);
+          const int buildExit = br.exitCode;
 
           if (buildExit == 130)
           {
@@ -349,23 +484,24 @@ namespace vix::commands::RunCommand
             if (!log.empty())
             {
               if (vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, fs::path{}))
-              {
                 return 1;
-              }
+
+              std::cout << log << "\n";
             }
 
-            error("Build failed (preset '" + runPreset + "') (exit code " +
+            error("Build failed (preset '" + buildPreset + "') (exit code " +
                   std::to_string(buildExit) + ").");
-            hint("Run the same command manually:");
-            step("cd " + projectDir.string());
-            step("cmake --build --preset " + runPreset);
             return buildExit;
           }
+
 #endif
         }
 
         // 2.2) Run executable directly
         {
+          progress.phase_done("Build project", "completed");
+          progress.phase_start("Run application");
+
           const std::string exeName = projectDir.filename().string();
           fs::path exePath = buildDir / exeName;
 #ifdef _WIN32
@@ -374,7 +510,69 @@ namespace vix::commands::RunCommand
 
           if (!fs::exists(exePath))
           {
+            if (auto testExe = find_single_test_binary(buildDir))
+            {
+              if (showUi)
+              {
+                info("No main executable found. Detected library project; running test binary:");
+                step(testExe->string());
+              }
+
+#ifdef _WIN32
+              clear_terminal_if_enabled();
+
+              const std::string cmd = "\"" + testExe->string() + "\"";
+              int raw = std::system(cmd.c_str());
+              int testExit = normalize_exit_code(raw);
+
+              if (testExit == 130)
+              {
+                hint("Stopped (SIGINT).");
+                return 0;
+              }
+
+              if (testExit != 0)
+              {
+                error("Test execution failed (exit code " + std::to_string(testExit) + ").");
+                return testExit;
+              }
+#else
+              const LiveRunResult tr = run_cmd_live_filtered_capture(
+                  quote(testExe->string()),
+                  /*spinnerLabel=*/"",
+                  /*passthroughRuntime=*/true,
+                  /*timeoutSec=*/opt.timeoutSec);
+
+              const int testExit = tr.exitCode;
+              if (testExit == 130)
+              {
+                hint("Stopped (SIGINT).");
+                return 0;
+              }
+
+              if (testExit != 0)
+              {
+                std::string log = tr.stderrText;
+                if (!tr.stdoutText.empty())
+                  log += tr.stdoutText;
+
+                if (!log.empty())
+                  std::cout << log << "\n";
+
+                error("Test execution failed (exit code " + std::to_string(testExit) + ").");
+                return testExit;
+              }
+#endif
+
+              progress.phase_done("Build project", "test executed");
+              if (showUi)
+                success("🏃 Test executed (library project).");
+
+              return 0;
+            }
+
             error("Built executable not found: " + exePath.string());
+            hint("This looks like a library project. Use: vix tests");
             hint("Resolved build directory: " + buildDir.string());
             hint("If your binary name differs from the folder name, adjust it or add a manifest field to specify target.");
             return 1;
@@ -409,7 +607,7 @@ namespace vix::commands::RunCommand
               /*passthroughRuntime=*/true,
               /*timeoutSec=*/opt.timeoutSec);
 
-          int runExit = normalize_exit_code(rr.exitCode);
+          int runExit = rr.exitCode;
 
           if (runExit == 130)
           {
@@ -443,24 +641,23 @@ namespace vix::commands::RunCommand
 
         if (started)
         {
-          progress.phase_done("Build & run", "application started");
-          success("🏃 Application started (preset: " + runPreset + ").");
+          progress.phase_done("Build project", "application started");
+          if (showUi)
+            success("🏃 Application started (preset: " + buildPreset + ").");
         }
         else
         {
-          progress.phase_done("Build & run", "stopped");
+          progress.phase_done("Build project", "stopped");
         }
 
         return 0;
       }
-
-      success("🏃 Application started (preset: " + runPreset + ").");
       return 0;
     }
 
     fs::path buildDir = projectDir / "build";
 
-    RunProgress progress(/*totalSteps=*/3);
+    RunProgress progress(/*totalSteps=*/3, showUi);
 
     {
       std::error_code ec;
@@ -484,15 +681,35 @@ namespace vix::commands::RunCommand
           << " && cmake --log-level=WARNING ..";
 #endif
       const std::string cmd = oss.str();
-      const int code = run_cmd_live_filtered(
+
+      const LiveRunResult cr = run_cmd_live_filtered_capture(
           cmd,
-          "Configuring project (fallback)");
+          /*spinnerLabel=*/"",
+          /*passthroughRuntime=*/false,
+          /*timeoutSec=*/0);
+
+      const int code = cr.exitCode;
 
       if (code != 0)
       {
+        std::string log = cr.stderrText;
+        if (!cr.stdoutText.empty())
+          log += cr.stdoutText;
+
+        if (!log.empty())
+          std::cout << log << "\n";
+
         error("CMake configure failed (fallback build/, code " + std::to_string(code) + ").");
-        hint("Check your CMakeLists.txt or run the command manually.");
+        if (showUi)
+          hint("Check your CMakeLists.txt or run the command manually.");
+
         return code != 0 ? code : 4;
+      }
+
+      if (showUi)
+      {
+        progress.phase_done("Configure project", "completed (fallback)");
+        std::cout << "\n";
       }
 
       progress.phase_done("Configure project", "completed (fallback)");
@@ -500,9 +717,12 @@ namespace vix::commands::RunCommand
     }
     else
     {
-      info("CMake cache detected in build/ — skipping configure step (fallback).");
-      progress.phase_start("Configure project (fallback)");
-      progress.phase_done("Configure project", "cache already present");
+      if (showUi)
+      {
+        info("CMake cache detected in build/ — skipping configure step (fallback).");
+        progress.phase_start("Configure project (fallback)");
+        progress.phase_done("Configure project", "cache already present");
+      }
     }
 
     {
@@ -677,7 +897,7 @@ namespace vix::commands::RunCommand
   {
     std::ostream &out = std::cout;
 
-    out << "Usageddd:\n";
+    out << "Usage:\n";
     out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags]\n\n";
 
     out << "Description:\n";

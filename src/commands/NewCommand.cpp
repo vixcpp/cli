@@ -38,8 +38,8 @@ int main()
     App app;
 
     // GET /
-    app.get("/", [](Request& req, Response& res) {
-        res.json({"message", "Hello world"});
+    app.get("/", [](Request&, Response& res) {
+        res.send("Hello world");
     });
 
     app.run(8080);
@@ -363,7 +363,7 @@ int main()
     return s;
   }
 
-  std::string make_cmake_presets_json()
+  std::string make_cmake_presets_json_app()
   {
     return R"JSON({
   "version": 6,
@@ -510,6 +510,90 @@ int main()
 )JSON";
   }
 
+  static std::string make_cmake_presets_json_lib()
+  {
+    return R"JSON({
+  "version": 6,
+
+  "configurePresets": [
+    {
+      "name": "dev-ninja",
+      "displayName": "Dev (Ninja, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "build-ninja",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "dev-ninja-san",
+      "displayName": "Dev (Ninja, ASan+UBSan, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "build-ninja-san",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VIX_ENABLE_SANITIZERS": "ON",
+        "VIX_SANITIZER_MODE": "asan_ubsan"
+      }
+    },
+    {
+      "name": "dev-ninja-ubsan",
+      "displayName": "Dev (Ninja, UBSan, Debug)",
+      "generator": "Ninja",
+      "binaryDir": "build-ninja-ubsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "VIX_ENABLE_SANITIZERS": "ON",
+        "VIX_SANITIZER_MODE": "ubsan"
+      }
+    },
+
+    {
+      "name": "release",
+      "displayName": "Release (Ninja, Release)",
+      "generator": "Ninja",
+      "binaryDir": "build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+
+    {
+      "name": "dev-msvc",
+      "displayName": "Dev (MSVC, Release)",
+      "generator": "Visual Studio 17 2022",
+      "architecture": { "value": "x64" },
+      "binaryDir": "build-msvc",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Release"
+      }
+    }
+  ],
+
+  "buildPresets": [
+    { "name": "build-ninja", "displayName": "Build (ALL, Ninja Debug)", "configurePreset": "dev-ninja" },
+    { "name": "build-ninja-san", "displayName": "Build (ALL, Ninja Debug, ASan+UBSan)", "configurePreset": "dev-ninja-san" },
+    { "name": "build-ninja-ubsan", "displayName": "Build (ALL, Ninja Debug, UBSan)", "configurePreset": "dev-ninja-ubsan" },
+
+    { "name": "build-release", "displayName": "Build (ALL, Ninja Release)", "configurePreset": "release" },
+
+    { "name": "build-msvc", "displayName": "Build (ALL, MSVC)", "configurePreset": "dev-msvc", "configuration": "Release" },
+
+    { "name": "dev-ninja", "displayName": "Alias: dev-ninja → build-ninja", "configurePreset": "dev-ninja" },
+    { "name": "dev-ninja-san", "displayName": "Alias: dev-ninja-san → build-ninja-san", "configurePreset": "dev-ninja-san" },
+    { "name": "dev-ninja-ubsan", "displayName": "Alias: dev-ninja-ubsan → build-ninja-ubsan", "configurePreset": "dev-ninja-ubsan" },
+    { "name": "release", "displayName": "Alias: release → build-release", "configurePreset": "release" },
+
+    { "name": "dev-msvc", "displayName": "Alias: dev-msvc → build (MSVC)", "configurePreset": "dev-msvc", "configuration": "Release" }
+  ]
+}
+)JSON";
+  }
+
   static std::string make_project_manifest_app(const std::string &name)
   {
     return "version = 1\n\n"
@@ -548,7 +632,6 @@ int main()
                   "entry = \"tests/test_basic.cpp\"\n\n"
                   "[build]\n"
                   "preset = \"dev-ninja\"\n"
-                  "run_preset = \"run-dev-ninja\"\n"
                   "jobs = 8\n\n"
                   "[dev]\n"
                   "watch = true\n"
@@ -682,7 +765,11 @@ namespace vix::commands::NewCommand
 
         write_text_file(cmakeLists, make_cmakelists_app(projName));
         write_text_file(readmeFile, make_readme_app(projName));
-        write_text_file(presetsFile, make_cmake_presets_json());
+        if (!isLib)
+          write_text_file(presetsFile, make_cmake_presets_json_app());
+        else
+          write_text_file(presetsFile, make_cmake_presets_json_lib());
+
         write_text_file(manifestPath, make_project_manifest_app(projName));
 
         success("Project '" + projName + "' created.");
@@ -712,7 +799,11 @@ namespace vix::commands::NewCommand
 
       write_text_file(cmakeLists, make_cmakelists_lib(projName));
       write_text_file(readmeFile, make_readme_lib(projName));
-      write_text_file(presetsFile, make_cmake_presets_json());
+      if (!isLib)
+        write_text_file(presetsFile, make_cmake_presets_json_app());
+      else
+        write_text_file(presetsFile, make_cmake_presets_json_lib());
+
       write_text_file(vixJson, make_vix_json_lib(projName));
       write_text_file(manifestPath, make_project_manifest_lib(projName));
 

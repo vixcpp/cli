@@ -375,12 +375,6 @@ namespace vix::commands::RunCommand::detail
 
         if (line.rfind("-- ", 0) == 0)
         {
-          if (line.find("Configuring done") != std::string_view::npos ||
-              line.find("Generating done") != std::string_view::npos ||
-              line.find("Build files have been written to:") != std::string_view::npos)
-          {
-            out.append(line.data(), line.size());
-          }
           continue;
         }
 
@@ -414,6 +408,10 @@ namespace vix::commands::RunCommand::detail
   {
     static const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
     if (chunk.find(ninjaStop) != std::string::npos)
+      return true;
+
+    static const std::string ninjaNoWork = "ninja: no work to do.";
+    if (chunk.find(ninjaNoWork) != std::string::npos)
       return true;
 
     if (!chunk.empty() && chunk[0] == '[')

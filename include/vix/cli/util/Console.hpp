@@ -41,7 +41,7 @@ namespace vix::cli::util
     style::hint(msg);
   }
 
-  static void status_line(
+  inline void status_line(
       bool quiet, const std::string &tag,
       const std::string &msg)
   {

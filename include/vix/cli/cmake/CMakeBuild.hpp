@@ -55,7 +55,8 @@ namespace vix::cli::build
       const std::vector<std::pair<std::string, std::string>> &extraEnv,
       const fs::path &logPath,
       bool quiet,
-      bool cmakeVerbose);
+      bool cmakeVerbose,
+      bool progressOnly);
 
   bool ninja_is_up_to_date(const process::Options &opt, const process::Plan &plan);
 

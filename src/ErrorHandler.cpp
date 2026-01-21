@@ -51,6 +51,64 @@ namespace
            std::strcmp(lvl, "trace") == 0;
   }
 
+  static std::size_t line_start(std::string_view s, std::size_t pos)
+  {
+    if (pos == std::string_view::npos)
+      return std::string_view::npos;
+    while (pos > 0 && s[pos - 1] != '\n')
+      --pos;
+    return pos;
+  }
+
+  static std::size_t find_first_error_anchor(std::string_view log)
+  {
+    static constexpr std::string_view anchors[] = {
+        "FAILED:",               // ninja
+        "ninja: build stopped:", // ninja
+        "error:",                // gcc/clang
+        "fatal error:",          // gcc/clang
+        "CMake Error",           // cmake configure
+        "make: ***"              // make
+    };
+
+    std::size_t best = std::string_view::npos;
+
+    for (auto a : anchors)
+    {
+      std::size_t p = log.find(a);
+      if (p == std::string_view::npos)
+        continue;
+
+      std::size_t ls = line_start(log, p);
+      if (ls == std::string_view::npos)
+        ls = 0;
+
+      if (best == std::string_view::npos || ls < best)
+        best = ls;
+    }
+
+    if (best == std::string_view::npos)
+    {
+      std::size_t p = log.find(": error:");
+      if (p != std::string_view::npos)
+      {
+        std::size_t ls = line_start(log, p);
+        best = (ls == std::string_view::npos) ? 0 : ls;
+      }
+    }
+
+    return best;
+  }
+
+  static std::string trim_build_preamble(const std::string &log)
+  {
+    std::string_view v(log);
+    const std::size_t start = find_first_error_anchor(v);
+    if (start == std::string_view::npos)
+      return log;
+    return std::string(v.substr(start));
+  }
+
   static void printHints(const vix::cli::errors::CompilerError &err)
   {
     const std::string &msg = err.message;
@@ -133,21 +191,20 @@ namespace vix::cli
   {
     using namespace vix::cli::errors;
 
-    auto errors = ClangGccParser::parse(buildLog);
+    const std::string cleanedLog = ::trim_build_preamble(buildLog);
+    auto errors = ClangGccParser::parse(cleanedLog);
 
     if (errors.empty())
     {
-      if (RawLogDetectors::handleLinkerOrSanitizer(buildLog, sourceFile, contextMessage))
-      {
+      if (RawLogDetectors::handleLinkerOrSanitizer(cleanedLog, sourceFile, contextMessage))
         return;
-      }
 
       error(contextMessage + " (see compiler output below):");
-      std::cerr << buildLog << "\n";
+      std::cerr << cleanedLog << "\n";
       return;
     }
 
-    ErrorContext ctx{sourceFile, contextMessage, buildLog};
+    ErrorContext ctx{sourceFile, contextMessage, cleanedLog};
     ErrorPipeline pipeline;
 
     if (pipeline.tryHandle(errors, ctx))
@@ -206,7 +263,7 @@ namespace vix::cli
         ErrorContext frameCtx{
             err.file,
             contextMessage,
-            buildLog};
+            cleanedLog};
 
         printCodeFrame(err, frameCtx, cf);
       }

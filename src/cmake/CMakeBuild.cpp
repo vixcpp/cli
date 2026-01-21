@@ -206,7 +206,8 @@ namespace vix::cli::build
       const std::vector<std::pair<std::string, std::string>> &extraEnv,
       const fs::path &logPath,
       bool quiet,
-      bool cmakeVerbose)
+      bool cmakeVerbose,
+      bool progressOnly)
   {
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
@@ -256,69 +257,100 @@ namespace vix::cli::build
     std::string firstLine;
     bool gotFirstLine = false;
 
-    std::string consoleLineBuf;
-    consoleLineBuf.reserve(4096);
+    std::string consoleBuf;
+    consoleBuf.reserve(8192);
+
+    auto is_progress_line = [](const std::string &line) -> bool
+    {
+      if (line.empty())
+        return false;
+      if (line[0] != '[')
+        return false;
+      const auto rb = line.find(']');
+      if (rb == std::string::npos)
+        return false;
+      const auto slash = line.find('/', 1);
+      const auto pct = line.find('%', 1);
+      return (slash != std::string::npos && pct != std::string::npos && pct < rb);
+    };
+
+    auto should_echo_line = [&](const std::string &line) -> bool
+    {
+      if (quiet)
+        return false;
+
+      if (filterCMakeSummary)
+      {
+        return !is_cmake_configure_summary_line(line);
+      }
+
+      if (!progressOnly)
+        return true;
+
+      if (is_progress_line(line))
+        return true;
+
+      if (line.rfind("FAILED:", 0) == 0)
+        return true;
+
+      if (line.rfind("ninja:", 0) == 0)
+        return true;
+
+      return false;
+    };
 
     std::string buf(16 * 1024, '\0');
+
     while (true)
     {
       ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
-      if (n > 0)
-      {
-        r.producedOutput = true;
-        (void)::write(logfd, buf.data(), static_cast<std::size_t>(n));
-
-        if (!quiet)
-        {
-          if (!filterCMakeSummary)
-          {
-            (void)::write(STDOUT_FILENO, buf.data(), static_cast<std::size_t>(n));
-          }
-          else
-          {
-            consoleLineBuf.append(buf.data(), static_cast<std::size_t>(n));
-
-            std::size_t start = 0;
-            while (true)
-            {
-              std::size_t nl = consoleLineBuf.find('\n', start);
-              if (nl == std::string::npos)
-                break;
-
-              std::string line = consoleLineBuf.substr(start, nl - start);
-              if (!is_cmake_configure_summary_line(line))
-              {
-                line.push_back('\n');
-                (void)::write(STDOUT_FILENO, line.data(), line.size());
-              }
-
-              start = nl + 1;
-            }
-
-            if (start > 0)
-              consoleLineBuf.erase(0, start);
-          }
-        }
-
-        if (!gotFirstLine)
-        {
-          for (ssize_t i = 0; i < n; ++i)
-          {
-            char c = buf[static_cast<std::size_t>(i)];
-            if (c == '\n')
-            {
-              gotFirstLine = true;
-              break;
-            }
-            if (firstLine.size() < 200)
-              firstLine.push_back(c);
-          }
-        }
-      }
-      else
-      {
+      if (n <= 0)
         break;
+
+      r.producedOutput = true;
+
+      (void)::write(logfd, buf.data(), static_cast<std::size_t>(n));
+
+      if (!gotFirstLine)
+      {
+        for (ssize_t i = 0; i < n; ++i)
+        {
+          char c = buf[static_cast<std::size_t>(i)];
+          if (c == '\n')
+          {
+            gotFirstLine = true;
+            break;
+          }
+          if (firstLine.size() < 200)
+            firstLine.push_back(c);
+        }
       }
+
+      if (quiet)
+        continue;
+
+      consoleBuf.append(buf.data(), static_cast<std::size_t>(n));
+
+      std::size_t start = 0;
+      while (true)
+      {
+        std::size_t nl = consoleBuf.find('\n', start);
+        if (nl == std::string::npos)
+          break;
+
+        std::string line = consoleBuf.substr(start, nl - start);
+
+        if (should_echo_line(line))
+        {
+          line.push_back('\n');
+          (void)::write(STDOUT_FILENO, line.data(), line.size());
+        }
+
+        start = nl + 1;
+      }
+
+      if (start > 0)
+        consoleBuf.erase(0, start);
     }
 
     ::close(pipefd[0]);
@@ -346,7 +378,6 @@ namespace vix::cli::build
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
 
-    // Apply env globally (simple, acceptable for CLI process)
     for (const auto &kv : extraEnv)
     {
       std::string e = kv.first + "=" + kv.second;

@@ -111,9 +111,10 @@ namespace vix::cli::util
     return std::nullopt;
   }
 
-  void collect_files_recursive(const fs::path &root,
-                               const std::string &ext,
-                               std::vector<fs::path> &out)
+  void collect_files_recursive(
+      const fs::path &root,
+      const std::string &ext,
+      std::vector<fs::path> &out)
   {
     std::error_code ec{};
     if (!dir_exists(root))
@@ -194,10 +195,8 @@ namespace vix::cli::util
 
 #ifdef _WIN32
 
-  // Faster than system("where ..."): uses SearchPathA.
   bool executable_on_path(const std::string &exeName)
   {
-    // SearchPath searches PATH; if no extension is provided, it may append PATHEXT
     char buf[MAX_PATH];
     DWORD n = ::SearchPathA(nullptr, exeName.c_str(), nullptr,
                             static_cast<DWORD>(sizeof(buf)), buf, nullptr);
@@ -224,7 +223,6 @@ namespace vix::cli::util
     if (!pathEnv)
       return false;
 
-    // Avoid std::filesystem status() here; go straight to stat() on candidate paths.
     std::string_view pathStr(pathEnv);
     std::size_t start = 0;
 

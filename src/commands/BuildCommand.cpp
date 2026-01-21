@@ -11,6 +11,7 @@
  *  Vix.cpp
  *
  */
+#include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 
@@ -46,6 +47,38 @@ namespace vix::commands::BuildCommand
 {
   namespace
   {
+
+    struct DeferredConsole
+    {
+      bool enabled{false};
+      std::ostringstream buf;
+
+      explicit DeferredConsole(bool on) : enabled(on) {}
+
+      void print(const std::string &s)
+      {
+        if (enabled)
+          buf << s;
+        else
+          std::cout << s;
+      }
+
+      void flush_to_stdout()
+      {
+        if (!enabled)
+          return;
+        std::cout << buf.str();
+        buf.str("");
+        buf.clear();
+      }
+
+      void discard()
+      {
+        buf.str("");
+        buf.clear();
+      }
+    };
+
     static std::map<std::string, process::Preset> builtin_presets()
     {
       std::map<std::string, process::Preset> m;
@@ -592,12 +625,17 @@ namespace vix::commands::BuildCommand
         auto planOpt = make_plan(opt_, cwd);
         if (!planOpt)
         {
-          error("Unable to determine the project directory (missing "
-                "CMakeLists.txt?)");
+          error("Unable to determine the project directory (missing CMakeLists.txt?)");
           hint("Run from your project root, or pass: vix build --dir <path>");
           return 1;
         }
+
         plan_ = *planOpt;
+
+        const bool defer = (!opt_.quiet && !opt_.cmakeVerbose);
+        DeferredConsole out(defer);
+
+        std::string tc;
 
 #ifndef _WIN32
         if (!util::executable_on_path("ld"))
@@ -614,8 +652,7 @@ namespace vix::commands::BuildCommand
         {
           if (!opt_.quiet)
           {
-            hint("Requested lld but 'ld.lld' is missing -> falling back to default "
-                 "linker.");
+            hint("Requested lld but 'ld.lld' is missing -> falling back to default linker.");
             hint("Install optional speedup: sudo apt install -y lld");
           }
           plan_.fastLinkerFlag.reset();
@@ -626,8 +663,7 @@ namespace vix::commands::BuildCommand
         {
           if (!opt_.quiet)
           {
-            hint("Requested mold but 'mold' is missing -> falling back to default "
-                 "linker.");
+            hint("Requested mold but 'mold' is missing -> falling back to default linker.");
             hint("Install optional speedup: sudo apt install -y mold");
           }
           plan_.fastLinkerFlag.reset();
@@ -637,12 +673,10 @@ namespace vix::commands::BuildCommand
             plan_.preset, opt_, plan_.toolchainFile,
             plan_.launcher, plan_.fastLinkerFlag);
 
-        std::string tc;
         if (!opt_.targetTriple.empty())
           tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
 
         plan_.signature = make_signature(plan_, opt_, tc);
-
 #endif
 
         if (!opt_.targetTriple.empty())
@@ -651,8 +685,7 @@ namespace vix::commands::BuildCommand
           const std::string gxx = opt_.targetTriple + "-g++";
           if (!util::executable_on_path(gcc) || !util::executable_on_path(gxx))
           {
-            error("Cross toolchain not found on PATH for target: " +
-                  opt_.targetTriple);
+            error("Cross toolchain not found on PATH for target: " + opt_.targetTriple);
             hint("Install the cross compiler and ensure binaries exist:");
             hint("  " + gcc);
             hint("  " + gxx);
@@ -671,44 +704,67 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        util::log_header_if(opt_.quiet, "Using project directory:");
-        util::log_bullet_if(opt_.quiet, plan_.projectDir.string());
         if (!opt_.quiet)
-          std::cout << "\n";
+        {
+          out.print("  Using project directory:\n");
+          out.print("    • " + plan_.projectDir.string() + "\n\n");
+        }
 
         if (!opt_.targetTriple.empty())
         {
           tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
           if (!util::write_text_file_atomic(plan_.toolchainFile, tc))
           {
-            error("Failed to write toolchain file: " +
-                  plan_.toolchainFile.string());
+            error("Failed to write toolchain file: " + plan_.toolchainFile.string());
             hint("Check filesystem permissions.");
             return 1;
           }
         }
 
+        // CONFIGURE
         if (need_configure(opt_, plan_))
         {
-          util::status_line(opt_.quiet, "Configuring",
-                            plan_.projectDir.filename().string() + " (" +
-                                plan_.preset.name + ")");
+          if (!opt_.quiet)
+          {
+            out.print("  Configuring " + plan_.projectDir.filename().string() +
+                      " (" + plan_.preset.name + ")\n");
 
-          build::print_preset_summary(opt_, plan_);
+            if (plan_.launcher)
+              out.print("    • compiler cache: " + *plan_.launcher + "\n");
+            if (plan_.fastLinkerFlag)
+              out.print("    • fast linker: " + *plan_.fastLinkerFlag + "\n");
+
+            for (const auto &kv : plan_.cmakeVars)
+              out.print("    • " + kv.first + "=" + kv.second + "\n");
+
+            out.print("\n");
+          }
 
           const auto t0 = std::chrono::steady_clock::now();
           auto argv = build::cmake_configure_argv(plan_, opt_);
 
           const process::ExecResult r = build::run_process_live_to_log(
-              argv, {}, plan_.configureLog, opt_.quiet, opt_.cmakeVerbose);
+              argv, {}, plan_.configureLog,
+              (opt_.quiet || defer),
+              opt_.cmakeVerbose,
+              /*progressOnly=*/false);
+
           if (r.exitCode != 0)
           {
-            error("CMake configure failed.");
-            util::log_hint_if(opt_.quiet, "Command:");
+            out.discard();
+
+            const std::string log = util::read_text_file_or_empty(plan_.configureLog);
+            vix::cli::ErrorHandler::printBuildErrors(
+                log,
+                plan_.projectDir / "CMakeLists.txt",
+                "CMake configure failed");
+
             if (!opt_.quiet)
+            {
+              util::log_hint_if(opt_.quiet, "Command:");
               step(r.displayCommand);
-            if (!opt_.quiet)
-              util::print_log_tail_fast(plan_.configureLog, 160);
+            }
+
             return (r.exitCode == 0) ? 2 : r.exitCode;
           }
 
@@ -725,52 +781,77 @@ namespace vix::commands::BuildCommand
                               std::chrono::steady_clock::now() - t0)
                               .count();
 
-          success("Configured in " + util::format_seconds(ms));
           if (!opt_.quiet)
-            std::cout << "\n";
+            out.print(PAD + std::string(GREEN) + "✔ Configured in " + RESET +
+                      util::format_seconds(ms) + "\n\n");
+          else
+            success("Configured in " + util::format_seconds(ms));
         }
         else
         {
-          util::log_header_if(opt_.quiet,
-                              "Using existing configuration (cache-friendly).");
-          util::log_bullet_if(opt_.quiet, plan_.buildDir.string());
           if (!opt_.quiet)
-            std::cout << "\n";
+          {
+            out.print("  Using existing configuration (cache-friendly).\n");
+            out.print("    • " + plan_.buildDir.string() + "\n\n");
+          }
+          else
+          {
+            util::log_header_if(opt_.quiet, "Using existing configuration (cache-friendly).");
+            util::log_bullet_if(opt_.quiet, plan_.buildDir.string());
+          }
         }
 
+        // FAST NO-OP
         if (opt_.fast && build::ninja_is_up_to_date(opt_, plan_))
         {
           if (!opt_.quiet)
           {
-            std::cout << PAD << GREEN << "Up to date" << RESET << " ("
-                      << plan_.preset.name << ")\n\n";
+            out.print(PAD + std::string(GREEN) + "Up to date" + RESET + " (" +
+                      plan_.preset.name + ")\n\n");
+            out.flush_to_stdout();
           }
           return 0;
         }
 
+        // BUILD
         {
-          util::status_line(opt_.quiet, "Building",
-                            plan_.projectDir.filename().string() + " [" +
-                                plan_.preset.name + "]");
+          if (!opt_.quiet)
+            out.print("  Building " + plan_.projectDir.filename().string() + " [" +
+                      plan_.preset.name + "]\n");
+
+          if (!opt_.quiet && defer)
+            out.flush_to_stdout();
 
           const auto t0 = std::chrono::steady_clock::now();
           auto argv = build::cmake_build_argv(plan_, opt_);
           auto env = build::ninja_env(opt_, plan_);
 
           const process::ExecResult r = build::run_process_live_to_log(
-              argv, env, plan_.buildLog, opt_.quiet, opt_.cmakeVerbose);
+              argv, env, plan_.buildLog,
+              /*quiet=*/opt_.quiet,
+              /*cmakeVerbose=*/opt_.cmakeVerbose,
+              /*progressOnly=*/true);
+
           const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - t0)
                               .count();
 
           if (r.exitCode != 0)
           {
-            error("Build failed.");
-            util::log_hint_if(opt_.quiet, "Command:");
+            out.discard();
+
+            const std::string log = util::read_text_file_or_empty(plan_.buildLog);
+            vix::cli::ErrorHandler::printBuildErrors(
+                log,
+                plan_.projectDir / "CMakeLists.txt",
+                "Build failed");
+
             if (!opt_.quiet)
+            {
+              util::log_hint_if(opt_.quiet, "Command:");
               step(r.displayCommand);
-            if (!opt_.quiet)
-              util::print_log_tail_fast(plan_.buildLog, 200);
+            }
+
             return (r.exitCode == 0) ? 3 : r.exitCode;
           }
 
@@ -779,12 +860,13 @@ namespace vix::commands::BuildCommand
                                           : "dev [unoptimized + debuginfo]";
 
           if (!opt_.quiet)
-          {
-            std::cout << PAD << GREEN << "Finished" << RESET << " " << profile
-                      << " in " << util::format_seconds(ms) << "\n\n";
-          }
+            out.print(PAD + std::string(GREEN) + "Finished" + RESET + " " + profile +
+                      " in " + util::format_seconds(ms) + "\n\n");
+          else
+            success("Finished " + profile + " in " + util::format_seconds(ms));
         }
 
+        out.flush_to_stdout();
         return 0;
       }
 

@@ -33,6 +33,7 @@
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/DepsCommand.hpp>
+#include <vix/cli/commands/ModulesCommand.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -347,6 +348,8 @@ namespace vix
         return commands::PublishCommand::help();
       if (cmd == "deps")
         return commands::DepsCommand::help();
+      if (cmd == "modules")
+        return commands::ModulesCommand::help();
     }
 
 #ifndef VIX_CLI_VERSION
@@ -384,6 +387,9 @@ namespace vix
     out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n";
     out << indent(3) << "repl                      Start interactive Vix REPL\n\n";
 
+    out << indent(2) << "Project structure:\n";
+    out << indent(3) << "modules <subcommand>      Opt-in module system (init/add/check)\n\n";
+
     out << indent(2) << "Registry:\n";
     out << indent(3) << "registry <subcommand>     Sync/search registry index (git-based)\n";
     out << indent(3) << "add <pkg>@<version>       Add a dependency from registry (pins commit)\n";
@@ -396,8 +402,8 @@ namespace vix
 
     out << indent(2) << "Packaging & security:\n";
     out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";
-    out << indent(3) << "verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n\n";
-    out << indent(3) << "install [options]        Install dist/<name>@<version> or a .vixpkg into the local store\n";
+    out << indent(3) << "verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n";
+    out << indent(3) << "install [options]        Install dist/<name>@<version> or a .vixpkg into the local store\n\n";
 
     out << indent(2) << "Database (ORM):\n";
     out << indent(3) << "orm <subcommand>         Migrations/status/rollback\n\n";

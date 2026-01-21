@@ -31,6 +31,7 @@
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/DepsCommand.hpp>
+#include <vix/cli/commands/ModulesCommand.hpp>
 
 #include <stdexcept>
 
@@ -204,6 +205,14 @@ namespace vix::cli::dispatch
          { return vix::commands::DepsCommand::run(a); },
          []()
          { return vix::commands::DepsCommand::help(); }});
+
+    add({"modules",
+         "Project",
+         "Optional project modules (init/add/list/check)",
+         [](const Args &a)
+         { return vix::commands::ModulesCommand::run(a); },
+         []()
+         { return vix::commands::ModulesCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const

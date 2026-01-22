@@ -82,46 +82,83 @@ namespace
 
   static std::string find_migrator_tool()
   {
+    // New preferred env var
+    if (const char *t = std::getenv("VIX_DB_TOOL"))
+      return std::string(t);
+
+    // Backward compat (old name)
     if (const char *t = std::getenv("VIX_ORM_TOOL"))
       return std::string(t);
+
+    const auto try_paths = [](const std::vector<fs::path> &paths) -> std::string
+    {
+      for (const auto &p : paths)
+      {
+        if (!p.empty() && fs::exists(p))
+          return p.string();
+      }
+      return {};
+    };
 
     if (fs::path binDir = get_exe_dir(); !binDir.empty())
     {
       fs::path prefix = binDir.parent_path();
 
+      // Installed layout candidates (vix_db_migrator)
       std::vector<fs::path> installed = {
-          prefix / "libexec" / "vix" / "vix_orm_migrator",
-          prefix / "libexec" / "vix" / "vix_orm_migrate_init",
+          // your current install rule: ${CMAKE_INSTALL_LIBEXECDIR}/vix
+          prefix / "libexec" / "vix" / "vix_db_migrator",
 
+          // some distros / variants
+          prefix / "lib" / "vix" / "libexec" / "vix_db_migrator",
+          prefix / "lib" / "vix" / "vix_db_migrator",
+
+          // same dir as the CLI binary (dev installs)
+          binDir / "vix_db_migrator",
+
+          // Backward compat for older installs
+          prefix / "libexec" / "vix" / "vix_orm_migrator",
           prefix / "lib" / "vix" / "libexec" / "vix_orm_migrator",
           prefix / "lib" / "vix" / "vix_orm_migrator",
-
           binDir / "vix_orm_migrator",
       };
 
-      for (const auto &p : installed)
-        if (!p.empty() && fs::exists(p))
-          return p.string();
+      if (auto found = try_paths(installed); !found.empty())
+        return found;
     }
 
+    // Dev build candidates (umbrella + module builds)
     std::vector<fs::path> dev = {
+        // umbrella builds
+        fs::path("build/db_build/vix_db_migrator"),
+        fs::path("build/db_build/vix_db_migrator.exe"),
+
+        // module-local builds (varies by generator)
+        fs::path("modules/db/build/vix_db_migrator"),
+        fs::path("modules/db/build/vix_db_migrator.exe"),
+        fs::path("modules/db/build-ninja/vix_db_migrator"),
+        fs::path("modules/db/build-ninja/vix_db_migrator.exe"),
+
+        // relative when running from modules/cli
+        fs::path("../build/db_build/vix_db_migrator"),
+        fs::path("../build/db_build/vix_db_migrator.exe"),
+        fs::path("../db/build/vix_db_migrator"),
+        fs::path("../db/build/vix_db_migrator.exe"),
+        fs::path("../db/build-ninja/vix_db_migrator"),
+        fs::path("../db/build-ninja/vix_db_migrator.exe"),
+
+        // Backward compat dev paths (old orm tool)
         fs::path("build/orm_build/vix_orm_migrator"),
         fs::path("modules/orm/build/vix_orm_migrator"),
-
-        fs::path("build/orm_build/migrate_init"),
-        fs::path("modules/orm/build/migrate_init"),
-
         fs::path("../build/orm_build/vix_orm_migrator"),
         fs::path("../orm/build/vix_orm_migrator"),
-        fs::path("../build/orm_build/migrate_init"),
-        fs::path("../orm/build/migrate_init"),
     };
 
-    for (const auto &p : dev)
-      if (fs::exists(p))
-        return p.string();
+    if (auto found = try_paths(dev); !found.empty())
+      return found;
 
-    return "vix_orm_migrator";
+    // Final fallback: prefer new name, but keep old for legacy systems
+    return "vix_db_migrator";
   }
 
   static std::string get_flag(const std::vector<std::string> &args,

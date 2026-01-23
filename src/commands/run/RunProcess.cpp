@@ -550,6 +550,7 @@ namespace vix::commands::RunCommand::detail
     ::setpgid(pid, pid);
 
     const bool useSpinner = !spinnerLabel.empty();
+    const bool captureOnly = (!passthroughRuntime && spinnerLabel.empty());
     bool spinnerActive = useSpinner;
     std::size_t frameIndex = 0;
 
@@ -710,7 +711,97 @@ namespace vix::commands::RunCommand::detail
       }
     };
 
+    struct UncaughtExceptionSuppressor
+    {
+      std::string carry;
+
+      static bool is_noise_line(std::string_view line) noexcept
+      {
+        auto has = [&](std::string_view s) noexcept
+        { return line.find(s) != std::string_view::npos; };
+
+        // libstdc++ / libc++ terminate noise
+        if (has("terminate called after throwing an instance of"))
+          return true;
+        if (has("terminating with uncaught exception"))
+          return true;
+        if (has("libc++abi: terminating with uncaught exception"))
+          return true;
+        if (has("std::terminate"))
+          return true;
+
+        // the missing line in your output
+        // libstdc++ prints: "  what():  Weird!"
+        if (has("what():"))
+          return true;
+
+        // common endings (optional)
+        if (has("Aborted (core dumped)"))
+          return true;
+        if (has("core dumped"))
+          return true;
+        if (has("SIGABRT"))
+          return true;
+
+        return false;
+      }
+
+      static bool is_whitespace_only(std::string_view s) noexcept
+      {
+        for (char c : s)
+        {
+          // ignore line endings
+          if (c == '\n' || c == '\r')
+            continue;
+
+          // any non-space/tab means it's not whitespace-only
+          if (c != ' ' && c != '\t')
+            return false;
+        }
+        return true;
+      }
+
+      // Remove noise from what we PRINT, but keep it in result.stdoutText capture.
+      std::string filter_for_print(const std::string &chunk)
+      {
+        std::string data = carry;
+        data += chunk;
+        carry.clear();
+
+        std::string out;
+        out.reserve(data.size());
+
+        std::size_t start = 0;
+        while (true)
+        {
+          const std::size_t nl = data.find('\n', start);
+          if (nl == std::string::npos)
+          {
+            carry = data.substr(start);
+            break;
+          }
+
+          std::string_view line(&data[start], (nl - start) + 1);
+          start = nl + 1;
+
+          if (is_noise_line(line))
+            continue;
+
+          // drop empty/whitespace-only lines created by filtering
+          if (is_whitespace_only(line))
+            continue;
+
+          out.append(line.data(), line.size());
+
+          out.append(line.data(), line.size());
+        }
+
+        return out;
+      }
+    };
+
     SanitizerSuppressor sanitizer;
+    UncaughtExceptionSuppressor uncaught;
 
     bool running = true;
     bool printedSomething = false;
@@ -881,7 +972,7 @@ namespace vix::commands::RunCommand::detail
 
       if (ready == 0)
       {
-        if (spinnerActive)
+        if (spinnerActive && !captureOnly)
           spinner_draw(spinnerLabel, frameIndex, printedSomething, lastPrintedChar);
       }
       else
@@ -916,15 +1007,21 @@ namespace vix::commands::RunCommand::detail
                 printable = sanitizer.filter_for_print(printable);
 
               if (!printable.empty())
+                printable = uncaught.filter_for_print(printable);
+
+              if (!printable.empty())
               {
                 std::string filtered =
                     passthroughRuntime ? printable : runtimeFilter.process(printable);
 
                 if (!filtered.empty())
                 {
-                  write_all(STDOUT_FILENO, filtered.data(), filtered.size());
-                  printedSomething = true;
-                  lastPrintedChar = filtered.back();
+                  if (!captureOnly)
+                  {
+                    write_all(STDOUT_FILENO, filtered.data(), filtered.size());
+                    printedSomething = true;
+                    lastPrintedChar = filtered.back();
+                  }
                 }
               }
             }
@@ -946,7 +1043,7 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
-    if (spinnerActive)
+    if (spinnerActive && !captureOnly)
       spinner_clear(printedSomething, lastPrintedChar);
 
     close_safe(outPipe[0]);
@@ -971,7 +1068,8 @@ namespace vix::commands::RunCommand::detail
 
     result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
 
-    if (printedSomething &&
+    if (!captureOnly &&
+        printedSomething &&
         lastPrintedChar != '\n' &&
         ::isatty(STDOUT_FILENO) != 0)
     {

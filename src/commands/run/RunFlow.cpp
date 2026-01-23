@@ -332,7 +332,10 @@ namespace vix::commands::RunCommand::detail
     return o;
   }
 
-  void handle_runtime_exit_code(int code, const std::string &context)
+  void handle_runtime_exit_code(
+      int code,
+      const std::string &context,
+      bool alreadyHandled)
   {
     if (code == 0)
       return;
@@ -343,8 +346,10 @@ namespace vix::commands::RunCommand::detail
       return;
     }
 
+    if (alreadyHandled)
+      return;
+
     error(context + " (exit code " + std::to_string(code) + ").");
-    hint("Check the logs above or run the command manually.");
   }
 
   std::string quote(const std::string &s)

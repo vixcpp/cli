@@ -14,6 +14,8 @@
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
+#include <vix/cli/errors/rules/UncaughtExceptionRule.hpp>
+#include <fstream>
 
 #include <algorithm>
 #include <cctype>
@@ -972,6 +974,9 @@ namespace vix::cli::errors
 
     // Order matters: keep specific ones first.
     if (handleRuntimePortAlreadyInUse(runtimeLog, sourceFile))
+      return true;
+
+    if (vix::cli::errors::rules::handleUncaughtException(runtimeLog, sourceFile))
       return true;
 
     if (handleRuntimeAllocDeallocMismatch(runtimeLog, sourceFile))

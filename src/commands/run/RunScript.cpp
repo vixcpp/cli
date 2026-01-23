@@ -145,7 +145,7 @@ namespace vix::commands::RunCommand::detail
         }
 
         error("Script configure failed.");
-        handle_runtime_exit_code(code, "Script configure failed");
+        handle_runtime_exit_code(code, "Script configure failed", /*alreadyHandled=*/true);
         return code;
       }
 
@@ -192,19 +192,22 @@ namespace vix::commands::RunCommand::detail
           return code;
         }
 
+        bool handled = false;
+
         if (!logContent.empty())
         {
           vix::cli::ErrorHandler::printBuildErrors(
               logContent,
               script,
               "Script build failed");
+          handled = true;
         }
         else
         {
           error("Script build failed (no compiler log captured).");
         }
 
-        handle_runtime_exit_code(code, "Script build failed");
+        handle_runtime_exit_code(code, "Script build failed", /*alreadyHandled=*/handled);
         return code;
       }
     }
@@ -238,12 +241,35 @@ namespace vix::commands::RunCommand::detail
 
     if (runCode != 0)
     {
-      const std::string runtimeLog = rr.stdoutText;
+      std::string runtimeLog;
+      runtimeLog.reserve(rr.stdoutText.size() + rr.stderrText.size() + 1);
 
-      vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-          runtimeLog, script, "Script execution failed");
+      if (!rr.stdoutText.empty())
+        runtimeLog += rr.stdoutText;
 
-      handle_runtime_exit_code(runCode, "Script execution failed");
+      if (!rr.stderrText.empty())
+      {
+        if (!runtimeLog.empty() && runtimeLog.back() != '\n')
+          runtimeLog.push_back('\n');
+        runtimeLog += rr.stderrText;
+      }
+
+      bool handled = false;
+
+      if (!runtimeLog.empty())
+      {
+        handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+            runtimeLog, script, "Script execution failed");
+
+        if (!handled &&
+            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))
+          handled = true;
+
+        if (!handled)
+          std::cout << runtimeLog << "\n";
+      }
+
+      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);
       return runCode;
     }
 #else
@@ -251,7 +277,7 @@ namespace vix::commands::RunCommand::detail
     runCode = normalize_exit_code(runCode);
     if (runCode != 0)
     {
-      handle_runtime_exit_code(runCode, "Script execution failed");
+      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/false);
       return runCode;
     }
 #endif
@@ -361,11 +387,16 @@ namespace vix::commands::RunCommand::detail
           return code;
         }
 
+        bool handled = false;
+
         if (!logContent.empty())
+        {
           std::cout << logContent << "\n";
+          handled = true; // log already printed
+        }
 
         error("Script configure failed.");
-        handle_runtime_exit_code(code, "Script configure failed");
+        handle_runtime_exit_code(code, "Script configure failed", /*alreadyHandled=*/handled);
         return code;
       }
 
@@ -406,19 +437,22 @@ namespace vix::commands::RunCommand::detail
         logContent = logStream.str();
       }
 
+      bool handled = false;
+
       if (!logContent.empty())
       {
         vix::cli::ErrorHandler::printBuildErrors(
             logContent,
             script,
             "Script build failed");
+        handled = true; // error already printed
       }
       else
       {
         error("Script build failed (no compiler log captured).");
       }
 
-      handle_runtime_exit_code(code, "Script build failed");
+      handle_runtime_exit_code(code, "Script build failed", /*alreadyHandled=*/handled);
       return code;
     }
 

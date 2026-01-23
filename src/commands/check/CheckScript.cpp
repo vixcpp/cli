@@ -204,12 +204,37 @@ namespace vix::commands::CheckCommand::detail
 
       if (code != 0)
       {
-        const std::string runtimeLog = rr.stdoutText + "\n" + rr.stderrText;
+        std::string runtimeLog;
+        runtimeLog.reserve(rr.stdoutText.size() + rr.stderrText.size() + 1);
 
-        vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-            runtimeLog, script, "Script check failed (runtime sanitizers)");
+        if (!rr.stdoutText.empty())
+          runtimeLog += rr.stdoutText;
 
-        run::handle_runtime_exit_code(code, "Script check failed (runtime sanitizers)");
+        if (!rr.stderrText.empty())
+        {
+          if (!runtimeLog.empty() && runtimeLog.back() != '\n')
+            runtimeLog.push_back('\n');
+          runtimeLog += rr.stderrText;
+        }
+
+        bool handled = false;
+
+        if (!runtimeLog.empty())
+        {
+          handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+              runtimeLog, script, "Script check failed (runtime sanitizers)");
+
+          // optionnel (si tu veux aussi les known failures en check)
+          if (!handled &&
+              vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))
+            handled = true;
+        }
+
+        run::handle_runtime_exit_code(
+            code,
+            "Script check failed (runtime sanitizers)",
+            /*alreadyHandled=*/handled);
+
         return code;
       }
 

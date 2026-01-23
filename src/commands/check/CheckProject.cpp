@@ -518,12 +518,35 @@ namespace vix::commands::CheckCommand::detail
 
         if (rr.exitCode != 0)
         {
-          const std::string runtimeLog = rr.stdoutText + "\n" + rr.stderrText;
+          std::string runtimeLog;
+          runtimeLog.reserve(rr.stdoutText.size() + rr.stderrText.size() + 1);
 
-          vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-              runtimeLog, projectDir, "Project check failed (runtime sanitizers)");
+          if (!rr.stdoutText.empty())
+            runtimeLog += rr.stdoutText;
 
-          handle_runtime_exit_code(rr.exitCode, "Project check failed (runtime sanitizers)");
+          if (!rr.stderrText.empty())
+          {
+            if (!runtimeLog.empty() && runtimeLog.back() != '\n')
+              runtimeLog.push_back('\n');
+            runtimeLog += rr.stderrText;
+          }
+
+          bool handled = false;
+          if (!runtimeLog.empty())
+          {
+            handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                runtimeLog, projectDir, "Project check failed (runtime sanitizers)");
+
+            if (!handled &&
+                vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, projectDir))
+              handled = true;
+          }
+
+          handle_runtime_exit_code(
+              rr.exitCode,
+              "Project check failed (runtime sanitizers)",
+              /*alreadyHandled=*/handled);
+
           return rr.exitCode;
         }
 

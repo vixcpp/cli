@@ -101,6 +101,8 @@ namespace vix::commands::RunCommand::detail
     int exitCode = 0;  // normalized 0..255 or 128+signal
     std::string stdoutText;
     std::string stderrText;
+
+    bool failureHandled = false;
   };
 
   LiveRunResult run_cmd_live_filtered_capture(
@@ -131,7 +133,10 @@ namespace vix::commands::RunCommand::detail
 
   // Build / run flow helpers
   std::string quote(const std::string &s);
-  void handle_runtime_exit_code(int code, const std::string &context);
+  void handle_runtime_exit_code(
+      int code,
+      const std::string &context,
+      bool alreadyHandled);
 
   bool has_presets(const fs::path &projectDir);
   std::string choose_run_preset(

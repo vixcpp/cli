@@ -477,11 +477,7 @@ namespace vix::commands::RunCommand
 
           if (buildExit != 0)
           {
-            if (!log.empty() &&
-                vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, fs::path{}))
-            {
-              return 1;
-            }
+            return buildExit != 0 ? buildExit : 2;
 
             if (!log.empty())
             {
@@ -548,10 +544,11 @@ namespace vix::commands::RunCommand
               const LiveRunResult tr = run_cmd_live_filtered_capture(
                   quote(testExe->string()),
                   /*spinnerLabel=*/"",
-                  /*passthroughRuntime=*/true,
+                  /*passthroughRuntime=*/false,
                   /*timeoutSec=*/opt.timeoutSec);
 
               const int testExit = tr.exitCode;
+
               if (testExit == 130)
               {
                 hint("Stopped (SIGINT).");
@@ -564,10 +561,25 @@ namespace vix::commands::RunCommand
                 if (!tr.stdoutText.empty())
                   log += tr.stdoutText;
 
-                if (!log.empty())
-                  std::cout << log << "\n";
+                bool handled = false;
 
-                error("Test execution failed (exit code " + std::to_string(testExit) + ").");
+                if (!log.empty())
+                {
+                  handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                      log,
+                      testExe->string(),
+                      "Test crashed");
+
+                  if (!handled && vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, testExe->string()))
+                    handled = true;
+
+                  if (!handled)
+                    std::cout << log << "\n";
+                }
+
+                if (!handled)
+                  error("Test execution failed (exit code " + std::to_string(testExit) + ").");
+
                 return testExit;
               }
 #endif
@@ -601,7 +613,7 @@ namespace vix::commands::RunCommand
 
           if (runExit != 0)
           {
-            handle_runtime_exit_code(runExit, "Execution failed");
+            handle_runtime_exit_code(runExit, "Execution failed", /*alreadyHandled=*/false);
             return runExit;
           }
 
@@ -612,7 +624,7 @@ namespace vix::commands::RunCommand
           const LiveRunResult rr = run_cmd_live_filtered_capture(
               runCmd,
               /*spinnerLabel=*/"",
-              /*passthroughRuntime=*/true,
+              /*passthroughRuntime=*/false, // IMPORTANT: capture only
               /*timeoutSec=*/opt.timeoutSec);
 
           int runExit = rr.exitCode;
@@ -629,17 +641,25 @@ namespace vix::commands::RunCommand
             if (!rr.stdoutText.empty())
               log += rr.stdoutText;
 
+            bool handled = false;
+
             if (!log.empty())
             {
-              if (vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, exePath))
-              {
-                return 1;
-              }
-              std::cout << log << "\n";
+              handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                  log,
+                  exePath,
+                  "Execution failed");
+
+              if (!handled && vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, exePath))
+                handled = true;
+
+              if (!handled)
+                std::cout << log << "\n";
             }
 
-            error("Execution failed (exit code " + std::to_string(runExit) + ").");
-            hint("Check the logs above or run the executable manually.");
+            if (!handled)
+              error("Execution failed (exit code " + std::to_string(runExit) + ").");
+
             return runExit;
           }
 
@@ -835,7 +855,8 @@ namespace vix::commands::RunCommand
         {
           handle_runtime_exit_code(
               code,
-              "Example returned non-zero exit code");
+              "Example returned non-zero exit code",
+              /*alreadyHandled=*/false);
         }
         return code;
       }
@@ -883,7 +904,8 @@ namespace vix::commands::RunCommand
       {
         handle_runtime_exit_code(
             code,
-            "Executable returned non-zero exit code");
+            "Executable returned non-zero exit code",
+            /*alreadyHandled=*/false);
         return code;
       }
 

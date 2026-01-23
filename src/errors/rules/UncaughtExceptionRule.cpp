@@ -181,6 +181,10 @@ namespace vix::cli::errors::rules
     std::cerr << "\n"
               << YELLOW << "tip:" << RESET << " wrap main() with try/catch (to print e.what())\n";
 
+    std::cerr << "\n"
+              << YELLOW << "tip:" << RESET
+              << " catch exceptions in main() and rely on RAII (no raw new/delete)\n";
+
     // location + code frame (si possible)
     if (!sourceFile.empty())
       std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";

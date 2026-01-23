@@ -88,6 +88,9 @@ namespace vix::commands::RunCommand::detail
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + exeName + " LANGUAGES CXX)\n\n";
 
+    s += "set(CMAKE_VERBOSE_MAKEFILE ON)\n";
+    s += "set(CMAKE_RULE_MESSAGES OFF)\n\n";
+
     // Standard
     s += "set(CMAKE_CXX_STANDARD 20)\n";
     s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
@@ -196,13 +199,24 @@ namespace vix::commands::RunCommand::detail
 
       s += "target_link_libraries(" + exeName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
 
-      s += "# Optional ORM\n";
+      s += "# Optional ORM (and DB)\n";
       s += "if (VIX_USE_ORM)\n";
       s += "  if (TARGET vix::orm)\n";
       s += "    target_link_libraries(" + exeName + " PRIVATE vix::orm)\n";
       s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
+      s += "  elseif (TARGET Vix::orm)\n";
+      s += "    target_link_libraries(" + exeName + " PRIVATE Vix::orm)\n";
+      s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
       s += "  else()\n";
-      s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
+      s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but ORM target is not available (vix::orm/Vix::orm)\")\n";
+      s += "  endif()\n";
+      s += "\n";
+      s += "  if (TARGET vix::db)\n";
+      s += "    target_link_libraries(" + exeName + " PRIVATE vix::db)\n";
+      s += "  elseif (TARGET Vix::db)\n";
+      s += "    target_link_libraries(" + exeName + " PRIVATE Vix::db)\n";
+      s += "  else()\n";
+      s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but DB target is not available (vix::db/Vix::db)\")\n";
       s += "  endif()\n";
       s += "endif()\n\n";
     }

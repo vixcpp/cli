@@ -60,6 +60,18 @@ namespace vix::commands::RunCommand::detail
            log.find("interrupted by user") != std::string::npos;
   }
 
+  static bool log_looks_like_sanitizer_or_ub(const std::string &log)
+  {
+    // UBSan can be "runtime error:" with exit code 0 (recover mode).
+    // ASan/TSan/LSan/MSan also leave strong banners.
+    return log.find("runtime error:") != std::string::npos ||
+           log.find("UndefinedBehaviorSanitizer") != std::string::npos ||
+           log.find("AddressSanitizer") != std::string::npos ||
+           log.find("LeakSanitizer") != std::string::npos ||
+           log.find("ThreadSanitizer") != std::string::npos ||
+           log.find("MemorySanitizer") != std::string::npos;
+  }
+
   static inline std::string trim_copy(std::string s)
   {
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
@@ -146,7 +158,6 @@ namespace vix::commands::RunCommand::detail
     const std::string msg = strip_prefix(eLine, "error:");
     const std::string tip = tipLine.empty() ? "" : strip_prefix(tipLine, "tip:");
 
-    // ✅ Style Vix (comme tes autres erreurs)
     std::cerr << "  " << RED << "✖" << RESET << " " << msg << "\n";
     if (!tip.empty())
       std::cerr << "  " << GRAY << "➜" << RESET << " " << tip << "\n";
@@ -330,43 +341,67 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
     apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
-    auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", false, opt.timeoutSec);
+    const bool isPlainScript = !useVixRuntime;
+
+    const std::string runLabel = isPlainScript ? "" : "Running script";
+
+    auto rr = run_cmd_live_filtered_capture(
+        cmdRun,
+        runLabel,
+        /*passthroughRuntime=*/isPlainScript,
+        opt.timeoutSec);
+
     runCode = normalize_exit_code(rr.exitCode);
 
-    if (runCode != 0)
+    std::string out = rr.stdoutText;
+    std::string err = rr.stderrText;
+
+    const std::string outT = trim_copy(out);
+    const std::string errT = trim_copy(err);
+
+    if (!outT.empty() && outT == errT)
     {
-      std::string out = rr.stdoutText;
-      std::string err = rr.stderrText;
-
-      const std::string outT = trim_copy(out);
-      const std::string errT = trim_copy(err);
-
-      // Dédup: même contenu → on garde un seul
-      if (!outT.empty() && outT == errT)
-      {
+      err.clear();
+    }
+    else if (!outT.empty() && !errT.empty())
+    {
+      if (outT.find(errT) != std::string::npos)
         err.clear();
-      }
-      else if (!outT.empty() && !errT.empty())
-      {
-        // Si l’un contient l’autre, garde le plus “riche”
-        if (outT.find(errT) != std::string::npos)
-          err.clear();
-        else if (errT.find(outT) != std::string::npos)
-          out.clear();
-      }
+      else if (errT.find(outT) != std::string::npos)
+        out.clear();
+    }
 
-      std::string runtimeLog;
-      runtimeLog.reserve(out.size() + err.size() + 1);
+    std::string runtimeLog;
+    runtimeLog.reserve(out.size() + err.size() + 1);
 
-      if (!out.empty())
-        runtimeLog += out;
+    if (!out.empty())
+      runtimeLog += out;
 
-      if (!err.empty())
-      {
-        if (!runtimeLog.empty() && runtimeLog.back() != '\n')
-          runtimeLog.push_back('\n');
-        runtimeLog += err;
-      }
+    if (!err.empty())
+    {
+      if (!runtimeLog.empty() && runtimeLog.back() != '\n')
+        runtimeLog.push_back('\n');
+      runtimeLog += err;
+    }
+
+    const bool looksSanOrUb =
+        !runtimeLog.empty() && log_looks_like_sanitizer_or_ub(runtimeLog);
+
+    const bool noOutput =
+        trim_copy(rr.stdoutText).empty() && trim_copy(rr.stderrText).empty();
+
+    if (runCode == 0 && !looksSanOrUb && noOutput)
+    {
+      if (!opt.quiet || ::isatty(STDOUT_FILENO) != 0)
+        vix::cli::style::hint("Program exited successfully (code 0) but produced no output.");
+
+      return 0;
+    }
+
+    if (runCode != 0 || looksSanOrUb)
+    {
+      if (runCode == 0 && looksSanOrUb)
+        runCode = 1;
 
       bool handled = false;
 
@@ -395,6 +430,9 @@ namespace vix::commands::RunCommand::detail
       handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);
       return runCode;
     }
+
+    return 0;
+
 #else
     runCode = std::system(cmdRun.c_str());
     runCode = normalize_exit_code(runCode);
@@ -403,9 +441,9 @@ namespace vix::commands::RunCommand::detail
       handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/false);
       return runCode;
     }
-#endif
 
     return 0;
+#endif
   }
 
   int build_script_executable(const Options &opt, std::filesystem::path &exePath)

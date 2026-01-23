@@ -15,11 +15,11 @@
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
 #include <vix/cli/errors/rules/UncaughtExceptionRule.hpp>
-#include <fstream>
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <regex>
@@ -36,7 +36,6 @@ namespace vix::cli::errors
 {
   namespace
   {
-
     static inline char toLowerAscii(unsigned char c) noexcept
     {
       return static_cast<char>(std::tolower(c));
@@ -68,14 +67,145 @@ namespace vix::cli::errors
       return false;
     }
 
+    static std::string escape_regex(std::string s)
+    {
+      // escape regex metacharacters: . ^ $ | ( ) [ ] { } * + ? \ -
+      std::string out;
+      out.reserve(s.size() + 16);
+      for (const char c : s)
+      {
+        switch (c)
+        {
+        case '.':
+        case '^':
+        case '$':
+        case '|':
+        case '(':
+        case ')':
+        case '[':
+        case ']':
+        case '{':
+        case '}':
+        case '*':
+        case '+':
+        case '?':
+        case '\\':
+        case '-':
+          out.push_back('\\');
+          out.push_back(c);
+          break;
+        default:
+          out.push_back(c);
+          break;
+        }
+      }
+      return out;
+    }
+
+    static std::vector<std::string> splitLines(const std::string &text)
+    {
+      std::vector<std::string> lines;
+      std::istringstream iss(text);
+      std::string line;
+      while (std::getline(iss, line))
+        lines.push_back(line);
+      return lines;
+    }
+
+    static std::string_view trim_view(std::string_view s) noexcept
+    {
+      while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())) != 0)
+        s.remove_prefix(1);
+      while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())) != 0)
+        s.remove_suffix(1);
+      return s;
+    }
+
+    static bool startsWith(std::string_view s, std::string_view p) noexcept
+    {
+      return s.size() >= p.size() && s.substr(0, p.size()) == p;
+    }
+
     static bool is_system_path(std::string_view p) noexcept
     {
       return p.find("/usr/include/") != std::string_view::npos ||
              p.find("/usr/lib/") != std::string_view::npos ||
+             p.find("/usr/local/include/") != std::string_view::npos ||
+             p.find("/usr/local/lib/") != std::string_view::npos ||
              p.find("/lib/") != std::string_view::npos ||
+             p.find("/lib64/") != std::string_view::npos ||
              p.find("libsanitizer") != std::string_view::npos;
     }
 
+    static std::vector<std::string> excerptWindow(
+        const std::vector<std::string> &lines,
+        std::size_t center,
+        std::size_t before,
+        std::size_t after,
+        std::size_t maxLines)
+    {
+      std::vector<std::string> out;
+      if (lines.empty())
+        return out;
+
+      const std::size_t start = (center > before) ? (center - before) : 0;
+      const std::size_t end = std::min(lines.size(), center + after + 1);
+
+      for (std::size_t i = start; i < end && out.size() < maxLines; ++i)
+        out.push_back(lines[i]);
+
+      return out;
+    }
+
+    static void print_excerpt(const std::string &log, std::size_t maxLines = 16)
+    {
+      const auto lines = splitLines(log);
+
+      // Find first interesting line to anchor.
+      std::size_t firstHit = lines.size();
+      for (std::size_t i = 0; i < lines.size(); ++i)
+      {
+        const std::string_view t = trim_view(std::string_view(lines[i]));
+        const bool interesting =
+            icontains(lines[i], "ERROR:") ||
+            icontains(lines[i], "SUMMARY:") ||
+            icontains(lines[i], "runtime error:") ||
+            icontains(lines[i], "AddressSanitizer") ||
+            icontains(lines[i], "UndefinedBehaviorSanitizer") ||
+            icontains(lines[i], "LeakSanitizer") ||
+            icontains(lines[i], "ThreadSanitizer") ||
+            startsWith(t, "#") ||
+            startsWith(t, "==") ||
+            icontains(lines[i], "Segmentation fault") ||
+            icontains(lines[i], "SIGSEGV") ||
+            icontains(lines[i], "SIGABRT") ||
+            icontains(lines[i], "Aborted") ||
+            icontains(lines[i], "assert") ||
+            icontains(lines[i], "terminate") ||
+            icontains(lines[i], "what():");
+
+        if (interesting)
+        {
+          firstHit = i;
+          break;
+        }
+      }
+
+      auto win = (firstHit != lines.size())
+                     ? excerptWindow(lines, firstHit, 2, 12, maxLines)
+                     : excerptWindow(lines, 0, 0, maxLines - 1, maxLines);
+
+      if (win.empty())
+        return;
+
+      std::cerr << "\n";
+      std::cerr << RED << "log:" << RESET << "\n";
+      for (const auto &l : win)
+        std::cerr << "  " << l << "\n";
+      std::cerr << "\n";
+    }
+
+    // Location extraction
     static std::optional<vix::cli::errors::CompilerError>
     tryExtractFirstUserFrame(const std::string &log,
                              const std::filesystem::path &fallbackSource)
@@ -100,10 +230,25 @@ namespace vix::cli::errors
           abs = fallbackSource.string();
       }
 
-      // 1) BEST: exact script absolute path appears in stack
+      // 0) BEST+ : UBSan often emits "file:line:col: runtime error: ..."
+      {
+        static const std::regex re(R"((/[^:\n]+?\.(?:c|cc|cpp|cxx|h|hpp|hh)):(\d+):(\d+):\s*runtime error:)",
+                                   std::regex::ECMAScript);
+        std::smatch m;
+        if (std::regex_search(log, m, re))
+        {
+          const std::string file = m[1].str();
+          const int line = std::stoi(m[2].str());
+          const int col = std::stoi(m[3].str());
+          if (!is_system_path(file))
+            return make(file, line, col);
+        }
+      }
+
+      // 1) Exact script absolute path appears in stack
       if (!abs.empty())
       {
-        const std::regex re(abs + R"(:([0-9]+)(?::([0-9]+))?)");
+        const std::regex re(escape_regex(abs) + R"(:([0-9]+)(?::([0-9]+))?)");
         std::smatch m;
         if (std::regex_search(log, m, re))
         {
@@ -132,699 +277,49 @@ namespace vix::cli::errors
         }
       }
 
-      // 3) Last resort: no reliable file:line info
       return std::nullopt;
     }
 
-    static std::vector<std::string> splitLines(const std::string &text)
+    // Unified printing (hint/at must be at bottom)
+    static void print_header(std::string_view title)
     {
-      std::vector<std::string> lines;
-      std::istringstream iss(text);
-      std::string line;
-      while (std::getline(iss, line))
-        lines.push_back(line);
-      return lines;
+      std::cerr << RED << title << RESET << "\n\n";
     }
 
-    static std::string_view trim_view(std::string_view s) noexcept
+    static void print_hint_at_bottom(std::string_view hint, std::string_view at)
     {
-      while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())) != 0)
-        s.remove_prefix(1);
-      while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())) != 0)
-        s.remove_suffix(1);
-      return s;
+      if (!hint.empty())
+        std::cerr << YELLOW << "hint: " << RESET << hint << "\n";
+      if (!at.empty())
+        std::cerr << GREEN << "at: " << RESET << at << "\n";
     }
 
-    static bool startsWith(std::string_view s, std::string_view p) noexcept
+    static void print_codeframe_then_bottom(
+        const vix::cli::errors::CompilerError &loc,
+        const ErrorContext &ctx,
+        const CodeFrameOptions &opt,
+        std::string_view hint)
     {
-      return s.size() >= p.size() && s.substr(0, p.size()) == p;
+      printCodeFrame(loc, ctx, opt);
+
+      std::string at = loc.file + ":" + std::to_string(loc.line);
+      print_hint_at_bottom(hint, at);
     }
 
-    static std::vector<std::string> excerptWindow(
-        const std::vector<std::string> &lines,
-        std::size_t center,
-        std::size_t before,
-        std::size_t after,
-        std::size_t maxLines)
+    static void print_codeframe_then_bottom_default(
+        const vix::cli::errors::CompilerError &loc,
+        std::string_view hint)
     {
-      std::vector<std::string> out;
-      if (lines.empty())
-        return out;
+      ErrorContext ctx;
+      CodeFrameOptions opt;
+      opt.contextLines = 2;
+      opt.maxLineWidth = 120;
+      opt.tabWidth = 4;
 
-      const std::size_t start = (center > before) ? (center - before) : 0;
-      const std::size_t end = std::min(lines.size(), center + after + 1);
-
-      for (std::size_t i = start; i < end && out.size() < maxLines; ++i)
-        out.push_back(lines[i]);
-
-      return out;
+      print_codeframe_then_bottom(loc, ctx, opt, hint);
     }
 
-    // Sanitizer helpers
-    static std::string extractSanitizerKind(const std::vector<std::string> &lines, std::string_view san)
-    {
-      for (const auto &l : lines)
-      {
-        if (icontains(l, "ERROR:") && icontains(l, san))
-        {
-          const std::size_t pos = l.find(':');
-          if (pos == std::string::npos)
-            continue;
-          const std::size_t pos2 = l.find(':', pos + 1);
-          if (pos2 == std::string::npos)
-            continue;
-
-          std::string_view after = trim_view(std::string_view(l).substr(pos2 + 1));
-          const std::size_t sp = after.find(' ');
-          if (sp != std::string_view::npos)
-            after = after.substr(0, sp);
-
-          return std::string(after);
-        }
-      }
-      return {};
-    }
-
-    static std::vector<std::string> extractSanitizerExcerpt(
-        const std::vector<std::string> &lines,
-        std::string_view san,
-        std::size_t maxLines)
-    {
-      std::size_t firstHit = lines.size();
-
-      for (std::size_t i = 0; i < lines.size(); ++i)
-      {
-        const std::string &l = lines[i];
-        const std::string_view t = trim_view(std::string_view(l));
-
-        const bool interesting =
-            icontains(l, san) ||
-            icontains(l, "SUMMARY:") ||
-            icontains(l, "ERROR:") ||
-            startsWith(t, "#") ||
-            startsWith(t, "==") ||
-            icontains(l, "allocated") ||
-            icontains(l, "freed") ||
-            icontains(l, "READ") ||
-            icontains(l, "WRITE") ||
-            icontains(l, "invalid") ||
-            icontains(l, "double-free") ||
-            icontains(l, "double free") ||
-            icontains(l, "overflow");
-
-        if (interesting)
-        {
-          firstHit = i;
-          break;
-        }
-      }
-
-      if (firstHit != lines.size())
-      {
-        auto out = excerptWindow(lines, firstHit, 2, 12, maxLines);
-        if (!out.empty())
-          return out;
-      }
-
-      std::vector<std::string> out;
-      for (std::size_t i = 0; i < std::min(lines.size(), maxLines); ++i)
-        out.push_back(lines[i]);
-      return out;
-    }
-
-    // Runtime detectors
-    static bool handleRuntimeDoubleFreeInvalidFree(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hit =
-          icontains(runtimeLog, "free(): invalid pointer") ||
-          icontains(runtimeLog, "munmap_chunk(): invalid pointer") ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "not malloc()-ed")) ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "attempting free"));
-
-      if (!hit)
-        return false;
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: invalid free"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: you freed a pointer that was not a valid heap allocation (or not owned)"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: invalid free"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: freed pointer is invalid (not malloc/new, shifted pointer, or double-free). run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleRuntimeHeapUseAfterFree(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hit =
-          icontains(runtimeLog, "heap-use-after-free") ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "use-after-free"));
-
-      if (!hit)
-        return false;
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: use-after-free"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: you used memory after it was freed (dangling pointer/reference)"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: use-after-free"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: memory was accessed after being freed. run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleRuntimeAllocDeallocMismatch(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hasAsan = icontains(runtimeLog, "AddressSanitizer");
-
-      const bool explicitMismatch =
-          icontains(runtimeLog, "alloc-dealloc-mismatch") ||
-          icontains(runtimeLog, "operator new [] vs operator delete") ||
-          icontains(runtimeLog, "operator new vs operator delete []") ||
-          icontains(runtimeLog, "malloc vs operator delete") ||
-          icontains(runtimeLog, "operator new vs free") ||
-          icontains(runtimeLog, "malloc vs delete") ||
-          icontains(runtimeLog, "malloc vs operator delete[]") ||
-          icontains(runtimeLog, "operator new[] vs free");
-
-      const bool fuzzyMismatch =
-          icontains(runtimeLog, "new[]") &&
-          icontains(runtimeLog, "delete") &&
-          icontains(runtimeLog, "mismatch");
-
-      const bool hit = explicitMismatch || (hasAsan && (explicitMismatch || fuzzyMismatch));
-
-      if (!hit)
-        return false;
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: alloc/dealloc mismatch"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: free memory with the matching API (new/delete, new[]/delete[], malloc/free)"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: alloc/dealloc mismatch"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: allocated with one API and freed with another. run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleRuntimeDoubleFree(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hit =
-          icontains(runtimeLog, "attempting double-free") ||
-          icontains(runtimeLog, "double-free") ||
-          icontains(runtimeLog, "double free") ||
-          icontains(runtimeLog, "free(): double free") ||
-          icontains(runtimeLog, "double free detected") ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "double-free"));
-
-      if (!hit)
-        return false;
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: double free"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: the same allocation was freed twice (double owner or duplicate delete/free)"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: double free"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: the same allocation was freed twice. run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleRuntimeUseAfterReturn(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hit =
-          icontains(runtimeLog, "use-after-return") ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "use-after-return"));
-
-      if (!hit)
-        return false;
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: use-after-return"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: a pointer/reference/view escaped a function and outlived its stack variable"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: use-after-return"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: dangling stack reference/view. run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleRuntimeStackUseAfterScope(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hit =
-          icontains(runtimeLog, "stack-use-after-scope") ||
-          icontains(runtimeLog, "use-after-scope") ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "stack-use-after-scope"));
-
-      if (!hit)
-        return false;
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: stack-use-after-scope"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: a reference/view/span outlived the object it refers to"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: stack-use-after-scope"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: dangling stack reference/view/span. run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleRuntimeBufferOverflow(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool isHeapBO = icontains(runtimeLog, "heap-buffer-overflow");
-      const bool isStackBO = icontains(runtimeLog, "stack-buffer-overflow");
-      const bool isGlobalBO = icontains(runtimeLog, "global-buffer-overflow");
-
-      const bool isUseAfterScope =
-          icontains(runtimeLog, "stack-use-after-scope") ||
-          icontains(runtimeLog, "use-after-scope");
-
-      const bool isUseAfterReturn = icontains(runtimeLog, "use-after-return");
-
-      const bool isOutOfBounds =
-          icontains(runtimeLog, "out of bounds") ||
-          icontains(runtimeLog, "out-of-bounds") ||
-          icontains(runtimeLog, "index out of range");
-
-      const bool genericOverflow =
-          icontains(runtimeLog, "buffer-overflow") ||
-          icontains(runtimeLog, "buffer overflow") ||
-          icontains(runtimeLog, "heap overflow") ||
-          icontains(runtimeLog, "stack overflow") ||
-          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "overflow"));
-
-      const bool hit =
-          isHeapBO || isStackBO || isGlobalBO ||
-          isUseAfterScope || isUseAfterReturn ||
-          isOutOfBounds || genericOverflow;
-
-      if (!hit)
-        return false;
-
-      std::string title = "runtime error: buffer overflow";
-      if (isHeapBO)
-        title = "runtime error: heap-buffer-overflow";
-      else if (isStackBO)
-        title = "runtime error: stack-buffer-overflow";
-      else if (isGlobalBO)
-        title = "runtime error: global-buffer-overflow";
-      else if (isUseAfterScope)
-        title = "runtime error: stack-use-after-scope";
-      else if (isUseAfterReturn)
-        title = "runtime error: use-after-return";
-      else if (isOutOfBounds)
-        title = "runtime error: out-of-bounds access";
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        std::cerr << RED
-                  << title
-                  << RESET << "\n";
-
-        if (isUseAfterReturn)
-        {
-          std::cerr << YELLOW
-                    << "hint: a pointer/reference/view outlived a stack variable (returned from a function)"
-                    << RESET << "\n";
-        }
-        else if (isUseAfterScope)
-        {
-          std::cerr << YELLOW
-                    << "hint: a reference/view/span outlived the object it refers to"
-                    << RESET << "\n";
-        }
-        else
-        {
-          std::cerr << YELLOW
-                    << "hint: read/write went past bounds (check indices and sizes)"
-                    << RESET << "\n";
-        }
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << title
-                  << RESET << "\n";
-
-        if (isUseAfterReturn)
-        {
-          std::cerr << YELLOW
-                    << "hint: dangling stack pointer/reference/view. run with --san for exact location"
-                    << RESET << "\n";
-        }
-        else if (isUseAfterScope)
-        {
-          std::cerr << YELLOW
-                    << "hint: dangling stack reference/view/span. run with --san for exact location"
-                    << RESET << "\n";
-        }
-        else
-        {
-          std::cerr << YELLOW
-                    << "hint: out-of-bounds memory access. run with --san for exact location"
-                    << RESET << "\n";
-        }
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleSanitizers(const std::string &log, const std::filesystem::path &sourceFile)
-    {
-      const bool hasASan = icontains(log, "AddressSanitizer");
-      const bool hasLSan = icontains(log, "LeakSanitizer");
-      const bool hasUBSan = icontains(log, "UndefinedBehaviorSanitizer") || icontains(log, "runtime error:");
-      const bool hasMSan = icontains(log, "MemorySanitizer");
-      const bool hasTSan = icontains(log, "ThreadSanitizer");
-
-      if (!(hasASan || hasLSan || hasUBSan || hasMSan || hasTSan))
-        return false;
-
-      const std::string san =
-          hasASan    ? "AddressSanitizer"
-          : hasLSan  ? "LeakSanitizer"
-          : hasUBSan ? "UndefinedBehaviorSanitizer"
-          : hasMSan  ? "MemorySanitizer"
-                     : "ThreadSanitizer";
-
-      const auto lines = splitLines(log);
-      const auto kind = extractSanitizerKind(lines, san);
-
-      if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
-      {
-        std::cerr << RED
-                  << "runtime error: sanitizer"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: fix the first reported issue"
-                  << RESET << "\n";
-
-        std::cerr << GREEN
-                  << "at: " << loc->file << ":" << loc->line
-                  << RESET << "\n";
-
-        ErrorContext ctx;
-        CodeFrameOptions opt;
-        opt.contextLines = 2;
-        opt.maxLineWidth = 120;
-        opt.tabWidth = 4;
-
-        printCodeFrame(*loc, ctx, opt);
-      }
-      else
-      {
-        std::cerr << RED
-                  << "runtime error: sanitizer"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW
-                  << "hint: " << san;
-        if (!kind.empty())
-          std::cerr << " (" << kind << ")";
-        std::cerr << ". run with --san for exact location"
-                  << RESET << "\n";
-
-        if (!sourceFile.empty())
-        {
-          std::cerr << GREEN
-                    << "source: " << sourceFile.filename().string()
-                    << RESET << "\n";
-        }
-      }
-
-      return true;
-    }
-
-    static bool handleLinkerErrors(const std::string &buildLog, const std::filesystem::path &sourceFile)
-    {
-      bool hasUndefinedRef = false;
-      bool hasLdError = false;
-
-      std::istringstream iss(buildLog);
-      std::string line;
-      while (std::getline(iss, line))
-      {
-        if (!hasUndefinedRef && line.find("undefined reference to") != std::string::npos)
-          hasUndefinedRef = true;
-
-        if (line.find("ld returned") != std::string::npos ||
-            line.find("collect2: error: ld returned") != std::string::npos)
-          hasLdError = true;
-      }
-
-      if (!(hasUndefinedRef || hasLdError))
-        return false;
-
-      std::cerr << RED
-                << "link error: undefined reference(s)"
-                << RESET << "\n";
-
-      std::cerr << YELLOW
-                << "hint: a symbol is declared but not linked (missing .cpp or missing library)"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-      {
-        std::cerr << GREEN
-                  << "source: " << sourceFile.filename().string()
-                  << RESET << "\n";
-      }
-
-      return true;
-    }
-
+    // Runtime detectors (non-sanitizer)
     static bool handleRuntimePortAlreadyInUse(
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
@@ -852,38 +347,720 @@ namespace vix::cli::errors
         }
       }
 
-      std::cerr << RED
-                << "runtime error: address already in use"
-                << RESET << "\n";
+      print_header("runtime error: address already in use");
 
-      if (!port.empty())
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
-        std::cerr << YELLOW
-                  << "hint: port " << port << " is already in use (stop the other process or change the port)"
-                  << RESET << "\n";
+        print_codeframe_then_bottom_default(
+            *loc,
+            port.empty() ? "this port is already in use (stop the other process or change the port)"
+                         : ("port " + port + " is already in use (stop the other process or change the port)"));
       }
       else
       {
-        std::cerr << YELLOW
-                  << "hint: this port is already in use (stop the other process or change the port)"
-                  << RESET << "\n";
-      }
-
-      if (!sourceFile.empty())
-      {
-        std::cerr << GREEN
-                  << "source: " << sourceFile.filename().string()
-                  << RESET << "\n";
+        print_hint_at_bottom(
+            port.empty() ? "this port is already in use (stop the other process or change the port)"
+                         : ("port " + port + " is already in use (stop the other process or change the port)"),
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
       }
 
       return true;
+    }
+
+    static bool handleRuntimeSegfaultAbortTerminate(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool segv =
+          icontains(runtimeLog, "segmentation fault") ||
+          icontains(runtimeLog, "sigsegv");
+
+      const bool abrt =
+          icontains(runtimeLog, "sigabrt") ||
+          icontains(runtimeLog, "aborted") ||
+          icontains(runtimeLog, "abort()");
+
+      const bool term =
+          icontains(runtimeLog, "terminate called after") ||
+          icontains(runtimeLog, "std::terminate") ||
+          icontains(runtimeLog, "terminating") ||
+          icontains(runtimeLog, "pure virtual method called");
+
+      if (!(segv || abrt || term))
+        return false;
+
+      std::string title = "runtime error: crash";
+      std::string hint = "program crashed. run with --san to get a precise location";
+      if (segv)
+      {
+        title = "runtime error: segmentation fault";
+        hint = "invalid memory access (null/dangling pointer, out-of-bounds, use-after-free). run with --san for exact location";
+      }
+      else if (abrt)
+      {
+        title = "runtime error: aborted";
+        hint = "the program aborted (assert/terminate/abort). run with --san for exact location";
+      }
+      else if (term)
+      {
+        title = "runtime error: terminate";
+        hint = "std::terminate/pure-virtual/unhandled fatal error. run with --san for exact location";
+      }
+
+      print_header(title);
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeAssertionFailed(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(runtimeLog, "assertion") && icontains(runtimeLog, "failed");
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: assertion failed");
+
+      const std::string hint =
+          "an assertion failed (a condition you expected to be true was false). check invariants and input validation";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeBadAllocOOM(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool badAlloc =
+          icontains(runtimeLog, "std::bad_alloc") ||
+          icontains(runtimeLog, "bad_alloc");
+
+      const bool oom =
+          icontains(runtimeLog, "cannot allocate memory") ||
+          icontains(runtimeLog, "out of memory") ||
+          icontains(runtimeLog, "killed") && icontains(runtimeLog, "oom");
+
+      if (!(badAlloc || oom))
+        return false;
+
+      print_header("runtime error: out of memory");
+
+      const std::string hint =
+          "allocation failed (std::bad_alloc / OOM). reduce memory usage, check leaks, or increase available memory";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    // Runtime detectors (allocator/memory)
+    static bool handleRuntimeDoubleFreeInvalidFree(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(runtimeLog, "free(): invalid pointer") ||
+          icontains(runtimeLog, "munmap_chunk(): invalid pointer") ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "not malloc()-ed")) ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "attempting free"));
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: invalid free");
+
+      const std::string hint =
+          "you freed a pointer that was not a valid heap allocation (or not owned)";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeHeapUseAfterFree(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(runtimeLog, "heap-use-after-free") ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "use-after-free"));
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: use-after-free");
+
+      const std::string hint =
+          "you used memory after it was freed (dangling pointer/reference)";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeAllocDeallocMismatch(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hasAsan = icontains(runtimeLog, "AddressSanitizer");
+
+      const bool explicitMismatch =
+          icontains(runtimeLog, "alloc-dealloc-mismatch") ||
+          icontains(runtimeLog, "operator new [] vs operator delete") ||
+          icontains(runtimeLog, "operator new vs operator delete []") ||
+          icontains(runtimeLog, "malloc vs operator delete") ||
+          icontains(runtimeLog, "operator new vs free") ||
+          icontains(runtimeLog, "malloc vs delete") ||
+          icontains(runtimeLog, "malloc vs operator delete[]") ||
+          icontains(runtimeLog, "operator new[] vs free") ||
+          icontains(runtimeLog, "new-delete-type-mismatch");
+
+      const bool fuzzyMismatch =
+          icontains(runtimeLog, "new[]") &&
+          icontains(runtimeLog, "delete") &&
+          icontains(runtimeLog, "mismatch");
+
+      const bool hit = explicitMismatch || (hasAsan && (explicitMismatch || fuzzyMismatch));
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: alloc/dealloc mismatch");
+
+      const std::string hint =
+          "free memory with the matching API (new/delete, new[]/delete[], malloc/free)";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeDoubleFree(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(runtimeLog, "attempting double-free") ||
+          icontains(runtimeLog, "double-free") ||
+          icontains(runtimeLog, "double free") ||
+          icontains(runtimeLog, "free(): double free") ||
+          icontains(runtimeLog, "double free detected") ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "double-free"));
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: double free");
+
+      const std::string hint =
+          "the same allocation was freed twice (double owner or duplicate delete/free)";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeUseAfterReturn(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(runtimeLog, "use-after-return") ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "use-after-return"));
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: use-after-return");
+
+      const std::string hint =
+          "a pointer/reference/view escaped a function and outlived its stack variable";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeStackUseAfterScope(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(runtimeLog, "stack-use-after-scope") ||
+          icontains(runtimeLog, "use-after-scope") ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "stack-use-after-scope"));
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: stack-use-after-scope");
+
+      const std::string hint =
+          "a reference/view/span outlived the object it refers to";
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    static bool handleRuntimeBufferOverflow(
+        const std::string &runtimeLog,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool isHeapBO = icontains(runtimeLog, "heap-buffer-overflow");
+      const bool isStackBO = icontains(runtimeLog, "stack-buffer-overflow");
+      const bool isGlobalBO = icontains(runtimeLog, "global-buffer-overflow");
+      const bool isStackOverflow = icontains(runtimeLog, "stack-overflow") || icontains(runtimeLog, "stack overflow");
+
+      const bool isOutOfBounds =
+          icontains(runtimeLog, "out of bounds") ||
+          icontains(runtimeLog, "out-of-bounds") ||
+          icontains(runtimeLog, "index out of range");
+
+      const bool genericOverflow =
+          icontains(runtimeLog, "buffer-overflow") ||
+          icontains(runtimeLog, "buffer overflow") ||
+          icontains(runtimeLog, "heap overflow") ||
+          icontains(runtimeLog, "stack overflow") ||
+          (icontains(runtimeLog, "AddressSanitizer") && icontains(runtimeLog, "overflow"));
+
+      const bool hit =
+          isHeapBO || isStackBO || isGlobalBO || isStackOverflow || isOutOfBounds || genericOverflow;
+
+      if (!hit)
+        return false;
+
+      std::string title = "runtime error: buffer overflow";
+      std::string hint = "read/write went past bounds (check indices and sizes)";
+
+      if (isHeapBO)
+      {
+        title = "runtime error: heap-buffer-overflow";
+        hint = "heap out-of-bounds (check vector/string indexing and sizes)";
+      }
+      else if (isStackBO)
+      {
+        title = "runtime error: stack-buffer-overflow";
+        hint = "stack out-of-bounds (local array overflow or too large stack buffer)";
+      }
+      else if (isGlobalBO)
+      {
+        title = "runtime error: global-buffer-overflow";
+        hint = "global out-of-bounds (global array overflow)";
+      }
+      else if (isStackOverflow)
+      {
+        title = "runtime error: stack overflow";
+        hint = "deep recursion or huge stack allocations. reduce recursion depth or move buffers to heap";
+      }
+      else if (isOutOfBounds)
+      {
+        title = "runtime error: out-of-bounds access";
+        hint = "index out of bounds (check indices, sizes, and signed/unsigned conversions)";
+      }
+
+      print_header(title);
+
+      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(
+            hint + ". run with --san for exact location",
+            !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(runtimeLog);
+      }
+
+      return true;
+    }
+
+    // Sanitizers (typed UBSan + LSan/TSan + generic)
+    static std::optional<std::string> extractUBSanKind(const std::string &log)
+    {
+      // UBSan formats:
+      //  1) file:line:col: runtime error: <kind>
+      //  2) runtime error: <kind>
+      {
+        static const std::regex re(R"(runtime error:\s*([^\n]+))", std::regex::icase);
+        std::smatch m;
+        if (std::regex_search(log, m, re))
+        {
+          std::string k = m[1].str();
+          k = std::string(trim_view(k));
+          // trim after " (" if present
+          const std::size_t p = k.find(" (");
+          if (p != std::string::npos)
+            k = k.substr(0, p);
+          return k;
+        }
+      }
+      return std::nullopt;
+    }
+
+    static std::pair<std::string, std::string> ubsanTitleHintFromKind(std::string_view kind)
+    {
+      const std::string k = std::string(trim_view(kind));
+
+      auto has = [&](std::string_view needle)
+      { return icontains(k, needle); };
+
+      if (has("signed integer overflow"))
+        return {"runtime error: signed integer overflow", "a signed integer overflow occurred (undefined behavior). use wider types or check bounds"};
+      if (has("division by zero"))
+        return {"runtime error: division by zero", "division/modulo by zero (undefined behavior). guard denominators"};
+      if (has("shift exponent") || has("shift count") || has("shift out of bounds"))
+        return {"runtime error: invalid shift", "shift count is invalid (negative or >= bit-width). validate shift values"};
+      if (has("load of misaligned address") || has("misaligned"))
+        return {"runtime error: misaligned access", "misaligned pointer dereference. check casts/packing and alignment"};
+      if (has("null pointer") && (has("passed") || has("argument")))
+        return {"runtime error: null pointer argument", "a null pointer was passed where non-null was required"};
+      if (has("member access within null pointer"))
+        return {"runtime error: null pointer dereference", "member access on a null pointer. check object lifetimes and null guards"};
+      if (has("invalid vptr") || has("vptr"))
+        return {"runtime error: invalid vptr", "object used after destruction or memory corruption (virtual dispatch on invalid object)"};
+      if (has("out of bounds") || has("index out of range"))
+        return {"runtime error: out-of-bounds access", "index out of bounds (undefined behavior). validate indices/sizes"};
+
+      return {"runtime error: undefined behavior", "undefined behavior detected (UBSan). fix the first reported issue"};
+    }
+
+    static bool handleUBSanRuntimeError(
+        const std::string &log,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hasUB =
+          icontains(log, "UndefinedBehaviorSanitizer") ||
+          icontains(log, "runtime error:");
+
+      if (!hasUB)
+        return false;
+
+      const auto kindOpt = extractUBSanKind(log);
+      const auto [title, hint] = kindOpt ? ubsanTitleHintFromKind(*kindOpt) : ubsanTitleHintFromKind("");
+
+      print_header(title);
+
+      if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint + ". run with --san for exact location",
+                             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(log);
+      }
+
+      return true;
+    }
+
+    static bool handleLeakSanitizer(
+        const std::string &log,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(log, "LeakSanitizer") ||
+          icontains(log, "detected memory leaks");
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: memory leak");
+
+      const std::string hint =
+          "memory leaks detected (LSan). free allocations or use RAII/smart pointers";
+
+      if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(log);
+      }
+
+      return true;
+    }
+
+    static bool handleThreadSanitizer(
+        const std::string &log,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(log, "ThreadSanitizer") ||
+          icontains(log, "data race");
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: data race");
+
+      const std::string hint =
+          "data race detected (TSan). protect shared state (mutex/atomic), avoid unsynchronized access";
+
+      if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(log);
+      }
+
+      return true;
+    }
+
+    static bool handleMemorySanitizer(
+        const std::string &log,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(log, "MemorySanitizer") ||
+          icontains(log, "uninitialized") && icontains(log, "use-of-uninitialized-value");
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: uninitialized memory");
+
+      const std::string hint =
+          "use of uninitialized memory (MSan). initialize variables and ensure buffers are written before read";
+
+      if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(log);
+      }
+
+      return true;
+    }
+
+    static bool handleGenericSanitizerBanner(
+        const std::string &log,
+        const std::filesystem::path &sourceFile)
+    {
+      const bool hit =
+          icontains(log, "AddressSanitizer") ||
+          icontains(log, "UndefinedBehaviorSanitizer") ||
+          icontains(log, "LeakSanitizer") ||
+          icontains(log, "ThreadSanitizer") ||
+          icontains(log, "MemorySanitizer");
+
+      if (!hit)
+        return false;
+
+      print_header("runtime error: sanitizer");
+
+      const std::string hint =
+          "sanitizer reported an issue. fix the first reported problem in the log";
+
+      if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
+      {
+        print_codeframe_then_bottom_default(*loc, hint);
+      }
+      else
+      {
+        print_hint_at_bottom(hint + ". run with --san for exact location",
+                             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+        print_excerpt(log);
+      }
+
+      return true;
+    }
+
+    static bool handleLinkerErrors(const std::string &buildLog, const std::filesystem::path &sourceFile)
+    {
+      bool hasUndefinedRef = false;
+      bool hasLdError = false;
+
+      std::istringstream iss(buildLog);
+      std::string line;
+      while (std::getline(iss, line))
+      {
+        if (!hasUndefinedRef && line.find("undefined reference to") != std::string::npos)
+          hasUndefinedRef = true;
+
+        if (line.find("ld returned") != std::string::npos ||
+            line.find("collect2: error: ld returned") != std::string::npos ||
+            line.find("clang: error: linker command failed") != std::string::npos)
+          hasLdError = true;
+      }
+
+      if (!(hasUndefinedRef || hasLdError))
+        return false;
+
+      print_header("link error: undefined reference(s)");
+
+      std::string hint = "a symbol is declared but not linked (missing .cpp or missing library)";
+      std::string at = !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "";
+      print_hint_at_bottom(hint, at);
+
+      print_excerpt(buildLog);
+      return true;
+    }
+
+    // Master runtime dispatcher (order matters)
+    static bool handleRuntimeAnything(const std::string &log, const std::filesystem::path &sourceFile)
+    {
+      // 1) Very specific app/runtime failures
+      if (handleRuntimePortAlreadyInUse(log, sourceFile))
+        return true;
+
+      // 2) C++ exceptions (your existing handler)
+      if (vix::cli::errors::rules::handleUncaughtException(log, sourceFile))
+        return true;
+
+      // 3) Typed UB (UBSan) MUST be early because it may also contain "runtime error:"
+      if (handleUBSanRuntimeError(log, sourceFile))
+        return true;
+
+      // 4) Typed allocator/memory families
+      if (handleRuntimeAllocDeallocMismatch(log, sourceFile))
+        return true;
+      if (handleRuntimeDoubleFree(log, sourceFile))
+        return true;
+      if (handleRuntimeDoubleFreeInvalidFree(log, sourceFile))
+        return true;
+      if (handleRuntimeHeapUseAfterFree(log, sourceFile))
+        return true;
+      if (handleRuntimeUseAfterReturn(log, sourceFile))
+        return true;
+      if (handleRuntimeStackUseAfterScope(log, sourceFile))
+        return true;
+      if (handleRuntimeBufferOverflow(log, sourceFile))
+        return true;
+
+      // 5) Other common crashes & signals
+      if (handleRuntimeAssertionFailed(log, sourceFile))
+        return true;
+      if (handleRuntimeBadAllocOOM(log, sourceFile))
+        return true;
+      if (handleRuntimeSegfaultAbortTerminate(log, sourceFile))
+        return true;
+
+      // 6) Other sanitizers (LSan/TSan/MSan)
+      if (handleLeakSanitizer(log, sourceFile))
+        return true;
+      if (handleThreadSanitizer(log, sourceFile))
+        return true;
+      if (handleMemorySanitizer(log, sourceFile))
+        return true;
+
+      // 7) Generic sanitizer banner (last resort)
+      if (handleGenericSanitizerBanner(log, sourceFile))
+        return true;
+
+      return false;
     }
 
   } // namespace
 
   bool RawLogDetectors::handleKnownRunFailure(const std::string &log, const std::filesystem::path &ctx)
   {
-    return handleRuntimePortAlreadyInUse(log, ctx);
+    if (handleRuntimePortAlreadyInUse(log, ctx))
+      return true;
+
+    return handleRuntimeAnything(log, ctx);
   }
 
   bool RawLogDetectors::handleRuntimeCrash(
@@ -891,39 +1068,7 @@ namespace vix::cli::errors
       const std::filesystem::path &sourceFile,
       [[maybe_unused]] const std::string &contextMessage)
   {
-
-    // Order matters: keep specific ones first.
-    if (handleRuntimePortAlreadyInUse(runtimeLog, sourceFile))
-      return true;
-
-    if (vix::cli::errors::rules::handleUncaughtException(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeAllocDeallocMismatch(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeDoubleFree(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeDoubleFreeInvalidFree(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeHeapUseAfterFree(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeUseAfterReturn(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeStackUseAfterScope(runtimeLog, sourceFile))
-      return true;
-
-    if (handleRuntimeBufferOverflow(runtimeLog, sourceFile))
-      return true;
-
-    if (handleSanitizers(runtimeLog, sourceFile))
-      return true;
-
-    return false;
+    return handleRuntimeAnything(runtimeLog, sourceFile);
   }
 
   bool RawLogDetectors::handleLinkerOrSanitizer(
@@ -931,28 +1076,7 @@ namespace vix::cli::errors
       const std::filesystem::path &sourceFile,
       [[maybe_unused]] const std::string &contextMessage)
   {
-    if (handleRuntimeAllocDeallocMismatch(buildLog, sourceFile))
-      return true;
-
-    if (handleRuntimeDoubleFree(buildLog, sourceFile))
-      return true;
-
-    if (handleRuntimeDoubleFreeInvalidFree(buildLog, sourceFile))
-      return true;
-
-    if (handleRuntimeHeapUseAfterFree(buildLog, sourceFile))
-      return true;
-
-    if (handleRuntimeUseAfterReturn(buildLog, sourceFile))
-      return true;
-
-    if (handleRuntimeStackUseAfterScope(buildLog, sourceFile))
-      return true;
-
-    if (handleRuntimeBufferOverflow(buildLog, sourceFile))
-      return true;
-
-    if (handleSanitizers(buildLog, sourceFile))
+    if (handleRuntimeAnything(buildLog, sourceFile))
       return true;
 
     if (handleLinkerErrors(buildLog, sourceFile))

@@ -114,30 +114,24 @@ namespace
     const std::string &msg = err.message;
     const bool verbose = hints_verbose_enabled();
 
-    auto printHintHeader = []()
+    auto h = [](const std::string &s)
     {
       std::cerr << "\n"
-                << YELLOW << "Hint:" << RESET << " ";
+                << YELLOW << "hint: " << RESET << s << "\n";
     };
 
     if (msg.find("use of undeclared identifier 'std'") != std::string::npos)
     {
-      printHintHeader();
-      std::cerr << "The C++ standard library namespace `std` is not visible here.\n"
-                << GRAY
-                << "Fix:\n"
-                << "  #include <iostream>\n"
-                << RESET;
+      h("std is not visible here (include the required standard header)");
+      if (verbose)
+        std::cerr << GRAY << "e.g. #include <iostream>\n"
+                  << RESET;
       return;
     }
 
     if (msg.find("expected ';'") != std::string::npos)
     {
-      printHintHeader();
-      std::cerr << "A ';' is missing at this location.\n"
-                << GRAY
-                << "Check the previous line.\n"
-                << RESET;
+      h("missing ';' (often the previous line)");
       return;
     }
 
@@ -149,33 +143,14 @@ namespace
 
       if (isVixJson)
       {
-        printHintHeader();
-        std::cerr
-            << "Response::json() expects ONE JSON object. You passed (key, value).\n"
-            << GRAY
-            << "Did you mean:\n"
-            << "  res.json({\"message\", \"Hello, world\"});\n"
-            << RESET;
-
+        h("Response::json() expects one JSON value (not key,value)");
         if (verbose)
-        {
-          std::cerr
-              << GRAY
-              << "\nOther valid forms:\n"
-              << "  res.json({ vix::json::kv(\"message\", \"Hello, world\") });\n"
-              << "  return vix::json::o(\"message\", \"Hello, world\");\n"
-              << "\nWhy:\n"
-              << "  json() accepts a JSON container/value (Vix tokens/builders), not two separate strings.\n"
-              << RESET;
-        }
+          std::cerr << GRAY << "e.g. res.json({\"message\", \"Hello\"});\n"
+                    << RESET;
         return;
       }
 
-      printHintHeader();
-      std::cerr << "The function call does not match any known overload.\n"
-                << GRAY
-                << "Check argument types and qualifiers.\n"
-                << RESET;
+      h("no matching overload (check argument types and qualifiers)");
       return;
     }
   }

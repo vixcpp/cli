@@ -257,8 +257,6 @@ namespace vix::cli::errors
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
     {
-      // NOTE: keep this detector for "invalid pointer"/"not malloc()-ed".
-      // Plain "double free" is handled by handleRuntimeDoubleFree() first.
       const bool hit =
           icontains(runtimeLog, "free(): invalid pointer") ||
           icontains(runtimeLog, "munmap_chunk(): invalid pointer") ||
@@ -268,72 +266,44 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      const bool hasASan = icontains(runtimeLog, "AddressSanitizer");
-
-      const bool alreadyPrintedByAsan =
-          hasASan &&
-          icontains(runtimeLog, "ERROR: AddressSanitizer") &&
-          icontains(runtimeLog, "SUMMARY: AddressSanitizer");
-
-      std::cerr << RED << "runtime error: invalid free (free/malloc or delete)" << RESET << "\n\n";
-      std::cerr << GRAY
-                << "A pointer is being freed incorrectly.\n"
-                << "Common causes: freeing a non-heap pointer, freeing shifted pointers (p+1),\n"
-                << "or freeing memory you don't own.\n"
-                << RESET << "\n";
-
-      if (!alreadyPrintedByAsan)
-      {
-        const auto lines = splitLines(runtimeLog);
-
-        auto excerpt = hasASan
-                           ? extractSanitizerExcerpt(lines, "AddressSanitizer", 14)
-                           : extractSanitizerExcerpt(lines, "free", 12);
-
-        std::cerr << GRAY << "excerpt:" << RESET << "\n";
-        for (const auto &l : excerpt)
-          std::cerr << GRAY << "    " << l << RESET << "\n";
-        std::cerr << "\n";
-      }
-      else
-      {
-        std::cerr << GRAY
-                  << "AddressSanitizer already printed a detailed report above.\n"
-                  << "Use the first frame in your code (file:line).\n"
-                  << RESET << "\n";
-      }
-
-      std::cerr << YELLOW << "tip:" << RESET << "\n"
-                << GRAY
-                << "  C:\n"
-                << "    ✔ only free() pointers returned by malloc/calloc/realloc\n"
-                << "    ✔ never free(): stack pointers, shifted pointers (p+1), or foreign memory\n"
-                << "  C++:\n"
-                << "    ✔ new    -> delete\n"
-                << "    ✔ new[]  -> delete[]\n"
-                << "    ✔ prefer std::unique_ptr / std::vector / std::string to avoid manual free/delete\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: invalid free"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: you freed a pointer that was not a valid heap allocation (or not owned)"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << "runtime error: invalid free"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: freed pointer is invalid (not malloc/new, shifted pointer, or double-free). run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
@@ -350,45 +320,44 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      std::cerr << RED << "runtime error: heap-use-after-free" << RESET << "\n\n";
-      std::cerr << GRAY
-                << "You are reading/writing memory after it was freed (dangling pointer/reference).\n"
-                << "This can crash later or silently corrupt data.\n"
-                << RESET << "\n";
-
-      std::cerr << YELLOW << "fix:" << RESET << "\n"
-                << GRAY
-                << "    ✔ don't access a pointer/reference after delete/free\n"
-                << "    ✔ set pointer to nullptr after delete/free\n"
-                << "    ✔ avoid storing references/iterators to elements that may be erased\n"
-                << "    ✔ prefer std::unique_ptr/std::shared_ptr instead of raw owning pointers\n"
-                << RESET << "\n";
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the location + code frame below.\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: use-after-free"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: you used memory after it was freed (dangling pointer/reference)"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << "runtime error: use-after-free"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: memory was accessed after being freed. run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
@@ -420,51 +389,49 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      std::cerr << RED << "runtime error: alloc-dealloc-mismatch" << RESET << "\n\n";
-      std::cerr << GRAY
-                << "Memory was allocated with one API and freed with a different one.\n"
-                << "Example: new[] must be paired with delete[], and malloc with free().\n"
-                << RESET << "\n";
-
-      std::cerr << YELLOW << "fix:" << RESET << "\n"
-                << GRAY
-                << "    ✔ new    -> delete\n"
-                << "    ✔ new[]  -> delete[]\n"
-                << "    ✔ malloc -> free\n"
-                << "    ✔ prefer std::vector / std::string / std::unique_ptr<T[]> to avoid manual delete\n"
-                << RESET << "\n";
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the location + code frame below.\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: alloc/dealloc mismatch"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: free memory with the matching API (new/delete, new[]/delete[], malloc/free)"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << "runtime error: alloc/dealloc mismatch"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: allocated with one API and freed with another. run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
     }
 
-    // double-free (malloc/free or new/delete)
     static bool handleRuntimeDoubleFree(
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
@@ -480,57 +447,44 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      std::cerr << RED << "runtime error: double-free (free/malloc or delete)" << RESET << "\n\n";
-      std::cerr << GRAY
-                << "The same heap allocation was freed more than once.\n"
-                << "This can happen in C (free/free) or C++ (delete/delete, double owner, etc.).\n"
-                << RESET << "\n";
-
-      std::cerr << YELLOW << "fix:" << RESET << "\n"
-                << GRAY
-                << "  C (malloc/free):\n"
-                << "    ✔ free() each allocation exactly once\n"
-                << "    ✔ after free(p), set p = nullptr to avoid accidental double-free\n"
-                << "    ✔ never free(): stack pointers, shifted pointers (p+1), or non-owned memory\n"
-                << "\n"
-                << "  C++ (new/delete / smart pointers):\n"
-                << "    ✔ new    -> delete\n"
-                << "    ✔ new[]  -> delete[]\n"
-                << "    ✔ never create 2 std::shared_ptr from the same raw pointer:\n"
-                << "        int* p = new int(1);\n"
-                << "        std::shared_ptr<int> a(p);\n"
-                << "        std::shared_ptr<int> b(p); // ❌ double delete\n"
-                << "    ✔ do this instead:\n"
-                << "        auto a = std::make_shared<int>(1);\n"
-                << "        auto b = a; // ✅ shared ownership\n"
-                << "    ✔ or use std::unique_ptr when there must be a single owner\n"
-                << RESET << "\n";
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the location + code frame below (if available).\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: double free"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: the same allocation was freed twice (double owner or duplicate delete/free)"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << "runtime error: double free"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: the same allocation was freed twice. run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
@@ -547,49 +501,44 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      std::cerr << RED << "runtime error: use-after-return" << RESET << "\n\n";
-      std::cerr << GRAY
-                << "Likely cause: you returned a pointer/reference/view to a local variable.\n"
-                << "After the function returns, that stack memory becomes invalid.\n"
-                << RESET << "\n";
-
-      std::cerr << YELLOW << "fix:" << RESET << "\n"
-                << GRAY
-                << "    ✔ return by value (preferred)\n"
-                << "    ✔ or return an owning type (std::string, std::vector, unique_ptr)\n"
-                << "    ✔ never return T& / T* / string_view/span to a local variable\n"
-                << "\n"
-                << "    // bad:\n"
-                << "    std::string_view f(){ std::string s=\"hi\"; return s; }\n"
-                << "    // good:\n"
-                << "    std::string f(){ return \"hi\"; }\n"
-                << RESET << "\n";
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the location + code frame below.\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: use-after-return"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: a pointer/reference/view escaped a function and outlived its stack variable"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << "runtime error: use-after-return"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: dangling stack reference/view. run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
@@ -607,45 +556,44 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      std::cerr << RED << "runtime error: stack-use-after-scope" << RESET << "\n\n";
-      std::cerr << GRAY
-                << "Likely cause: a dangling reference/view/span was used after its backing storage went out of scope.\n"
-                << "Example: std::string_view sv = std::string(\"Hello\"); // dangling view\n"
-                << RESET << "\n";
-
-      std::cerr << YELLOW << "fix:" << RESET << "\n"
-                << GRAY
-                << "    ✔ keep backing storage alive:\n"
-                << "        std::string s = \"Hello\";\n"
-                << "        std::string_view sv = s;\n"
-                << "    ✔ or use std::string instead of std::string_view\n"
-                << RESET << "\n";
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the location + code frame below.\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: stack-use-after-scope"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: a reference/view/span outlived the object it refers to"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << "runtime error: stack-use-after-scope"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: dangling stack reference/view/span. run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
@@ -685,8 +633,7 @@ namespace vix::cli::errors
       if (!hit)
         return false;
 
-      std::string title = "runtime error: memory safety issue";
-
+      std::string title = "runtime error: buffer overflow";
       if (isHeapBO)
         title = "runtime error: heap-buffer-overflow";
       else if (isStackBO)
@@ -699,86 +646,75 @@ namespace vix::cli::errors
         title = "runtime error: use-after-return";
       else if (isOutOfBounds)
         title = "runtime error: out-of-bounds access";
-      else
-        title = "runtime error: buffer overflow";
-
-      std::cerr << RED << title << RESET << "\n\n";
-
-      if (isUseAfterReturn)
-      {
-        std::cerr << GRAY
-                  << "Likely cause: you returned a pointer/reference/view to a local variable.\n"
-                  << "After the function returns, that stack memory becomes invalid.\n"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW << "fix:" << RESET << "\n"
-                  << GRAY
-                  << "    ✔ return by value (preferred)\n"
-                  << "    ✔ or return an owning type (std::string, std::vector, unique_ptr)\n"
-                  << "    ✔ never return T& / T* to a local variable\n"
-                  << "\n"
-                  << "    // bad:\n"
-                  << "    const char* f(){ std::string s=\"hi\"; return s.c_str(); }\n"
-                  << "    // good:\n"
-                  << "    std::string f(){ return \"hi\"; }\n"
-                  << RESET << "\n";
-      }
-      else if (isUseAfterScope)
-      {
-        std::cerr << GRAY
-                  << "Likely cause: a dangling reference/view/span was used after its backing storage went out of scope.\n"
-                  << "Example: std::string_view sv = std::string(\"Hello\"); // dangling view\n"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW << "fix:" << RESET << "\n"
-                  << GRAY
-                  << "    ✔ keep backing storage alive:\n"
-                  << "        std::string s = \"Hello\";\n"
-                  << "        std::string_view sv = s;\n"
-                  << "    ✔ or use std::string instead of std::string_view\n"
-                  << RESET << "\n";
-      }
-      else
-      {
-        std::cerr << GRAY
-                  << "A read/write went past the bounds of an allocated object.\n"
-                  << "This can corrupt memory and crash later in unrelated code.\n"
-                  << RESET << "\n";
-
-        std::cerr << YELLOW << "fix:" << RESET << "\n"
-                  << GRAY
-                  << "    ✔ check indices (i < size)\n"
-                  << "    ✔ use .at(...) in debug builds for bounds checking\n"
-                  << "    ✔ ensure buffers include null terminator for C strings\n"
-                  << "    ✔ prefer std::vector / std::string / std::span over raw arrays\n"
-                  << RESET << "\n";
-      }
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the location + code frame below.\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
 
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
+        std::cerr << RED
+                  << title
+                  << RESET << "\n";
+
+        if (isUseAfterReturn)
+        {
+          std::cerr << YELLOW
+                    << "hint: a pointer/reference/view outlived a stack variable (returned from a function)"
+                    << RESET << "\n";
+        }
+        else if (isUseAfterScope)
+        {
+          std::cerr << YELLOW
+                    << "hint: a reference/view/span outlived the object it refers to"
+                    << RESET << "\n";
+        }
+        else
+        {
+          std::cerr << YELLOW
+                    << "hint: read/write went past bounds (check indices and sizes)"
+                    << RESET << "\n";
+        }
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
+        std::cerr << RED
+                  << title
+                  << RESET << "\n";
+
+        if (isUseAfterReturn)
+        {
+          std::cerr << YELLOW
+                    << "hint: dangling stack pointer/reference/view. run with --san for exact location"
+                    << RESET << "\n";
+        }
+        else if (isUseAfterScope)
+        {
+          std::cerr << YELLOW
+                    << "hint: dangling stack reference/view/span. run with --san for exact location"
+                    << RESET << "\n";
+        }
+        else
+        {
+          std::cerr << YELLOW
+                    << "hint: out-of-bounds memory access. run with --san for exact location"
+                    << RESET << "\n";
+        }
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
       }
 
       return true;
@@ -805,45 +741,48 @@ namespace vix::cli::errors
       const auto lines = splitLines(log);
       const auto kind = extractSanitizerKind(lines, san);
 
-      std::cerr << RED << "runtime error: sanitizer reported an issue" << RESET << "\n";
-      std::cerr << GRAY << "sanitizer: " << san;
-      if (!kind.empty())
-        std::cerr << " (" << kind << ")";
-      std::cerr << RESET << "\n\n";
-
-      std::cerr << GRAY
-                << "Sanitizer report was captured and hidden to keep output clean.\n"
-                << "Use the first frame in your code (file:line) below.\n"
-                << RESET << "\n";
-
-      if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
-
       if (auto loc = tryExtractFirstUserFrame(log, sourceFile))
       {
+        std::cerr << RED
+                  << "runtime error: sanitizer"
+                  << RESET << "\n";
+
+        std::cerr << YELLOW
+                  << "hint: fix the first reported issue"
+                  << RESET << "\n";
+
+        std::cerr << GREEN
+                  << "at: " << loc->file << ":" << loc->line
+                  << RESET << "\n";
+
         ErrorContext ctx;
         CodeFrameOptions opt;
         opt.contextLines = 2;
         opt.maxLineWidth = 120;
         opt.tabWidth = 4;
 
-        std::cerr << "\n"
-                  << GREEN << "location:" << RESET
-                  << " " << loc->file << ":" << loc->line << "\n";
-
         printCodeFrame(*loc, ctx, opt);
       }
       else
       {
-        hint("no stack trace (enable ASan for exact location)");
-      }
+        std::cerr << RED
+                  << "runtime error: sanitizer"
+                  << RESET << "\n";
 
-      std::cerr << "\n"
-                << YELLOW << "tip:" << RESET << "\n"
-                << GRAY
-                << "    ✔ fix the first reported issue; others may be consequences\n"
-                << "    ✔ prefer RAII (std::vector/std::string/unique_ptr) over manual memory management\n"
-                << RESET << "\n";
+        std::cerr << YELLOW
+                  << "hint: " << san;
+        if (!kind.empty())
+          std::cerr << " (" << kind << ")";
+        std::cerr << ". run with --san for exact location"
+                  << RESET << "\n";
+
+        if (!sourceFile.empty())
+        {
+          std::cerr << GREEN
+                    << "source: " << sourceFile.filename().string()
+                    << RESET << "\n";
+        }
+      }
 
       return true;
     }
@@ -852,44 +791,36 @@ namespace vix::cli::errors
     {
       bool hasUndefinedRef = false;
       bool hasLdError = false;
-      std::string firstUndefinedRefLine;
 
       std::istringstream iss(buildLog);
       std::string line;
       while (std::getline(iss, line))
       {
         if (!hasUndefinedRef && line.find("undefined reference to") != std::string::npos)
-        {
           hasUndefinedRef = true;
-          firstUndefinedRefLine = line;
-        }
 
         if (line.find("ld returned") != std::string::npos ||
             line.find("collect2: error: ld returned") != std::string::npos)
-        {
           hasLdError = true;
-        }
       }
 
       if (!(hasUndefinedRef || hasLdError))
         return false;
 
-      std::cerr << RED << "link error: undefined reference(s)" << RESET << "\n\n";
-      std::cerr << GRAY << "The linker reported one or more undefined symbols.\n"
+      std::cerr << RED
+                << "link error: undefined reference(s)"
                 << RESET << "\n";
 
-      if (!firstUndefinedRefLine.empty())
-        std::cerr << GRAY << "    " << firstUndefinedRefLine << RESET << "\n\n";
-
-      std::cerr << YELLOW << "tip:" << RESET << "\n"
-                << GRAY
-                << "    ✔ ensure every function you call is defined\n"
-                << "    ✔ ensure required .cpp files are part of the target\n"
-                << "    ✔ verify target_link_libraries(...) in CMake\n"
+      std::cerr << YELLOW
+                << "hint: a symbol is declared but not linked (missing .cpp or missing library)"
                 << RESET << "\n";
 
       if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
+      {
+        std::cerr << GREEN
+                  << "source: " << sourceFile.filename().string()
+                  << RESET << "\n";
+      }
 
       return true;
     }
@@ -921,40 +852,29 @@ namespace vix::cli::errors
         }
       }
 
-      std::cerr << RED << "runtime error: port already in use" << RESET << "\n\n";
-
-      std::cerr << GRAY
-                << "Another process is already listening on this address/port.\n"
-                << "This typically happens when a server is already running in another terminal.\n"
+      std::cerr << RED
+                << "runtime error: address already in use"
                 << RESET << "\n";
 
       if (!port.empty())
-        std::cerr << GREEN << "port: " << RESET << port << "\n";
-
-      std::cerr << YELLOW << "fix:" << RESET << "\n";
-
-      std::cerr << GRAY
-                << "  Option A: stop the other server (Ctrl+C in the other terminal)\n"
-                << "  Option B: change the port (e.g. PORT=8081 or --port 8081)\n"
-                << "  Option C: find the process using the port:\n";
-
-#ifndef _WIN32
-      if (!port.empty())
       {
-        std::cerr << "    lsof -iTCP:" << port << " -sTCP:LISTEN\n"
-                  << "    ss -ltnp | grep :" << port << "\n";
+        std::cerr << YELLOW
+                  << "hint: port " << port << " is already in use (stop the other process or change the port)"
+                  << RESET << "\n";
       }
-#else
-      if (!port.empty())
+      else
       {
-        std::cerr << "    netstat -ano | findstr :" << port << "\n";
+        std::cerr << YELLOW
+                  << "hint: this port is already in use (stop the other process or change the port)"
+                  << RESET << "\n";
       }
-#endif
-
-      std::cerr << RESET << "\n";
 
       if (!sourceFile.empty())
-        std::cerr << GREEN << "source:" << RESET << " " << sourceFile.filename().string() << "\n";
+      {
+        std::cerr << GREEN
+                  << "source: " << sourceFile.filename().string()
+                  << RESET << "\n";
+      }
 
       return true;
     }

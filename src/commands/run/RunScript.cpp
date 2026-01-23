@@ -60,6 +60,100 @@ namespace vix::commands::RunCommand::detail
            log.find("interrupted by user") != std::string::npos;
   }
 
+  static inline std::string trim_copy(std::string s)
+  {
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
+      s.pop_back();
+
+    size_t i = 0;
+    while (i < s.size() && (s[i] == '\n' || s[i] == '\r' || s[i] == ' ' || s[i] == '\t'))
+      ++i;
+
+    s.erase(0, i);
+    return s;
+  }
+
+  static bool handle_error_tip_block(const std::string &log)
+  {
+    const auto epos = log.find("error:");
+    if (epos == std::string::npos)
+      return false;
+
+    auto line_end = [&](size_t p) -> size_t
+    {
+      size_t n = log.find('\n', p);
+      return (n == std::string::npos) ? log.size() : n;
+    };
+
+    const size_t eend = line_end(epos);
+    std::string eLine = log.substr(epos, eend - epos); // "error: ..."
+
+    std::string tipLine;
+    const auto tpos = log.find("tip:", eend);
+    if (tpos != std::string::npos)
+    {
+      const size_t tend = line_end(tpos);
+      tipLine = log.substr(tpos, tend - tpos); // "tip: ..."
+    }
+
+    auto strip_prefix = [](std::string s, const char *pref) -> std::string
+    {
+      if (s.rfind(pref, 0) == 0)
+        s.erase(0, std::strlen(pref));
+      while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+        s.erase(0, 1);
+      return s;
+    };
+
+    vix::cli::style::error(strip_prefix(eLine, "error:"));
+    if (!tipLine.empty())
+      vix::cli::style::hint(strip_prefix(tipLine, "tip:"));
+    return true;
+  }
+
+  static bool handle_error_tip_block_vix(const std::string &log)
+  {
+    const auto epos = log.find("error:");
+    if (epos == std::string::npos)
+      return false;
+
+    auto line_end = [&](size_t p) -> size_t
+    {
+      size_t n = log.find('\n', p);
+      return (n == std::string::npos) ? log.size() : n;
+    };
+
+    auto strip_prefix = [](std::string s, const char *pref) -> std::string
+    {
+      if (s.rfind(pref, 0) == 0)
+        s.erase(0, std::strlen(pref));
+      while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+        s.erase(0, 1);
+      return s;
+    };
+
+    const size_t eend = line_end(epos);
+    std::string eLine = log.substr(epos, eend - epos); // "error: ..."
+
+    std::string tipLine;
+    const auto tpos = log.find("tip:", eend);
+    if (tpos != std::string::npos)
+    {
+      const size_t tend = line_end(tpos);
+      tipLine = log.substr(tpos, tend - tpos); // "tip: ..."
+    }
+
+    const std::string msg = strip_prefix(eLine, "error:");
+    const std::string tip = tipLine.empty() ? "" : strip_prefix(tipLine, "tip:");
+
+    // ✅ Style Vix (comme tes autres erreurs)
+    std::cerr << "  " << RED << "✖" << RESET << " " << msg << "\n";
+    if (!tip.empty())
+      std::cerr << "  " << GRAY << "➜" << RESET << " " << tip << "\n";
+
+    return true;
+  }
+
   int run_single_cpp(const Options &opt)
   {
     using namespace std;
@@ -236,37 +330,66 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
     apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
-    auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", true, opt.timeoutSec);
+    auto rr = run_cmd_live_filtered_capture(cmdRun, "Running script", false, opt.timeoutSec);
     runCode = normalize_exit_code(rr.exitCode);
 
     if (runCode != 0)
     {
+      std::string out = rr.stdoutText;
+      std::string err = rr.stderrText;
+
+      const std::string outT = trim_copy(out);
+      const std::string errT = trim_copy(err);
+
+      // Dédup: même contenu → on garde un seul
+      if (!outT.empty() && outT == errT)
+      {
+        err.clear();
+      }
+      else if (!outT.empty() && !errT.empty())
+      {
+        // Si l’un contient l’autre, garde le plus “riche”
+        if (outT.find(errT) != std::string::npos)
+          err.clear();
+        else if (errT.find(outT) != std::string::npos)
+          out.clear();
+      }
+
       std::string runtimeLog;
-      runtimeLog.reserve(rr.stdoutText.size() + rr.stderrText.size() + 1);
+      runtimeLog.reserve(out.size() + err.size() + 1);
 
-      if (!rr.stdoutText.empty())
-        runtimeLog += rr.stdoutText;
+      if (!out.empty())
+        runtimeLog += out;
 
-      if (!rr.stderrText.empty())
+      if (!err.empty())
       {
         if (!runtimeLog.empty() && runtimeLog.back() != '\n')
           runtimeLog.push_back('\n');
-        runtimeLog += rr.stderrText;
+        runtimeLog += err;
       }
 
       bool handled = false;
 
       if (!runtimeLog.empty())
       {
-        handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-            runtimeLog, script, "Script execution failed");
+        handled = handle_error_tip_block_vix(runtimeLog);
+
+        if (!handled)
+        {
+          handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+              runtimeLog, script, "Script execution failed");
+        }
 
         if (!handled &&
             vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))
+        {
           handled = true;
+        }
 
         if (!handled)
-          std::cout << runtimeLog << "\n";
+        {
+          std::cerr << runtimeLog << "\n";
+        }
       }
 
       handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);

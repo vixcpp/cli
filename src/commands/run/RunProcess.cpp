@@ -87,6 +87,36 @@ namespace vix::commands::RunCommand::detail
     }
   }
 
+  static inline bool is_vix_error_tip_line(std::string_view line) noexcept
+  {
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+      line.remove_prefix(1);
+
+    return (line.rfind("error:", 0) == 0) || (line.rfind("tip:", 0) == 0);
+  }
+
+  static inline std::string drop_vix_error_tip_lines(const std::string &chunk)
+  {
+    std::string out;
+    out.reserve(chunk.size());
+
+    std::size_t start = 0;
+    while (start < chunk.size())
+    {
+      const std::size_t nl = chunk.find('\n', start);
+      const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
+
+      std::string_view line(&chunk[start], end - start);
+
+      if (!is_vix_error_tip_line(line))
+        out.append(line.data(), line.size());
+
+      start = end;
+    }
+
+    return out;
+  }
+
   static inline std::size_t utf8_safe_prefix_len(const std::string &s, std::size_t want)
   {
     if (want >= s.size())
@@ -787,11 +817,8 @@ namespace vix::commands::RunCommand::detail
           if (is_noise_line(line))
             continue;
 
-          // drop empty/whitespace-only lines created by filtering
           if (is_whitespace_only(line))
             continue;
-
-          out.append(line.data(), line.size());
 
           out.append(line.data(), line.size());
         }
@@ -805,6 +832,7 @@ namespace vix::commands::RunCommand::detail
 
     bool running = true;
     bool printedSomething = false;
+    bool printedRealOutput = false;
     char lastPrintedChar = '\n';
 
     int finalStatus = 0;
@@ -1016,11 +1044,14 @@ namespace vix::commands::RunCommand::detail
 
                 if (!filtered.empty())
                 {
-                  if (!captureOnly)
+                  std::string toPrint = drop_vix_error_tip_lines(filtered);
+
+                  if (!toPrint.empty() && !captureOnly)
                   {
-                    write_all(STDOUT_FILENO, filtered.data(), filtered.size());
+                    write_all(STDOUT_FILENO, toPrint.data(), toPrint.size());
                     printedSomething = true;
-                    lastPrintedChar = filtered.back();
+                    printedRealOutput = true; // ✅
+                    lastPrintedChar = toPrint.back();
                   }
                 }
               }
@@ -1069,7 +1100,7 @@ namespace vix::commands::RunCommand::detail
     result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
 
     if (!captureOnly &&
-        printedSomething &&
+        printedRealOutput &&
         lastPrintedChar != '\n' &&
         ::isatty(STDOUT_FILENO) != 0)
     {

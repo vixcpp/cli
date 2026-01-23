@@ -477,8 +477,6 @@ namespace vix::commands::RunCommand
 
           if (buildExit != 0)
           {
-            return buildExit != 0 ? buildExit : 2;
-
             if (!log.empty())
             {
               vix::cli::ErrorHandler::printBuildErrors(
@@ -498,6 +496,7 @@ namespace vix::commands::RunCommand
 
             return buildExit != 0 ? buildExit : 2;
           }
+
 #endif
         }
 

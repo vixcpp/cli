@@ -250,12 +250,32 @@ namespace vix::commands::OrmCommand
       return help();
 
     const std::string sub = args[0];
-    if (sub != "migrate" && sub != "rollback" && sub != "status")
+    if (sub != "migrate" && sub != "rollback" && sub != "status" && sub != "makemigrations")
     {
       std::cerr << "vix: unknown orm subcommand '" << sub << "'\n\n";
       help();
       return 1;
     }
+
+    const bool is_make = (sub == "makemigrations");
+
+    auto parse_opt = [&](const std::string &key) -> std::string
+    {
+      // --key value
+      {
+        const std::string v = get_flag(args, key);
+        if (!v.empty())
+          return v;
+      }
+
+      // --key=value
+      const std::string prefix = key + "=";
+      for (const auto &a : args)
+        if (a.rfind(prefix, 0) == 0)
+          return a.substr(prefix.size());
+
+      return {};
+    };
 
     auto flag_or_env = [&](const std::string &flag,
                            const char *envKey,
@@ -267,11 +287,7 @@ namespace vix::commands::OrmCommand
       return env_or(envKey, defv);
     };
 
-    const std::string host = flag_or_env("--host", "VIX_ORM_HOST", "tcp://127.0.0.1:3306");
-    const std::string user = flag_or_env("--user", "VIX_ORM_USER", "root");
-    const std::string pass = flag_or_env("--pass", "VIX_ORM_PASS", "");
-    const std::string db = flag_or_env("--db", "VIX_ORM_DB", "vixdb");
-
+    // Project root
     fs::path projectDir;
     const std::string projFlag = get_flag(args, "--project-dir");
     if (!projFlag.empty())
@@ -286,8 +302,8 @@ namespace vix::commands::OrmCommand
       return 1;
     }
 
+    // Detect/resolve migrations dir
     fs::path migDir;
-
     const std::string dirFlag = get_flag(args, "--dir");
     if (!dirFlag.empty())
     {
@@ -314,46 +330,105 @@ namespace vix::commands::OrmCommand
       migDir = fs::weakly_canonical(migDir);
     }
 
+    // Ensure migrations dir:
+    // - migrate/rollback/status => must exist
+    // - makemigrations          => create it if missing
     if (!fs::exists(migDir) || !fs::is_directory(migDir))
     {
-      std::cerr << "vix orm: migrations directory not found: " << migDir.string() << "\n";
-
-      if (looks_like_app_root(projectDir))
+      if (!is_make)
       {
-        std::cerr << "Tip: create it with:\n";
-        std::cerr << "  mkdir -p " << (projectDir / "migrations").string() << "\n";
+        std::cerr << "vix orm: migrations directory not found: " << migDir.string() << "\n";
+        if (looks_like_app_root(projectDir))
+        {
+          std::cerr << "Tip: create it with:\n";
+          std::cerr << "  mkdir -p " << (projectDir / "migrations").string() << "\n";
+        }
+        std::cerr << "Or pass: --dir <path>\n";
+        return 1;
       }
-
-      std::cerr << "Or pass: --dir <path>\n";
-      return 1;
+      else
+      {
+        std::error_code ec;
+        fs::create_directories(migDir, ec);
+        if (ec)
+        {
+          std::cerr << "vix orm makemigrations: cannot create migrations dir: " << migDir.string() << "\n";
+          return 1;
+        }
+      }
     }
 
+    // Tool path
     std::string tool = get_flag(args, "--tool");
     if (tool.empty())
       tool = find_migrator_tool();
 
-    // Build command:
-    //   tool <host> <user> <pass> <db> <sub> [--steps N] --dir <path>
     std::string cmd;
     cmd += shell_quote(tool) + " ";
-    cmd += shell_quote(host) + " ";
-    cmd += shell_quote(user) + " ";
-    cmd += shell_quote(pass) + " ";
-    cmd += shell_quote(db) + " ";
-    cmd += shell_quote(sub);
 
-    if (sub == "rollback")
+    if (is_make)
     {
-      std::string steps = get_flag(args, "--steps");
-      if (steps.empty())
+      // REQUIRED
+      const std::string newSchema = parse_opt("--new");
+      if (newSchema.empty())
       {
-        std::cerr << "vix orm rollback requires: --steps <n>\n";
+        std::cerr << "vix orm makemigrations requires: --new <schema.json>\n";
         return 1;
       }
-      cmd += " --steps " + shell_quote(steps);
-    }
 
-    cmd += " --dir " + shell_quote(migDir.string());
+      std::string snapshot = parse_opt("--snapshot");
+      if (snapshot.empty())
+        snapshot = "schema.json";
+
+      std::string name = parse_opt("--name");
+      if (name.empty())
+        name = "auto";
+
+      std::string dialect = parse_opt("--dialect");
+      if (dialect.empty())
+        dialect = "mysql";
+
+      fs::path newPath = fs::path(newSchema);
+      if (newPath.is_relative())
+        newPath = fs::weakly_canonical(projectDir / newPath);
+
+      fs::path snapPath = fs::path(snapshot);
+      if (snapPath.is_relative())
+        snapPath = fs::weakly_canonical(projectDir / snapPath);
+
+      cmd += "makemigrations ";
+      cmd += "--new " + shell_quote(newPath.string()) + " ";
+      cmd += "--snapshot " + shell_quote(snapPath.string()) + " ";
+      cmd += "--dir " + shell_quote(migDir.string()) + " ";
+      cmd += "--name " + shell_quote(name) + " ";
+      cmd += "--dialect " + shell_quote(dialect);
+    }
+    else
+    {
+      const std::string host = flag_or_env("--host", "VIX_ORM_HOST", "tcp://127.0.0.1:3306");
+      const std::string user = flag_or_env("--user", "VIX_ORM_USER", "root");
+      const std::string pass = flag_or_env("--pass", "VIX_ORM_PASS", "");
+      const std::string db = flag_or_env("--db", "VIX_ORM_DB", "vixdb");
+
+      cmd += shell_quote(host) + " ";
+      cmd += shell_quote(user) + " ";
+      cmd += shell_quote(pass) + " ";
+      cmd += shell_quote(db) + " ";
+      cmd += shell_quote(sub);
+
+      if (sub == "rollback")
+      {
+        std::string steps = get_flag(args, "--steps");
+        if (steps.empty())
+        {
+          std::cerr << "vix orm rollback requires: --steps <n>\n";
+          return 1;
+        }
+        cmd += " --steps " + shell_quote(steps);
+      }
+
+      cmd += " --dir " + shell_quote(migDir.string());
+    }
 
     int rc = std::system(cmd.c_str());
     return rc == 0 ? 0 : 1;
@@ -369,6 +444,13 @@ namespace vix::commands::OrmCommand
     out << "  vix orm migrate   [options]\n";
     out << "  vix orm rollback  --steps <n> [options]\n";
     out << "  vix orm status    [options]\n\n";
+    out << "  vix orm makemigrations --new <schema.json> [options]\n\n";
+
+    out << "Makemigrations options:\n";
+    out << "  --new <path>          New schema json (required)\n";
+    out << "  --snapshot <path>     Previous snapshot (default: schema.json)\n";
+    out << "  --name <label>        Migration label (default: auto)\n";
+    out << "  --dialect <mysql|sqlite>  SQL dialect (default: mysql)\n\n";
 
     out << "Common options:\n";
     out << "  --db <name>           Database name (overrides VIX_ORM_DB)\n";
@@ -396,6 +478,7 @@ namespace vix::commands::OrmCommand
     out << "  vix orm rollback --steps 1 --db blog_db --dir ./migrations\n";
     out << "  vix orm status --db blog_db\n";
     out << "  VIX_ORM_DB=blog_db vix orm migrate --dir ./migrations\n";
+    out << "  vix orm makemigrations --new ./schema.new.json --snapshot ./schema.json --dir ./migrations --name create_users --dialect mysql\n";
 
     return 0;
   }

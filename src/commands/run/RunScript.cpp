@@ -439,7 +439,8 @@ namespace vix::commands::RunCommand::detail
 
         if (!handled)
         {
-          std::cerr << runtimeLog << "\n";
+          if (!rr.printed_live)
+            std::cerr << runtimeLog << "\n";
         }
       }
 

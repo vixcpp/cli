@@ -1,3 +1,16 @@
+/**
+ *
+ *  @file ScriptCMake.cpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Vix.cpp
+ *
+ */
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 
 #include <fstream>
@@ -6,6 +19,50 @@
 
 namespace vix::commands::RunCommand::detail
 {
+  struct ScriptFeatures
+  {
+    bool usesVix = false;
+    bool usesOrm = false;
+    bool usesDb = false;
+    bool usesMysql = false;
+  };
+
+  static ScriptFeatures detect_script_features(const fs::path &cppPath)
+  {
+    ScriptFeatures f;
+
+    std::ifstream ifs(cppPath);
+    if (!ifs)
+      return f;
+
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+      auto has = [&](const char *s)
+      { return line.find(s) != std::string::npos; };
+
+      if (has("vix::") || has("Vix::") || has("#include <vix/") || has("#include \"vix/"))
+        f.usesVix = true;
+
+      if (has("#include <vix/orm/") || has("vix::orm") || has("using namespace vix::orm"))
+        f.usesOrm = true;
+
+      if (has("#include <vix/db/") || has("vix::db") || has("using namespace vix::db"))
+        f.usesDb = true;
+
+      if (has("make_mysql_factory") || has("Engine::MySQL") || has("mysqlcppconn"))
+        f.usesMysql = true;
+
+      if (!f.usesMysql && (has("tcp://") || has("3306") || has("MySQL")))
+        f.usesMysql = true;
+    }
+
+    if (f.usesOrm)
+      f.usesDb = true;
+
+    return f;
+  }
+
   ScriptLinkFlags parse_link_flags(const std::vector<std::string> &flags)
   {
     ScriptLinkFlags out;
@@ -101,17 +158,24 @@ namespace vix::commands::RunCommand::detail
     s += "  set(CMAKE_BUILD_TYPE Debug CACHE STRING \"Build type\" FORCE)\n";
     s += "endif()\n\n";
 
+    auto feat = detect_script_features(cppPath);
+
     // Options
     s += "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)\n";
     s += "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan or ubsan\")\n";
     s += "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan)\n";
     s += "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)\n";
     s += "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)\n";
-    s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" ON)\n\n";
+    s += std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")\n";
 
     // Executable
     s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
     auto lf = parse_link_flags(scriptFlags);
+
+    auto hasLib = [&](const std::string &name) -> bool
+    {
+      return std::find(lf.libs.begin(), lf.libs.end(), name) != lf.libs.end();
+    };
 
     if (!lf.libDirs.empty())
     {
@@ -219,6 +283,20 @@ namespace vix::commands::RunCommand::detail
       s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but DB target is not available (vix::db/Vix::db)\")\n";
       s += "  endif()\n";
       s += "endif()\n\n";
+
+      // Auto-link MySQL connector only when needed and not already provided
+      if (feat.usesMysql && !hasLib("mysqlcppconn8") && !hasLib("mysqlcppconn"))
+      {
+        s += "# Auto-link MySQL connector when script uses MySQL\n";
+        s += "if (UNIX)\n";
+        s += "  find_library(VIX_MYSQLCPPCONN_LIB NAMES mysqlcppconn8 mysqlcppconn)\n";
+        s += "  if (VIX_MYSQLCPPCONN_LIB)\n";
+        s += "    target_link_libraries(" + exeName + " PRIVATE ${VIX_MYSQLCPPCONN_LIB})\n";
+        s += "  else()\n";
+        s += "    message(WARNING \"MySQL connector lib not found (mysqlcppconn8/mysqlcppconn). If you get undefined references, pass: -- -lmysqlcppconn8\")\n";
+        s += "  endif()\n";
+        s += "endif()\n\n";
+      }
     }
 
     // Sanitizers (mode-aware)

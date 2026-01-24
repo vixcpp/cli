@@ -1050,7 +1050,8 @@ namespace vix::commands::RunCommand::detail
                   {
                     write_all(STDOUT_FILENO, toPrint.data(), toPrint.size());
                     printedSomething = true;
-                    printedRealOutput = true; // ✅
+                    printedRealOutput = true;
+                    result.printed_live = true;
                     lastPrintedChar = toPrint.back();
                   }
                 }

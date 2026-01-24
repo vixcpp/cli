@@ -101,8 +101,8 @@ namespace vix::commands::RunCommand::detail
     int exitCode = 0;  // normalized 0..255 or 128+signal
     std::string stdoutText;
     std::string stderrText;
-
     bool failureHandled = false;
+    bool printed_live = false;
   };
 
   LiveRunResult run_cmd_live_filtered_capture(

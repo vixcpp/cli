@@ -48,8 +48,9 @@ namespace vix::commands::CheckCommand::detail
   using vix::cli::commands::helpers::run_and_capture_with_code;
   using vix::commands::RunCommand::detail::has_presets;
 
-  static fs::path guess_build_dir_from_configure_preset(const fs::path &projectDir,
-                                                        const std::string &preset)
+  static fs::path guess_build_dir_from_configure_preset(
+      const fs::path &projectDir,
+      const std::string &preset)
   {
     // Convention Vix: dev-ninja -> build-ninja
     if (preset.rfind("dev-", 0) == 0)
@@ -65,9 +66,11 @@ namespace vix::commands::CheckCommand::detail
 
     std::ostringstream cmd;
 #ifdef _WIN32
-    cmd << "cmd /C \"cd /D " << quote(projectDir.string()) << " && cmake --list-presets\"";
+    cmd << "cmd /C \"cd /D " << quote(projectDir.string())
+        << " && cmake --list-presets=build\"";
 #else
-    cmd << "cd " << quote(projectDir.string()) << " && cmake --list-presets";
+    cmd << "cd " << quote(projectDir.string())
+        << " && cmake --list-presets=build";
 #endif
 
     int code = 0;
@@ -82,6 +85,7 @@ namespace vix::commands::CheckCommand::detail
       auto q1 = line.find('"');
       if (q1 == std::string::npos)
         continue;
+
       auto q2 = line.find('"', q1 + 1);
       if (q2 == std::string::npos)
         continue;
@@ -111,6 +115,7 @@ namespace vix::commands::CheckCommand::detail
       return userBuildPresetOverride;
 
     const auto presets = list_build_presets(projectDir);
+
     if (presets.empty())
     {
       if (configurePreset == "dev-ninja")
@@ -119,7 +124,10 @@ namespace vix::commands::CheckCommand::detail
         return "build-ninja-san";
       if (configurePreset == "dev-ninja-ubsan")
         return "build-ninja-ubsan";
-      return configurePreset;
+
+      if (configurePreset.rfind("dev-", 0) == 0)
+        return "build-" + configurePreset.substr(4);
+      return "build-" + configurePreset;
     }
 
     if (configurePreset == "dev-ninja")
@@ -163,7 +171,9 @@ namespace vix::commands::CheckCommand::detail
         return configurePreset;
     }
 
-    return configurePreset;
+    if (configurePreset.rfind("dev-", 0) == 0)
+      return "build-" + configurePreset.substr(4);
+    return "build-" + configurePreset;
   }
 
   static std::string guess_project_name_from_dir(const fs::path &projectDir)
@@ -371,6 +381,7 @@ namespace vix::commands::CheckCommand::detail
       // 3) choose build preset
       const std::string buildPreset =
           pick_build_preset_smart(projectDir, preset, opt.buildPreset);
+      step("Build preset: " + buildPreset);
 
       // 4) build
       std::ostringstream b;

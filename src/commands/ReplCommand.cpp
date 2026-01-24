@@ -20,20 +20,28 @@ namespace vix::commands::ReplCommand
 {
   int run(const std::vector<std::string> &args)
   {
-    (void)args;
-    return repl_flow_run();
+    std::vector<std::string> replArgs = args;
+    if (!replArgs.empty() && replArgs[0] == "--")
+      replArgs.erase(replArgs.begin());
+
+    return repl_flow_run(replArgs);
   }
 
   int help()
   {
     std::cout
         << "Usage:\n"
-        << "  vix repl\n\n"
+        << "  vix repl [-- <args...>]\n\n"
         << "Description:\n"
-        << "  Start an interactive Vix REPL (CLI shell + calculator).\n\n"
+        << "  Start an interactive Vix REPL (shell + calculator).\n"
+        << "  Args after `--` are available via Vix.args().\n\n"
         << "Examples:\n"
         << "  vix repl\n"
-        << "  vix repl   # then: = 1+2*3\n";
+        << "  vix repl -- --port 8080 --mode dev\n"
+        << "  # inside REPL:\n"
+        << "  #   Vix.args()\n"
+        << "  #   x = 1+2*3\n";
     return 0;
   }
+
 }

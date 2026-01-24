@@ -15,7 +15,7 @@
 
 namespace vix::commands::ReplCommand
 {
-  int repl_flow_run();
+  int repl_flow_run(const std::vector<std::string> &replArgs);
 }
 
 #endif

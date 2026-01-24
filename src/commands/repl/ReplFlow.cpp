@@ -446,10 +446,19 @@ namespace
 
     if (m == "args")
     {
-      // print JSON array
+      // args() takes no parameters in REPL (getter only)
+      if (!call.args.empty())
+      {
+        vix::cli::repl::api::println(
+            "error: Vix.args() takes no arguments.\n"
+            "hint: use Vix.args() to read CLI args.");
+        return true;
+      }
+
       nlohmann::json j = nlohmann::json::array();
       for (const auto &a : VixObj.args())
         j.push_back(a);
+
       vix::cli::repl::api::println(j.dump());
       return true;
     }
@@ -639,7 +648,7 @@ namespace
 
 namespace vix::commands::ReplCommand
 {
-  int repl_flow_run()
+  int repl_flow_run(const std::vector<std::string> &replArgs)
   {
     using vix::cli::repl::History;
     using vix::cli::repl::ReplConfig;
@@ -654,7 +663,7 @@ namespace vix::commands::ReplCommand
     vix::cli::repl::api::Vix VixObj(&history);
     std::unordered_map<std::string, nlohmann::json> vars;
 
-    VixObj.set_args({});
+    VixObj.set_args(replArgs);
 
     if (cfg.enableFileHistory)
     {

@@ -47,6 +47,22 @@ namespace vix::commands::RunCommand::detail
     return code == 130; // standard: 128 + SIGINT(2)
   }
 
+  static bool dev_verbose_ui(const Options &opt)
+  {
+    if (opt.verbose)
+      return true;
+
+    const char *lvl = std::getenv("VIX_LOG_LEVEL");
+    if (!lvl || !*lvl)
+      return false;
+
+    std::string s(lvl);
+    for (auto &c : s)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    return (s == "debug" || s == "trace");
+  }
+
   static inline bool log_looks_like_interrupt(const std::string &log)
   {
     const bool isMakeInterrupt =
@@ -1011,7 +1027,8 @@ namespace vix::commands::RunCommand::detail
           return code != 0 ? code : 4;
         }
 
-        success("Dev configure completed (build-dev/).");
+        if (dev_verbose_ui(opt))
+          success("Dev configure completed (build-dev/).");
       }
 
       // 2) Build
@@ -1020,13 +1037,26 @@ namespace vix::commands::RunCommand::detail
 
         std::ostringstream oss;
         oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
-        if (opt.jobs > 0)
-          oss << " -j " << opt.jobs;
+
+        if (fs::exists(buildDir / "build.ninja"))
+        {
+          oss << " --";
+          if (opt.jobs > 0)
+            oss << " -j " << opt.jobs;
+          oss << " --quiet";
+        }
+        else
+        {
+          if (opt.jobs > 0)
+            oss << " -j " << opt.jobs;
+        }
 
         const std::string cmd = oss.str();
 
         int code = 0;
-        std::string buildLog = run_and_capture_with_code(cmd, code);
+
+        std::string buildLog = run_and_capture_with_code(cmd + " 2>&1", code);
+        code = normalize_exit_code(code);
 
         watch_spinner_pause_for_output();
 
@@ -1064,13 +1094,10 @@ namespace vix::commands::RunCommand::detail
           continue;
         }
 
-        if (!buildLog.empty() && has_real_build_work(buildLog))
-          std::cout << buildLog;
-
-        success("Build completed (dev mode).");
+        if (dev_verbose_ui(opt))
+          success("Build completed (dev mode).");
       }
 
-      // 3) Lancer le binaire
       const std::string exeName = projectDir.filename().string();
       fs::path exePath = buildDir / exeName;
 
@@ -1117,7 +1144,8 @@ namespace vix::commands::RunCommand::detail
       }
 
       watch_spinner_pause_for_output();
-      success("PID " + std::to_string(pid));
+      if (dev_verbose_ui(opt))
+        success("PID " + std::to_string(pid));
 
       bool needRestart = false;
       bool running = true;

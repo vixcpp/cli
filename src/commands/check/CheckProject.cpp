@@ -296,6 +296,78 @@ namespace vix::commands::CheckCommand::detail
 #endif
   }
 
+  static std::vector<std::string> list_configure_presets(const fs::path &projectDir)
+  {
+    std::vector<std::string> out;
+
+    std::ostringstream cmd;
+#ifdef _WIN32
+    cmd << "cmd /C \"cd /D " << quote(projectDir.string()) << " && cmake --list-presets=configure\"";
+#else
+    cmd << "cd " << quote(projectDir.string()) << " && cmake --list-presets=configure";
+#endif
+
+    int code = 0;
+    const std::string s = run_and_capture_with_code(cmd.str(), code);
+    if (code != 0 || s.empty())
+      return out;
+
+    std::istringstream iss(s);
+    std::string line;
+    while (std::getline(iss, line))
+    {
+      auto q1 = line.find('"');
+      if (q1 == std::string::npos)
+        continue;
+      auto q2 = line.find('"', q1 + 1);
+      if (q2 == std::string::npos)
+        continue;
+
+      const std::string name = line.substr(q1 + 1, q2 - (q1 + 1));
+      if (!name.empty())
+        out.push_back(name);
+    }
+
+    return out;
+  }
+
+  static std::string pick_configure_preset_smart(
+      const fs::path &projectDir,
+      const std::string &basePreset,
+      bool san,
+      bool ubsanOnly)
+  {
+    const auto presets = list_configure_presets(projectDir);
+
+    auto has = [&](const std::string &p)
+    {
+      return contains_preset(presets, p);
+    };
+
+    if (san && basePreset == "dev-ninja")
+    {
+      if (has("dev-ninja-san"))
+        return "dev-ninja-san";
+      return "dev-ninja";
+    }
+
+    if (ubsanOnly && basePreset == "dev-ninja")
+    {
+      if (has("dev-ninja-ubsan"))
+        return "dev-ninja-ubsan";
+      return "dev-ninja";
+    }
+
+    if (has(basePreset))
+      return basePreset;
+
+    if (has("dev-ninja"))
+      return "dev-ninja";
+    if (!presets.empty())
+      return presets.front();
+    return basePreset;
+  }
+
   int check_project(const Options &opt, const fs::path &projectDir)
   {
     apply_log_level_env_local(opt);
@@ -306,21 +378,17 @@ namespace vix::commands::CheckCommand::detail
       info("Checking project using CMake presets...");
       step("Project: " + projectDir.string());
 
-      // 0) resolve preset from flags
-      std::string preset = opt.preset;
+      const bool wantsSan = opt.enableSanitizers;
+      const bool wantsUbsan = opt.enableUbsanOnly;
 
-      if (opt.enableSanitizers)
-      {
-        if (preset == "dev-ninja")
-          preset = "dev-ninja-san";
-      }
-      else if (opt.enableUbsanOnly)
-      {
-        if (preset == "dev-ninja")
-          preset = "dev-ninja-ubsan";
-      }
-
+      // 0) choose preset smart (configure preset)
+      std::string preset = pick_configure_preset_smart(projectDir, opt.preset, wantsSan, wantsUbsan);
       step("Preset: " + preset);
+
+      // if we had to fallback (no dev-ninja-san/ubsan), inject vars
+      const bool usingFallbackVars =
+          (wantsSan && preset == "dev-ninja") ||
+          (wantsUbsan && preset == "dev-ninja");
 
       // 1) build dir (from configure preset)
       fs::path buildDir = guess_build_dir_from_configure_preset(projectDir, preset);
@@ -355,6 +423,13 @@ namespace vix::commands::CheckCommand::detail
 #else
         conf << "cd " << quote(projectDir.string())
              << " && cmake --preset " << quote(preset);
+
+        if (usingFallbackVars)
+        {
+          conf << " --"
+               << " -DVIX_ENABLE_SANITIZERS=ON"
+               << " -DVIX_SANITIZER_MODE=" << quote(wantsUbsan ? "ubsan" : "asan-ubsan");
+        }
 
         const int code = run_cmd_live_filtered(
             conf.str(),

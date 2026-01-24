@@ -543,8 +543,8 @@ namespace vix::commands::RunCommand
               const LiveRunResult tr = run_cmd_live_filtered_capture(
                   quote(testExe->string()),
                   /*spinnerLabel=*/"",
-                  /*passthroughRuntime=*/false,
-                  /*timeoutSec=*/opt.timeoutSec);
+                  /*passthroughRuntime=*/true,
+                  /*timeoutSec=*/effective_timeout_sec(opt));
 
               const int testExit = tr.exitCode;
 
@@ -620,11 +620,15 @@ namespace vix::commands::RunCommand
 #else
           std::string runCmd = quote(exePath.string());
 
+          int timeout = opt.timeoutSec;
+          if (opt.forceServerLike || opt.watch)
+            timeout = 0;
+
           const LiveRunResult rr = run_cmd_live_filtered_capture(
               runCmd,
               /*spinnerLabel=*/"",
-              /*passthroughRuntime=*/false, // IMPORTANT: capture only
-              /*timeoutSec=*/opt.timeoutSec);
+              /*passthroughRuntime=*/true,
+              /*timeoutSec=*/effective_timeout_sec(opt));
 
           int runExit = rr.exitCode;
 

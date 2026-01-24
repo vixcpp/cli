@@ -181,6 +181,14 @@ namespace vix::commands::RunCommand::detail
       const std::filesystem::path &projectDir,
       const std::string &configurePreset);
 
+  inline int effective_timeout_sec(const Options &opt)
+  {
+    if (opt.forceServerLike || opt.watch)
+      return 0;
+
+    return opt.timeoutSec;
+  }
+
 } // namespace vix::commands::RunCommand::detail
 
 #endif

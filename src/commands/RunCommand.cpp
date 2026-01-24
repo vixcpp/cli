@@ -572,7 +572,7 @@ namespace vix::commands::RunCommand
                   if (!handled && vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, testExe->string()))
                     handled = true;
 
-                  if (!handled)
+                  if (!handled && !tr.printed_live)
                     std::cout << log << "\n";
                 }
 
@@ -656,7 +656,7 @@ namespace vix::commands::RunCommand
               if (!handled && vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, exePath))
                 handled = true;
 
-              if (!handled)
+              if (!handled && !rr.printed_live)
                 std::cout << log << "\n";
             }
 

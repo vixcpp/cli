@@ -583,7 +583,7 @@ namespace vix::commands::RunCommand
               }
 #endif
 
-              progress.phase_done("Build project", "test executed");
+              progress.phase_done("Run application", "test executed");
               if (showUi)
                 success("🏃 Test executed (library project).");
 
@@ -619,10 +619,6 @@ namespace vix::commands::RunCommand
           started = true;
 #else
           std::string runCmd = quote(exePath.string());
-
-          int timeout = opt.timeoutSec;
-          if (opt.forceServerLike || opt.watch)
-            timeout = 0;
 
           const LiveRunResult rr = run_cmd_live_filtered_capture(
               runCmd,
@@ -672,14 +668,16 @@ namespace vix::commands::RunCommand
 
         if (started)
         {
-          progress.phase_done("Build project", "application started");
+          progress.phase_done("Run application", "completed");
           if (showUi)
             success("🏃 Application started (preset: " + buildPreset + ").");
         }
         else
         {
-          progress.phase_done("Build project", "stopped");
+          progress.phase_done("Run application", "stopped");
         }
+
+        return 0;
 
         return 0;
       }
@@ -737,14 +735,9 @@ namespace vix::commands::RunCommand
         return code != 0 ? code : 4;
       }
 
-      if (showUi)
-      {
-        progress.phase_done("Configure project", "completed (fallback)");
-        std::cout << "\n";
-      }
-
       progress.phase_done("Configure project", "completed (fallback)");
-      std::cout << "\n";
+      if (showUi)
+        std::cout << "\n";
     }
     else
     {

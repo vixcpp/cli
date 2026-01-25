@@ -509,6 +509,42 @@ namespace vix::commands::RunCommand::detail
     lastPrintedChar = '\r';
   }
 
+  static bool is_sanitizer_abort_banner_line(std::string_view line) noexcept
+  {
+    // Trim left
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t' || line.front() == '\r'))
+      line.remove_prefix(1);
+
+    // ==12345==ABORTING
+    if (line.size() >= 4 && line.rfind("==", 0) == 0 &&
+        line.find("==ABORTING") != std::string_view::npos)
+      return true;
+
+    return false;
+  }
+
+  static inline std::string drop_sanitizer_abort_banner_lines(const std::string &chunk)
+  {
+    std::string out;
+    out.reserve(chunk.size());
+
+    std::size_t start = 0;
+    while (start < chunk.size())
+    {
+      const std::size_t nl = chunk.find('\n', start);
+      const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
+
+      std::string_view line(&chunk[start], end - start);
+
+      if (!is_sanitizer_abort_banner_line(line))
+        out.append(line.data(), line.size());
+
+      start = end;
+    }
+
+    return out;
+  }
+
   LiveRunResult run_cmd_live_filtered_capture(
       const std::string &cmd,
       const std::string &spinnerLabel,
@@ -1045,6 +1081,8 @@ namespace vix::commands::RunCommand::detail
                 if (!filtered.empty())
                 {
                   std::string toPrint = drop_vix_error_tip_lines(filtered);
+                  if (!toPrint.empty())
+                    toPrint = drop_sanitizer_abort_banner_lines(toPrint);
 
                   if (!toPrint.empty() && !captureOnly)
                   {

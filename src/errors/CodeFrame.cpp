@@ -38,6 +38,18 @@ namespace vix::cli::errors
     return true;
   }
 
+  static bool isWhitespaceOnly(const std::string &s)
+  {
+    for (unsigned char c : s)
+    {
+      if (c == '\r' || c == '\n')
+        continue;
+      if (std::isspace(c) == 0)
+        return false;
+    }
+    return true;
+  }
+
   static std::string expandTabs(const std::string &s, int tabWidth)
   {
     if (tabWidth <= 0)
@@ -143,6 +155,29 @@ namespace vix::cli::errors
               << caretColor << caretSlice << resetColor << "\n";
   }
 
+  static bool isContextNoiseLine(const std::string &s)
+  {
+    // trim spaces/tabs
+    std::size_t i = 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r'))
+      ++i;
+
+    std::size_t j = s.size();
+    while (j > i && (s[j - 1] == ' ' || s[j - 1] == '\t' || s[j - 1] == '\r'))
+      --j;
+
+    if (j <= i)
+      return true; // empty/whitespace
+
+    const std::string_view t(&s[i], j - i);
+
+    // treat only braces as noise in context
+    if (t == "{" || t == "}" || t == "};")
+      return true;
+
+    return false;
+  }
+
   void printCodeFrame(
       const CompilerError &err,
       const ErrorContext &ctx,
@@ -160,8 +195,16 @@ namespace vix::cli::errors
     if (err.line > n)
       return;
 
-    const int from = std::max(1, err.line - opt.contextLines);
-    const int to = std::min(n, err.line + opt.contextLines);
+    int from = std::max(1, err.line - opt.contextLines);
+    int to = std::min(n, err.line + opt.contextLines);
+
+    // trim bottom noise lines (never trim the main line)
+    while (to > err.line && isContextNoiseLine(lines[static_cast<std::size_t>(to - 1)]))
+      --to;
+
+    // trim top noise lines (never trim the main line)
+    while (from < err.line && isContextNoiseLine(lines[static_cast<std::size_t>(from - 1)]))
+      ++from;
 
     const std::size_t width = std::to_string(to).size();
 
@@ -180,8 +223,11 @@ namespace vix::cli::errors
       const std::size_t pad = (width > lnStr.size()) ? (width - lnStr.size()) : 0;
 
       std::ostringstream p;
-      p << "  " << std::string(pad, ' ') << lnStr << " | ";
-      const std::string prefix = p.str();
+      p << "  " << std::string(pad, ' ') << lnStr << " |";
+      const std::string prefixBase = p.str();
+
+      const bool addGap = !expanded.empty();
+      const std::string prefixPrint = addGap ? (prefixBase + " ") : prefixBase;
 
       if (!isMain)
       {
@@ -200,25 +246,25 @@ namespace vix::cli::errors
             cropped += "…";
           }
 
-          std::cerr << GRAY << prefix << cropped << RESET << "\n";
+          if (cropped.empty())
+            std::cerr << GRAY << prefixPrint << RESET << "\n";
+          else
+            std::cerr << GRAY << prefixPrint << cropped << RESET << "\n";
         }
         else
         {
-          std::cerr << GRAY << prefix << expanded << RESET << "\n";
+          // no crop needed
+          if (expanded.empty())
+            std::cerr << GRAY << prefixPrint << RESET << "\n";
+          else
+            std::cerr << GRAY << prefixPrint << expanded << RESET << "\n";
         }
+
         continue;
       }
 
       const std::string caret = makeCaretLine(err.column, opt.tabWidth, rawLine);
-
-      printTruncatedLineWithPrefix(
-          expanded,
-          caret,
-          opt.maxLineWidth,
-          prefix,
-          /*lineColor=*/"",   // main line normal
-          /*caretColor=*/RED, // caret red
-          /*resetColor=*/RESET);
+      printTruncatedLineWithPrefix(expanded, caret, opt.maxLineWidth, prefixPrint, "", RED, RESET);
     }
   }
 

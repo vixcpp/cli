@@ -223,12 +223,15 @@ int main()
   static bool dir_is_empty(const fs::path &p)
   {
     std::error_code ec;
+
     if (!dir_exists(p))
       return true;
-    auto it = fs::directory_iterator(p, ec);
+
+    fs::directory_iterator it(p, ec);
     if (ec)
       return false;
-    return it == fs::end(it);
+
+    return it == fs::directory_iterator{};
   }
 
   static bool ensure_dir(const fs::path &p, std::string &err)

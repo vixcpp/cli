@@ -67,6 +67,25 @@ namespace vix::cli::errors
       return false;
     }
 
+    static bool log_looks_sanitized(const std::string &log) noexcept
+    {
+      return icontains(log, "AddressSanitizer") ||
+             icontains(log, "UndefinedBehaviorSanitizer") ||
+             icontains(log, "LeakSanitizer") ||
+             icontains(log, "ThreadSanitizer") ||
+             icontains(log, "MemorySanitizer") ||
+             icontains(log, "==") && icontains(log, "==ABORTING");
+    }
+
+    static std::string maybe_add_san_hint(std::string hint, const std::string &log)
+    {
+      if (log_looks_sanitized(log))
+        return hint;
+
+      hint += ". run with --san for exact location";
+      return hint;
+    }
+
     static std::string escape_regex(std::string s)
     {
       // escape regex metacharacters: . ^ $ | ( ) [ ] { } * + ? \ -
@@ -201,7 +220,14 @@ namespace vix::cli::errors
       std::cerr << "\n";
       std::cerr << RED << "log:" << RESET << "\n";
       for (const auto &l : win)
+      {
+        // Drop ASan abort banner (==12345==ABORTING)
+        if (startsWith(trim_view(l), "==") &&
+            icontains(l, "ABORTING"))
+          continue;
+
         std::cerr << "  " << l << "\n";
+      }
       std::cerr << "\n";
     }
 
@@ -283,7 +309,7 @@ namespace vix::cli::errors
     // Unified printing (hint/at must be at bottom)
     static void print_header(std::string_view title)
     {
-      std::cerr << RED << title << RESET << "\n\n";
+      std::cerr << RED << title << RESET << "\n";
     }
 
     static void print_hint_at_bottom(std::string_view hint, std::string_view at)
@@ -391,28 +417,31 @@ namespace vix::cli::errors
         return false;
 
       std::string title = "runtime error: crash";
-      std::string hint = "program crashed. run with --san to get a precise location";
+      std::string hint = "program crashed";
+
       if (segv)
       {
         title = "runtime error: segmentation fault";
-        hint = "invalid memory access (null/dangling pointer, out-of-bounds, use-after-free). run with --san for exact location";
+        hint = "invalid memory access (null/dangling pointer, out-of-bounds, use-after-free)";
       }
       else if (abrt)
       {
         title = "runtime error: aborted";
-        hint = "the program aborted (assert/terminate/abort). run with --san for exact location";
+        hint = "the program aborted (assert/terminate/abort)";
       }
       else if (term)
       {
         title = "runtime error: terminate";
-        hint = "std::terminate/pure-virtual/unhandled fatal error. run with --san for exact location";
+        hint = "std::terminate/pure-virtual/unhandled fatal error";
       }
+
+      hint = maybe_add_san_hint(hint, runtimeLog);
 
       print_header(title);
 
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
-        print_codeframe_then_bottom_default(*loc, hint);
+        print_codeframe_then_bottom_default(*loc, maybe_add_san_hint(hint, runtimeLog));
       }
       else
       {
@@ -511,7 +540,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -542,7 +571,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -589,7 +618,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -624,7 +653,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -655,7 +684,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -687,7 +716,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -760,7 +789,7 @@ namespace vix::cli::errors
       else
       {
         print_hint_at_bottom(
-            hint + ". run with --san for exact location",
+            maybe_add_san_hint(hint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }
@@ -840,7 +869,7 @@ namespace vix::cli::errors
       }
       else
       {
-        print_hint_at_bottom(hint + ". run with --san for exact location",
+        print_hint_at_bottom(maybe_add_san_hint(hint, log),
                              !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(log);
       }
@@ -960,7 +989,7 @@ namespace vix::cli::errors
       }
       else
       {
-        print_hint_at_bottom(hint + ". run with --san for exact location",
+        print_hint_at_bottom(maybe_add_san_hint(hint, log),
                              !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(log);
       }

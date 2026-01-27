@@ -101,44 +101,6 @@ namespace vix::commands::RunCommand::detail
     return s;
   }
 
-  static bool handle_error_tip_block(const std::string &log)
-  {
-    const auto epos = log.find("error:");
-    if (epos == std::string::npos)
-      return false;
-
-    auto line_end = [&](size_t p) -> size_t
-    {
-      size_t n = log.find('\n', p);
-      return (n == std::string::npos) ? log.size() : n;
-    };
-
-    const size_t eend = line_end(epos);
-    std::string eLine = log.substr(epos, eend - epos); // "error: ..."
-
-    std::string tipLine;
-    const auto tpos = log.find("tip:", eend);
-    if (tpos != std::string::npos)
-    {
-      const size_t tend = line_end(tpos);
-      tipLine = log.substr(tpos, tend - tpos); // "tip: ..."
-    }
-
-    auto strip_prefix = [](std::string s, const char *pref) -> std::string
-    {
-      if (s.rfind(pref, 0) == 0)
-        s.erase(0, std::strlen(pref));
-      while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
-        s.erase(0, 1);
-      return s;
-    };
-
-    vix::cli::style::error(strip_prefix(eLine, "error:"));
-    if (!tipLine.empty())
-      vix::cli::style::hint(strip_prefix(tipLine, "tip:"));
-    return true;
-  }
-
   static bool handle_error_tip_block_vix(const std::string &log)
   {
     const auto epos = log.find("error:");

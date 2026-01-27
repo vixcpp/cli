@@ -38,18 +38,6 @@ namespace vix::cli::errors
     return true;
   }
 
-  static bool isWhitespaceOnly(const std::string &s)
-  {
-    for (unsigned char c : s)
-    {
-      if (c == '\r' || c == '\n')
-        continue;
-      if (std::isspace(c) == 0)
-        return false;
-    }
-    return true;
-  }
-
   static std::string expandTabs(const std::string &s, int tabWidth)
   {
     if (tabWidth <= 0)

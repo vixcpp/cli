@@ -74,7 +74,7 @@ namespace vix::cli::errors
              icontains(log, "LeakSanitizer") ||
              icontains(log, "ThreadSanitizer") ||
              icontains(log, "MemorySanitizer") ||
-             icontains(log, "==") && icontains(log, "==ABORTING");
+             (icontains(log, "==") && icontains(log, "==ABORTING"));
     }
 
     static std::string maybe_add_san_hint(std::string hint, const std::string &log)
@@ -491,7 +491,7 @@ namespace vix::cli::errors
       const bool oom =
           icontains(runtimeLog, "cannot allocate memory") ||
           icontains(runtimeLog, "out of memory") ||
-          icontains(runtimeLog, "killed") && icontains(runtimeLog, "oom");
+          (icontains(runtimeLog, "killed") && icontains(runtimeLog, "oom"));
 
       if (!(badAlloc || oom))
         return false;
@@ -941,7 +941,7 @@ namespace vix::cli::errors
     {
       const bool hit =
           icontains(log, "MemorySanitizer") ||
-          icontains(log, "uninitialized") && icontains(log, "use-of-uninitialized-value");
+          (icontains(log, "uninitialized") && icontains(log, "use-of-uninitialized-value"));
 
       if (!hit)
         return false;

@@ -11,19 +11,28 @@
 # ====================================================================
 cmake_minimum_required(VERSION 3.20)
 
-project(vix_cli VERSION 1.16.5 LANGUAGES CXX)
+# ----------------------------------------------------
+# Standalone vs Umbrella
+# - If this module is built alone: define a project()
+# - If built from umbrella: DO NOT call project() here
+# ----------------------------------------------------
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(vix_cli VERSION 1.16.5 LANGUAGES CXX)
+endif()
 
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)
 
+# Prevent accidental ORM auto-pulls in some setups
 set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 file(GLOB_RECURSE CLI_SOURCES
-     CONFIGURE_DEPENDS
-     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
+  CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
 
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(vix::cli ALIAS vix_cli)
@@ -53,6 +62,9 @@ else()
   vix_add_flag_if_supported(vix_cli -Wpedantic)
 endif()
 
+# ----------------------------------------------------
+# Link dependencies
+# ----------------------------------------------------
 if (TARGET vix::vix)
   message(STATUS "[cli] Using umbrella target vix::vix")
   target_link_libraries(vix_cli PRIVATE vix::vix)
@@ -62,6 +74,7 @@ elseif (TARGET vix::core)
   target_link_libraries(vix_cli PRIVATE vix::core)
 
 else()
+  # Standalone or external build using installed package
   get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
   set(_VIX_CORE_DIR  "${_VIX_MODULES_DIR}/core")
   set(_VIX_UTILS_DIR "${_VIX_MODULES_DIR}/utils")
@@ -71,7 +84,6 @@ else()
     add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
     add_subdirectory("${_VIX_CORE_DIR}"  "${CMAKE_BINARY_DIR}/_vix_core")
     target_link_libraries(vix_cli PRIVATE vix::core)
-
   else()
     find_package(Vix CONFIG REQUIRED)
     if (TARGET vix::vix)
@@ -97,20 +109,23 @@ if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
   target_link_libraries(vix_cli PRIVATE vix_sanitizers)
 endif()
 
+# ----------------------------------------------------
+# Version string
+# ----------------------------------------------------
 set(_VIX_CLI_VERSION "dev")
 
-if(DEFINED VIX_CLI_VERSION AND NOT "${VIX_CLI_VERSION}" STREQUAL "")
+if (DEFINED VIX_CLI_VERSION AND NOT "${VIX_CLI_VERSION}" STREQUAL "")
   set(_VIX_CLI_VERSION "${VIX_CLI_VERSION}")
 
-elseif(DEFINED ENV{VIX_CLI_VERSION} AND NOT "$ENV{VIX_CLI_VERSION}" STREQUAL "")
+elseif (DEFINED ENV{VIX_CLI_VERSION} AND NOT "$ENV{VIX_CLI_VERSION}" STREQUAL "")
   set(_VIX_CLI_VERSION "$ENV{VIX_CLI_VERSION}")
 
-elseif(DEFINED VIX_UMBRELLA_VERSION AND NOT "${VIX_UMBRELLA_VERSION}" STREQUAL "")
+elseif (DEFINED VIX_UMBRELLA_VERSION AND NOT "${VIX_UMBRELLA_VERSION}" STREQUAL "")
   set(_VIX_CLI_VERSION "${VIX_UMBRELLA_VERSION}")
 
 else()
   find_package(Git QUIET)
-  if(Git_FOUND)
+  if (Git_FOUND)
     execute_process(
       COMMAND "${GIT_EXECUTABLE}" describe --tags --always
       WORKING_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}"
@@ -118,12 +133,12 @@ else()
       OUTPUT_STRIP_TRAILING_WHITESPACE
       ERROR_QUIET
     )
-    if(_GIT_DESCRIBE)
+    if (_GIT_DESCRIBE)
       set(_VIX_CLI_VERSION "${_GIT_DESCRIBE}")
     endif()
   endif()
 
-  if("${_VIX_CLI_VERSION}" STREQUAL "dev" AND DEFINED PROJECT_VERSION AND NOT "${PROJECT_VERSION}" STREQUAL "")
+  if ("${_VIX_CLI_VERSION}" STREQUAL "dev" AND DEFINED PROJECT_VERSION AND NOT "${PROJECT_VERSION}" STREQUAL "")
     set(_VIX_CLI_VERSION "v${PROJECT_VERSION}")
   endif()
 endif()
@@ -131,10 +146,9 @@ endif()
 message(STATUS "Vix CLI version: ${_VIX_CLI_VERSION}")
 target_compile_definitions(vix_cli PRIVATE VIX_CLI_VERSION="${_VIX_CLI_VERSION}")
 
-if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
-  target_link_libraries(vix_cli PRIVATE vix_sanitizers)
-endif()
-
+# ----------------------------------------------------
+# LTO (Release only)
+# ----------------------------------------------------
 if (VIX_ENABLE_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
   include(CheckIPOSupported)
   check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
@@ -145,16 +159,26 @@ if (VIX_ENABLE_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
   endif()
 endif()
 
+# ----------------------------------------------------
+# Output name + stable output directory for CI packaging
+# ----------------------------------------------------
 set_target_properties(vix_cli PROPERTIES
   OUTPUT_NAME vix
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}"
+  RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
 )
 
-install(TARGETS vix_cli
-  EXPORT  VixTargets
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+# ----------------------------------------------------
+# Install (standalone only)
+# - Umbrella handles install itself
+# ----------------------------------------------------
+if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  install(TARGETS vix_cli
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+endif()
 
 message(STATUS "CLI module configured.")
 message(STATUS "Executable will be: ${CMAKE_BINARY_DIR}/vix")
-

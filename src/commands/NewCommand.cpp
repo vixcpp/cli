@@ -325,8 +325,11 @@ int main()
 
       termios t = old;
 
-      t.c_lflag &= ~(ICANON | ECHO);
-      t.c_iflag &= ~(IXON | ICRNL);
+      const tcflag_t lmask = static_cast<tcflag_t>(ICANON | ECHO);
+      const tcflag_t imask = static_cast<tcflag_t>(IXON | ICRNL);
+
+      t.c_lflag &= static_cast<tcflag_t>(~lmask);
+      t.c_iflag &= static_cast<tcflag_t>(~imask);
 
       t.c_cc[VMIN] = 1;
       t.c_cc[VTIME] = 0;

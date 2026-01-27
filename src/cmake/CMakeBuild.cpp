@@ -28,6 +28,34 @@
 #include <unistd.h>
 #endif
 
+#ifndef _WIN32
+#include <cerrno>
+#include <cstddef>
+
+namespace
+{
+  inline void write_all_fd(int fd, const char *data, std::size_t len) noexcept
+  {
+    while (len > 0)
+    {
+      const ssize_t w = ::write(fd, data, len);
+      if (w > 0)
+      {
+        data += static_cast<std::size_t>(w);
+        len -= static_cast<std::size_t>(w);
+        continue;
+      }
+
+      if (w < 0 && errno == EINTR)
+        continue;
+
+      // best-effort: stop on any other error (EPIPE, EBADF, etc.)
+      break;
+    }
+  }
+} // namespace
+#endif
+
 namespace vix::cli::build
 {
   namespace util = vix::cli::util;
@@ -309,7 +337,7 @@ namespace vix::cli::build
 
       r.producedOutput = true;
 
-      (void)::write(logfd, buf.data(), static_cast<std::size_t>(n));
+      write_all_fd(logfd, buf.data(), static_cast<std::size_t>(n));
 
       if (!gotFirstLine)
       {
@@ -343,7 +371,7 @@ namespace vix::cli::build
         if (should_echo_line(line))
         {
           line.push_back('\n');
-          (void)::write(STDOUT_FILENO, line.data(), line.size());
+          write_all_fd(STDOUT_FILENO, line.data(), line.size());
         }
 
         start = nl + 1;

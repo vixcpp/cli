@@ -26,6 +26,8 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <poll.h>
+#include <signal.h>
 #endif
 
 #ifndef _WIN32
@@ -258,9 +260,11 @@ namespace vix::cli::build
       return r;
     }
 
+    // Fork
     pid_t pid = ::fork();
     if (pid == 0)
     {
+      // Child: redirect stdout+stderr to pipe write end
       ::dup2(pipefd[1], STDOUT_FILENO);
       ::dup2(pipefd[1], STDERR_FILENO);
 
@@ -280,6 +284,7 @@ namespace vix::cli::build
       _exit(127);
     }
 
+    // Parent
     ::close(pipefd[1]);
 
     std::string firstLine;
@@ -308,9 +313,7 @@ namespace vix::cli::build
         return false;
 
       if (filterCMakeSummary)
-      {
         return !is_cmake_configure_summary_line(line);
-      }
 
       if (!progressOnly)
         return true;
@@ -329,56 +332,118 @@ namespace vix::cli::build
 
     std::string buf(16 * 1024, '\0');
 
+    // Heartbeat state
+    const auto startTs = std::chrono::steady_clock::now();
+    auto lastOutputTs = startTs;
+    auto lastHeartbeatTs = startTs;
+
+    // poll loop
     while (true)
     {
-      ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
-      if (n <= 0)
-        break;
+      struct pollfd pfd;
+      pfd.fd = pipefd[0];
+      pfd.events = POLLIN | POLLHUP | POLLERR;
+      pfd.revents = 0;
 
-      r.producedOutput = true;
+      // 250ms tick -> lets us print heartbeat & not look frozen
+      const int pr = ::poll(&pfd, 1, 250);
 
-      write_all_fd(logfd, buf.data(), static_cast<std::size_t>(n));
-
-      if (!gotFirstLine)
+      if (pr < 0)
       {
-        for (ssize_t i = 0; i < n; ++i)
-        {
-          char c = buf[static_cast<std::size_t>(i)];
-          if (c == '\n')
-          {
-            gotFirstLine = true;
-            break;
-          }
-          if (firstLine.size() < 200)
-            firstLine.push_back(c);
-        }
+        if (errno == EINTR)
+          continue;
+        break;
       }
 
-      if (quiet)
-        continue;
-
-      consoleBuf.append(buf.data(), static_cast<std::size_t>(n));
-
-      std::size_t start = 0;
-      while (true)
+      // If data is ready, read it
+      if (pr > 0 && (pfd.revents & POLLIN))
       {
-        std::size_t nl = consoleBuf.find('\n', start);
-        if (nl == std::string::npos)
+        const ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
+        if (n <= 0)
           break;
 
-        std::string line = consoleBuf.substr(start, nl - start);
+        r.producedOutput = true;
+        lastOutputTs = std::chrono::steady_clock::now();
 
-        if (should_echo_line(line))
+        write_all_fd(logfd, buf.data(), static_cast<std::size_t>(n));
+
+        if (!gotFirstLine)
         {
-          line.push_back('\n');
-          write_all_fd(STDOUT_FILENO, line.data(), line.size());
+          for (ssize_t i = 0; i < n; ++i)
+          {
+            char c = buf[static_cast<std::size_t>(i)];
+            if (c == '\n')
+            {
+              gotFirstLine = true;
+              break;
+            }
+            if (firstLine.size() < 200)
+              firstLine.push_back(c);
+          }
         }
 
-        start = nl + 1;
+        if (!quiet)
+        {
+          consoleBuf.append(buf.data(), static_cast<std::size_t>(n));
+
+          std::size_t start = 0;
+          while (true)
+          {
+            std::size_t nl = consoleBuf.find('\n', start);
+            if (nl == std::string::npos)
+              break;
+
+            std::string line = consoleBuf.substr(start, nl - start);
+            if (should_echo_line(line))
+            {
+              line.push_back('\n');
+              write_all_fd(STDOUT_FILENO, line.data(), line.size());
+            }
+            start = nl + 1;
+          }
+
+          if (start > 0)
+            consoleBuf.erase(0, start);
+        }
+
+        continue;
       }
 
-      if (start > 0)
-        consoleBuf.erase(0, start);
+      // EOF/HUP
+      if (pr > 0 && (pfd.revents & (POLLHUP | POLLERR)))
+        break;
+
+      // No output tick -> heartbeat (avoid "looks frozen")
+      if (!quiet)
+      {
+        const auto now = std::chrono::steady_clock::now();
+        const auto silenceMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastOutputTs).count();
+        const auto hbMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastHeartbeatTs).count();
+
+        // print heartbeat every 5s of silence
+        if (silenceMs >= 5000 && hbMs >= 5000)
+        {
+          lastHeartbeatTs = now;
+          const auto elapsedMs =
+              std::chrono::duration_cast<std::chrono::milliseconds>(now - startTs).count();
+
+          std::string msg =
+              "\r[building] still running… (" + util::format_seconds(elapsedMs) + ")   ";
+          write_all_fd(STDOUT_FILENO, msg.data(), msg.size());
+        }
+      }
+    }
+
+    // flush a possible last partial line when process ends
+    if (!quiet && !consoleBuf.empty())
+    {
+      if (should_echo_line(consoleBuf))
+      {
+        std::string tail = consoleBuf + "\n";
+        write_all_fd(STDOUT_FILENO, tail.data(), tail.size());
+      }
     }
 
     ::close(pipefd[0]);
@@ -391,11 +456,17 @@ namespace vix::cli::build
       return r;
     }
 
+    if (!quiet)
+    {
+      // clear heartbeat line if any
+      const std::string clear = "\r";
+      write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
+    }
+
     r.exitCode = process::normalize_exit_code(status);
     r.capturedFirstLine = util::trim(firstLine);
     return r;
   }
-
 #else // _WIN32
 
   process::ExecResult run_process_capture(

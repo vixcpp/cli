@@ -34,6 +34,7 @@
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/DepsCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
+#include <vix/cli/commands/P2PCommand.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -350,6 +351,8 @@ namespace vix
         return commands::DepsCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
+      if (cmd == "p2p")
+        return commands::P2PCommand::help();
     }
 
 #ifndef VIX_CLI_VERSION
@@ -389,6 +392,9 @@ namespace vix
 
     out << indent(2) << "Project structure:\n";
     out << indent(3) << "modules <subcommand>      Opt-in module system (init/add/check)\n\n";
+
+    out << indent(2) << "Network:\n";
+    out << indent(3) << "p2p [options]            Run P2P node (tcp + discovery + bootstrap)\n\n";
 
     out << indent(2) << "Registry:\n";
     out << indent(3) << "registry <subcommand>     Sync/search registry index (git-based)\n";

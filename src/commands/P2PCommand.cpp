@@ -12,8 +12,11 @@
  *
  */
 #include <vix/cli/commands/P2PCommand.hpp>
+
 #include <vix/cli/Style.hpp>
-#include <vix/cli/Utils.hpp>
+#include <vix/cli/util/Console.hpp>
+#include <vix/cli/util/Ui.hpp>
+
 #include <vix/utils/Logger.hpp>
 
 #include <atomic>
@@ -36,13 +39,23 @@
 #include <vix/p2p/P2P.hpp>
 #include <vix/p2p/Peer.hpp>
 
-using namespace vix::cli::style;
+#if defined(_WIN32)
+#include <io.h>
+#define VIX_ISATTY _isatty
+#define VIX_FILENO _fileno
+#else
+#include <unistd.h>
+#define VIX_ISATTY isatty
+#define VIX_FILENO fileno
+#endif
 
 namespace
 {
+  namespace style = vix::cli::style;
+  namespace cli_console = vix::cli::util;
+
   using Logger = vix::utils::Logger;
 
-  // P0: shared lifecycle state (running/stopping)
   struct SharedLifecycle
   {
     std::atomic<bool> running{true};
@@ -50,10 +63,16 @@ namespace
   };
 
   static std::shared_ptr<SharedLifecycle> g_life;
+
   static void on_sigint(int)
   {
     if (g_life)
       g_life->running.store(false);
+  }
+
+  static bool is_tty_stdout()
+  {
+    return VIX_ISATTY(VIX_FILENO(stdout)) != 0;
   }
 
   static bool has_flag(const std::vector<std::string> &a, const std::string &k)
@@ -105,13 +124,18 @@ namespace
     return std::nullopt;
   }
 
-  static void apply_log_level_from_flag(Logger &logger, const std::string &value)
+  static void apply_log_level_from_flag(Logger &logger, const std::string &value, bool quiet)
   {
     if (auto lvl = parse_log_level(value))
+    {
       logger.setLevel(*lvl);
-    else
-      std::cerr << "vix: invalid --log-level value '" << value
-                << "'. Expected one of: trace, debug, info, warn, error, critical, off.\n";
+      if (!quiet)
+        style::hint(std::string("log_level=") + value);
+      return;
+    }
+
+    style::error(std::string("invalid --log-level: ") + value);
+    style::hint("expected: trace, debug, info, warn, error, critical, off");
   }
 
   static std::optional<std::uint64_t> parse_u64(const std::string &s)
@@ -140,7 +164,6 @@ namespace
 
   static std::optional<vix::p2p::PeerEndpoint> parse_endpoint(const std::string &s)
   {
-    // host:port OR tcp://host:port
     std::string x = s;
     constexpr const char *kPrefix = "tcp://";
     if (x.rfind(kPrefix, 0) == 0)
@@ -162,11 +185,6 @@ namespace
     return ep;
   }
 
-  // P1: anti double-connect + backoff (CLI-side guard)
-  //
-  // NOTE:
-  //   The ideal place is Node::connect() (core), but this guard already
-  //   eliminates spam from discovery/bootstrap/manual in the CLI.
   enum class ConnectReason
   {
     Manual,
@@ -174,32 +192,16 @@ namespace
     Bootstrap
   };
 
-  static const char *reason_name(ConnectReason r)
-  {
-    switch (r)
-    {
-    case ConnectReason::Manual:
-      return "manual";
-    case ConnectReason::Discovery:
-      return "discovery";
-    case ConnectReason::Bootstrap:
-      return "bootstrap";
-    default:
-      return "unknown";
-    }
-  }
-
   struct ConnectStats
   {
     std::uint64_t connect_attempts = 0;
     std::uint64_t connect_deduped = 0;
-    std::uint64_t connect_failures = 0; // approximated (attempt -> backoff)
+    std::uint64_t connect_failures = 0;
     std::uint64_t backoff_skips = 0;
   };
 
   struct ConnectEntry
   {
-    // Exponential backoff state
     std::uint32_t failures = 0;
     std::chrono::steady_clock::time_point backoff_until{};
     std::chrono::steady_clock::time_point last_attempt{};
@@ -216,21 +218,15 @@ namespace
     static std::string key_for(const vix::p2p::PeerEndpoint &ep)
     {
       std::string scheme = ep.scheme.empty() ? "tcp" : to_lower_copy(ep.scheme);
-      std::string host = ep.host;
-      // Keep host as-is (could be ip/hostname). If you want stronger normalize,
-      // do it in core Node (DNS/case rules).
       std::ostringstream oss;
-      oss << scheme << "://" << host << ":" << ep.port;
+      oss << scheme << "://" << ep.host << ":" << ep.port;
       return oss.str();
     }
 
-    bool should_connect(const vix::p2p::PeerEndpoint &ep, ConnectReason reason, bool quiet)
+    bool allow_attempt(const vix::p2p::PeerEndpoint &ep, bool manual, bool quiet)
     {
       if (!life_ || life_->stopping.load())
-      {
-        // P0.1: after stop, callbacks do nothing
         return false;
-      }
 
       const auto now = std::chrono::steady_clock::now();
       const std::string key = key_for(ep);
@@ -238,47 +234,58 @@ namespace
       std::lock_guard<std::mutex> lock(mu_);
       auto &e = table_[key];
 
-      // Backoff gate
-      if (e.backoff_until.time_since_epoch().count() != 0 &&
-          now < e.backoff_until)
+      if (e.backoff_until.time_since_epoch().count() != 0 && now < e.backoff_until)
       {
         ++stats_.backoff_skips;
         return false;
       }
 
-      // Dedup gate: do not attempt too frequently even without explicit backoff.
-      // This is a "connecting window" that prevents discovery from hammering.
-      constexpr auto kMinAttemptGap = std::chrono::milliseconds(800);
-      if (e.last_attempt.time_since_epoch().count() != 0 &&
-          (now - e.last_attempt) < kMinAttemptGap)
+      constexpr auto kMinAttemptGap = std::chrono::milliseconds(900);
+      if (!manual && e.last_attempt.time_since_epoch().count() != 0 && (now - e.last_attempt) < kMinAttemptGap)
       {
         ++stats_.connect_deduped;
         return false;
       }
 
       e.last_attempt = now;
-
-      // Record attempt
       ++stats_.connect_attempts;
-
-      // P1.4: exponential backoff (approx. failure until proven otherwise)
-      // This prevents spam even when connect fails quickly.
-      // In core, you'd reset failures on successful connect events.
-      if (reason != ConnectReason::Manual) // keep manual responsive
-      {
-        e.failures = std::min<std::uint32_t>(e.failures + 1, 10u);
-
-        const std::uint64_t base_ms = 2000;
-        std::uint64_t backoff_ms = base_ms * (1ULL << std::min<std::uint32_t>(e.failures - 1, 6u)); // cap exponent
-        if (backoff_ms > 15000)
-          backoff_ms = 15000;
-
-        e.backoff_until = now + std::chrono::milliseconds(backoff_ms);
-        ++stats_.connect_failures; // approximated
-      }
 
       (void)quiet;
       return true;
+    }
+
+    void mark_failure(const vix::p2p::PeerEndpoint &ep, bool manual)
+    {
+      const auto now = std::chrono::steady_clock::now();
+      const std::string key = key_for(ep);
+
+      std::lock_guard<std::mutex> lock(mu_);
+      auto &e = table_[key];
+
+      ++stats_.connect_failures;
+
+      if (manual)
+      {
+        e.failures = std::min<std::uint32_t>(e.failures + 1, 8u);
+        const std::uint64_t backoff_ms = std::min<std::uint64_t>(2500ULL * (1ULL << std::min<std::uint32_t>(e.failures - 1, 5u)), 12000ULL);
+        e.backoff_until = now + std::chrono::milliseconds(backoff_ms);
+        return;
+      }
+
+      e.failures = std::min<std::uint32_t>(e.failures + 1, 10u);
+      const std::uint64_t backoff_ms = std::min<std::uint64_t>(2000ULL * (1ULL << std::min<std::uint32_t>(e.failures - 1, 6u)), 15000ULL);
+      e.backoff_until = now + std::chrono::milliseconds(backoff_ms);
+    }
+
+    void mark_success(const vix::p2p::PeerEndpoint &ep)
+    {
+      const std::string key = key_for(ep);
+      std::lock_guard<std::mutex> lock(mu_);
+      auto it = table_.find(key);
+      if (it == table_.end())
+        return;
+      it->second.failures = 0;
+      it->second.backoff_until = {};
     }
 
     ConnectStats stats() const
@@ -300,12 +307,10 @@ namespace
     ConnectStats stats_{};
   };
 
-  // P2: printing stats (extended)
-  static void print_stats_line(const vix::p2p::NodeStats &st,
-                               const ConnectStats &cs,
-                               std::size_t tracked)
+  static std::string build_stats_plain(const vix::p2p::NodeStats &st, const ConnectStats &cs, std::size_t tracked)
   {
-    std::cout
+    std::ostringstream oss;
+    oss
         << "peers_total=" << st.peers_total
         << " peers_connected=" << st.peers_connected
         << " handshakes_started=" << st.handshakes_started
@@ -314,8 +319,21 @@ namespace
         << " connect_deduped=" << cs.connect_deduped
         << " connect_failures=" << cs.connect_failures
         << " backoff_skips=" << cs.backoff_skips
-        << " tracked_endpoints=" << tracked
-        << "\n";
+        << " tracked_endpoints=" << tracked;
+    return oss.str();
+  }
+
+  static void print_stats(bool tui, const std::string &line)
+  {
+    if (tui)
+    {
+      std::cout << "\r" << style::GRAY << "[vix p2p] " << style::RESET << line << "    " << std::flush;
+    }
+    else
+    {
+      std::cout << style::GRAY << "[vix p2p] " << style::RESET << line << "\n"
+                << std::flush;
+    }
   }
 
   static void usage(std::ostream &out)
@@ -330,7 +348,8 @@ namespace
         << "  --connect <host:port>          Connect to a peer after start\n"
         << "  --connect-delay <ms>           Delay before connect()\n"
         << "  --run <seconds>                Auto-stop after N seconds\n"
-        << "  --stats-every <ms>             Stats print interval (default: 1000)\n"
+        << "  --stats-every <ms>             Stats interval (default: 1000)\n"
+        << "  --tui <on|off>                 Single-line live stats (default: auto on TTY)\n"
         << "  --quiet                        Print only final stats\n"
         << "  --no-connect                   Disable auto connect (discovery/bootstrap callbacks)\n"
         << "\n"
@@ -349,20 +368,54 @@ namespace
         << "Logging:\n"
         << "  --log-level <level>            trace|debug|info|warn|error|critical|off\n"
         << "\n"
-        << "Security (placeholders):\n"
-        << "  --tls                          (reserved) enable TLS transport\n"
-        << "  --psk <value>                  (reserved) pre-shared key\n"
-        << "  --handshake <mode>             (reserved) handshake mode\n"
-        << "\n"
         << "Help:\n"
         << "  --help, -h\n"
         << "\n"
         << "Examples:\n"
-        << "  # Terminal A\n"
         << "  vix p2p --id A --listen 9001\n"
-        << "\n"
-        << "  # Terminal B\n"
         << "  vix p2p --id B --listen 9002 --connect 127.0.0.1:9001\n";
+  }
+
+  static bool parse_on_off(const std::string &s, bool &out)
+  {
+    if (s == "on")
+    {
+      out = true;
+      return true;
+    }
+    if (s == "off")
+    {
+      out = false;
+      return true;
+    }
+    return false;
+  }
+
+  static bool do_connect(
+      const std::shared_ptr<SharedLifecycle> &life,
+      ConnectGuard &guard,
+      vix::p2p::P2PRuntime &p2p,
+      const vix::p2p::PeerEndpoint &ep,
+      bool manual,
+      bool quiet)
+  {
+    if (!life || life->stopping.load())
+      return false;
+
+    if (!guard.allow_attempt(ep, manual, quiet))
+      return false;
+
+    try
+    {
+      p2p.connect(ep);
+      guard.mark_success(ep);
+      return true;
+    }
+    catch (...)
+    {
+      guard.mark_failure(ep, manual);
+      return false;
+    }
   }
 
 } // namespace
@@ -371,36 +424,26 @@ namespace vix::commands::P2PCommand
 {
   int run(const std::vector<std::string> &argsIn)
   {
-    // Return codes:
-    // 0 success
-    // 2 cancelled
-    // 1+ errors
-
     g_life = std::make_shared<SharedLifecycle>();
     std::signal(SIGINT, on_sigint);
 
-    auto &logger = Logger::getInstance();
+    std::ios::sync_with_stdio(false);
 
+    auto &logger = Logger::getInstance();
     std::vector<std::string> args = argsIn;
 
     if (args.empty() || has_flag(args, "--help") || has_flag(args, "-h"))
       return help();
 
-    // P2.2: per-command --log-level
-    if (auto s = arg_value(args, "--log-level"))
-      apply_log_level_from_flag(logger, *s);
+    const bool quiet = has_flag(args, "--quiet");
+    const bool no_connect = has_flag(args, "--no-connect");
 
-    // P2.3: placeholders (no implementation yet)
-    const bool tls_flag = has_flag(args, "--tls");
-    const auto psk_flag = arg_value(args, "--psk");
-    const auto handshake_flag = arg_value(args, "--handshake");
+    if (auto s = arg_value(args, "--log-level"))
+      apply_log_level_from_flag(logger, *s, quiet);
 
     const auto id_opt = arg_value(args, "--id");
     const auto listen_opt = arg_value(args, "--listen");
     const auto connect_opt = arg_value(args, "--connect");
-
-    const bool quiet = has_flag(args, "--quiet");
-    const bool no_connect = has_flag(args, "--no-connect");
 
     std::uint64_t connect_delay_ms = 0;
     if (auto s = arg_value(args, "--connect-delay"))
@@ -408,7 +451,7 @@ namespace vix::commands::P2PCommand
       auto v = parse_u64(*s);
       if (!v)
       {
-        error("Invalid --connect-delay (ms).");
+        style::error("invalid --connect-delay (ms)");
         return 1;
       }
       connect_delay_ms = *v;
@@ -420,7 +463,7 @@ namespace vix::commands::P2PCommand
       auto v = parse_u64(*s);
       if (!v)
       {
-        error("Invalid --run (seconds).");
+        style::error("invalid --run (seconds)");
         return 1;
       }
       run_seconds = *v;
@@ -432,37 +475,42 @@ namespace vix::commands::P2PCommand
       auto v = parse_u64(*s);
       if (!v || *v == 0)
       {
-        error("Invalid --stats-every (ms).");
+        style::error("invalid --stats-every (ms)");
         return 1;
       }
       stats_every_ms = *v;
     }
 
+    bool tui = is_tty_stdout();
+    if (auto s = arg_value(args, "--tui"))
+    {
+      if (!parse_on_off(*s, tui))
+      {
+        style::error("invalid --tui (expected on|off)");
+        return 1;
+      }
+    }
+
     if (!id_opt || !listen_opt)
     {
-      error("Missing required options: --id and/or --listen.");
-      hint("Try: vix p2p --help");
+      style::error("missing required options: --id and/or --listen");
+      style::hint("try: vix p2p --help");
       return 1;
     }
 
     const auto listen_port_opt = parse_u16(*listen_opt);
     if (!listen_port_opt)
     {
-      error("Invalid --listen port.");
+      style::error("invalid --listen port");
       return 1;
     }
 
-    // Discovery
     bool discovery_on = true;
     if (auto s = arg_value(args, "--discovery"))
     {
-      if (*s == "on")
-        discovery_on = true;
-      else if (*s == "off")
-        discovery_on = false;
-      else
+      if (!parse_on_off(*s, discovery_on))
       {
-        error("Invalid --discovery. Expected on|off.");
+        style::error("invalid --discovery (expected on|off)");
         return 1;
       }
     }
@@ -473,7 +521,7 @@ namespace vix::commands::P2PCommand
       auto v = parse_u16(*s);
       if (!v)
       {
-        error("Invalid --disc-port.");
+        style::error("invalid --disc-port");
         return 1;
       }
       disc_port = *v;
@@ -488,7 +536,7 @@ namespace vix::commands::P2PCommand
         disc_mode = vix::p2p::DiscoveryMode::Multicast;
       else
       {
-        error("Invalid --disc-mode. Expected broadcast|multicast.");
+        style::error("invalid --disc-mode (expected broadcast|multicast)");
         return 1;
       }
     }
@@ -497,30 +545,20 @@ namespace vix::commands::P2PCommand
     if (auto s = arg_value(args, "--disc-interval"))
     {
       auto v = parse_u64(*s);
-      if (!v || *v == 0)
+      if (!v || *v == 0 || *v > 0xFFFFFFFFULL)
       {
-        error("Invalid --disc-interval (ms).");
-        return 1;
-      }
-      if (*v > 0xFFFFFFFFULL)
-      {
-        error("--disc-interval too large.");
+        style::error("invalid --disc-interval (ms)");
         return 1;
       }
       disc_interval_ms = static_cast<std::uint32_t>(*v);
     }
 
-    // Bootstrap
     bool bootstrap_on = false;
     if (auto s = arg_value(args, "--bootstrap"))
     {
-      if (*s == "on")
-        bootstrap_on = true;
-      else if (*s == "off")
-        bootstrap_on = false;
-      else
+      if (!parse_on_off(*s, bootstrap_on))
       {
-        error("Invalid --bootstrap. Expected on|off.");
+        style::error("invalid --bootstrap (expected on|off)");
         return 1;
       }
     }
@@ -535,7 +573,7 @@ namespace vix::commands::P2PCommand
       auto v = parse_u64(*s);
       if (!v || *v == 0)
       {
-        error("Invalid --boot-interval (seconds).");
+        style::error("invalid --boot-interval (seconds)");
         return 1;
       }
       boot_interval_sec = *v;
@@ -544,30 +582,20 @@ namespace vix::commands::P2PCommand
     bool announce_on = true;
     if (auto s = arg_value(args, "--announce"))
     {
-      if (*s == "on")
-        announce_on = true;
-      else if (*s == "off")
-        announce_on = false;
-      else
+      if (!parse_on_off(*s, announce_on))
       {
-        error("Invalid --announce. Expected on|off.");
+        style::error("invalid --announce (expected on|off)");
         return 1;
       }
     }
 
-    // Warn for placeholders (P2.3)
-    if (!quiet && (tls_flag || psk_flag.has_value() || handshake_flag.has_value()))
-    {
-      hint("security flags detected (placeholders): TLS/PSK/handshake not implemented yet.");
-    }
-
-    // Build node/runtime
     vix::p2p::NodeConfig cfg;
     cfg.node_id = *id_opt;
     cfg.listen_port = *listen_port_opt;
 
     auto node = vix::p2p::make_tcp_node(cfg);
-    std::weak_ptr<vix::p2p::Node> wnode = node; // P0.3: callbacks safe
+    std::weak_ptr<vix::p2p::Node> wnode = node;
+
     vix::p2p::P2PRuntime p2p(node);
 
     auto life = g_life;
@@ -575,11 +603,13 @@ namespace vix::commands::P2PCommand
 
     if (!quiet)
     {
-      info("P2P starting");
-      hint("node_id=" + cfg.node_id + " listen=" + std::to_string(cfg.listen_port));
+      style::info("P2P starting");
+      cli_console::status_line(false, "node", cfg.node_id);
+      cli_console::status_line(false, "listen", std::to_string(cfg.listen_port));
+      if (tui)
+        style::hint("tui=on (single-line stats)");
     }
 
-    // Bootstrap (HTTP registry)
     if (bootstrap_on)
     {
       vix::p2p::BootstrapConfig bc;
@@ -592,7 +622,7 @@ namespace vix::commands::P2PCommand
 
       auto boot = vix::p2p::make_http_bootstrap(
           bc,
-          [life, &guard, wnode, no_connect](const vix::p2p::BootstrapPeer &p)
+          [life, &guard, &p2p, wnode, no_connect](const vix::p2p::BootstrapPeer &p)
           {
             if (no_connect)
               return;
@@ -608,19 +638,18 @@ namespace vix::commands::P2PCommand
             ep.port = p.tcp_port;
             ep.scheme = "tcp";
 
-            if (!guard.should_connect(ep, ConnectReason::Bootstrap, /*quiet=*/true))
-              return;
-
-            n->connect(ep);
+            (void)do_connect(life, guard, p2p, ep, /*manual=*/false, /*quiet=*/true);
           });
 
       node->set_bootstrap(boot);
 
       if (!quiet)
-        hint("bootstrap=on registry=" + registry);
+      {
+        style::hint(std::string("bootstrap=on registry=") + registry);
+        style::hint(std::string("announce=") + (announce_on ? "on" : "off"));
+      }
     }
 
-    // Discovery (UDP)
     if (discovery_on)
     {
       vix::p2p::DiscoveryConfig dc;
@@ -632,7 +661,7 @@ namespace vix::commands::P2PCommand
 
       auto disc = vix::p2p::make_udp_discovery(
           dc,
-          [life, &guard, wnode, no_connect](const vix::p2p::DiscoveryAnnouncement &a)
+          [life, &guard, &p2p, wnode, no_connect](const vix::p2p::DiscoveryAnnouncement &a)
           {
             if (no_connect)
               return;
@@ -648,52 +677,41 @@ namespace vix::commands::P2PCommand
             ep.port = a.port;
             ep.scheme = "tcp";
 
-            if (!guard.should_connect(ep, ConnectReason::Discovery, /*quiet=*/true))
-              return;
-
-            n->connect(ep);
+            (void)do_connect(life, guard, p2p, ep, /*manual=*/false, /*quiet=*/true);
           });
 
       node->set_discovery(disc);
 
       if (!quiet)
-        hint("discovery=on disc_port=" + std::to_string(disc_port));
+      {
+        style::hint(std::string("discovery=on disc_port=") + std::to_string(disc_port));
+        style::hint(std::string("disc_mode=") + (disc_mode == vix::p2p::DiscoveryMode::Broadcast ? "broadcast" : "multicast"));
+      }
     }
 
     p2p.start();
 
-    // Manual outbound connect (also uses guard)
     if (connect_opt)
     {
       auto ep = parse_endpoint(*connect_opt);
       if (!ep)
       {
-        error("Invalid --connect. Expected host:port or tcp://host:port");
-        // P0.2: we still stop cleanly
-        if (life)
-        {
-          life->stopping.store(true);
-          life->running.store(false);
-        }
+        style::error("invalid --connect (expected host:port or tcp://host:port)");
+        life->stopping.store(true);
+        life->running.store(false);
         p2p.stop();
         return 1;
       }
 
       if (!quiet)
-        hint("connect=" + ep->host + ":" + std::to_string(ep->port) +
-             " delay=" + std::to_string(connect_delay_ms) + "ms");
+        style::hint(std::string("connect=") + ep->host + ":" + std::to_string(ep->port));
 
       if (connect_delay_ms > 0)
         std::this_thread::sleep_for(std::chrono::milliseconds(connect_delay_ms));
 
-      if (!life->stopping.load())
-      {
-        if (guard.should_connect(*ep, ConnectReason::Manual, quiet))
-          p2p.connect(*ep);
-      }
+      (void)do_connect(life, guard, p2p, *ep, /*manual=*/true, quiet);
     }
 
-    // Auto-stop timer
     std::thread stopper;
     if (run_seconds > 0)
     {
@@ -704,48 +722,80 @@ namespace vix::commands::P2PCommand
                                 life->running.store(false); });
     }
 
-    // Stats loop
     const auto tick = std::chrono::milliseconds(stats_every_ms);
+
+    vix::p2p::NodeStats last{};
+    std::chrono::steady_clock::time_point last_print{};
     while (life->running.load())
     {
-      if (!quiet)
+      const auto now = std::chrono::steady_clock::now();
+      const auto st = p2p.stats();
+      const auto cs = guard.stats();
+      const auto tracked = guard.tracked_endpoints();
+
+      const bool changed =
+          (st.peers_total != last.peers_total) ||
+          (st.peers_connected != last.peers_connected) ||
+          (st.handshakes_started != last.handshakes_started) ||
+          (st.handshakes_completed != last.handshakes_completed);
+
+      const bool time_ok =
+          (last_print.time_since_epoch().count() == 0) ||
+          (now - last_print) >= tick;
+
+      if (!quiet && (changed || time_ok))
       {
-        auto st = p2p.stats();
-        auto cs = guard.stats();
-        std::cout << "[vix p2p] ";
-        print_stats_line(st, cs, guard.tracked_endpoints());
+        print_stats(tui, build_stats_plain(st, cs, tracked));
+        last = st;
+        last_print = now;
       }
-      std::this_thread::sleep_for(tick);
+
+      std::this_thread::sleep_for(std::chrono::milliseconds(80));
     }
 
     if (stopper.joinable())
       stopper.join();
 
     if (!quiet)
-      hint("stopping...");
+    {
+      if (tui)
+        std::cout << "\n"
+                  << std::flush;
+      style::hint("stopping...");
+    }
 
-    // P0.2: stop order (as far as CLI can enforce without touching core)
-    // 1) running=false already
-    // 2) mark stopping=true -> callbacks become no-op
-    // 3) detach discovery/bootstrap to avoid late callbacks holding refs
-    // 4) p2p.stop() handles acceptor/sessions/threads inside core
     life->stopping.store(true);
 
-    // Detach hooks (best-effort: prevents late callback invocations through node)
     node->set_discovery(nullptr);
     node->set_bootstrap(nullptr);
 
     p2p.stop();
 
-    // Final stats
-    auto final_st = p2p.stats();
-    auto final_cs = guard.stats();
-
-    std::cout << "[vix p2p] final: ";
-    print_stats_line(final_st, final_cs, guard.tracked_endpoints());
+    const auto final_st = p2p.stats();
+    const auto final_cs = guard.stats();
 
     if (!quiet)
-      success("bye");
+    {
+      style::blank();
+      vix::cli::util::section(std::cout, "Final");
+      vix::cli::util::kv(std::cout, "peers_total", std::to_string(final_st.peers_total), 22);
+      vix::cli::util::kv(std::cout, "peers_connected", std::to_string(final_st.peers_connected), 22);
+      vix::cli::util::kv(std::cout, "handshakes_started", std::to_string(final_st.handshakes_started), 22);
+      vix::cli::util::kv(std::cout, "handshakes_completed", std::to_string(final_st.handshakes_completed), 22);
+
+      vix::cli::util::kv(std::cout, "connect_attempts", std::to_string(final_cs.connect_attempts), 22);
+      vix::cli::util::kv(std::cout, "connect_deduped", std::to_string(final_cs.connect_deduped), 22);
+      vix::cli::util::kv(std::cout, "connect_failures", std::to_string(final_cs.connect_failures), 22);
+      vix::cli::util::kv(std::cout, "backoff_skips", std::to_string(final_cs.backoff_skips), 22);
+      vix::cli::util::kv(std::cout, "tracked_endpoints", std::to_string(guard.tracked_endpoints()), 22);
+
+      style::success("bye");
+    }
+    else
+    {
+      std::cout << build_stats_plain(final_st, final_cs, guard.tracked_endpoints()) << "\n"
+                << std::flush;
+    }
 
     return 0;
   }

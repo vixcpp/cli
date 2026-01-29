@@ -32,6 +32,7 @@
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/DepsCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
+#include <vix/cli/commands/P2PCommand.hpp>
 
 #include <stdexcept>
 
@@ -108,6 +109,14 @@ namespace vix::cli::dispatch
          { return vix::commands::ReplCommand::run(a); },
          []()
          { return vix::commands::ReplCommand::help(); }});
+
+    add({"p2p",
+         "Network",
+         "Run P2P node (tcp + discovery + bootstrap)",
+         [](const Args &a)
+         { return vix::commands::P2PCommand::run(a); },
+         []()
+         { return vix::commands::P2PCommand::help(); }});
 
     add({"orm",
          "Database",

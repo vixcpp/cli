@@ -90,6 +90,35 @@ int main()
 }
 )";
 
+  constexpr const char *kAppConfigJson = R"JSON({
+  "server": {
+    "port": 8080,
+    "request_timeout": 2000,
+    "io_threads": 0,
+    "session_timeout_sec": 20
+  },
+  "logging": {
+    "async": true,
+    "queue_max": 20000,
+    "drop_on_overflow": true
+  },
+  "waf": {
+    "mode": "basic",
+    "max_target_len": 4096,
+    "max_body_bytes": 1048576
+  },
+  "database": {
+    "default": {
+      "host": "localhost",
+      "user": "root",
+      "password": "",
+      "name": "",
+      "port": 3306
+    }
+  }
+}
+)JSON";
+
   static std::string make_lib_header(const std::string &name)
   {
     std::string s;
@@ -794,14 +823,55 @@ int main()
   static std::string make_readme_app(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(3000);
+    readme.reserve(3500);
 
     readme += "# " + projectName + "\n\n";
     readme += "Minimal Vix.cpp application.\n\n";
+
+    readme += "## Build & Run\n\n";
     readme += "```bash\n";
     readme += "vix build\n";
     readme += "vix run\n";
+    readme += "```\n\n";
+
+    readme += "## Configuration\n\n";
+    readme += "Vix applications **do not auto-load project configuration by default**.\n";
+    readme += "If you want to use a project-level configuration (for example to configure the server port),\n";
+    readme += "you must explicitly initialize and read it in your application.\n\n";
+
+    readme += "### Project config file\n\n";
+    readme += "Create a configuration file at:\n\n";
     readme += "```\n";
+    readme += "config/config.json\n";
+    readme += "```\n\n";
+
+    readme += "Example:\n\n";
+    readme += "```json\n";
+    readme += "{\n";
+    readme += "  \"server\": {\n";
+    readme += "    \"port\": 8081\n";
+    readme += "  }\n";
+    readme += "}\n";
+    readme += "```\n\n";
+
+    readme += "### Using the config in code\n\n";
+    readme += "To use the project configuration, initialize and read it explicitly:\n\n";
+    readme += "```cpp\n";
+    readme += "#include <vix.hpp>\n";
+    readme += "using namespace vix;\n\n";
+    readme += "int main()\n";
+    readme += "{\n";
+    readme += "  // Load project config (project config overrides Vix install config)\n";
+    readme += "  auto &cfg = vix::config::Config::getInstance();\n\n";
+    readme += "  App app;\n";
+    readme += "  app.get(\"/\", [](Request&, Response& res) {\n";
+    readme += "    res.send(\"Hello world\");\n";
+    readme += "  });\n\n";
+    readme += "  app.run(cfg.getServerPort());\n";
+    readme += "}\n";
+    readme += "```\n\n";
+
+    readme += "> The project `config/config.json` always takes precedence over the global Vix installation config.\n";
 
     return readme;
   }
@@ -1209,10 +1279,7 @@ int main()
     return f;
   }
 
-  // ==========================================================
   // Generation routines
-  // ==========================================================
-
   static bool generate_app_project(
       const fs::path &projectDir,
       const std::string &projName,
@@ -1221,15 +1288,21 @@ int main()
   {
     const fs::path srcDir = projectDir / "src";
     const fs::path testsDir = projectDir / "tests";
+    const fs::path configDir = projectDir / "config";
 
     if (!ensure_dir(srcDir, err))
       return false;
     if (!ensure_dir(testsDir, err))
       return false;
+    if (!ensure_dir(configDir, err))
+      return false;
 
     if (!write_text_file(srcDir / "main.cpp", kMainCpp, err))
       return false;
     if (!write_text_file(testsDir / "test_basic.cpp", kBasicTestCpp_App, err))
+      return false;
+
+    if (!write_text_file(configDir / "config.json", kAppConfigJson, err))
       return false;
 
     if (!write_text_file(projectDir / "CMakeLists.txt", make_cmakelists_app(projName, features), err))

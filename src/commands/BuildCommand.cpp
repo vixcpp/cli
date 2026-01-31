@@ -919,32 +919,27 @@ namespace vix::commands::BuildCommand
 
     out << "Options:\n";
     out << "  --preset <name>       Preset to use (dev, dev-ninja, release)\n";
-    out << "  --target <triple>     Cross-compilation target triple (auto "
-           "toolchain)\n";
+    out << "  --target <triple>     Cross-compilation target triple (auto toolchain)\n";
     out << "  --sysroot <path>      Sysroot for cross toolchain (optional)\n";
-    out << "  --static              Request static linking "
-           "(VIX_LINK_STATIC=ON)\n";
-    out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, "
-           "clamped)\n";
+    out << "  --static              Request static linking (VIX_LINK_STATIC=ON)\n";
+    out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, clamped)\n";
     out << "  --clean               Force reconfigure (ignore cache/signature)\n";
     out << "  --no-cache            Disable signature cache shortcut\n";
-    out << "  --fast                Fast loop: if Ninja says up-to-date, exit "
-           "immediately\n";
-    out << "  --linker <mode>       auto|default|mold|lld (auto prefers mold "
-           "then lld)\n";
-    out << "  --launcher <mode>     auto|none|sccache|ccache (auto prefers "
-           "sccache)\n";
+    out << "  --fast                Fast loop: if Ninja says up-to-date, exit immediately\n";
+    out << "  --linker <mode>       auto|default|mold|lld (auto prefers mold then lld)\n";
+    out << "  --launcher <mode>     auto|none|sccache|ccache (auto prefers sccache)\n";
     out << "  --no-status           Disable NINJA_STATUS progress format\n";
     out << "  --no-up-to-date       Disable Ninja dry-run up-to-date detection\n";
-    out << "  -d, --dir <path>      Project directory (where CMakeLists.txt "
-           "lives)\n";
+    out << "  -d, --dir <path>      Project directory (where CMakeLists.txt lives)\n";
     out << "  -q, --quiet           Minimal output (still logs to files)\n";
     out << "  --targets             List detected cross toolchains on PATH\n";
-    out << "  --cmake-verbose       Show raw CMake configure output (no summary "
-           "filtering)\n";
-    out << "  --build-target <name> Build only a specific CMake target (ex: "
-           "blog)\n";
+    out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
+    out << "  --build-target <name> Build only a specific CMake target (ex: blog)\n";
     out << "  -h, --help            Show this help\n\n";
+
+    out << "Environment variables:\n";
+    out << "  VIX_BUILD_HEARTBEAT=1 Enable build heartbeat when no output is produced\n";
+    out << "                       for several seconds (disabled by default)\n\n";
 
     out << "Examples:\n";
     out << "  vix build\n";
@@ -953,9 +948,9 @@ namespace vix::commands::BuildCommand
     out << "  vix build --preset release --static\n";
     out << "  vix build --launcher sccache --linker mold\n";
     out << "  vix build --target aarch64-linux-gnu\n";
-    out << "  vix build --preset release -target aarch64-linux-gnu\n";
+    out << "  vix build --preset release --target aarch64-linux-gnu\n";
     out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
-
+    out << "  VIX_BUILD_HEARTBEAT=1 vix build\n";
     out << "  vix build -j 8\n\n";
 
     out << "Logs:\n";
@@ -964,4 +959,5 @@ namespace vix::commands::BuildCommand
 
     return 0;
   }
+
 } // namespace vix::commands::BuildCommand

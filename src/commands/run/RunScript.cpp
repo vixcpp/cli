@@ -148,6 +148,15 @@ namespace vix::commands::RunCommand::detail
     using namespace std;
     namespace fs = std::filesystem;
 
+    if (opt.badDoubleDashRuntimeArgs)
+    {
+      error("Invalid usage: you passed a runtime argument after `--` (" + opt.badDoubleDashArg + ").");
+      hint("In .cpp script mode, everything after `--` is treated as compiler/linker flags.");
+      hint("Use repeatable --args for runtime arguments.");
+      hint("example: vix run main.cpp --cwd ./data --args --config --args config.json");
+      return 1;
+    }
+
     const fs::path script = opt.cppFile;
     if (!fs::exists(script))
     {
@@ -193,7 +202,11 @@ namespace vix::commands::RunCommand::detail
     {
       std::ostringstream oss;
 
+#ifndef _WIN32
       oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build-ninja";
+#else
+      oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build-ninja";
+#endif
 
       if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
       {
@@ -206,12 +219,7 @@ namespace vix::commands::RunCommand::detail
       }
 
       fs::path cfgLogPath = projectDir / "configure.log";
-
-#ifndef _WIN32
       oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
-#else
-      oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
-#endif
 
       const std::string cmd = oss.str();
       int code = std::system(cmd.c_str());
@@ -246,17 +254,13 @@ namespace vix::commands::RunCommand::detail
       if (opt.jobs > 0)
         oss << " -- -j " << opt.jobs;
 
-#ifndef _WIN32
       oss << " >" << quote(logPath.string()) << " 2>&1";
-#else
-      oss << " >" << quote(logPath.string()) << " 2>&1";
-#endif
 
       const std::string buildCmd = oss.str();
       int code = std::system(buildCmd.c_str());
       code = normalize_exit_code(code);
-      if (code != 0)
 
+      if (code != 0)
       {
         std::ifstream ifs(logPath);
         std::string logContent;
@@ -307,21 +311,58 @@ namespace vix::commands::RunCommand::detail
     }
 
     int runCode = 0;
-    std::string cmdRun;
 
 #ifdef _WIN32
-    cmdRun = "cmd /C \"set VIX_STDOUT_MODE=line && " +
-             std::string("\"") + exePath.string() + "\"\"";
-#else
-    cmdRun = "VIX_STDOUT_MODE=line " + quote(exePath.string());
-#endif
+    std::string cmdRun =
+        "cmd /C \"set VIX_STDOUT_MODE=line && \"" + exePath.string() + "\"";
+    cmdRun += join_quoted_args_local(opt.runArgs);
+    cmdRun += "\"";
 
-#ifndef _WIN32
+    cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
+
+    const LiveRunResult rr = run_cmd_live_filtered_capture(
+        cmdRun,
+        /*spinnerLabel=*/"",
+        /*passthroughRuntime=*/true,
+        /*timeoutSec=*/effective_timeout_sec(opt));
+
+    runCode = normalize_exit_code(rr.exitCode);
+
+    if (runCode != 0)
+    {
+      std::string log = rr.stderrText;
+      if (!rr.stdoutText.empty())
+        log += rr.stdoutText;
+
+      bool handled = false;
+
+      if (!log.empty())
+      {
+        handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+            log, script, "Script execution failed");
+
+        if (!handled && vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, script))
+          handled = true;
+
+        if (!handled && !rr.printed_live)
+          std::cerr << log << "\n";
+      }
+
+      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);
+      return runCode;
+    }
+
+    return 0;
+
+#else
     apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
     const bool isPlainScript = !useVixRuntime;
-
     const std::string runLabel = isPlainScript ? "" : "Running script";
+
+    std::string cmdRun = "VIX_STDOUT_MODE=line " + quote(exePath.string());
+    cmdRun += join_quoted_args_local(opt.runArgs);
+    cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
 
     auto rr = run_cmd_live_filtered_capture(
         cmdRun,
@@ -407,17 +448,6 @@ namespace vix::commands::RunCommand::detail
       }
 
       handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);
-      return runCode;
-    }
-
-    return 0;
-
-#else
-    runCode = std::system(cmdRun.c_str());
-    runCode = normalize_exit_code(runCode);
-    if (runCode != 0)
-    {
-      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/false);
       return runCode;
     }
 
@@ -782,10 +812,28 @@ namespace vix::commands::RunCommand::detail
 
         apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
-        const std::string exeStr = exePath.string();
-        const char *argv0 = exeStr.c_str();
+        if (!opt.cwd.empty())
+        {
+          const std::string cwd = normalize_cwd_if_needed(opt.cwd);
+          if (::chdir(cwd.c_str()) != 0)
+            _exit(127);
+        }
 
-        ::execl(argv0, argv0, (char *)nullptr);
+        std::vector<std::string> argvStr;
+        argvStr.push_back(exePath.string());
+        for (const auto &a : opt.runArgs)
+        {
+          if (!a.empty())
+            argvStr.push_back(a);
+        }
+
+        std::vector<char *> argv;
+        argv.reserve(argvStr.size() + 1);
+        for (auto &s : argvStr)
+          argv.push_back(const_cast<char *>(s.c_str()));
+        argv.push_back(nullptr);
+
+        ::execv(argv[0], argv.data());
         _exit(127);
       }
 

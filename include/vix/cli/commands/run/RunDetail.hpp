@@ -67,6 +67,9 @@ namespace vix::commands::RunCommand::detail
     std::vector<std::string> runArgs; // [run] args = ["--port","8080"]
     std::vector<std::string> runEnv;  // [run] env  = ["K=V","X=1"]
     int timeoutSec = 0;               // [run] timeout_sec = 15
+    std::string cwd;
+    bool badDoubleDashRuntimeArgs = false;
+    std::string badDoubleDashArg;
   };
 
   // Process / IO
@@ -166,6 +169,9 @@ namespace vix::commands::RunCommand::detail
   void apply_log_format_env(const Options &opt);
   void apply_log_color_env(const Options &opt);
 
+  std::string join_quoted_args_local(const std::vector<std::string> &a);
+  std::string wrap_with_cwd_if_needed(const Options &opt, const std::string &cmd);
+
   inline void apply_log_env(const Options &opt)
   {
     apply_log_level_env(opt);
@@ -187,6 +193,23 @@ namespace vix::commands::RunCommand::detail
       return 0;
 
     return opt.timeoutSec;
+  }
+
+  inline std::string normalize_cwd_if_needed(const std::string &cwd)
+  {
+    if (cwd.empty())
+      return {};
+
+    std::error_code ec{};
+    fs::path p(cwd);
+
+    if (p.is_relative())
+      p = fs::absolute(p, ec);
+
+    if (ec)
+      return cwd; // fallback
+
+    return p.string();
   }
 
 } // namespace vix::commands::RunCommand::detail

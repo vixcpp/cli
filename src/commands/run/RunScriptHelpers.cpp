@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/Style.hpp>
 
 #include <iostream>
@@ -162,6 +163,33 @@ namespace vix::commands::RunCommand::detail
     }
 
     return sig;
+  }
+
+  std::string join_quoted_args_local(const std::vector<std::string> &a)
+  {
+    std::string s;
+    for (const auto &x : a)
+    {
+      if (x.empty())
+        continue;
+      s += " ";
+      s += quote(x);
+    }
+    return s;
+  }
+
+  std::string wrap_with_cwd_if_needed(const Options &opt, const std::string &cmd)
+  {
+    if (opt.cwd.empty())
+      return cmd;
+
+    const std::string cwd = normalize_cwd_if_needed(opt.cwd);
+
+#ifdef _WIN32
+    return "cmd /C \"cd /D " + quote(cwd) + " && " + cmd + "\"";
+#else
+    return "cd " + quote(cwd) + " && " + cmd;
+#endif
   }
 
 #ifndef _WIN32

@@ -244,6 +244,22 @@ namespace vix::cli::build
 
     const bool filterCMakeSummary = is_configure_cmd(argv) && !cmakeVerbose;
 
+    const bool heartbeatEnabled = [&]() -> bool
+    {
+      if (quiet)
+        return false;
+      const char *v = std::getenv("VIX_BUILD_HEARTBEAT");
+      if (!v)
+        return false;
+
+      std::string s(v);
+      s = util::trim(s);
+      for (char &c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return (s == "1" || s == "true" || s == "yes" || s == "on");
+    }();
+
     int pipefd[2];
     if (::pipe(pipefd) != 0)
     {
@@ -332,10 +348,11 @@ namespace vix::cli::build
 
     std::string buf(16 * 1024, '\0');
 
-    // Heartbeat state
+    // Heartbeat state (only used if enabled)
     const auto startTs = std::chrono::steady_clock::now();
     auto lastOutputTs = startTs;
     auto lastHeartbeatTs = startTs;
+    bool heartbeatPrinted = false;
 
     // poll loop
     while (true)
@@ -345,7 +362,7 @@ namespace vix::cli::build
       pfd.events = POLLIN | POLLHUP | POLLERR;
       pfd.revents = 0;
 
-      // 250ms tick -> lets us print heartbeat & not look frozen
+      // 250ms tick -> lets us keep UI responsive (and optional heartbeat)
       const int pr = ::poll(&pfd, 1, 250);
 
       if (pr < 0)
@@ -413,8 +430,7 @@ namespace vix::cli::build
       if (pr > 0 && (pfd.revents & (POLLHUP | POLLERR)))
         break;
 
-      // No output tick -> heartbeat (avoid "looks frozen")
-      if (!quiet)
+      if (heartbeatEnabled)
       {
         const auto now = std::chrono::steady_clock::now();
         const auto silenceMs =
@@ -430,8 +446,9 @@ namespace vix::cli::build
               std::chrono::duration_cast<std::chrono::milliseconds>(now - startTs).count();
 
           std::string msg =
-              "\r[building] still running… (" + util::format_seconds(elapsedMs) + ")   ";
+              "\r[building] still running... (" + util::format_seconds(elapsedMs) + ")   ";
           write_all_fd(STDOUT_FILENO, msg.data(), msg.size());
+          heartbeatPrinted = true;
         }
       }
     }
@@ -456,10 +473,11 @@ namespace vix::cli::build
       return r;
     }
 
-    if (!quiet)
+    // clear heartbeat line only if it was printed
+    if (heartbeatEnabled && heartbeatPrinted)
     {
-      // clear heartbeat line if any
-      const std::string clear = "\r";
+      // best-effort: overwrite the line then return carriage
+      const std::string clear = "\r\033[2K\r";
       write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
     }
 
@@ -467,6 +485,7 @@ namespace vix::cli::build
     r.capturedFirstLine = util::trim(firstLine);
     return r;
   }
+
 #else // _WIN32
 
   process::ExecResult run_process_capture(

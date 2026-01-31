@@ -18,6 +18,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <system_error>
+#include <fstream>
+#include <sstream>
+#include <algorithm>
 
 #include <vix/cli/ErrorHandler.hpp>
 
@@ -210,6 +214,322 @@ namespace vix::commands::RunCommand::detail
       return cwd; // fallback
 
     return p.string();
+  }
+
+  struct RebuildCacheStamp
+  {
+    std::uint64_t exe_mtime_ns = 0;
+    std::uint64_t depfiles_fingerprint = 0; // changes if any .d changes
+    std::uint64_t max_dep_mtime_ns = 0;     // max mtime among resolved deps
+  };
+
+  inline std::uint64_t file_mtime_ns(const fs::path &p, std::error_code &ec)
+  {
+    ec.clear();
+    const auto ft = fs::last_write_time(p, ec);
+    if (ec)
+      return 0;
+
+    // Convert to nanoseconds in a portable-ish way
+    using namespace std::chrono;
+    const auto ns = duration_cast<nanoseconds>(ft.time_since_epoch()).count();
+    return (ns < 0) ? 0ull : static_cast<std::uint64_t>(ns);
+  }
+
+  inline std::uint64_t file_size_u64(const fs::path &p, std::error_code &ec)
+  {
+    ec.clear();
+    const auto sz = fs::file_size(p, ec);
+    if (ec)
+      return 0;
+    return static_cast<std::uint64_t>(sz);
+  }
+
+  inline std::optional<RebuildCacheStamp> load_rebuild_cache_stamp(const fs::path &stampFile)
+  {
+    std::ifstream ifs(stampFile);
+    if (!ifs)
+      return std::nullopt;
+
+    RebuildCacheStamp s{};
+    std::string line;
+
+    auto parse_u64 = [](const std::string &v) -> std::optional<std::uint64_t>
+    {
+      try
+      {
+        std::size_t idx = 0;
+        unsigned long long x = std::stoull(v, &idx, 10);
+        if (idx != v.size())
+          return std::nullopt;
+        return static_cast<std::uint64_t>(x);
+      }
+      catch (...)
+      {
+        return std::nullopt;
+      }
+    };
+
+    while (std::getline(ifs, line))
+    {
+      const auto pos = line.find('=');
+      if (pos == std::string::npos)
+        continue;
+
+      const std::string k = line.substr(0, pos);
+      const std::string v = line.substr(pos + 1);
+
+      auto u = parse_u64(v);
+      if (!u)
+        continue;
+
+      if (k == "exe_mtime_ns")
+        s.exe_mtime_ns = *u;
+      else if (k == "depfiles_fingerprint")
+        s.depfiles_fingerprint = *u;
+      else if (k == "max_dep_mtime_ns")
+        s.max_dep_mtime_ns = *u;
+    }
+
+    if (s.depfiles_fingerprint == 0 && s.max_dep_mtime_ns == 0 && s.exe_mtime_ns == 0)
+      return std::nullopt;
+
+    return s;
+  }
+
+  inline void save_rebuild_cache_stamp(const fs::path &stampFile, const RebuildCacheStamp &s)
+  {
+    std::ofstream ofs(stampFile, std::ios::trunc);
+    if (!ofs)
+      return;
+
+    ofs << "exe_mtime_ns=" << s.exe_mtime_ns << "\n";
+    ofs << "depfiles_fingerprint=" << s.depfiles_fingerprint << "\n";
+    ofs << "max_dep_mtime_ns=" << s.max_dep_mtime_ns << "\n";
+  }
+
+  inline std::uint64_t depfiles_fingerprint_fast(const std::vector<fs::path> &depfiles)
+  {
+    std::uint64_t h = 1469598103934665603ull;
+    auto fnv1a = [&](std::uint64_t v)
+    {
+      h ^= v;
+      h *= 1099511628211ull;
+    };
+
+    std::error_code ec;
+    for (const auto &d : depfiles)
+    {
+      fnv1a(std::hash<std::string>{}(d.string()));
+
+      // mtime + size
+      fnv1a(file_mtime_ns(d, ec));
+      fnv1a(file_size_u64(d, ec));
+    }
+    return h;
+  }
+
+  // CMake usually: buildDir/CMakeFiles/<target>.dir/*.d
+  inline std::vector<fs::path> list_depfiles_for_target(
+      const fs::path &buildDir,
+      const std::string &targetName)
+  {
+    std::vector<fs::path> out;
+    std::error_code ec;
+
+    fs::path dir = buildDir / "CMakeFiles" / (targetName + ".dir");
+    if (!fs::exists(dir, ec) || ec)
+      return out;
+
+    for (auto it = fs::recursive_directory_iterator(
+             dir, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator();
+         ++it)
+    {
+      if (!it->is_regular_file())
+        continue;
+      const auto p = it->path();
+      if (p.extension() == ".d")
+        out.push_back(p);
+    }
+
+    std::sort(out.begin(), out.end(), [](const fs::path &a, const fs::path &b)
+              { return a.string() < b.string(); });
+
+    return out;
+  }
+
+  inline void depfile_parse_paths(const std::string &content, std::vector<fs::path> &paths)
+  {
+    const auto pos = content.find(':');
+    if (pos == std::string::npos)
+      return;
+
+    std::string deps = content.substr(pos + 1);
+
+    std::vector<std::string> toks;
+    toks.reserve(128);
+
+    std::string cur;
+    cur.reserve(128);
+
+    auto flush = [&]()
+    {
+      if (!cur.empty())
+      {
+        toks.push_back(cur);
+        cur.clear();
+      }
+    };
+
+    for (std::size_t i = 0; i < deps.size(); ++i)
+    {
+      const char c = deps[i];
+
+      if (c == '\\')
+      {
+        if (i + 1 < deps.size())
+        {
+          const char n = deps[i + 1];
+
+          if (n == '\n' || n == '\r')
+          {
+            ++i;
+            if (i + 1 < deps.size() && deps[i + 1] == '\n')
+              ++i;
+            continue;
+          }
+
+          cur.push_back(n);
+          ++i;
+          continue;
+        }
+
+        flush();
+        continue;
+      }
+
+      if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
+      {
+        flush();
+        continue;
+      }
+
+      cur.push_back(c);
+    }
+
+    flush();
+
+    for (const auto &t : toks)
+    {
+      if (t.empty())
+        continue;
+      paths.push_back(fs::path(t));
+    }
+  }
+
+  inline fs::path normalize_dep_path(const fs::path &buildDir, const fs::path &p)
+  {
+    if (p.empty())
+      return p;
+    if (p.is_absolute())
+      return p;
+
+    std::error_code ec;
+    fs::path cand = buildDir / p;
+    if (fs::exists(cand, ec) && !ec)
+      return cand;
+
+    return p;
+  }
+
+  inline std::optional<std::uint64_t> compute_max_dep_mtime_ns(
+      const fs::path &buildDir,
+      const std::vector<fs::path> &depfiles)
+  {
+    std::error_code ec;
+    std::uint64_t maxNs = 0;
+
+    std::vector<fs::path> deps;
+    deps.reserve(512);
+
+    for (const auto &d : depfiles)
+    {
+      std::ifstream ifs(d);
+      if (!ifs)
+        return std::nullopt;
+
+      std::ostringstream ss;
+      ss << ifs.rdbuf();
+      deps.clear();
+      depfile_parse_paths(ss.str(), deps);
+
+      for (auto &p : deps)
+      {
+        const fs::path dep = normalize_dep_path(buildDir, p);
+
+        std::error_code e2;
+        if (!fs::exists(dep, e2) || e2)
+        {
+          continue;
+        }
+
+        const auto t = file_mtime_ns(dep, e2);
+        if (!e2 && t > maxNs)
+          maxNs = t;
+      }
+    }
+
+    return maxNs;
+  }
+
+  inline bool needs_rebuild_from_depfiles_cached(
+      const fs::path &exePath,
+      const fs::path &buildDir,
+      const std::string &targetName)
+  {
+    std::error_code ec;
+
+    if (!fs::exists(exePath, ec) || ec)
+      return true;
+
+    const auto depfiles = list_depfiles_for_target(buildDir, targetName);
+    if (depfiles.empty())
+      return true;
+
+    const fs::path stampFile =
+        buildDir / (".vix-rebuild-cache-" + targetName + ".txt");
+
+    const std::uint64_t exeMtime = file_mtime_ns(exePath, ec);
+    if (ec || exeMtime == 0)
+      return true;
+
+    const std::uint64_t fpNow = depfiles_fingerprint_fast(depfiles);
+
+    if (auto st = load_rebuild_cache_stamp(stampFile))
+    {
+      if (st->depfiles_fingerprint == fpNow)
+      {
+        if (exeMtime >= st->max_dep_mtime_ns)
+          return false;
+      }
+    }
+
+    auto maxDep = compute_max_dep_mtime_ns(buildDir, depfiles);
+    if (!maxDep)
+      return true;
+
+    RebuildCacheStamp out{};
+    out.exe_mtime_ns = exeMtime;
+    out.depfiles_fingerprint = fpNow;
+    out.max_dep_mtime_ns = *maxDep;
+
+    save_rebuild_cache_stamp(stampFile, out);
+
+    if (exeMtime < *maxDep)
+      return true;
+
+    return false;
   }
 
 } // namespace vix::commands::RunCommand::detail

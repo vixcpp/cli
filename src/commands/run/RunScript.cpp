@@ -63,6 +63,18 @@ namespace vix::commands::RunCommand::detail
     return (s == "debug" || s == "trace");
   }
 
+  static bool has_ccache()
+  {
+#ifdef _WIN32
+    // On Windows, keep it simple: ccache is rare in default setups
+    return false;
+#else
+    int code = std::system("ccache --version >/dev/null 2>&1");
+    code = normalize_exit_code(code);
+    return code == 0;
+#endif
+  }
+
   static inline bool log_looks_like_interrupt(const std::string &log)
   {
     const bool isMakeInterrupt =
@@ -99,6 +111,26 @@ namespace vix::commands::RunCommand::detail
 
     s.erase(0, i);
     return s;
+  }
+
+  static bool cache_is_ninja_build(const fs::path &buildDir)
+  {
+    std::error_code ec;
+    const fs::path cache = buildDir / "CMakeCache.txt";
+    if (!fs::exists(cache, ec) || ec)
+      return false;
+
+    std::ifstream ifs(cache);
+    if (!ifs)
+      return false;
+
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+      if (line.rfind("CMAKE_GENERATOR:INTERNAL=", 0) == 0)
+        return line.find("Ninja") != std::string::npos;
+    }
+    return false;
   }
 
   static bool handle_error_tip_block_vix(const std::string &log)
@@ -198,20 +230,32 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
+    // Ensure generator is Ninja (build dir name alone is not enough)
+    if (!cache_is_ninja_build(buildDir))
+    {
+      std::error_code ec;
+      fs::remove_all(buildDir, ec); // ignore errors
+      needConfigure = true;
+    }
+
     if (needConfigure)
     {
       std::ostringstream oss;
 
-#ifndef _WIN32
-      oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build-ninja";
-#else
-      oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build-ninja";
-#endif
+      oss << "cd " << quote(projectDir.string())
+          << " && cmake -S . -B build-ninja -G Ninja";
+
+      if (has_ccache())
+      {
+        oss << " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+            << " -DCMAKE_C_COMPILER_LAUNCHER=ccache";
+      }
 
       if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
       {
         oss << " -DVIX_ENABLE_SANITIZERS=ON"
-            << " -DVIX_SANITIZER_MODE=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
+            << " -DVIX_SANITIZER_MODE="
+            << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
       }
       else
       {
@@ -243,7 +287,28 @@ namespace vix::commands::RunCommand::detail
       (void)text::write_text_file(sigFile, sig);
     }
 
+    // Compute exe path early (needed for smart rebuild)
+    fs::path exePath = buildDir / exeName;
+#ifdef _WIN32
+    exePath += ".exe";
+#endif
+
+    bool skipBuild = false;
+
+#ifndef _WIN32
+    // Only safe to skip build when we did not reconfigure
+    if (!needConfigure)
+    {
+      // Robust intelligent rebuild cache (depfiles + stamp)
+      if (!needs_rebuild_from_depfiles_cached(exePath, buildDir, exeName))
+        skipBuild = true;
+      if (skipBuild && !opt.quiet)
+        hint("Up to date (skip build).");
+    }
+#endif
+
     // Build
+    if (!skipBuild)
     {
       fs::path logPath = projectDir / "build.log";
 
@@ -298,11 +363,6 @@ namespace vix::commands::RunCommand::detail
         return code;
       }
     }
-
-    fs::path exePath = buildDir / exeName;
-#ifdef _WIN32
-    exePath += ".exe";
-#endif
 
     if (!fs::exists(exePath))
     {
@@ -368,7 +428,7 @@ namespace vix::commands::RunCommand::detail
         cmdRun,
         runLabel,
         /*passthroughRuntime=*/isPlainScript,
-        opt.timeoutSec);
+        /*timeoutSec=*/effective_timeout_sec(opt));
 
     runCode = normalize_exit_code(rr.exitCode);
 
@@ -516,7 +576,13 @@ namespace vix::commands::RunCommand::detail
       std::ostringstream oss;
 
       oss << "cd " << quote(projectDir.string())
-          << " && cmake -S . -B build-ninja";
+          << " && cmake -S . -B build-ninja -G Ninja";
+
+      if (has_ccache())
+      {
+        oss << " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+            << " -DCMAKE_C_COMPILER_LAUNCHER=ccache";
+      }
 
       if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
       {

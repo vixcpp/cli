@@ -177,7 +177,17 @@ namespace vix::commands::RunCommand::detail
       if (a == "--")
       {
         for (size_t j = i + 1; j < args.size(); ++j)
-          o.scriptFlags.push_back(args[j]);
+        {
+          const std::string v = args[j];
+
+          if (!v.empty() && v.rfind("--", 0) == 0)
+          {
+            o.badDoubleDashRuntimeArgs = true;
+            o.badDoubleDashArg = v;
+          }
+
+          o.scriptFlags.push_back(v);
+        }
         break;
       }
 
@@ -249,7 +259,39 @@ namespace vix::commands::RunCommand::detail
       {
         o.forceScriptLike = true;
       }
-
+      else if (a == "--cwd" && i + 1 < args.size())
+      {
+        std::filesystem::path p = args[++i];
+        if (p.is_relative())
+          p = std::filesystem::absolute(p);
+        o.cwd = p.string();
+      }
+      else if (a.rfind("--cwd=", 0) == 0)
+      {
+        std::filesystem::path p = a.substr(std::string("--cwd=").size());
+        if (p.is_relative())
+          p = std::filesystem::absolute(p);
+        o.cwd = p.string();
+      }
+      // --env K=V (repeatable)
+      else if (a == "--env" && i + 1 < args.size())
+      {
+        o.runEnv.push_back(args[++i]);
+      }
+      else if (a.rfind("--env=", 0) == 0)
+      {
+        o.runEnv.push_back(a.substr(std::string("--env=").size()));
+      }
+      // --args value (repeatable)
+      // Exemple: --args --port --args 8080
+      else if (a == "--args" && i + 1 < args.size())
+      {
+        o.runArgs.push_back(args[++i]);
+      }
+      else if (a.rfind("--args=", 0) == 0)
+      {
+        o.runArgs.push_back(a.substr(std::string("--args=").size()));
+      }
       else if (a == "--san")
       {
         o.enableSanitizers = true;

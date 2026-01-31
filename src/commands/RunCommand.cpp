@@ -278,6 +278,9 @@ namespace vix::commands::RunCommand
       opt.cppFile = detail::manifest_entry_cpp(opt.manifestFile);
     }
 
+    if (!opt.cwd.empty())
+      opt.cwd = normalize_cwd_if_needed(opt.cwd);
+
     ensure_mode_env_for_run(opt);
     enable_line_buffered_stdout_for_apps();
 
@@ -524,8 +527,11 @@ namespace vix::commands::RunCommand
 #ifdef _WIN32
               clear_terminal_if_enabled();
 
-              const std::string cmd = "\"" + testExe->string() + "\"";
+              std::string cmd = "\"" + testExe->string() + "\"";
+              cmd += join_quoted_args_local(opt.runArgs);
+              cmd = wrap_with_cwd_if_needed(opt, cmd);
               int raw = std::system(cmd.c_str());
+
               int testExit = normalize_exit_code(raw);
 
               if (testExit == 130)
@@ -540,8 +546,12 @@ namespace vix::commands::RunCommand
                 return testExit;
               }
 #else
+              std::string testCmd = quote(testExe->string());
+              testCmd += join_quoted_args_local(opt.runArgs);
+              testCmd = wrap_with_cwd_if_needed(opt, testCmd);
+
               const LiveRunResult tr = run_cmd_live_filtered_capture(
-                  quote(testExe->string()),
+                  testCmd,
                   /*spinnerLabel=*/"",
                   /*passthroughRuntime=*/true,
                   /*timeoutSec=*/effective_timeout_sec(opt));
@@ -601,6 +611,9 @@ namespace vix::commands::RunCommand
           clear_terminal_if_enabled();
 
           std::string runCmd = "\"" + exePath.string() + "\"";
+          runCmd += join_quoted_args_local(opt.runArgs);
+          runCmd = wrap_with_cwd_if_needed(opt, runCmd);
+
           int runCode = std::system(runCmd.c_str());
           int runExit = normalize_exit_code(runCode);
 
@@ -619,6 +632,8 @@ namespace vix::commands::RunCommand
           started = true;
 #else
           std::string runCmd = quote(exePath.string());
+          runCmd += join_quoted_args_local(opt.runArgs);
+          runCmd = wrap_with_cwd_if_needed(opt, runCmd);
 
           const LiveRunResult rr = run_cmd_live_filtered_capture(
               runCmd,
@@ -676,8 +691,6 @@ namespace vix::commands::RunCommand
         {
           progress.phase_done("Run application", "stopped");
         }
-
-        return 0;
 
         return 0;
       }
@@ -845,8 +858,13 @@ namespace vix::commands::RunCommand
 #else
             quote(exampleExe.string());
 #endif
+
+        cmd += join_quoted_args_local(opt.runArgs);
+        cmd = wrap_with_cwd_if_needed(opt, cmd);
+
         int code = std::system(cmd.c_str());
         code = normalize_exit_code(code);
+
         if (code != 0)
         {
           handle_runtime_exit_code(
@@ -854,6 +872,7 @@ namespace vix::commands::RunCommand
               "Example returned non-zero exit code",
               /*alreadyHandled=*/false);
         }
+
         return code;
       }
 
@@ -893,6 +912,8 @@ namespace vix::commands::RunCommand
           quote(exePath.string());
 #endif
       cmd += join_args(opt.runArgs);
+
+      cmd = wrap_with_cwd_if_needed(opt, cmd);
 
       const int code = std::system(cmd.c_str());
 
@@ -937,7 +958,8 @@ namespace vix::commands::RunCommand
     out << "  - Project manifest: [app].kind=\"project\" with entry like \"src/main.cpp\".\n";
     out << "  Notes:\n";
     out << "    • CLI flags override manifest values.\n";
-    out << "    • Use `--` to pass runtime args after Vix options.\n\n";
+    out << "    • Runtime program args must be passed with repeatable --args.\n";
+    out << "    • `--` is only for compiler/linker flags (script build), not runtime args.\n\n";
 
     out << "Options:\n";
     out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
@@ -946,6 +968,11 @@ namespace vix::commands::RunCommand
     out << "  -j, --jobs <n>                Parallel build jobs\n";
     out << "  --clear <auto|always|never>   Clear terminal before runtime output (default: auto)\n";
     out << "  --no-clear                    Alias for --clear=never\n\n";
+
+    out << "Runtime options:\n";
+    out << "  --cwd <path>                  Run the program with this working directory\n";
+    out << "  --env <K=V>                   Add/override one environment variable (repeatable)\n";
+    out << "  --args <value>                Add one runtime argument (repeatable)\n\n";
 
     out << "Watch / reload:\n";
     out << "  --watch, --reload             Rebuild & restart on file changes\n";
@@ -967,24 +994,31 @@ namespace vix::commands::RunCommand
     out << "                               JSON pretty colors (maps to VIX_COLOR)\n";
     out << "  --no-color                    Alias for --log-color=never (also respects NO_COLOR)\n\n";
 
+    out << "Important: runtime args vs compiler flags:\n";
+    out << "  - Runtime args (argv)  : use repeatable --args\n";
+    out << "  - Compiler/linker flags: use `--` then flags (script mode build only)\n\n";
+
     out << "Passing compiler/linker flags (script mode):\n";
     out << "  Use `--` to separate Vix options from compiler/linker flags.\n";
     out << "  Everything after `--` is forwarded to the script build.\n\n";
 
-    out << "  Examples:\n";
-    out << "    vix run main.cpp -- -lssl -lcrypto\n";
-    out << "    vix run main.cpp -- -L/usr/lib -lssl\n";
-    out << "    vix run main.cpp -- -DDEBUG\n\n";
-
     out << "Examples:\n";
+    out << "  # Script mode (.cpp) runtime args + cwd\n";
+    out << "  vix run main.cpp --cwd ./data --args --config --args config.json\n\n";
+
+    out << "  # Script mode (.cpp) compiler/linker flags\n";
+    out << "  vix run main.cpp -- -lssl -lcrypto\n";
+    out << "  vix run main.cpp -- -L/usr/lib -lssl\n";
+    out << "  vix run main.cpp -- -DDEBUG\n\n";
+
     out << "  # Manifest mode (.vix)\n";
     out << "  vix run api.vix\n";
-    out << "  vix run api.vix -- --port 8080\n";
+    out << "  vix run api.vix --args --port --args 8080\n";
     out << "  vix dev api.vix\n\n";
 
     out << "  # Project mode (auto-detect)\n";
     out << "  vix run\n";
-    out << "  vix run api -- --port 8080\n";
+    out << "  vix run api --args --port --args 8080\n";
     out << "  vix run --dir ./examples/blog\n";
     out << "  vix run api --preset dev-ninja --run-preset run-dev-ninja\n";
     out << "  vix run --watch api\n";
@@ -993,11 +1027,6 @@ namespace vix::commands::RunCommand
     out << "  # Umbrella repo examples\n";
     out << "  vix run example main\n";
     out << "  vix run example now_server\n\n";
-
-    out << "  # Script mode (.cpp)\n";
-    out << "  vix run http_ws.cpp\n";
-    out << "  vix run http_ws.cpp --log-level=info --log-format=json-pretty --log-color=always\n";
-    out << "  vix run http_ws.cpp --san\n\n";
 
     out << "Environment:\n";
     out << "  VIX_LOG_LEVEL   trace|debug|info|warn|error|critical|off\n";

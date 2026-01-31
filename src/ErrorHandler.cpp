@@ -41,6 +41,41 @@ namespace
     error(oss.str());
   }
 
+  static bool handle_unrecognized_cli_option_as_script_runtime_args(std::string_view log)
+  {
+    // Exemple:
+    // c++: error: unrecognized command-line option ‘--config’; did you mean ...
+    const std::size_t p = log.find("unrecognized command-line option");
+    if (p == std::string_view::npos)
+      return false;
+
+    std::string opt;
+    {
+      std::size_t q1 = log.find("‘", p);
+      std::size_t q2 = std::string_view::npos;
+      if (q1 != std::string_view::npos)
+        q2 = log.find("’", q1 + 1);
+
+      if (q1 != std::string_view::npos && q2 != std::string_view::npos && q2 > q1 + 1)
+        opt = std::string(log.substr(q1 + 1, q2 - (q1 + 1)));
+    }
+
+    if (opt.size() >= 3 && opt.rfind("--", 0) == 0)
+    {
+      error("Script build failed: you passed runtime args as compiler flags.");
+      hint("In .cpp script mode, everything after `--` is treated as compiler/linker flags.");
+      hint("Use repeatable --args for runtime arguments.");
+      if (!opt.empty())
+      {
+        std::cerr << GRAY << "example: vix run main.cpp --args " << opt << " --args <value>\n"
+                  << RESET;
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   static bool hints_verbose_enabled() noexcept
   {
     const char *lvl = std::getenv("VIX_LOG_LEVEL");
@@ -171,6 +206,15 @@ namespace vix::cli
 
     if (errors.empty())
     {
+      if (handle_unrecognized_cli_option_as_script_runtime_args(cleanedLog))
+      {
+        std::cerr << "\n"
+                  << GRAY << "compiler output:\n"
+                  << RESET;
+        std::cerr << cleanedLog << "\n";
+        return;
+      }
+
       if (RawLogDetectors::handleLinkerOrSanitizer(cleanedLog, sourceFile, contextMessage))
         return;
 

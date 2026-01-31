@@ -90,6 +90,35 @@ int main()
 }
 )";
 
+  constexpr const char *kAppConfigJson = R"JSON({
+  "server": {
+    "port": 8080,
+    "request_timeout": 2000,
+    "io_threads": 0,
+    "session_timeout_sec": 20
+  },
+  "logging": {
+    "async": true,
+    "queue_max": 20000,
+    "drop_on_overflow": true
+  },
+  "waf": {
+    "mode": "basic",
+    "max_target_len": 4096,
+    "max_body_bytes": 1048576
+  },
+  "database": {
+    "default": {
+      "host": "localhost",
+      "user": "root",
+      "password": "",
+      "name": "",
+      "port": 3306
+    }
+  }
+}
+)JSON";
+
   static std::string make_lib_header(const std::string &name)
   {
     std::string s;
@@ -1209,10 +1238,7 @@ int main()
     return f;
   }
 
-  // ==========================================================
   // Generation routines
-  // ==========================================================
-
   static bool generate_app_project(
       const fs::path &projectDir,
       const std::string &projName,
@@ -1221,15 +1247,21 @@ int main()
   {
     const fs::path srcDir = projectDir / "src";
     const fs::path testsDir = projectDir / "tests";
+    const fs::path configDir = projectDir / "config";
 
     if (!ensure_dir(srcDir, err))
       return false;
     if (!ensure_dir(testsDir, err))
       return false;
+    if (!ensure_dir(configDir, err))
+      return false;
 
     if (!write_text_file(srcDir / "main.cpp", kMainCpp, err))
       return false;
     if (!write_text_file(testsDir / "test_basic.cpp", kBasicTestCpp_App, err))
+      return false;
+
+    if (!write_text_file(configDir / "config.json", kAppConfigJson, err))
       return false;
 
     if (!write_text_file(projectDir / "CMakeLists.txt", make_cmakelists_app(projName, features), err))

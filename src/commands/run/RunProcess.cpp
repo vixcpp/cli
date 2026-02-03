@@ -502,7 +502,7 @@ namespace vix::commands::RunCommand::detail
 
   static inline void spinner_clear(bool &printedSomething, char &lastPrintedChar)
   {
-    const char *clearLine = "\r                                                                                \r";
+    const char *clearLine = "\r\033[2K\r";
     write_all(STDOUT_FILENO, clearLine, std::strlen(clearLine));
 
     printedSomething = true;

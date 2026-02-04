@@ -29,6 +29,7 @@
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -612,6 +613,13 @@ namespace vix::commands::RunCommand::detail
       if (::getenv("VIX_MODE") == nullptr)
         ::setenv("VIX_MODE", "run", 1);
 
+#ifdef RLIMIT_CORE
+      struct rlimit rl;
+      rl.rlim_cur = 0;
+      rl.rlim_max = 0;
+      ::setrlimit(RLIMIT_CORE, &rl);
+#endif
+
       ::execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
       _exit(127);
     }
@@ -1140,7 +1148,18 @@ namespace vix::commands::RunCommand::detail
       return result;
     }
 
-    result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
+    if (haveStatus && WIFSIGNALED(finalStatus))
+    {
+      const int sig = WTERMSIG(finalStatus);
+      result.terminatedBySignal = true;
+      result.termSignal = sig;
+
+      result.exitCode = 128 + sig;
+    }
+    else
+    {
+      result.exitCode = haveStatus ? normalize_exit_code(finalStatus) : 1;
+    }
 
     if (!captureOnly &&
         printedRealOutput &&

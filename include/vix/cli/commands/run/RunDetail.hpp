@@ -119,6 +119,9 @@ namespace vix::commands::RunCommand::detail
     std::string stderrText;
     bool failureHandled = false;
     bool printed_live = false;
+
+    bool terminatedBySignal = false;
+    int termSignal = 0;
   };
 
   LiveRunResult run_cmd_live_filtered_capture(

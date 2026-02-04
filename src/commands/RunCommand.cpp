@@ -301,7 +301,12 @@ namespace vix::commands::RunCommand
 
     if (opt.singleCpp)
     {
-      return detail::run_single_cpp(opt);
+      int rc = detail::run_single_cpp(opt);
+
+      if (rc < 0)
+        return -rc;
+
+      return rc;
     }
 
     // 2) Mode projet (apps)

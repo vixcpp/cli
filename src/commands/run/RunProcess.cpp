@@ -559,7 +559,9 @@ namespace vix::commands::RunCommand::detail
 
     if (::pipe(outPipe) != 0)
     {
-      result.exitCode = std::system(cmd.c_str());
+      const int st = std::system(cmd.c_str());
+      result.rawStatus = st;
+      result.exitCode = normalize_exit_code(st);
       return result;
     }
 
@@ -569,7 +571,9 @@ namespace vix::commands::RunCommand::detail
       close_safe(outPipe[0]);
       close_safe(outPipe[1]);
 
-      result.exitCode = std::system(cmd.c_str());
+      const int st = std::system(cmd.c_str());
+      result.rawStatus = st;
+      result.exitCode = normalize_exit_code(st);
       return result;
     }
 

@@ -507,7 +507,13 @@ namespace vix::commands::RunCommand::detail
         }
       }
 
-      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);
+      const bool already = handled || rr.printed_live;
+
+      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/already);
+
+      if (already && runCode > 0 && runCode != 130)
+        return -runCode;
+
       return runCode;
     }
 

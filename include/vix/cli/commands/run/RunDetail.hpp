@@ -76,6 +76,12 @@ namespace vix::commands::RunCommand::detail
     std::string badDoubleDashArg;
   };
 
+  struct ScriptRunResult
+  {
+    int code = 0;
+    bool handled = false;
+  };
+
   // Process / IO
   int run_cmd_live_filtered(
       const std::string &cmd,
@@ -90,6 +96,9 @@ namespace vix::commands::RunCommand::detail
 #else
     if (code < 0)
       return 1;
+
+    if (code <= 255)
+      return code;
 
     if (WIFEXITED(code))
       return WEXITSTATUS(code);

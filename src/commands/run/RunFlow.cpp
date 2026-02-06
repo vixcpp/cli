@@ -65,6 +65,13 @@ namespace vix::commands::RunCommand::detail
     return std::nullopt;
   }
 
+  static std::string lower(std::string s)
+  {
+    for (auto &c : s)
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+  }
+
   std::filesystem::path manifest_entry_cpp(const std::filesystem::path &manifestFile)
   {
     namespace fs = std::filesystem;
@@ -258,6 +265,24 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--force-script")
       {
         o.forceScriptLike = true;
+      }
+      else if (a == "--docs")
+      {
+        o.docs = true;
+      }
+      else if (a == "--no-docs")
+      {
+        o.docs = false;
+      }
+      else if (a.rfind("--docs=", 0) == 0)
+      {
+        std::string v = lower(a.substr(std::string("--docs=").size()));
+        if (v == "1" || v == "true" || v == "yes" || v == "on")
+          o.docs = true;
+        else if (v == "0" || v == "false" || v == "no" || v == "off")
+          o.docs = false;
+        else
+          hint("Invalid value for --docs. Use 0|1|true|false.");
       }
       else if (a == "--cwd" && i + 1 < args.size())
       {
@@ -770,13 +795,6 @@ namespace vix::commands::RunCommand::detail
     }
 
     return cwd;
-  }
-
-  static std::string lower(std::string s)
-  {
-    for (auto &c : s)
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
   }
 
   void apply_log_level_env(const Options &opt)

@@ -253,6 +253,18 @@ namespace vix::commands::RunCommand
 #endif
   }
 
+  static void apply_docs_env(const Options &opt)
+  {
+    if (!opt.docs.has_value())
+      return;
+
+#ifdef _WIN32
+    _putenv_s("VIX_DOCS", (*opt.docs ? "1" : "0"));
+#else
+    ::setenv("VIX_DOCS", (*opt.docs ? "1" : "0"), 1);
+#endif
+  }
+
   int run(const std::vector<std::string> &args)
   {
     Options opt = parse(args);
@@ -286,6 +298,7 @@ namespace vix::commands::RunCommand
 
     apply_log_env(opt);
     vix::cli::manifest::apply_env_pairs(opt.runEnv);
+    apply_docs_env(opt);
 
 #ifndef _WIN32
     ::setenv("VIX_CLI_CLEAR", opt.clearMode.c_str(), 1);
@@ -976,20 +989,25 @@ namespace vix::commands::RunCommand
 
     out << "Runtime options:\n";
     out << "  --cwd <path>                  Run the program with this working directory\n";
-    out << "  --env <K=V>                   Add/override one environment variable (repeatable)\n";
+    out << "  --env <K=V>                   Add or override one environment variable (repeatable)\n";
     out << "  --args <value>                Add one runtime argument (repeatable)\n\n";
 
     out << "Watch / reload:\n";
-    out << "  --watch, --reload             Rebuild & restart on file changes\n";
+    out << "  --watch, --reload             Rebuild and restart on file changes\n";
     out << "  --force-server                Treat process as long-lived (server-like)\n";
     out << "  --force-script                Treat process as short-lived (script-like)\n\n";
 
     out << "Script mode (single .cpp) flags:\n";
-    out << "  --san                         Enable ASan + UBSan\n";
+    out << "  --san                         Enable ASan and UBSan\n";
     out << "  --ubsan                       Enable UBSan only\n\n";
 
+    out << "Documentation (OpenAPI / Swagger):\n";
+    out << "  --docs                        Enable auto docs (sets VIX_DOCS=1)\n";
+    out << "  --no-docs                     Disable auto docs (sets VIX_DOCS=0)\n";
+    out << "  --docs=<0|1|true|false>       Explicitly control docs generation\n\n";
+
     out << "Logging:\n";
-    out << "  --log-level <level>           debug | info | warn | error\n";
+    out << "  --log-level <level>           trace | debug | info | warn | error | critical | off\n";
     out << "  --verbose                     Alias for --log-level=debug\n";
     out << "  -q, --quiet                   Alias for --log-level=warn\n";
     out << "  --log-format <kv|json|json-pretty>\n";
@@ -1016,6 +1034,9 @@ namespace vix::commands::RunCommand
     out << "  vix run main.cpp -- -L/usr/lib -lssl\n";
     out << "  vix run main.cpp -- -DDEBUG\n\n";
 
+    out << "  # Disable auto docs\n";
+    out << "  vix run api.cpp --no-docs\n\n";
+
     out << "  # Manifest mode (.vix)\n";
     out << "  vix run api.vix\n";
     out << "  vix run api.vix --args --port --args 8080\n";
@@ -1034,6 +1055,7 @@ namespace vix::commands::RunCommand
     out << "  vix run example now_server\n\n";
 
     out << "Environment:\n";
+    out << "  VIX_DOCS        0|1             Enable or disable auto docs\n";
     out << "  VIX_LOG_LEVEL   trace|debug|info|warn|error|critical|off\n";
     out << "  VIX_LOG_FORMAT  kv|json|json-pretty\n";
     out << "  VIX_COLOR       auto|always|never   (NO_COLOR disables colors)\n";

@@ -74,6 +74,7 @@ namespace vix::commands::RunCommand::detail
     std::string cwd;
     bool badDoubleDashRuntimeArgs = false;
     std::string badDoubleDashArg;
+    std::optional<bool> docs;
   };
 
   struct ScriptRunResult

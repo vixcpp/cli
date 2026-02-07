@@ -54,13 +54,13 @@ namespace
   //   Ctrl+C -> 0x03
   //   Ctrl+D -> 0x04
   //   Ctrl+L -> 0x0C
-  constexpr unsigned char KEY_CTRL_C = 0x03;
-  constexpr unsigned char KEY_CTRL_D = 0x04;
-  constexpr unsigned char KEY_CTRL_L = 0x0C;
-  constexpr unsigned char KEY_BACKSPACE_1 = 0x08;
-  constexpr unsigned char KEY_BACKSPACE_2 = 0x7F;
-  constexpr unsigned char KEY_ENTER_1 = '\n';
-  constexpr unsigned char KEY_ENTER_2 = '\r';
+  [[maybe_unused]] constexpr unsigned char KEY_CTRL_C = 0x03;
+  [[maybe_unused]] constexpr unsigned char KEY_CTRL_D = 0x04;
+  [[maybe_unused]] constexpr unsigned char KEY_CTRL_L = 0x0C;
+  [[maybe_unused]] constexpr unsigned char KEY_BACKSPACE_1 = 0x08;
+  [[maybe_unused]] constexpr unsigned char KEY_BACKSPACE_2 = 0x7F;
+  [[maybe_unused]] constexpr unsigned char KEY_ENTER_1 = '\n';
+  [[maybe_unused]] constexpr unsigned char KEY_ENTER_2 = '\r';
 
   enum class ReadStatus
   {

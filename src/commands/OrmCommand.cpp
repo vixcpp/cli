@@ -16,6 +16,10 @@
 #include <cstdlib>
 #include <filesystem>
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace

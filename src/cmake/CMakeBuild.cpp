@@ -22,6 +22,8 @@
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Strings.hpp>
 
+#include <vix/utils/Env.hpp>
+
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -248,7 +250,7 @@ namespace vix::cli::build
     {
       if (quiet)
         return false;
-      const char *v = std::getenv("VIX_BUILD_HEARTBEAT");
+      const char *v = vix::utils::vix_getenv("VIX_BUILD_HEARTBEAT");
       if (!v)
         return false;
 

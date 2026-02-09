@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/repl/ReplUtils.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <cstdlib>
 #include <cctype>
@@ -39,16 +40,16 @@ namespace vix::cli::repl
   std::filesystem::path user_home_dir()
   {
 #if defined(_WIN32)
-    const char *home = std::getenv("USERPROFILE");
+    const char *home = vix::utils::vix_getenv("USERPROFILE");
     if (home && *home)
       return std::filesystem::path(home);
-    const char *drive = std::getenv("HOMEDRIVE");
-    const char *path = std::getenv("HOMEPATH");
+    const char *drive = vix::utils::vix_getenv("HOMEDRIVE");
+    const char *path = vix::utils::vix_getenv("HOMEPATH");
     if (drive && path)
       return std::filesystem::path(std::string(drive) + std::string(path));
     return std::filesystem::current_path();
 #else
-    const char *home = std::getenv("HOME");
+    const char *home = vix::utils::vix_getenv("HOME");
     if (home && *home)
       return std::filesystem::path(home);
     return std::filesystem::current_path();

@@ -13,6 +13,7 @@
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -33,10 +34,133 @@
 #include <unistd.h>
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
 {
+
+#ifdef _WIN32
+
+  static inline std::string win_last_error_message(DWORD err)
+  {
+    LPWSTR buf = nullptr;
+    const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                        FORMAT_MESSAGE_FROM_SYSTEM |
+                        FORMAT_MESSAGE_IGNORE_INSERTS;
+
+    const DWORD len = FormatMessageW(
+        flags, nullptr, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPWSTR)&buf, 0, nullptr);
+
+    std::string out;
+    if (len && buf)
+    {
+      // naive utf16->utf8 (good enough for error text)
+      int n = WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, nullptr, 0, nullptr, nullptr);
+      out.resize(n > 0 ? (size_t)n : 0);
+      if (n > 0)
+        WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, out.data(), n, nullptr, nullptr);
+      LocalFree(buf);
+    }
+    if (out.empty())
+      out = "unknown Windows error";
+    return out;
+  }
+
+  LiveRunResult run_cmd_live_filtered_capture(
+      const std::string &cmd,
+      const std::string &spinnerLabel,
+      bool passthroughRuntime,
+      int timeoutSec)
+  {
+    (void)spinnerLabel;
+    (void)passthroughRuntime;
+    (void)timeoutSec;
+
+    LiveRunResult r;
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE outRead = nullptr, outWrite = nullptr;
+
+    if (!CreatePipe(&outRead, &outWrite, &sa, 0))
+    {
+      r.exitCode = 1;
+      r.stderrText = "CreatePipe failed: " + win_last_error_message(GetLastError());
+      return r;
+    }
+
+    // child must inherit write end, but parent must NOT be inheritable
+    SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdOutput = outWrite;
+    si.hStdError = outWrite;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+    PROCESS_INFORMATION pi{};
+    std::string cmdline = "cmd /C " + cmd; // reuse your existing cmd string
+
+    if (!CreateProcessA(
+            nullptr,
+            cmdline.data(),
+            nullptr,
+            nullptr,
+            TRUE,
+            CREATE_NO_WINDOW,
+            nullptr,
+            nullptr,
+            &si,
+            &pi))
+    {
+      CloseHandle(outRead);
+      CloseHandle(outWrite);
+
+      r.exitCode = 1;
+      r.stderrText = "CreateProcess failed: " + win_last_error_message(GetLastError());
+      return r;
+    }
+
+    // parent doesn't need write end
+    CloseHandle(outWrite);
+
+    // read all output
+    char buffer[4096];
+    DWORD n = 0;
+    while (true)
+    {
+      const BOOL ok = ReadFile(outRead, buffer, (DWORD)sizeof(buffer), &n, nullptr);
+      if (!ok || n == 0)
+        break;
+
+      r.stdoutText.append(buffer, buffer + n);
+    }
+
+    CloseHandle(outRead);
+
+    // wait for process and get exit code
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    DWORD code = 0;
+    GetExitCodeProcess(pi.hProcess, &code);
+
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    r.rawStatus = (int)code;
+    r.exitCode = normalize_exit_code((int)code);
+    return r;
+  }
+
+#endif // _WIN32
 
 #ifndef _WIN32
 
@@ -172,7 +296,7 @@ namespace vix::commands::RunCommand::detail
     {
       static const bool debugMode = []()
       {
-        const char *env = std::getenv("VIX_DEBUG_FILTER");
+        const char *env = vix::utils::vix_getenv("VIX_DEBUG_FILTER");
         return env && std::strcmp(env, "1") == 0;
       }();
 
@@ -245,7 +369,7 @@ namespace vix::commands::RunCommand::detail
 
     static bool should_clear()
     {
-      const char *mode = std::getenv("VIX_CLI_CLEAR");
+      const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
       if (!mode || !*mode)
         mode = "auto";
 

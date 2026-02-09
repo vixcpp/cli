@@ -11,7 +11,7 @@
  *  Vix.cpp
  */
 #include <vix/cli/util/Fs.hpp>
-
+#include <vix/utils/Env.hpp>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -219,7 +219,7 @@ namespace vix::cli::util
 
   bool executable_on_path(const std::string &exeName)
   {
-    const char *pathEnv = std::getenv("PATH");
+    const char *pathEnv = vix::utils::vix_getenv("PATH");
     if (!pathEnv)
       return false;
 

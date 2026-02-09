@@ -13,6 +13,7 @@
  */
 #include <vix/cli/commands/repl/api/Vix.hpp>
 #include <vix/cli/commands/repl/ReplHistory.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <cstdlib>
 #include <system_error>
@@ -80,7 +81,7 @@ namespace vix::cli::repl::api
 
   std::optional<std::string> Vix::env(const std::string &key) const
   {
-    const char *v = std::getenv(key.c_str());
+    const char *v = vix::utils::vix_getenv(key.c_str());
     if (!v || !*v)
       return std::nullopt;
     return std::string(v);

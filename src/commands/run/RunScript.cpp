@@ -17,6 +17,8 @@
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 
+#include <vix/utils/Env.hpp>
+
 #include <vix/cli/Style.hpp>
 #include <filesystem>
 #include <fstream>
@@ -52,7 +54,7 @@ namespace vix::commands::RunCommand::detail
     if (opt.verbose)
       return true;
 
-    const char *lvl = std::getenv("VIX_LOG_LEVEL");
+    const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
     if (!lvl || !*lvl)
       return false;
 

@@ -13,7 +13,7 @@
  */
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/Style.hpp>
-
+#include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
@@ -30,13 +30,13 @@
 #include <algorithm>
 
 #ifndef _WIN32
-#include <cctype>   // std::isspace
-#include <cstdio>   // popen, pclose, fgets
-#include <cstdlib>  // std::system, std::getenv
-#include <unistd.h> // getpid
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <unistd.h>
 #else
-#include <cctype>  // std::isspace
-#include <cstdlib> // std::getenv
+#include <cctype>
+#include <cstdlib>
 #endif
 
 namespace fs = std::filesystem;
@@ -133,7 +133,7 @@ namespace
 
   std::string env_or_empty(const char *name)
   {
-    const char *v = std::getenv(name);
+    const char *v = vix::utils::vix_getenv(name);
     if (v && *v)
       return std::string(v);
     return {};
@@ -827,7 +827,7 @@ namespace
 
     if (!opt.pubkey.has_value())
     {
-      const char *home = std::getenv("HOME");
+      const char *home = vix::utils::vix_getenv("HOME");
       if (home && *home)
       {
         const fs::path p1 = fs::path(home) / ".config" / "vix" / "keys" / "vix-pack.pub";

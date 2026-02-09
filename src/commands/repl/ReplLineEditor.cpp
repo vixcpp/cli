@@ -14,9 +14,10 @@
 #include <vix/cli/commands/repl/ReplLineEditor.hpp>
 #include <vix/cli/commands/repl/ReplConsole.hpp>
 
+#include <iostream>
+
 #ifndef _WIN32
 #include <unistd.h>
-#include <iostream>
 #endif
 
 namespace vix::cli::repl

@@ -15,7 +15,7 @@
 #include <vix/cli/util/Shell.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
-
+#include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -38,9 +38,9 @@ namespace vix::commands
     std::string home_dir()
     {
 #ifdef _WIN32
-      const char *home = std::getenv("USERPROFILE");
+      const char *home = vix::utils::vix_getenv("USERPROFILE");
 #else
-      const char *home = std::getenv("HOME");
+      const char *home = vix::utils::vix_getenv("HOME");
 #endif
       return home ? std::string(home) : std::string();
     }

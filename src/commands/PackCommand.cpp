@@ -13,6 +13,7 @@
  */
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
 #include <filesystem>
 #include <fstream>
@@ -200,7 +201,7 @@ namespace
 #ifndef _WIN32
   static std::optional<fs::path> find_default_minisign_seckey()
   {
-    const char *home = std::getenv("HOME");
+    const char *home = vix::utils::vix_getenv("HOME");
     if (!home || !*home)
       return std::nullopt;
 
@@ -680,7 +681,7 @@ namespace
 
   std::string env_or_default(const char *name, const std::string &fallback)
   {
-    const char *v = std::getenv(name);
+    const char *v = vix::utils::vix_getenv(name);
     if (v && *v)
       return std::string(v);
     return fallback;

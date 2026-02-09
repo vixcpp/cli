@@ -17,7 +17,7 @@
 #include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/manifest/RunManifestMerge.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
-
+#include <vix/utils/Env.hpp>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -40,7 +40,7 @@ namespace
 {
   static bool should_clear_terminal_now()
   {
-    const char *mode = std::getenv("VIX_CLI_CLEAR");
+    const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
     if (!mode || !*mode)
       mode = "auto";
 
@@ -222,7 +222,7 @@ namespace
 
   static bool ui_enabled()
   {
-    const char *v = std::getenv("VIX_RUN_UI");
+    const char *v = vix::utils::vix_getenv("VIX_RUN_UI");
     if (!v || !*v)
       return false;
     if (std::strcmp(v, "0") == 0)
@@ -242,7 +242,7 @@ namespace vix::commands::RunCommand
 
   static void ensure_mode_env_for_run(const Options &opt)
   {
-    const char *cur = std::getenv("VIX_MODE");
+    const char *cur = vix::utils::vix_getenv("VIX_MODE");
     if (cur && *cur)
       return;
 

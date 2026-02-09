@@ -11,9 +11,14 @@
  *  Vix.cpp
  *
  */
+#if defined(_WIN32)
+#include <vix/platform/windows.hpp>
+#endif
+
 #include <vix/cli/commands/NewCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/Utils.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -178,13 +183,13 @@ int main()
 
   static bool is_noninteractive_env()
   {
-    if (const char *v = std::getenv("VIX_NONINTERACTIVE"))
+    if (const char *v = vix::utils::vix_getenv("VIX_NONINTERACTIVE"))
     {
       const std::string s = v;
       if (!s.empty() && s != "0" && s != "false" && s != "FALSE")
         return true;
     }
-    if (std::getenv("CI") != nullptr)
+    if (vix::utils::vix_getenv("CI") != nullptr)
       return true;
 
     return false;
@@ -410,8 +415,82 @@ int main()
   static Key read_key()
   {
 #if defined(_WIN32)
-    // ... (ton code Windows inchangé)
+    // -------- Windows (Console Input) --------
+    HANDLE hIn = ::GetStdHandle(STD_INPUT_HANDLE);
+    if (hIn == INVALID_HANDLE_VALUE || hIn == nullptr)
+      return Key::None;
+
+    while (true)
+    {
+      if (g_cancelled.load())
+        return Key::CtrlC;
+
+      DWORD pending = 0;
+      if (!::GetNumberOfConsoleInputEvents(hIn, &pending))
+        return Key::None;
+
+      if (pending == 0)
+      {
+        ::Sleep(50); // keep responsive
+        continue;
+      }
+
+      INPUT_RECORD rec{};
+      DWORD readCount = 0;
+      if (!::ReadConsoleInputW(hIn, &rec, 1, &readCount) || readCount != 1)
+        continue;
+
+      if (rec.EventType != KEY_EVENT)
+        continue;
+
+      const KEY_EVENT_RECORD &k = rec.Event.KeyEvent;
+
+      // only handle key DOWN
+      if (!k.bKeyDown)
+        continue;
+
+      // Ctrl+C detection (either control state or ascii 3)
+      const bool ctrlDown = (k.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+
+      // Virtual keys first (arrows, enter, escape)
+      switch (k.wVirtualKeyCode)
+      {
+      case VK_UP:
+        return Key::Up;
+      case VK_DOWN:
+        return Key::Down;
+      case VK_RETURN:
+        return Key::Enter;
+      case VK_ESCAPE:
+        return Key::Escape;
+      default:
+        break;
+      }
+
+      // Character-based mapping
+      const wchar_t ch = k.uChar.UnicodeChar;
+
+      if (ctrlDown && (ch == L'c' || ch == L'C'))
+        return Key::CtrlC;
+
+      if (ch == 3) // ETX (rare here, but safe)
+        return Key::CtrlC;
+
+      if (ch == L' ')
+        return Key::Space;
+
+      if (ch == L'a' || ch == L'A')
+        return Key::ToggleAll;
+
+      if (ch == L'q' || ch == L'Q')
+        return Key::Quit;
+
+      // unknown key -> ignore
+      return Key::None;
+    }
+    return Key::None;
 #else
+    // -------- Unix (poll/read) --------
     while (true)
     {
       if (g_cancelled.load())
@@ -421,11 +500,9 @@ int main()
       pfd.fd = STDIN_FILENO;
       pfd.events = POLLIN;
 
-      // timeout 50ms to stay responsive to Ctrl+C
       const int r = ::poll(&pfd, 1, 50);
       if (r < 0)
       {
-        // EINTR: interrupted by signal -> treat as cancel if SIGINT
         if (g_cancelled.load())
           return Key::CtrlC;
         continue;
@@ -456,7 +533,6 @@ int main()
         unsigned char s1 = 0;
         unsigned char s2 = 0;
 
-        // If escape alone -> return Escape quickly (do NOT block)
         pollfd p2{};
         p2.fd = STDIN_FILENO;
         p2.events = POLLIN;

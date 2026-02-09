@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 
 #include <algorithm>
@@ -742,7 +743,7 @@ namespace vix::commands::RunCommand::detail
         best = c;
     }
 
-    if (std::getenv("VIX_DEBUG_PRESET"))
+    if (vix::utils::vix_getenv("VIX_DEBUG_PRESET"))
     {
       info("Preset candidates:");
       for (const auto &preset : cfgs)

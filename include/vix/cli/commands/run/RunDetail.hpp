@@ -111,11 +111,10 @@ namespace vix::commands::RunCommand::detail
 #endif
   }
 
-#ifndef _WIN32
   struct LiveRunResult
   {
-    int rawStatus = 0; // waitpid status
-    int exitCode = 0;  // normalized 0..255 or 128+signal
+    int rawStatus = 0;
+    int exitCode = 0;
     std::string stdoutText;
     std::string stderrText;
     bool failureHandled = false;
@@ -130,7 +129,6 @@ namespace vix::commands::RunCommand::detail
       const std::string &spinnerLabel,
       bool passthroughRuntime,
       int timeoutSec = 0);
-#endif
 
   // Script mode (vix run foo.cpp)
   std::filesystem::path get_scripts_root();

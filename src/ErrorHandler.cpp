@@ -19,7 +19,7 @@
 #include "vix/cli/errors/ErrorPipeline.hpp"
 #include "vix/cli/errors/RawLogDetectors.hpp"
 #include "vix/cli/errors/CodeFrame.hpp"
-
+#include <vix/utils/Env.hpp>
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
@@ -78,7 +78,7 @@ namespace
 
   static bool hints_verbose_enabled() noexcept
   {
-    const char *lvl = std::getenv("VIX_LOG_LEVEL");
+    const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
     if (!lvl || !*lvl)
       return false;
 

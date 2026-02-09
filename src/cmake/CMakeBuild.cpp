@@ -529,10 +529,14 @@ namespace vix::cli::build
       const std::vector<std::pair<std::string, std::string>> &extraEnv,
       const fs::path &logPath,
       bool quiet,
-      bool /*cmakeVerbose*/)
+      bool cmakeVerbose,
+      bool progressOnly)
   {
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
+
+    (void)cmakeVerbose;
+    (void)progressOnly;
 
     for (const auto &kv : extraEnv)
     {
@@ -553,7 +557,9 @@ namespace vix::cli::build
     r.exitCode = process::normalize_exit_code(raw);
 
     if (!quiet)
+    {
       std::cerr << util::read_text_file_or_empty(logPath);
+    }
 
     return r;
   }

@@ -35,7 +35,7 @@
 #include <vix/cli/commands/DepsCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/P2PCommand.hpp>
-
+#include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
 
@@ -86,7 +86,7 @@ namespace vix
 
     void apply_log_level_from_env(Logger &logger)
     {
-      if (const char *env = std::getenv("VIX_LOG_LEVEL"))
+      if (const char *env = vix::utils::vix_getenv("VIX_LOG_LEVEL"))
       {
         std::string value(env);
         if (auto lvl = parse_log_level(value))

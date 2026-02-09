@@ -108,19 +108,19 @@ namespace
   {
     const std::string s = to_lower_copy(std::move(raw));
     if (s == "trace")
-      return Logger::Level::TRACE;
+      return Logger::Level::Trace;
     if (s == "debug")
-      return Logger::Level::DEBUG;
+      return Logger::Level::Debug;
     if (s == "info")
-      return Logger::Level::INFO;
+      return Logger::Level::Info;
     if (s == "warn" || s == "warning")
-      return Logger::Level::WARN;
+      return Logger::Level::Warn;
     if (s == "error" || s == "err")
-      return Logger::Level::ERROR;
+      return Logger::Level::Error;
     if (s == "critical" || s == "fatal")
-      return Logger::Level::CRITICAL;
+      return Logger::Level::Critical;
     if (s == "off" || s == "none")
-      return Logger::Level::OFF;
+      return Logger::Level::Off;
     return std::nullopt;
   }
 

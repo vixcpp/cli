@@ -69,17 +69,17 @@ namespace vix
       const std::string s = to_lower_copy(raw);
 
       if (s == "trace")
-        return Logger::Level::TRACE;
+        return Logger::Level::Trace;
       if (s == "debug")
-        return Logger::Level::DEBUG;
+        return Logger::Level::Debug;
       if (s == "info")
-        return Logger::Level::INFO;
+        return Logger::Level::Info;
       if (s == "warn" || s == "warning")
-        return Logger::Level::WARN;
+        return Logger::Level::Warn;
       if (s == "error" || s == "err")
-        return Logger::Level::ERROR;
+        return Logger::Level::Error;
       if (s == "critical" || s == "fatal")
-        return Logger::Level::CRITICAL;
+        return Logger::Level::Critical;
 
       return std::nullopt;
     }
@@ -161,7 +161,7 @@ namespace vix
     commands_["hello"] = [](auto)
     {
       auto &logger = Logger::getInstance();
-      logger.logModule("CLI", Logger::Level::INFO, "Hello from Vix.cpp 👋");
+      logger.logModule("CLI", Logger::Level::Info, "Hello from Vix.cpp 👋");
       return 0;
     };
   }
@@ -248,10 +248,10 @@ namespace vix
     switch (verbosity)
     {
     case VerbosityMode::Verbose:
-      logger.setLevel(Logger::Level::DEBUG);
+      logger.setLevel(Logger::Level::Debug);
       break;
     case VerbosityMode::Quiet:
-      logger.setLevel(Logger::Level::WARN);
+      logger.setLevel(Logger::Level::Warn);
       break;
     default:
       break;
@@ -299,7 +299,7 @@ namespace vix
     }
     catch (const std::exception &ex)
     {
-      logger.logModule("CLI", Logger::Level::ERROR,
+      logger.logModule("CLI", Logger::Level::Error,
                        "Command '{}' failed: {}", cmd, ex.what());
       return 1;
     }

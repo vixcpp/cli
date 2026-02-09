@@ -12,7 +12,7 @@
  *
  */
 #if defined(_WIN32)
-#include <vix/platform/windows.hpp>
+#include <vix/cli/platform/windows.hpp>
 #endif
 
 #include <vix/cli/commands/NewCommand.hpp>

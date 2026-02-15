@@ -74,6 +74,16 @@ namespace vix::cli::util
     return std::string(BOLD) + std::string(s) + RESET;
   }
 
+  inline void info_line(std::ostream &os, std::string_view msg)
+  {
+    os << "  " << CYAN << "•" << RESET << " " << msg << "\n";
+  }
+
+  inline void info(std::ostream &os, std::string_view msg)
+  {
+    os << "  " << GRAY << "•" << RESET << " " << msg << "\n";
+  }
+
   inline std::string faint_sep()
   {
     return std::string(GRAY) + "────────────────────────────────────────" + RESET;

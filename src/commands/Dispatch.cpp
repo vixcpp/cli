@@ -33,6 +33,9 @@
 #include <vix/cli/commands/DepsCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/P2PCommand.hpp>
+#include <vix/cli/commands/UpgradeCommand.hpp>
+#include <vix/cli/commands/DoctorCommand.hpp>
+#include <vix/cli/commands/UninstallCommand.hpp>
 
 #include <stdexcept>
 
@@ -214,6 +217,30 @@ namespace vix::cli::dispatch
          { return vix::commands::DepsCommand::run(a); },
          []()
          { return vix::commands::DepsCommand::help(); }});
+
+    add({"upgrade",
+         "Info",
+         "Upgrade the Vix CLI binary",
+         [](const Args &a)
+         { return vix::commands::UpgradeCommand::run(a); },
+         []()
+         { return vix::commands::UpgradeCommand::help(); }});
+
+    add({"doctor",
+         "Info",
+         "Check toolchain and install health",
+         [](const Args &a)
+         { return vix::commands::DoctorCommand::run(a); },
+         []()
+         { return vix::commands::DoctorCommand::help(); }});
+
+    add({"uninstall",
+         "Info",
+         "Remove Vix CLI from the system",
+         [](const Args &a)
+         { return vix::commands::UninstallCommand::run(a); },
+         []()
+         { return vix::commands::UninstallCommand::help(); }});
 
     add({"modules",
          "Project",

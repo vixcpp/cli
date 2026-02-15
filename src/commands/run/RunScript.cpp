@@ -49,6 +49,7 @@ namespace vix::commands::RunCommand::detail
     return code == 130; // standard: 128 + SIGINT(2)
   }
 
+#ifndef _WIN32
   static bool dev_verbose_ui(const Options &opt)
   {
     if (opt.verbose)
@@ -64,6 +65,7 @@ namespace vix::commands::RunCommand::detail
 
     return (s == "debug" || s == "trace");
   }
+#endif
 
   static bool has_ccache()
   {
@@ -88,18 +90,6 @@ namespace vix::commands::RunCommand::detail
            isMakeInterrupt ||
            log.find("ninja: interrupted") != std::string::npos ||
            log.find("interrupted by user") != std::string::npos;
-  }
-
-  static bool log_looks_like_sanitizer_or_ub(const std::string &log)
-  {
-    // UBSan can be "runtime error:" with exit code 0 (recover mode).
-    // ASan/TSan/LSan/MSan also leave strong banners.
-    return log.find("runtime error:") != std::string::npos ||
-           log.find("UndefinedBehaviorSanitizer") != std::string::npos ||
-           log.find("AddressSanitizer") != std::string::npos ||
-           log.find("LeakSanitizer") != std::string::npos ||
-           log.find("ThreadSanitizer") != std::string::npos ||
-           log.find("MemorySanitizer") != std::string::npos;
   }
 
   static inline std::string trim_copy(std::string s)
@@ -135,6 +125,17 @@ namespace vix::commands::RunCommand::detail
     return false;
   }
 
+#ifndef _WIN32
+  static bool log_looks_like_sanitizer_or_ub(const std::string &log)
+  {
+    return log.find("runtime error:") != std::string::npos ||
+           log.find("UndefinedBehaviorSanitizer") != std::string::npos ||
+           log.find("AddressSanitizer") != std::string::npos ||
+           log.find("LeakSanitizer") != std::string::npos ||
+           log.find("ThreadSanitizer") != std::string::npos ||
+           log.find("MemorySanitizer") != std::string::npos;
+  }
+
   static bool handle_error_tip_block_vix(const std::string &log)
   {
     const auto epos = log.find("error:");
@@ -157,14 +158,14 @@ namespace vix::commands::RunCommand::detail
     };
 
     const size_t eend = line_end(epos);
-    std::string eLine = log.substr(epos, eend - epos); // "error: ..."
+    std::string eLine = log.substr(epos, eend - epos);
 
     std::string tipLine;
     const auto tpos = log.find("tip:", eend);
     if (tpos != std::string::npos)
     {
       const size_t tend = line_end(tpos);
-      tipLine = log.substr(tpos, tend - tpos); // "tip: ..."
+      tipLine = log.substr(tpos, tend - tpos);
     }
 
     const std::string msg = strip_prefix(eLine, "error:");
@@ -176,6 +177,7 @@ namespace vix::commands::RunCommand::detail
 
     return true;
   }
+#endif
 
   int run_single_cpp(const Options &opt)
   {

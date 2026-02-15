@@ -15,8 +15,6 @@
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
-#include <vix/utils/Env.hpp>
-
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
@@ -28,6 +26,7 @@
 #include <cctype>
 #include <algorithm>
 #include <stdexcept>
+#include <cstdio>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -193,6 +192,8 @@ namespace vix::commands
         return std::nullopt;
       return out;
     }
+
+    std::optional<fs::path> which_vix();
 
     std::optional<std::string> vix_version_from_self()
     {

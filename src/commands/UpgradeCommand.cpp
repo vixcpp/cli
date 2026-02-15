@@ -34,6 +34,15 @@
 #include <unistd.h>
 #endif
 
+#include <ctime> // pour std::time_t, std::time, std::tm
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // GetCurrentProcessId
+#endif
+
 namespace fs = std::filesystem;
 using json = nlohmann::json;
 

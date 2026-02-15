@@ -13,9 +13,9 @@
 
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <filesystem>
-#include <cstdlib>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -48,13 +48,13 @@ namespace vix::commands
     fs::path get_install_json_path()
     {
 #ifdef _WIN32
-      const char *local = std::getenv("LOCALAPPDATA");
-      if (!local)
+      const char *local = vix::utils::vix_getenv("LOCALAPPDATA");
+      if (!local || std::string(local).empty())
         throw std::runtime_error("LOCALAPPDATA not set");
       return fs::path(local) / "Vix" / "install.json";
 #else
-      const char *home = std::getenv("HOME");
-      if (!home)
+      const char *home = vix::utils::vix_getenv("HOME");
+      if (!home || std::string(home).empty())
         throw std::runtime_error("HOME not set");
       return fs::path(home) / ".local" / "share" / "vix" / "install.json";
 #endif
@@ -63,10 +63,14 @@ namespace vix::commands
     fs::path get_store_path()
     {
 #ifdef _WIN32
-      const char *local = std::getenv("LOCALAPPDATA");
+      const char *local = vix::utils::vix_getenv("LOCALAPPDATA");
+      if (!local || std::string(local).empty())
+        throw std::runtime_error("LOCALAPPDATA not set");
       return fs::path(local) / "Vix" / "store";
 #else
-      const char *home = std::getenv("HOME");
+      const char *home = vix::utils::vix_getenv("HOME");
+      if (!home || std::string(home).empty())
+        throw std::runtime_error("HOME not set");
       return fs::path(home) / ".vix";
 #endif
     }
@@ -143,7 +147,7 @@ namespace vix::commands
 
     std::optional<fs::path> resolve_path_from_env()
     {
-      const char *env = std::getenv("VIX_CLI_PATH");
+      const char *env = vix::utils::vix_getenv("VIX_CLI_PATH");
       if (!env || std::string(env).empty())
         return std::nullopt;
       return fs::absolute(fs::path(env));

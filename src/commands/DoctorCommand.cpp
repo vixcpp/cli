@@ -15,6 +15,7 @@
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -24,7 +25,6 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <cstdlib>
 #include <cctype>
 #include <algorithm>
 #include <stdexcept>
@@ -57,11 +57,13 @@ namespace vix::commands
     {
 #ifdef _WIN32
       if (const char *p = vix::utils::vix_getenv("LOCALAPPDATA"))
-        return fs::path(p) / "Vix" / "install.json";
+        if (*p)
+          return fs::path(p) / "Vix" / "install.json";
       return fs::current_path() / "install.json";
 #else
       if (const char *home = vix::utils::vix_getenv("HOME"))
-        return fs::path(home) / ".local" / "share" / "vix" / "install.json";
+        if (*home)
+          return fs::path(home) / ".local" / "share" / "vix" / "install.json";
       return fs::current_path() / "install.json";
 #endif
     }
@@ -69,7 +71,8 @@ namespace vix::commands
     fs::path current_exe_path()
     {
       if (const char *p = vix::utils::vix_getenv("VIX_CLI_PATH"))
-        return fs::path(p);
+        if (*p)
+          return fs::path(p);
 #ifdef _WIN32
       return fs::path("vix.exe");
 #else
@@ -194,6 +197,8 @@ namespace vix::commands
     std::optional<std::string> vix_version_from_self()
     {
 #ifdef _WIN32
+      if (auto w = which_vix())
+        return extract_version_token(run_capture("\"" + w->string() + "\" --version 2>nul").value_or(""));
       return extract_version_token(run_capture("vix --version 2>nul").value_or(""));
 #else
       return extract_version_token(run_capture("vix --version 2>/dev/null").value_or(""));
@@ -443,7 +448,21 @@ namespace vix::commands
     std::optional<fs::path> which_vix()
     {
 #ifdef _WIN32
-      return std::nullopt;
+      // Take first result from `where vix`
+      auto out = run_capture("where vix 2>nul");
+      if (!out)
+        return std::nullopt;
+
+      std::string s = *out;
+      s.erase(std::remove(s.begin(), s.end(), '\r'), s.end());
+
+      // first line
+      const auto nl = s.find('\n');
+      const std::string first = trim_copy(nl == std::string::npos ? s : s.substr(0, nl));
+      if (first.empty())
+        return std::nullopt;
+
+      return fs::path(first);
 #else
       auto out = run_capture("command -v vix 2>/dev/null");
       if (!out)

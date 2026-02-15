@@ -176,14 +176,15 @@ namespace vix::commands::CheckCommand::detail
     return "build-" + configurePreset;
   }
 
+#ifndef _WIN32
   static std::string guess_project_name_from_dir(const fs::path &projectDir)
   {
-    // blog/ -> "blog"
     std::string name = projectDir.filename().string();
     if (name.empty())
       name = "app";
     return name;
   }
+#endif
 
   static std::string read_cmake_cache_value(const fs::path &cacheFile, const std::string &key)
   {
@@ -207,6 +208,7 @@ namespace vix::commands::CheckCommand::detail
     return {};
   }
 
+#ifndef _WIN32
   static std::string resolve_build_type_from_cache_or_default(
       const fs::path &buildDir,
       const std::string &fallback = "Debug")
@@ -221,7 +223,9 @@ namespace vix::commands::CheckCommand::detail
 
     return bt;
   }
+#endif
 
+#ifndef _WIN32
   static fs::path compute_runtime_executable_path(
       const fs::path &buildDir,
       const std::string &projectName,
@@ -234,15 +238,12 @@ namespace vix::commands::CheckCommand::detail
 
     std::vector<fs::path> candidates;
 
-    // Most common (Ninja/Make single-config)
     candidates.push_back(buildDir / exeName);
     candidates.push_back(buildDir / "bin" / exeName);
 
-    // Multi-config layouts (MSVC-like)
     candidates.push_back(buildDir / configName / exeName);
     candidates.push_back(buildDir / "bin" / configName / exeName);
 
-    // Some projects put outputs under src/
     candidates.push_back(buildDir / "src" / exeName);
     candidates.push_back(buildDir / "src" / configName / exeName);
 
@@ -253,7 +254,6 @@ namespace vix::commands::CheckCommand::detail
         return c;
     }
 
-    // Fallback: read runtime output dir from cache (if set)
     const fs::path cacheFile = buildDir / "CMakeCache.txt";
     if (fs::exists(cacheFile))
     {
@@ -277,6 +277,7 @@ namespace vix::commands::CheckCommand::detail
 
     return buildDir / exeName;
   }
+#endif
 
   static void apply_log_level_env_local(const Options &opt)
   {
@@ -386,9 +387,11 @@ namespace vix::commands::CheckCommand::detail
       step("Preset: " + preset);
 
       // if we had to fallback (no dev-ninja-san/ubsan), inject vars
+#ifndef _WIN32
       const bool usingFallbackVars =
           (wantsSan && preset == "dev-ninja") ||
           (wantsUbsan && preset == "dev-ninja");
+#endif
 
       // 1) build dir (from configure preset)
       fs::path buildDir = guess_build_dir_from_configure_preset(projectDir, preset);

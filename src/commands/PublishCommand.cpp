@@ -30,6 +30,8 @@
 #include <string>
 #include <vector>
 #include <cstdio>
+#include <chrono>
+#include <iomanip>
 
 #if defined(_WIN32)
 #define vix_popen _popen
@@ -95,12 +97,32 @@ namespace vix::commands
 
     static fs::path registry_repo_dir()
     {
+      // vix registry sync clones into ~/.vix/registry/index
       return vix_root() / "registry" / "index";
     }
 
     static fs::path registry_index_dir()
     {
+      // entries folder inside the registry repo: ~/.vix/registry/index/index
       return registry_repo_dir() / "index";
+    }
+
+    static std::string iso_utc_now()
+    {
+      using namespace std::chrono;
+      const auto now = system_clock::now();
+      const std::time_t t = system_clock::to_time_t(now);
+
+      std::tm tm{};
+#if defined(_WIN32)
+      gmtime_s(&tm, &t);
+#else
+      gmtime_r(&t, &tm);
+#endif
+
+      std::ostringstream oss;
+      oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
+      return oss.str();
     }
 
     static bool file_exists_nonempty(const fs::path &p)
@@ -281,6 +303,21 @@ namespace vix::commands
       return std::make_pair(lower_copy(ns), lower_copy(name));
     }
 
+    static void mark_version_published_or_throw(
+        const fs::path &entryPath,
+        json &entry,
+        const std::string &version)
+    {
+      if (!entry.contains("versions") || !entry["versions"].is_object())
+        entry["versions"] = json::object();
+
+      if (!entry["versions"].contains(version) || !entry["versions"][version].is_object())
+        entry["versions"][version] = json::object();
+
+      entry["versions"][version]["status"] = "published";
+      write_json_or_throw(entryPath, entry);
+    }
+
     static PublishOptions parse_args_or_throw(const std::vector<std::string> &args)
     {
       PublishOptions opt;
@@ -362,62 +399,6 @@ namespace vix::commands
           c = '-';
       }
       return b;
-    }
-
-    static std::vector<int> parse_version_nums(const std::string &s)
-    {
-      std::vector<int> out;
-      std::string cur;
-      for (char ch : s)
-      {
-        if (std::isdigit(static_cast<unsigned char>(ch)))
-        {
-          cur.push_back(ch);
-          continue;
-        }
-        if (ch == '.')
-        {
-          if (!cur.empty())
-          {
-            out.push_back(std::stoi(cur));
-            cur.clear();
-          }
-          continue;
-        }
-        break;
-      }
-      if (!cur.empty())
-        out.push_back(std::stoi(cur));
-      while (out.size() < 3)
-        out.push_back(0);
-      return out;
-    }
-
-    static int compare_versions(const std::string &a, const std::string &b)
-    {
-      const auto va = parse_version_nums(a);
-      const auto vb = parse_version_nums(b);
-      const size_t n = std::max(va.size(), vb.size());
-      for (size_t i = 0; i < n; ++i)
-      {
-        const int ia = (i < va.size() ? va[i] : 0);
-        const int ib = (i < vb.size() ? vb[i] : 0);
-        if (ia < ib)
-          return -1;
-        if (ia > ib)
-          return 1;
-      }
-      return 0;
-    }
-
-    static void update_latest_if_newer(json &entry, const std::string &newVersion)
-    {
-      std::string cur;
-      if (entry.contains("latest") && entry["latest"].is_string())
-        cur = entry["latest"].get<std::string>();
-
-      if (cur.empty() || compare_versions(newVersion, cur) > 0)
-        entry["latest"] = newVersion;
     }
 
     static int publish_impl(const PublishOptions &opt)
@@ -552,7 +533,6 @@ namespace vix::commands
         entry["type"] = "header-only";
         entry["manifestPath"] = "vix.json";
         entry["homepage"] = httpsUrl;
-        entry["maintainers"] = json::array({json::object({{"name", ""}, {"github", ""}})});
         entry["versions"] = json::object();
       }
 
@@ -567,24 +547,30 @@ namespace vix::commands
 
       if (entry["versions"].contains(opt.version))
       {
-        std::string latest;
-        if (entry.contains("latest") && entry["latest"].is_string())
-          latest = entry["latest"].get<std::string>();
-        vix::cli::util::err_line(std::cerr, "version already exists in registry entry: " + opt.version);
-        if (!latest.empty())
-          vix::cli::util::warn_line(std::cerr, "current latest: " + latest);
-        return 1;
+        const json &existing = entry["versions"][opt.version];
+        const std::string status = (existing.contains("status") && existing["status"].is_string())
+                                       ? existing["status"].get<std::string>()
+                                       : std::string();
+
+        if (status == "published")
+        {
+          vix::cli::util::err_line(std::cerr, "version already published in registry: " + opt.version);
+          return 1;
+        }
+
+        // pending or unknown -> resume
+        vix::cli::util::warn_line(std::cout, "found existing pending entry, resuming publish for: " + opt.version);
       }
 
       json v = json::object();
       v["tag"] = tag;
       v["commit"] = commit;
+      v["publishedAt"] = iso_utc_now();
+      v["status"] = "pending";
       if (!opt.notes.empty())
         v["notes"] = opt.notes;
 
       entry["versions"][opt.version] = v;
-      update_latest_if_newer(entry, opt.version);
-
       if (opt.dryRun)
       {
         vix::cli::util::ok_line(std::cout, "dry-run: would update: " + entryPath.string());
@@ -632,8 +618,9 @@ namespace vix::commands
       }
 
       {
-        const std::string cmd =
-            "git -C " + regRepo.string() + " add " + entryPath.string();
+        const std::string relEntry = (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
+        const std::string cmd = "git -C " + regRepo.string() + " add " + relEntry;
+
         const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
         if (rc != 0)
           return rc;
@@ -678,13 +665,37 @@ namespace vix::commands
         }
       }
 
+      // Mark as published locally after successful push.
+      try
+      {
+        entry = read_json_or_throw(entryPath);
+        mark_version_published_or_throw(entryPath, entry, opt.version);
+
+        const std::string relEntry =
+            (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
+
+        (void)vix::cli::util::run_cmd_retry_debug("git -C " + regRepo.string() + " add " + relEntry);
+        (void)vix::cli::util::run_cmd_retry_debug(
+            "git -C " + regRepo.string() +
+            " commit -q -m \"registry: mark published " + pkgId + " v" + opt.version + "\"");
+        (void)vix::cli::util::run_cmd_retry_debug("git -C " + regRepo.string() + " push");
+      }
+      catch (...)
+      {
+        // Not fatal: publish already pushed, only status update failed.
+        vix::cli::util::warn_line(std::cout, "warning: could not mark version as published locally");
+      }
+
       bool prCreated = false;
 
       if (command_exists("gh"))
       {
-        std::string out;
-        const int authRc = run_cmd_capture("gh auth status -h github.com >/dev/null 2>&1; echo $?", out);
-        const bool ghAuthed = (authRc == 0 && out == "0");
+        bool ghAuthed = false;
+        {
+          std::string out;
+          const int rc = run_cmd_capture("gh auth status -h github.com 2>/dev/null", out);
+          ghAuthed = (rc == 0);
+        }
 
         if (ghAuthed)
         {
@@ -753,7 +764,7 @@ namespace vix::commands
         << "  - Registry must be synced: vix registry sync\n\n"
         << "Examples:\n"
         << "  vix publish 0.2.0\n"
-        << "  vix publish 0.2.0 --notes \"Add count_leaves helper\"\n"
+        << "  vix publish 0.2.0 --notes \"Add count_leaves helpers\"\n"
         << "  vix publish 0.2.0 --dry-run\n";
     return 0;
   }

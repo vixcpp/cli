@@ -1155,17 +1155,28 @@ int main()
   static std::string make_vix_json_lib(const std::string &name)
   {
     std::string s;
-    s.reserve(900);
+    s.reserve(1400);
 
     s += "{\n";
     s += "  \"name\": \"" + name + "\",\n";
-    s += "  \"namespace\": \"<your-namespace>\",\n";
+    s += "  \"namespace\": \"gaspardkirira\",\n";
     s += "  \"version\": \"0.1.0\",\n";
+    s += "  \"type\": \"header-only\",\n";
+    s += "  \"include\": \"include\",\n";
     s += "  \"license\": \"MIT\",\n";
-    s += "  \"description\": \"A C++ library.\",\n";
-    s += "  \"repo\": \"<git-url>\",\n";
-    s += "  \"type\": \"library\",\n";
-    s += "  \"build\": { \"system\": \"cmake\", \"preset\": \"dev-ninja\" }\n";
+    s += "  \"description\": \"A tiny header-only C++ library.\",\n";
+    s += "  \"keywords\": [\n";
+    s += "    \"cpp\",\n";
+    s += "    \"header-only\",\n";
+    s += "    \"vix\"\n";
+    s += "  ],\n";
+    s += "  \"repository\": \"https://github.com/Gaspardkirira/" + name + "\",\n";
+    s += "  \"authors\": [\n";
+    s += "    {\n";
+    s += "      \"name\": \"Gaspard Kirira\",\n";
+    s += "      \"github\": \"Gaspardkirira\"\n";
+    s += "    }\n";
+    s += "  ]\n";
     s += "}\n";
 
     return s;

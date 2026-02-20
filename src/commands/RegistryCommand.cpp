@@ -58,6 +58,50 @@ namespace vix::commands
       return "https://github.com/vixcpp/registry.git";
     }
 
+    static int git_run(const std::string &cmd)
+    {
+      return vix::cli::util::run_cmd_retry_debug(cmd);
+    }
+
+    static int normalize_registry_worktree(const fs::path &dir)
+    {
+      // Important:
+      // Publish can leave this clone checked out on a temporary publish-* branch.
+      // That branch can be deleted after merge, and later pulls will fail.
+      // So sync must always re-attach the worktree to origin/main.
+
+      step("fetching origin (prune)...");
+      {
+        const std::string cmd =
+            "git -C " + dir.string() + " fetch -q origin --prune";
+        const int rc = git_run(cmd);
+        if (rc != 0)
+          return rc;
+      }
+
+      step("checking out main...");
+      {
+        // Force checkout even if HEAD is detached or on a deleted publish branch.
+        const std::string cmd =
+            "git -C " + dir.string() + " checkout -q -B main origin/main";
+        const int rc = git_run(cmd);
+        if (rc != 0)
+          return rc;
+      }
+
+      step("resetting to origin/main...");
+      {
+        // Ensure local main matches origin/main exactly.
+        const std::string cmd =
+            "git -C " + dir.string() + " reset -q --hard origin/main";
+        const int rc = git_run(cmd);
+        if (rc != 0)
+          return rc;
+      }
+
+      return 0;
+    }
+
     int sync_registry()
     {
       const fs::path dir = registry_dir();
@@ -72,7 +116,7 @@ namespace vix::commands
         const std::string cmd =
             "git clone -q --depth 1 " + registry_repo_url() + " " + dir.string();
 
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
+        const int rc = git_run(cmd);
         if (rc != 0)
         {
           vix::cli::util::err_line(std::cerr, "registry sync failed");
@@ -82,22 +126,32 @@ namespace vix::commands
           return rc;
         }
 
+        // After clone, still normalize to avoid any odd state.
+        const int nrc = normalize_registry_worktree(dir);
+        if (nrc != 0)
+        {
+          vix::cli::util::err_line(std::cerr, "registry sync failed");
+          vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
+          if (!vix::cli::util::debug_enabled())
+            vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+          return nrc;
+        }
+
         vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
         return 0;
       }
 
-      step("updating index (ff-only)...");
-      const std::string cmd =
-          "git -C " + dir.string() + " pull -q --ff-only";
-
-      const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-      if (rc != 0)
+      // Existing clone: always normalize first, then we are done.
+      // Doing pull --ff-only on a deleted publish branch is what caused the failure you saw.
+      step("normalizing worktree...");
+      const int nrc = normalize_registry_worktree(dir);
+      if (nrc != 0)
       {
         vix::cli::util::err_line(std::cerr, "registry sync failed");
         vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
         if (!vix::cli::util::debug_enabled())
           vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
-        return rc;
+        return nrc;
       }
 
       vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
@@ -135,29 +189,23 @@ namespace vix::commands
         << "  vix registry <subcommand>\n\n"
 
         << "Subcommands:\n"
-        << "  sync        Clone or update the registry index (git-based)\n"
-        << "  path        Print local registry index path\n\n"
-
-        << "Description:\n"
-        << "  The Vix registry is a Git repository containing package metadata.\n"
-        << "  It maps <namespace>/<name>@<version> to immutable git commits.\n\n"
-
-        << "Notes:\n"
-        << "  - Registry is Git-based (V1): no server, no API, no auth.\n"
-        << "  - All searches are local after 'vix registry sync'.\n"
-        << "  - Packages are pinned to commits for reproducible builds.\n\n"
+        << "  sync        Update the local registry index\n"
+        << "  path        Print the local registry index path\n\n"
 
         << "Related commands:\n"
-        << "  vix search <query>      Search packages in the local registry index\n"
-        << "  vix add <pkg>@<ver>     Add a dependency from the registry\n"
-        << "  vix list                List project dependencies (from vix.lock)\n"
-        << "  vix remove <pkg>        Remove a dependency from the project\n\n"
+        << "  vix search <query>          Search packages\n"
+        << "  vix add <pkg>@<ver>         Add a dependency\n"
+        << "  vix remove <pkg>            Remove a dependency\n"
+        << "  vix list                    List project dependencies\n"
+        << "  vix publish <version>       Publish a package version\n"
+        << "  vix store <subcommand>      Manage local dependency store\n"
+        << "  vix registry unpublish <namespace/name> [-y|--yes]\n\n"
 
         << "Examples:\n"
         << "  vix registry sync\n"
         << "  vix registry path\n"
-        << "  vix search tree\n"
-        << "  vix add gaspardkirira/tree@0.1.0\n";
+        << "  vix publish 0.2.0\n"
+        << "  vix store gc\n";
 
     return 0;
   }

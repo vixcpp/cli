@@ -38,6 +38,7 @@
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
+#include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -289,6 +290,15 @@ namespace vix
       return dispatcher.help(cmd);
     }
 
+    if (!args.empty() && args[0] == "unpublish")
+    {
+      // Usage:
+      //   vix registry unpublish <namespace/name> [-y|--yes]
+      // On forward sans le mot "unpublish"
+      std::vector<std::string> rest(args.begin() + 1, args.end());
+      return vix::commands::UnpublishCommand{}.run(rest);
+    }
+
     if (!dispatcher.has(cmd))
     {
       std::cerr << "vix: unknown command '" << cmd << "'\n\n";
@@ -336,6 +346,8 @@ namespace vix
         return commands::ReplCommand::help();
       if (cmd == "install")
         return commands::InstallCommand::help();
+      if (cmd == "registry")
+        return commands::RegistryCommand::help();
       if (cmd == "registry")
         return commands::RegistryCommand::help();
       if (cmd == "add")
@@ -413,6 +425,7 @@ namespace vix
     out << indent(2) << "Registry:\n";
     docs("https://vixcpp.com/docs/modules/cli/search");
     out << indent(3) << "registry <subcommand>    Sync/search registry index (git-based)\n";
+    out << indent(3) << "registry unpublish <pkg> Remove a package from the registry (opens PR, destructive)\n";
     out << indent(3) << "search <query>           Search packages in local registry index (offline)\n";
     out << indent(3) << "add <pkg>@<version>      Add a dependency from registry (pins commit)\n";
     out << indent(3) << "remove <pkg>             Remove a dependency from vix.lock\n";

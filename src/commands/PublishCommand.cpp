@@ -827,26 +827,51 @@ namespace vix::commands
         if (!command_exists_on_path("gh"))
         {
           vix::cli::util::warn_line(std::cout, "gh not found. Registry will update on the next scheduled index run.");
-          vix::cli::util::warn_line(std::cout, "Trigger manually: gh workflow run " + workflowFile + " --repo " + registryRepo);
+          vix::cli::util::warn_line(std::cout, "Trigger manually: gh workflow run " + workflowFile + " --repo " + registryRepo + " --ref main");
           return 0;
         }
 
         if (!gh_is_authed())
         {
           vix::cli::util::warn_line(std::cout, "gh is not authenticated. Run: gh auth login");
-          vix::cli::util::warn_line(std::cout, "Then: gh workflow run " + workflowFile + " --repo " + registryRepo);
+          vix::cli::util::warn_line(std::cout, "Then: gh workflow run " + workflowFile + " --repo " + registryRepo + " --ref main");
           return 0;
         }
 
-        if (gh_workflow_run_by_file(registryRepo, workflowFile))
+        // Dispatch workflow on main. Don't fail publish if it fails.
         {
-          vix::cli::util::ok_line(std::cout, "registry index triggered");
+          const auto r = run_process_retry_debug({
+              "gh",
+              "workflow",
+              "run",
+              workflowFile,
+              "--repo",
+              registryRepo,
+              "--ref",
+              "main",
+          });
+
+          if (r.exitCode == 0)
+          {
+            vix::cli::util::ok_line(std::cout, "registry index triggered");
+            vix::cli::util::ok_line(std::cout, "registry will reflect this version after the index workflow merges");
+            return 0;
+          }
+
+          vix::cli::util::warn_line(std::cout, "could not trigger registry index automatically");
+
+          // show gh output for debugging, but keep it short and clean
+          const std::string out = trim_copy(r.out);
+          const std::string err = trim_copy(r.err);
+
+          if (!out.empty())
+            vix::cli::util::warn_line(std::cout, out);
+          if (!err.empty())
+            vix::cli::util::warn_line(std::cout, err);
+
+          vix::cli::util::warn_line(std::cout, "Run: gh workflow run " + workflowFile + " --repo " + registryRepo + " --ref main");
           return 0;
         }
-
-        vix::cli::util::warn_line(std::cout, "could not trigger registry index automatically");
-        vix::cli::util::warn_line(std::cout, "Run: gh workflow run " + workflowFile + " --repo " + registryRepo);
-        return 0;
       }
 
       json entry;
@@ -1071,6 +1096,7 @@ namespace vix::commands
       if (prCreated)
       {
         vix::cli::util::ok_line(std::cout, "PR created for: " + pkgId + " v" + opt.version);
+        vix::cli::util::ok_line(std::cout, "registry will reflect this version after the index workflow merges");
         return 0;
       }
 

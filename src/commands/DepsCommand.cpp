@@ -167,14 +167,25 @@ namespace vix::commands
         fs::remove(p, ec);
     }
 
+    static void remove_all_if_exists(const fs::path &p)
+    {
+      std::error_code ec;
+      if (fs::exists(p, ec))
+        fs::remove_all(p, ec);
+    }
+
     static void ensure_symlink_or_copy_dir(const fs::path &src, const fs::path &dst)
     {
       std::error_code ec;
-      remove_if_exists(dst);
+      remove_all_if_exists(dst);
 
 #ifdef _WIN32
       fs::create_directories(dst, ec);
-      fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::copy_symlinks, ec);
+      fs::copy(src, dst,
+               fs::copy_options::recursive |
+                   fs::copy_options::copy_symlinks |
+                   fs::copy_options::overwrite_existing,
+               ec);
 #else
       fs::create_directories(dst.parent_path(), ec);
       fs::create_directory_symlink(src, dst, ec);
@@ -295,20 +306,28 @@ namespace vix::commands
       }
     }
 
-    static void print_next_steps()
+    static void print_next_steps(const std::vector<DepResolved> &deps)
     {
       vix::cli::util::one_line_spacer(std::cout);
-      vix::cli::util::ok_line(std::cout, "deps installed + CMake generated");
+
+      vix::cli::util::ok_line(std::cout, "Dependencies installed");
+      vix::cli::util::kv(std::cout, "deps", std::to_string(deps.size()));
+      vix::cli::util::kv(std::cout, "dir", project_deps_dir().string());
       vix::cli::util::kv(std::cout, "cmake", project_deps_cmake().string());
       std::cout << "\n";
 
       vix::cli::util::warn_line(std::cout, "Next steps (CMake):");
-      std::cout << "  " << GRAY << "• " << RESET
-                << "Add to your CMakeLists.txt:\n\n";
+      vix::cli::util::warn_line(std::cout, "If you edit vix.lock, run 'vix deps' again to refresh CMake.");
+      std::cout << "  " << GRAY << "• " << RESET << "Add this to your CMakeLists.txt:\n\n";
 
       std::cout << "    include(.vix/vix_deps.cmake)\n";
       std::cout << "    add_executable(app main.cpp)\n";
-      std::cout << "    target_link_libraries(app PRIVATE gaspardkirira::tree gaspardkirira::binary_search)\n\n";
+
+      // Generate target list: ns::name
+      std::cout << "    target_link_libraries(app PRIVATE";
+      for (const auto &d : deps)
+        std::cout << " " << cmake_alias_target(d.id);
+      std::cout << ")\n\n";
     }
 
   }
@@ -321,6 +340,8 @@ namespace vix::commands
 
     const fs::path lp = lock_path();
     vix::cli::util::kv(std::cout, "lock", lp.string());
+    vix::cli::util::kv(std::cout, "depsDir", project_deps_dir().string());
+    vix::cli::util::kv(std::cout, "cmake", project_deps_cmake().string());
 
     if (!fs::exists(lp))
     {
@@ -329,7 +350,16 @@ namespace vix::commands
       return 1;
     }
 
-    const json lock = read_json_or_throw(lp);
+    json lock;
+    try
+    {
+      lock = read_json_or_throw(lp);
+    }
+    catch (const std::exception &ex)
+    {
+      vix::cli::util::err_line(std::cerr, std::string("failed to read vix.lock: ") + ex.what());
+      return 1;
+    }
 
     if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
     {
@@ -353,33 +383,51 @@ namespace vix::commands
     {
       DepResolved dep = resolve_dep_from_lock_entry(d);
 
-      vix::cli::util::kv(std::cout, "dep", dep.id + "@" + dep.version);
+      vix::cli::util::info_line(std::cout, dep.id + "@" + dep.version);
 
-      if (!fs::exists(dep.checkout))
+      const bool cached = fs::exists(dep.checkout);
+      if (cached)
       {
-        vix::cli::util::warn_line(std::cout, "fetching: " + dep.repo);
+        vix::cli::util::kv(std::cout, "status", "cached");
+      }
+      else
+      {
+        vix::cli::util::kv(std::cout, "status", "fetching");
+        vix::cli::util::kv(std::cout, "repo", dep.repo);
+
         const int rc = ensure_checkout_present(dep.repo, dep.id, dep.commit);
         if (rc != 0)
         {
-          vix::cli::util::err_line(std::cerr, "fetch failed for: " + dep.id);
-          vix::cli::util::warn_line(std::cerr, "Check git access/network, or re-add/publish with a valid commit.");
+          vix::cli::util::err_line(std::cerr, "fetch failed: " + dep.id);
+          vix::cli::util::warn_line(std::cerr, "Check git access, network, or re-add with a valid version.");
           return rc;
         }
+
+        vix::cli::util::kv(std::cout, "status", "fetched");
       }
 
       load_dep_manifest(dep);
+      vix::cli::util::kv(std::cout, "commit", dep.commit);
 
-      // Create a stable project-local link:
-      // .vix/deps/<ns>.<name> -> ~/.vix/store/git/<ns>.<name>/<commit>
+      // Create stable project-local link
       const fs::path link = project_deps_dir() / sanitize_id_dot(dep.id);
       ensure_symlink_or_copy_dir(dep.checkout, link);
       dep.linkDir = link;
 
+      // Affiche link seulement si on a vraiment fait quelque chose
+      if (!cached)
+        vix::cli::util::kv(std::cout, "link", dep.linkDir.string());
+
+      // Create a stable project-local link:
+      // .vix/deps/<ns>.<name> -> ~/.vix/store/git/<ns>.<name>/<commit>
+      ensure_symlink_or_copy_dir(dep.checkout, link);
+      dep.linkDir = link;
+      vix::cli::util::kv(std::cout, "link", dep.linkDir.string());
       resolved.push_back(std::move(dep));
     }
 
     generate_cmake(resolved);
-    print_next_steps();
+    print_next_steps(resolved);
     return 0;
   }
 
@@ -388,12 +436,17 @@ namespace vix::commands
     std::cout
         << "Usage:\n"
         << "  vix deps\n\n"
+
         << "Description:\n"
-        << "  Install project dependencies from vix.lock into ./.vix/deps and generate ./.vix/vix_deps.cmake\n\n"
-        << "Example:\n"
+        << "  Install dependencies listed in vix.lock.\n"
+        << "  Packages are fetched into ./.vix/deps.\n"
+        << "  Generates ./.vix/vix_deps.cmake.\n\n"
+
+        << "Examples:\n"
         << "  vix add gaspardkirira/tree@0.4.0\n"
         << "  vix add gaspardkirira/binary_search@0.1.1\n"
         << "  vix deps\n";
+
     return 0;
   }
 }

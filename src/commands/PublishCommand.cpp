@@ -13,32 +13,33 @@
  */
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
-#include <vix/cli/util/Shell.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
-#include <cstdio>
-#include <chrono>
-#include <iomanip>
 
 #if defined(_WIN32)
-#define vix_popen _popen
-#define vix_pclose _pclose
+#include <windows.h>
 #else
-#define vix_popen popen
-#define vix_pclose pclose
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -149,70 +150,396 @@ namespace vix::commands
       out << j.dump(2) << "\n";
     }
 
-    static int run_cmd_capture(const std::string &cmd, std::string &out)
+    struct ProcessResult
     {
-      out.clear();
-      FILE *pipe = ::vix_popen(cmd.c_str(), "r");
-      if (!pipe)
-        return 127;
+      int exitCode{127};
+      std::string out;
+      std::string err;
+    };
 
-      char buffer[4096];
+    static std::string join_for_log(const std::vector<std::string> &args)
+    {
+      std::ostringstream oss;
+      for (size_t i = 0; i < args.size(); ++i)
+      {
+        if (i)
+          oss << ' ';
+        const std::string &a = args[i];
+        const bool needsQuotes = (a.find(' ') != std::string::npos) || (a.find('"') != std::string::npos);
+        if (!needsQuotes)
+        {
+          oss << a;
+          continue;
+        }
+        oss << '"';
+        for (char c : a)
+        {
+          if (c == '"')
+            oss << "\\\"";
+          else
+            oss << c;
+        }
+        oss << '"';
+      }
+      return oss.str();
+    }
+
+#if defined(_WIN32)
+
+    static std::string win_last_error()
+    {
+      const DWORD err = GetLastError();
+      if (!err)
+        return {};
+      LPSTR buf = nullptr;
+      const DWORD n = FormatMessageA(
+          FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+          nullptr,
+          err,
+          MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+          (LPSTR)&buf,
+          0,
+          nullptr);
+      std::string s = (n && buf) ? std::string(buf, buf + n) : std::string();
+      if (buf)
+        LocalFree(buf);
+      return trim_copy(s);
+    }
+
+    static std::string win_read_all(HANDLE h)
+    {
+      std::string out;
+      char buf[4096];
+      DWORD read = 0;
       while (true)
       {
-        const size_t n = std::fread(buffer, 1, sizeof(buffer), pipe);
-        if (n > 0)
-          out.append(buffer, buffer + n);
-        if (n < sizeof(buffer))
+        const BOOL ok = ReadFile(h, buf, (DWORD)sizeof(buf), &read, nullptr);
+        if (!ok || read == 0)
           break;
+        out.append(buf, buf + read);
+      }
+      return out;
+    }
+
+    static ProcessResult run_process_capture(const std::vector<std::string> &args, const std::optional<fs::path> &cwd = std::nullopt)
+    {
+      ProcessResult r;
+
+      if (args.empty())
+      {
+        r.exitCode = 127;
+        r.err = "empty command";
+        return r;
       }
 
-      const int rc = ::vix_pclose(pipe);
-      out = trim_copy(out);
-      return rc;
+      SECURITY_ATTRIBUTES sa{};
+      sa.nLength = sizeof(sa);
+      sa.bInheritHandle = TRUE;
+
+      HANDLE outRead = nullptr, outWrite = nullptr;
+      HANDLE errRead = nullptr, errWrite = nullptr;
+
+      if (!CreatePipe(&outRead, &outWrite, &sa, 0))
+      {
+        r.exitCode = 127;
+        r.err = "CreatePipe(stdout) failed: " + win_last_error();
+        return r;
+      }
+      if (!SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0))
+      {
+        r.exitCode = 127;
+        r.err = "SetHandleInformation(stdout) failed: " + win_last_error();
+        CloseHandle(outRead);
+        CloseHandle(outWrite);
+        return r;
+      }
+
+      if (!CreatePipe(&errRead, &errWrite, &sa, 0))
+      {
+        r.exitCode = 127;
+        r.err = "CreatePipe(stderr) failed: " + win_last_error();
+        CloseHandle(outRead);
+        CloseHandle(outWrite);
+        return r;
+      }
+      if (!SetHandleInformation(errRead, HANDLE_FLAG_INHERIT, 0))
+      {
+        r.exitCode = 127;
+        r.err = "SetHandleInformation(stderr) failed: " + win_last_error();
+        CloseHandle(outRead);
+        CloseHandle(outWrite);
+        CloseHandle(errRead);
+        CloseHandle(errWrite);
+        return r;
+      }
+
+      STARTUPINFOA si{};
+      si.cb = sizeof(si);
+      si.dwFlags = STARTF_USESTDHANDLES;
+      si.hStdOutput = outWrite;
+      si.hStdError = errWrite;
+      si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+      PROCESS_INFORMATION pi{};
+      std::string cmd = join_for_log(args);
+
+      // CreateProcess requires a writable buffer
+      std::vector<char> cmdBuf(cmd.begin(), cmd.end());
+      cmdBuf.push_back('\0');
+
+      std::string cwdStr;
+      LPCSTR cwdPtr = nullptr;
+      if (cwd)
+      {
+        cwdStr = cwd->string();
+        cwdPtr = cwdStr.c_str();
+      }
+
+      const BOOL ok = CreateProcessA(
+          nullptr,
+          cmdBuf.data(),
+          nullptr,
+          nullptr,
+          TRUE,
+          0,
+          nullptr,
+          cwdPtr,
+          &si,
+          &pi);
+
+      CloseHandle(outWrite);
+      CloseHandle(errWrite);
+
+      if (!ok)
+      {
+        r.exitCode = 127;
+        r.err = "CreateProcess failed: " + win_last_error();
+        CloseHandle(outRead);
+        CloseHandle(errRead);
+        return r;
+      }
+
+      WaitForSingleObject(pi.hProcess, INFINITE);
+
+      DWORD ec = 127;
+      GetExitCodeProcess(pi.hProcess, &ec);
+      r.exitCode = (int)ec;
+
+      r.out = win_read_all(outRead);
+      r.err = win_read_all(errRead);
+
+      CloseHandle(outRead);
+      CloseHandle(errRead);
+      CloseHandle(pi.hThread);
+      CloseHandle(pi.hProcess);
+
+      r.out = trim_copy(r.out);
+      r.err = trim_copy(r.err);
+      return r;
+    }
+
+#else
+
+    static int set_cloexec(int fd)
+    {
+      const int flags = fcntl(fd, F_GETFD);
+      if (flags < 0)
+        return -1;
+      return fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+    }
+
+    static std::string read_fd_all(int fd)
+    {
+      std::string out;
+      char buf[4096];
+      while (true)
+      {
+        const ssize_t n = ::read(fd, buf, sizeof(buf));
+        if (n > 0)
+        {
+          out.append(buf, buf + n);
+          continue;
+        }
+        if (n == 0)
+          break;
+        if (errno == EINTR)
+          continue;
+        break;
+      }
+      return out;
+    }
+
+    static ProcessResult run_process_capture(const std::vector<std::string> &args, const std::optional<fs::path> &cwd = std::nullopt)
+    {
+      ProcessResult r;
+
+      if (args.empty())
+      {
+        r.exitCode = 127;
+        r.err = "empty command";
+        return r;
+      }
+
+      int outPipe[2]{-1, -1};
+      int errPipe[2]{-1, -1};
+
+      if (pipe(outPipe) != 0)
+      {
+        r.exitCode = 127;
+        r.err = "pipe(stdout) failed";
+        return r;
+      }
+      if (pipe(errPipe) != 0)
+      {
+        r.exitCode = 127;
+        r.err = "pipe(stderr) failed";
+        close(outPipe[0]);
+        close(outPipe[1]);
+        return r;
+      }
+
+      set_cloexec(outPipe[0]);
+      set_cloexec(outPipe[1]);
+      set_cloexec(errPipe[0]);
+      set_cloexec(errPipe[1]);
+
+      pid_t pid = fork();
+      if (pid < 0)
+      {
+        r.exitCode = 127;
+        r.err = "fork failed";
+        close(outPipe[0]);
+        close(outPipe[1]);
+        close(errPipe[0]);
+        close(errPipe[1]);
+        return r;
+      }
+
+      if (pid == 0)
+      {
+        // child
+        if (cwd)
+        {
+          (void)chdir(cwd->c_str());
+        }
+
+        dup2(outPipe[1], STDOUT_FILENO);
+        dup2(errPipe[1], STDERR_FILENO);
+
+        close(outPipe[0]);
+        close(outPipe[1]);
+        close(errPipe[0]);
+        close(errPipe[1]);
+
+        std::vector<char *> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto &a : args)
+          argv.push_back(const_cast<char *>(a.c_str()));
+        argv.push_back(nullptr);
+
+        execvp(argv[0], argv.data());
+        _exit(127);
+      }
+
+      // parent
+      close(outPipe[1]);
+      close(errPipe[1]);
+
+      r.out = read_fd_all(outPipe[0]);
+      r.err = read_fd_all(errPipe[0]);
+
+      close(outPipe[0]);
+      close(errPipe[0]);
+
+      int status = 0;
+      while (waitpid(pid, &status, 0) < 0)
+      {
+        if (errno == EINTR)
+          continue;
+        break;
+      }
+
+      if (WIFEXITED(status))
+        r.exitCode = WEXITSTATUS(status);
+      else if (WIFSIGNALED(status))
+        r.exitCode = 128 + WTERMSIG(status);
+      else
+        r.exitCode = 127;
+
+      r.out = trim_copy(r.out);
+      r.err = trim_copy(r.err);
+      return r;
+    }
+
+#endif
+
+    static ProcessResult run_process_retry_debug(
+        const std::vector<std::string> &args,
+        const std::optional<fs::path> &cwd = std::nullopt,
+        int attempts = 2)
+    {
+      ProcessResult last;
+      for (int i = 0; i < attempts; ++i)
+      {
+        last = run_process_capture(args, cwd);
+        if (last.exitCode == 0)
+          return last;
+
+        // small retry for transient filesystem/network issues
+        if (i + 1 < attempts)
+          std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      }
+      return last;
     }
 
     static std::optional<std::string> git_top_level()
     {
-      std::string out;
-      const int rc = run_cmd_capture("git rev-parse --show-toplevel 2>/dev/null", out);
-      if (rc != 0 || out.empty())
+      const auto r = run_process_capture({"git", "rev-parse", "--show-toplevel"});
+      if (r.exitCode != 0 || r.out.empty())
         return std::nullopt;
-      return out;
+      return r.out;
     }
 
     static bool git_is_clean()
     {
-      std::string out;
-      const int rc = run_cmd_capture("git status --porcelain 2>/dev/null", out);
-      if (rc != 0)
+      const auto r = run_process_capture({"git", "status", "--porcelain"});
+      if (r.exitCode != 0)
         return false;
-      return out.empty();
+      return r.out.empty();
     }
 
     static bool git_tag_exists(const std::string &tag)
     {
-      // Accept annotated tags AND lightweight tags.
-      // Annotated: tag^{tag} works
-      // Lightweight: tag^{tag} fails, but refs/tags/<tag> exists.
       {
-        const std::string cmd = "git rev-parse -q --verify " + tag + "^{tag} >/dev/null 2>&1";
-        if (std::system(cmd.c_str()) == 0)
+        const auto r = run_process_capture({"git", "rev-parse", "-q", "--verify", tag + "^{tag}"});
+        if (r.exitCode == 0)
           return true;
       }
       {
-        const std::string cmd = "git rev-parse -q --verify refs/tags/" + tag + " >/dev/null 2>&1";
-        return std::system(cmd.c_str()) == 0;
+        const auto r = run_process_capture({"git", "rev-parse", "-q", "--verify", "refs/tags/" + tag});
+        return r.exitCode == 0;
       }
     }
 
     static std::optional<std::string> git_commit_for_tag(const std::string &tag)
     {
-      std::string out;
-      const std::string cmd = "git rev-list -n 1 " + tag + " 2>/dev/null";
-      const int rc = run_cmd_capture(cmd, out);
-      if (rc != 0 || out.empty())
+      const auto r = run_process_capture({"git", "rev-list", "-n", "1", tag});
+      if (r.exitCode != 0 || r.out.empty())
         return std::nullopt;
-      return out;
+      return r.out;
+    }
+
+    static bool git_remote_tag_exists(const std::string &tag)
+    {
+      {
+        const auto r = run_process_capture({"git", "ls-remote", "--tags", "origin", "refs/tags/" + tag});
+        if (r.exitCode == 0 && !r.out.empty())
+          return true;
+      }
+      {
+        const auto r = run_process_capture({"git", "ls-remote", "--tags", "origin", "refs/tags/" + tag + "^{}"});
+        return (r.exitCode == 0 && !r.out.empty());
+      }
     }
 
     static std::optional<std::string> read_vix_json_namespace(const fs::path &repoRoot)
@@ -253,12 +580,11 @@ namespace vix::commands
 
     static std::optional<std::pair<std::string, std::string>> infer_from_git_remote()
     {
-      std::string url;
-      const int rc = run_cmd_capture("git remote get-url origin 2>/dev/null", url);
-      if (rc != 0 || url.empty())
+      const auto r = run_process_capture({"git", "remote", "get-url", "origin"});
+      if (r.exitCode != 0 || r.out.empty())
         return std::nullopt;
 
-      std::string u = url;
+      std::string u = r.out;
 
       auto strip_suffix = [&](const std::string &suf)
       {
@@ -303,19 +629,46 @@ namespace vix::commands
       return std::make_pair(lower_copy(ns), lower_copy(name));
     }
 
-    static void mark_version_published_or_throw(
-        const fs::path &entryPath,
-        json &entry,
-        const std::string &version)
+    static std::string registry_file_name(const std::string &ns, const std::string &name)
     {
-      if (!entry.contains("versions") || !entry["versions"].is_object())
-        entry["versions"] = json::object();
+      return ns + "." + name + ".json";
+    }
 
-      if (!entry["versions"].contains(version) || !entry["versions"][version].is_object())
-        entry["versions"][version] = json::object();
+    static std::string branch_name(const std::string &ns, const std::string &name, const std::string &version)
+    {
+      std::string b = "publish-" + ns + "-" + name + "-" + version;
+      for (char &c : b)
+      {
+        if (c == '/')
+          c = '-';
+      }
+      return b;
+    }
 
-      entry["versions"][version]["status"] = "published";
-      write_json_or_throw(entryPath, entry);
+    static bool is_git_repo(const fs::path &dir)
+    {
+      std::error_code ec;
+      return fs::exists(dir / ".git", ec);
+    }
+
+    static bool command_exists_on_path(const std::string &exe)
+    {
+      // No shell: just try to execute "<exe> --version"
+      const auto r = run_process_capture({exe, "--version"});
+      return r.exitCode == 0;
+    }
+
+    static bool gh_is_authed()
+    {
+      const auto r = run_process_capture({"gh", "auth", "status", "-h", "github.com"});
+      return r.exitCode == 0;
+    }
+
+    static bool gh_workflow_run_by_file(const std::string &repo, const std::string &workflowFile)
+    {
+      // stable: target the workflow file, not the display name
+      const auto r = run_process_capture({"gh", "workflow", "run", workflowFile, "--repo", repo});
+      return r.exitCode == 0;
     }
 
     static PublishOptions parse_args_or_throw(const std::vector<std::string> &args)
@@ -367,38 +720,6 @@ namespace vix::commands
         throw std::runtime_error("version cannot be empty");
 
       return opt;
-    }
-
-    static bool is_git_repo(const fs::path &dir)
-    {
-      std::error_code ec;
-      return fs::exists(dir / ".git", ec);
-    }
-
-    static bool command_exists(const std::string &name)
-    {
-#ifdef _WIN32
-      const std::string cmd = "where " + name + " >nul 2>nul";
-#else
-      const std::string cmd = "command -v " + name + " >/dev/null 2>&1";
-#endif
-      return std::system(cmd.c_str()) == 0;
-    }
-
-    static std::string registry_file_name(const std::string &ns, const std::string &name)
-    {
-      return ns + "." + name + ".json";
-    }
-
-    static std::string branch_name(const std::string &ns, const std::string &name, const std::string &version)
-    {
-      std::string b = "publish-" + ns + "-" + name + "-" + version;
-      for (char &c : b)
-      {
-        if (c == '/')
-          c = '-';
-      }
-      return b;
     }
 
     static int publish_impl(const PublishOptions &opt)
@@ -484,6 +805,50 @@ namespace vix::commands
       const fs::path entryPath = regIndex / registry_file_name(*ns, *name);
       vix::cli::util::kv(std::cout, "entry", entryPath.string());
 
+      const bool entryExists = fs::exists(entryPath);
+
+      if (entryExists)
+      {
+        if (!git_remote_tag_exists(tag))
+        {
+          vix::cli::util::err_line(std::cerr, "tag not found on remote origin: " + tag);
+          vix::cli::util::warn_line(std::cerr, "Fix: git push origin " + tag);
+          vix::cli::util::warn_line(std::cerr, "Or:  git push --tags");
+          return 1;
+        }
+
+        vix::cli::util::ok_line(std::cout, "tag pushed: " + tag);
+        vix::cli::util::ok_line(std::cout, "package already registered: " + pkgId);
+
+        // Versions are indexed from tags, trigger indexing now when possible.
+        const std::string registryRepo = "vixcpp/registry";
+        const std::string workflowFile = "registry_index_from_tags.yml";
+
+        if (!command_exists_on_path("gh"))
+        {
+          vix::cli::util::warn_line(std::cout, "gh not found. Registry will update on the next scheduled index run.");
+          vix::cli::util::warn_line(std::cout, "Trigger manually: gh workflow run " + workflowFile + " --repo " + registryRepo);
+          return 0;
+        }
+
+        if (!gh_is_authed())
+        {
+          vix::cli::util::warn_line(std::cout, "gh is not authenticated. Run: gh auth login");
+          vix::cli::util::warn_line(std::cout, "Then: gh workflow run " + workflowFile + " --repo " + registryRepo);
+          return 0;
+        }
+
+        if (gh_workflow_run_by_file(registryRepo, workflowFile))
+        {
+          vix::cli::util::ok_line(std::cout, "registry index triggered");
+          return 0;
+        }
+
+        vix::cli::util::warn_line(std::cout, "could not trigger registry index automatically");
+        vix::cli::util::warn_line(std::cout, "Run: gh workflow run " + workflowFile + " --repo " + registryRepo);
+        return 0;
+      }
+
       json entry;
 
       if (fs::exists(entryPath))
@@ -501,8 +866,10 @@ namespace vix::commands
       else
       {
         std::string remoteUrl;
-        run_cmd_capture("git remote get-url origin 2>/dev/null", remoteUrl);
-        remoteUrl = trim_copy(remoteUrl);
+        {
+          const auto r = run_process_capture({"git", "remote", "get-url", "origin"});
+          remoteUrl = trim_copy(r.out);
+        }
 
         std::string httpsUrl = remoteUrl;
         if (!httpsUrl.empty())
@@ -542,35 +909,6 @@ namespace vix::commands
         return 1;
       }
 
-      if (!entry.contains("versions") || !entry["versions"].is_object())
-        entry["versions"] = json::object();
-
-      if (entry["versions"].contains(opt.version))
-      {
-        const json &existing = entry["versions"][opt.version];
-        const std::string status = (existing.contains("status") && existing["status"].is_string())
-                                       ? existing["status"].get<std::string>()
-                                       : std::string();
-
-        if (status == "published")
-        {
-          vix::cli::util::err_line(std::cerr, "version already published in registry: " + opt.version);
-          return 1;
-        }
-
-        // pending or unknown -> resume
-        vix::cli::util::warn_line(std::cout, "found existing pending entry, resuming publish for: " + opt.version);
-      }
-
-      json v = json::object();
-      v["tag"] = tag;
-      v["commit"] = commit;
-      v["publishedAt"] = iso_utc_now();
-      v["status"] = "pending";
-      if (!opt.notes.empty())
-        v["notes"] = opt.notes;
-
-      entry["versions"][opt.version] = v;
       if (opt.dryRun)
       {
         vix::cli::util::ok_line(std::cout, "dry-run: would update: " + entryPath.string());
@@ -595,130 +933,138 @@ namespace vix::commands
       const std::string branch = branch_name(*ns, *name, opt.version);
       vix::cli::util::kv(std::cout, "branch", branch);
 
+      // git -C <regRepo> pull -q --ff-only
       {
-        const std::string cmd =
-            "git -C " + regRepo.string() + " pull -q --ff-only";
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
+        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "pull", "-q", "--ff-only"});
+        if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to update local registry repo (pull --ff-only)");
-          return rc;
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+          return r.exitCode;
         }
       }
 
+      // git -C <regRepo> checkout -B <branch> -q
       {
-        const std::string cmd =
-            "git -C " + regRepo.string() + " checkout -B " + branch + " -q";
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
+        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "checkout", "-B", branch, "-q"});
+        if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to create branch: " + branch);
-          return rc;
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+          return r.exitCode;
         }
       }
 
+      // git -C <regRepo> add index/<file>
       {
         const std::string relEntry = (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
-        const std::string cmd = "git -C " + regRepo.string() + " add " + relEntry;
-
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
-          return rc;
+        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "add", relEntry});
+        if (r.exitCode != 0)
+        {
+          vix::cli::util::err_line(std::cerr, "failed to add registry entry");
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+          return r.exitCode;
+        }
       }
 
+      // git -C <regRepo> commit -q -m "<msg>"
       {
         const std::string msg = "registry: " + pkgId + " v" + opt.version;
-        const std::string cmd =
-            "git -C " + regRepo.string() + " commit -q -m \"" + msg + "\"";
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
+        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "commit", "-q", "-m", msg});
+        if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to commit registry update");
-          return rc;
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+          return r.exitCode;
         }
       }
 
+      // git -C <regRepo> push -u origin <branch>
       {
-        const std::string pushCmd =
-            "git -C " + regRepo.string() + " push -u origin " + branch;
-
-        const int rc = vix::cli::util::run_cmd_retry_debug(pushCmd);
-        if (rc != 0)
+        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "push", "-u", "origin", branch});
+        if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to push branch to origin");
-          return rc;
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+          return r.exitCode;
         }
+      }
 
-        if (opt.cleanup)
+      // Optional cleanup: keep it simple without shell pipes
+      if (opt.cleanup)
+      {
+        // list branches and delete older publish branches for this pkg
+        const auto r = run_process_capture({"git", "-C", regRepo.string(), "branch", "--format=%(refname:short)"});
+        if (r.exitCode == 0 && !r.out.empty())
         {
-          const std::string cleanupCmd =
-              "git -C " + regRepo.string() +
-              " branch --format='%(refname:short)' "
-              "| grep '^publish-" +
-              *ns + "-" + *name + "-' "
-                                  "| grep -v '^" +
-              branch + "$' "
-                       "| xargs -r -n1 git -C " +
-              regRepo.string() + " branch -D";
+          std::istringstream iss(r.out);
+          std::string line;
+          const std::string prefix = "publish-" + *ns + "-" + *name + "-";
+          while (std::getline(iss, line))
+          {
+            line = trim_copy(line);
+            if (line.empty())
+              continue;
+            if (line == branch)
+              continue;
+            if (line.rfind(prefix, 0) != 0)
+              continue;
 
-          (void)vix::cli::util::run_cmd_retry_debug(cleanupCmd);
+            (void)run_process_capture({"git", "-C", regRepo.string(), "branch", "-D", line});
+          }
         }
-      }
-
-      // Mark as published locally after successful push.
-      try
-      {
-        entry = read_json_or_throw(entryPath);
-        mark_version_published_or_throw(entryPath, entry, opt.version);
-
-        const std::string relEntry =
-            (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
-
-        (void)vix::cli::util::run_cmd_retry_debug("git -C " + regRepo.string() + " add " + relEntry);
-        (void)vix::cli::util::run_cmd_retry_debug(
-            "git -C " + regRepo.string() +
-            " commit -q -m \"registry: mark published " + pkgId + " v" + opt.version + "\"");
-        (void)vix::cli::util::run_cmd_retry_debug("git -C " + regRepo.string() + " push");
-      }
-      catch (...)
-      {
-        // Not fatal: publish already pushed, only status update failed.
-        vix::cli::util::warn_line(std::cout, "warning: could not mark version as published locally");
       }
 
       bool prCreated = false;
 
-      if (command_exists("gh"))
+      // Important: don't fail publish if gh is missing
+      if (!command_exists_on_path("gh"))
       {
-        bool ghAuthed = false;
+        vix::cli::util::warn_line(std::cout, "gh not found, skipping PR creation.");
+      }
+      else if (!gh_is_authed())
+      {
+        vix::cli::util::warn_line(std::cout, "gh is installed but not authenticated, skipping PR creation.");
+        vix::cli::util::warn_line(std::cout, "Run: gh auth login");
+      }
+      else
+      {
+        const std::string title = "registry: " + pkgId + " v" + opt.version;
+
+        std::string body;
+        body += "Adds " + pkgId + " v" + opt.version + " to the Vix registry.\n\n";
+        body += "- tag: " + tag + "\n";
+        body += "- commit: " + commit + "\n";
+        body += "- time: " + iso_utc_now() + "\n";
+
+        const auto r = run_process_retry_debug({
+            "gh",
+            "pr",
+            "create",
+            "--repo",
+            "vixcpp/registry",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--title",
+            title,
+            "--body",
+            body,
+        });
+
+        if (r.exitCode == 0)
+          prCreated = true;
+        else
         {
-          std::string out;
-          const int rc = run_cmd_capture("gh auth status -h github.com 2>/dev/null", out);
-          ghAuthed = (rc == 0);
-        }
-
-        if (ghAuthed)
-        {
-          const std::string title = "registry: " + pkgId + " v" + opt.version;
-          std::string body;
-          body += "Adds " + pkgId + " v" + opt.version + " to the Vix registry.\n\n";
-          body += "- tag: " + tag + "\n";
-          body += "- commit: " + commit + "\n";
-
-          std::string cmd =
-              "gh pr create "
-              "--repo vixcpp/registry "
-              "--base main "
-              "--head " +
-              branch + " "
-                       "--title \"" +
-              title + "\" "
-                      "--body \"" +
-              body + "\"";
-
-          const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-          if (rc == 0)
-            prCreated = true;
+          vix::cli::util::warn_line(std::cout, "gh pr create failed, continuing without failing publish.");
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cout, r.err);
         }
       }
 
@@ -733,8 +1079,7 @@ namespace vix::commands
       vix::cli::util::warn_line(std::cout, "Tip: install/auth gh to auto-create PR next time.");
       return 0;
     }
-
-  }
+  } // namespace
 
   int PublishCommand::run(const std::vector<std::string> &args)
   {
@@ -755,17 +1100,23 @@ namespace vix::commands
     std::cout
         << "Usage:\n"
         << "  vix publish <version> [--notes \"...\"] [--dry-run]\n\n"
+
         << "Description:\n"
-        << "  Publish a C++ package version into the Vix Registry by updating the local registry clone\n"
-        << "  (~/.vix/registry/index), creating a branch, committing, pushing, and opening a PR (if gh is available).\n\n"
+        << "  Publish a tagged version of the current package to the Vix registry.\n\n"
+
+        << "Options:\n"
+        << "  --notes \"...\"     Attach release notes\n"
+        << "  --dry-run          Validate without pushing changes\n\n"
+
         << "Requirements:\n"
-        << "  - Run inside your library git repo\n"
-        << "  - Tag must exist: v<version>\n"
-        << "  - Registry must be synced: vix registry sync\n\n"
+        << "  - Run inside a git repository\n"
+        << "  - Tag v<version> must exist and be pushed\n\n"
+
         << "Examples:\n"
         << "  vix publish 0.2.0\n"
-        << "  vix publish 0.2.0 --notes \"Add count_leaves helpers\"\n"
+        << "  vix publish 0.2.0 --notes \"Add helpers\"\n"
         << "  vix publish 0.2.0 --dry-run\n";
+
     return 0;
   }
-}
+} // namespace vix::commands

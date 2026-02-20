@@ -17,9 +17,13 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -32,37 +36,34 @@ namespace vix::commands
 
   namespace
   {
-    fs::path lock_path()
-    {
-      return fs::current_path() / "vix.lock";
-    }
-
-    json read_json_or_throw(const fs::path &p)
-    {
-      std::ifstream in(p);
-      if (!in)
-        throw std::runtime_error("cannot open: " + p.string());
-      json j;
-      in >> j;
-      return j;
-    }
-
-    void write_json_or_throw(const fs::path &p, const json &j)
-    {
-      std::ofstream out(p);
-      if (!out)
-        throw std::runtime_error("cannot write: " + p.string());
-      out << j.dump(2) << "\n";
-    }
-
     struct Target
     {
-      std::string id;
-      std::string version;
+      std::string id;      // namespace/name
+      std::string version; // optional
     };
 
-    Target parse_target(const std::string &raw)
+    struct Options
     {
+      Target target;
+      bool yes{false};
+      bool purge{false}; // delete .vix/deps/<ns>.<name>
+    };
+
+    static std::string trim_copy(std::string s)
+    {
+      auto isws = [](unsigned char c)
+      { return std::isspace(c) != 0; };
+      while (!s.empty() && isws(static_cast<unsigned char>(s.front())))
+        s.erase(s.begin());
+      while (!s.empty() && isws(static_cast<unsigned char>(s.back())))
+        s.pop_back();
+      return s;
+    }
+
+    static Target parse_target(std::string raw)
+    {
+      raw = trim_copy(raw);
+
       Target t;
       const auto pos = raw.find('@');
       if (pos == std::string::npos)
@@ -72,15 +73,40 @@ namespace vix::commands
       }
       t.id = raw.substr(0, pos);
       t.version = raw.substr(pos + 1);
+      t.id = trim_copy(t.id);
+      t.version = trim_copy(t.version);
       return t;
     }
 
-    bool matches_id(const std::string &depId, const std::string &targetId)
+    static fs::path lock_path()
+    {
+      return fs::current_path() / "vix.lock";
+    }
+
+    static json read_json_or_throw(const fs::path &p)
+    {
+      std::ifstream in(p);
+      if (!in)
+        throw std::runtime_error("cannot open: " + p.string());
+      json j;
+      in >> j;
+      return j;
+    }
+
+    static void write_json_or_throw(const fs::path &p, const json &j)
+    {
+      std::ofstream out(p);
+      if (!out)
+        throw std::runtime_error("cannot write: " + p.string());
+      out << j.dump(2) << "\n";
+    }
+
+    static bool matches_id(const std::string &depId, const std::string &targetId)
     {
       return depId == targetId;
     }
 
-    bool matches_version_if_given(const json &dep, const std::string &version)
+    static bool matches_version_if_given(const json &dep, const std::string &version)
     {
       if (version.empty())
         return true;
@@ -98,19 +124,113 @@ namespace vix::commands
 
       return false;
     }
-  }
+
+    static std::optional<std::pair<std::string, std::string>> split_pkg_id(const std::string &id)
+    {
+      const auto pos = id.find('/');
+      if (pos == std::string::npos)
+        return std::nullopt;
+
+      std::string ns = trim_copy(id.substr(0, pos));
+      std::string name = trim_copy(id.substr(pos + 1));
+
+      if (ns.empty() || name.empty())
+        return std::nullopt;
+
+      // keep exact casing in display, but your ids are already lower-case
+      return std::make_pair(ns, name);
+    }
+
+    static fs::path deps_dir_for_pkg(const std::string &pkgId)
+    {
+      // Layout: .vix/deps/<namespace>.<name>
+      const auto parts = split_pkg_id(pkgId);
+      if (!parts)
+        return fs::path();
+
+      const std::string folder = parts->first + "." + parts->second;
+      return fs::current_path() / ".vix" / "deps" / folder;
+    }
+
+    static bool confirm_delete_if_needed(const Options &opt, const fs::path &depDir)
+    {
+      if (!opt.purge)
+        return true;
+
+      if (depDir.empty() || !fs::exists(depDir))
+        return true;
+
+      if (opt.yes)
+        return true;
+
+      vix::cli::util::warn_line(std::cout, "This will also delete files from this project:");
+      vix::cli::util::info_line(std::cout, depDir.string());
+      vix::cli::util::warn_line(std::cout, "Type DELETE to confirm: ");
+
+      std::string line;
+      std::getline(std::cin, line);
+      line = trim_copy(line);
+      return line == "DELETE";
+    }
+
+    static Options parse_args_or_throw(const std::vector<std::string> &args)
+    {
+      if (args.empty())
+        throw std::runtime_error("missing package id. Try: vix remove namespace/name");
+
+      Options opt;
+      std::vector<std::string> pos;
+
+      for (size_t i = 0; i < args.size(); ++i)
+      {
+        const auto &a = args[i];
+
+        if (a == "-y" || a == "--yes")
+        {
+          opt.yes = true;
+          continue;
+        }
+        if (a == "--purge")
+        {
+          opt.purge = true;
+          continue;
+        }
+        if (!a.empty() && a[0] == '-')
+          throw std::runtime_error("unknown flag: " + a);
+
+        pos.push_back(a);
+      }
+
+      if (pos.empty())
+        throw std::runtime_error("missing package id");
+
+      opt.target = parse_target(pos[0]);
+      if (opt.target.id.empty())
+        throw std::runtime_error("package id cannot be empty");
+
+      return opt;
+    }
+
+  } // namespace
 
   int RemoveCommand::run(const std::vector<std::string> &args)
   {
     vix::cli::util::section(std::cout, "Remove");
 
-    if (args.empty())
+    Options opt;
+    try
+    {
+      opt = parse_args_or_throw(args);
+    }
+    catch (const std::exception &ex)
+    {
+      vix::cli::util::err_line(std::cerr, ex.what());
       return help();
+    }
 
-    const Target t = parse_target(args[0]);
-    vix::cli::util::kv(std::cout, "id", t.id);
-    if (!t.version.empty())
-      vix::cli::util::kv(std::cout, "version", t.version);
+    vix::cli::util::kv(std::cout, "id", opt.target.id);
+    if (!opt.target.version.empty())
+      vix::cli::util::kv(std::cout, "version", opt.target.version);
 
     const fs::path p = lock_path();
     if (!fs::exists(p))
@@ -138,8 +258,15 @@ namespace vix::commands
       return 1;
     }
 
+    const fs::path depDir = deps_dir_for_pkg(opt.target.id);
+
+    if (!confirm_delete_if_needed(opt, depDir))
+    {
+      vix::cli::util::warn_line(std::cout, "cancelled");
+      return 0;
+    }
+
     auto &deps = lock["dependencies"];
-    const std::size_t before = deps.size();
 
     json newDeps = json::array();
     bool removed = false;
@@ -147,7 +274,7 @@ namespace vix::commands
     for (const auto &d : deps)
     {
       const std::string depId = d.value("id", "");
-      if (!removed && matches_id(depId, t.id) && matches_version_if_given(d, t.version))
+      if (!removed && matches_id(depId, opt.target.id) && matches_version_if_given(d, opt.target.version))
       {
         removed = true;
         continue;
@@ -157,8 +284,8 @@ namespace vix::commands
 
     if (!removed)
     {
-      vix::cli::util::err_line(std::cerr, "dependency not found in lock: " + t.id);
-      vix::cli::util::warn_line(std::cerr, "Tip: run 'vix search <query>' then check what you added");
+      vix::cli::util::err_line(std::cerr, "dependency not found in lock: " + opt.target.id);
+      vix::cli::util::warn_line(std::cerr, "Tip: use 'vix list' to check current deps");
       return 1;
     }
 
@@ -174,21 +301,20 @@ namespace vix::commands
       return 1;
     }
 
-    vix::cli::util::ok_line(std::cout, "removed: " + t.id);
+    if (opt.purge && !depDir.empty() && fs::exists(depDir))
+    {
+      std::error_code ec;
+      fs::remove_all(depDir, ec);
+      if (ec)
+        vix::cli::util::warn_line(std::cout, "failed to delete: " + depDir.string());
+      else
+        vix::cli::util::ok_line(std::cout, "deleted: " + depDir.string());
+    }
+
+    vix::cli::util::ok_line(std::cout, "removed from vix.lock: " + opt.target.id);
     vix::cli::util::ok_line(std::cout, "lock:  " + p.string());
 
-    vix::cli::util::warn_line(
-        std::cout,
-        "Note: 'vix search' searches the registry index, not your project dependencies.");
-
-    vix::cli::util::warn_line(
-        std::cout,
-        "Tip: use 'vix list' to view current project dependencies.");
-
-    const std::size_t after = lock["dependencies"].size();
-    (void)before;
-    (void)after;
-
+    vix::cli::util::warn_line(std::cout, "Tip: run 'vix deps' to regenerate .vix/vix_deps.cmake if needed.");
     return 0;
   }
 
@@ -197,12 +323,25 @@ namespace vix::commands
     std::cout
         << "Usage:\n"
         << "  vix remove <pkg>\n"
-        << "  vix remove <pkg>@<version>\n\n"
+        << "  vix remove <pkg>@<version>\n"
+        << "  vix remove <pkg> --purge [-y|--yes]\n\n"
+
         << "Description:\n"
-        << "  Remove a dependency from the local vix.lock.\n\n"
+        << "  Remove a dependency from the current project.\n\n"
+
+        << "Options:\n"
+        << "  --purge        Also delete the local package directory (.vix/deps/<namespace>.<name>)\n"
+        << "  -y, --yes      Skip confirmation (used with --purge)\n\n"
+
+        << "Notes:\n"
+        << "  - This command only affects the current project.\n"
+        << "  - The registry is never modified.\n\n"
+
         << "Examples:\n"
-        << "  vix remove gaspardkirira/tree\n"
-        << "  vix remove gaspardkirira/tree@0.1.0\n";
+        << "  vix remove gaspardkirira/strings\n"
+        << "  vix remove gaspardkirira/strings@0.1.4\n"
+        << "  vix remove gaspardkirira/strings --purge\n";
+
     return 0;
   }
-}
+} // namespace vix::commands

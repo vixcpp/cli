@@ -36,6 +36,7 @@
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
+#include <vix/cli/commands/UnpublishCommand.hpp>
 
 #include <stdexcept>
 
@@ -209,6 +210,18 @@ namespace vix::cli::dispatch
          { return vix::commands::PublishCommand::run(a); },
          []()
          { return vix::commands::PublishCommand::help(); }});
+
+    add({"unpublish",
+         "Registry",
+         "Remove a package from the registry (opens PR, destructive)",
+         [](const Args &a)
+         {
+           return vix::commands::UnpublishCommand{}.run(a);
+         },
+         []()
+         {
+           return vix::commands::UnpublishCommand{}.help();
+         }});
 
     add({"deps",
          "Registry",

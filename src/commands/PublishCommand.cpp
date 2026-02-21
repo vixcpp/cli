@@ -1,15 +1,15 @@
 /**
+ * @file PublishCommand.cpp
+ * @brief Implements `vix publish` command (registry publication via git + optional GitHub PR).
+ * @author Gaspard Kirira
  *
- *  @file PublishCommand.cpp
- *  @author Gaspard Kirira
+ * @copyright Copyright (c) 2025 Gaspard Kirira
+ * @license MIT
  *
- *  Copyright 2025, Gaspard Kirira.  All rights reserved.
- *  https://github.com/vixcpp/vix
- *  Use of this source code is governed by a MIT license
- *  that can be found in the License file.
+ * Project: Vix.cpp
+ * Repository: https://github.com/vixcpp/vix
  *
- *  Vix.cpp
- *
+ * This source code is governed by the MIT license found in the LICENSE file.
  */
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
@@ -578,6 +578,100 @@ namespace vix::commands
       return std::nullopt;
     }
 
+    static std::optional<std::string> read_vix_json_string(const fs::path &repoRoot, const char *key)
+    {
+      const fs::path p = repoRoot / "vix.json";
+      if (!file_exists_nonempty(p))
+        return std::nullopt;
+
+      try
+      {
+        const json j = read_json_or_throw(p);
+        if (j.is_object() && j.contains(key) && j[key].is_string())
+          return j[key].get<std::string>();
+      }
+      catch (...)
+      {
+      }
+      return std::nullopt;
+    }
+
+    static json read_vix_json_object(const fs::path &repoRoot)
+    {
+      const fs::path p = repoRoot / "vix.json";
+      if (!file_exists_nonempty(p))
+        return json::object();
+      try
+      {
+        const json j = read_json_or_throw(p);
+        if (j.is_object())
+          return j;
+      }
+      catch (...)
+      {
+      }
+      return json::object();
+    }
+
+    static std::string https_repo_from_remote(const std::string &remoteUrl)
+    {
+      std::string httpsUrl = trim_copy(remoteUrl);
+      if (httpsUrl.empty())
+        return {};
+
+      if (httpsUrl.find("git@") == 0)
+      {
+        const auto pos = httpsUrl.find(':');
+        if (pos != std::string::npos)
+        {
+          const std::string path = httpsUrl.substr(pos + 1);
+          httpsUrl = "https://github.com/" + path;
+        }
+      }
+
+      if (httpsUrl.size() >= 4 && httpsUrl.rfind(".git") == httpsUrl.size() - 4)
+        httpsUrl.erase(httpsUrl.size() - 4);
+
+      return httpsUrl;
+    }
+
+    static std::string guess_default_branch()
+    {
+      // Best-effort: if this fails, fallback to main
+      const auto r = run_process_capture({"git", "symbolic-ref", "refs/remotes/origin/HEAD"});
+      if (r.exitCode != 0 || r.out.empty())
+        return "main";
+
+      // expected: refs/remotes/origin/main
+      const auto slash = r.out.rfind('/');
+      if (slash == std::string::npos || slash + 1 >= r.out.size())
+        return "main";
+
+      return trim_copy(r.out.substr(slash + 1));
+    }
+
+    static std::string git_user_name()
+    {
+      const auto r = run_process_capture({"git", "config", "user.name"});
+      if (r.exitCode == 0 && !r.out.empty())
+        return trim_copy(r.out);
+      return {};
+    }
+
+    static json ensure_object(json &o, const char *key)
+    {
+      if (!o.contains(key) || !o[key].is_object())
+        o[key] = json::object();
+      return o[key];
+    }
+
+    static json ensure_array(json &o, const char *key)
+    {
+      if (!o.contains(key) || !o[key].is_array())
+        o[key] = json::array();
+      return o[key];
+    }
+
     static std::optional<std::pair<std::string, std::string>> infer_from_git_remote()
     {
       const auto r = run_process_capture({"git", "remote", "get-url", "origin"});
@@ -896,35 +990,144 @@ namespace vix::commands
           remoteUrl = trim_copy(r.out);
         }
 
-        std::string httpsUrl = remoteUrl;
-        if (!httpsUrl.empty())
+        const std::string httpsUrl = https_repo_from_remote(remoteUrl);
+        const std::string defaultBranch = guess_default_branch();
+
+        const json vixManifest = read_vix_json_object(repoRoot);
+
+        const std::string desc =
+            (vixManifest.contains("description") && vixManifest["description"].is_string())
+                ? vixManifest["description"].get<std::string>()
+                : std::string();
+
+        const std::string displayName =
+            (vixManifest.contains("displayName") && vixManifest["displayName"].is_string())
+                ? vixManifest["displayName"].get<std::string>()
+                : *name;
+
+        const std::string license =
+            (vixManifest.contains("license") && vixManifest["license"].is_string())
+                ? vixManifest["license"].get<std::string>()
+                : std::string("MIT");
+
+        // documentation defaults to README anchor
+        const std::string documentation =
+            (vixManifest.contains("documentation") && vixManifest["documentation"].is_string())
+                ? vixManifest["documentation"].get<std::string>()
+                : (httpsUrl.empty() ? std::string() : (httpsUrl + "#readme"));
+
+        // keywords defaults to []
+        json keywords = json::array();
+        if (vixManifest.contains("keywords") && vixManifest["keywords"].is_array())
+          keywords = vixManifest["keywords"];
+
+        // exports defaults for header-only packages
+        json exports = json::object();
+        if (vixManifest.contains("exports") && vixManifest["exports"].is_object())
         {
-          if (httpsUrl.find("git@") == 0)
+          exports = vixManifest["exports"];
+        }
+        else
+        {
+          exports["headers"] = json::array();
+          exports["modules"] = json::array();
+          exports["namespaces"] = json::array();
+
+          // Best-effort: if user has include/<name>/<name>.hpp, expose it.
+          // Keep it conservative: do not guess deep trees.
+          const fs::path includeDir = repoRoot / "include";
+          if (fs::exists(includeDir))
           {
-            const auto pos = httpsUrl.find(':');
-            if (pos != std::string::npos)
+            // common layout: include/<pkg>/<pkg>.hpp
+            const fs::path candidate = includeDir / *name / (*name + ".hpp");
+            if (fs::exists(candidate))
             {
-              const std::string path = httpsUrl.substr(pos + 1);
-              httpsUrl = "https://github.com/" + path;
-              if (httpsUrl.size() >= 4 && httpsUrl.rfind(".git") == httpsUrl.size() - 4)
-                httpsUrl.erase(httpsUrl.size() - 4);
+              const std::string rel = (fs::path(*name) / (*name + ".hpp")).generic_string();
+              exports["headers"].push_back(rel);
+              exports["modules"].push_back(rel);
             }
           }
-          if (httpsUrl.size() >= 4 && httpsUrl.rfind(".git") == httpsUrl.size() - 4)
-            httpsUrl.erase(httpsUrl.size() - 4);
         }
 
+        // constraints defaults
+        json constraints = json::object();
+        if (vixManifest.contains("constraints") && vixManifest["constraints"].is_object())
+        {
+          constraints = vixManifest["constraints"];
+        }
+        else
+        {
+          constraints["minCppStandard"] = "c++17";
+          constraints["platforms"] = json::array({"linux", "macos", "windows"});
+        }
+
+        // dependencies defaults
+        json deps = json::object();
+        if (vixManifest.contains("dependencies") && vixManifest["dependencies"].is_object())
+        {
+          deps = vixManifest["dependencies"];
+        }
+        else
+        {
+          deps["git"] = json::array();
+          deps["registry"] = json::array();
+          deps["system"] = json::array();
+        }
+
+        // maintainers defaults
+        json maintainers = json::array();
+        if (vixManifest.contains("maintainers") && vixManifest["maintainers"].is_array())
+        {
+          maintainers = vixManifest["maintainers"];
+        }
+        else
+        {
+          json m = json::object();
+          m["github"] = *ns; // namespace == github username in your current model
+          const std::string uname = git_user_name();
+          m["name"] = uname.empty() ? *ns : uname;
+          maintainers.push_back(m);
+        }
+
+        // quality defaults (can be refined later)
+        json quality = json::object();
+        quality["ci"] = json::array();
+        quality["hasDocs"] = !documentation.empty();
+        quality["hasExamples"] = fs::exists(repoRoot / "examples");
+        quality["hasTests"] = fs::exists(repoRoot / "tests") || fs::exists(repoRoot / "test") || fs::exists(repoRoot / "unittests");
+
+        // api metadata for registry tooling
+        json api = json::object();
+        api["format"] = "vix-api-1";
+        api["generatedBy"] = "vix-cli";
+        api["path"] = "vix.api.json";
+        api["updatedAt"] = iso_utc_now();
+
         entry = json::object();
+        entry["api"] = api;
+
         entry["name"] = *name;
         entry["namespace"] = *ns;
-        entry["displayName"] = *name;
-        entry["description"] = "";
-        entry["keywords"] = json::array();
-        entry["license"] = "MIT";
-        entry["repo"] = json::object({{"url", httpsUrl}, {"defaultBranch", "main"}});
-        entry["type"] = "header-only";
+        entry["displayName"] = displayName;
+        entry["description"] = desc;
+        entry["documentation"] = documentation;
+
+        entry["keywords"] = keywords;
+        entry["license"] = license;
+
+        entry["exports"] = exports;
+        entry["constraints"] = constraints;
+        entry["dependencies"] = deps;
+
+        entry["maintainers"] = maintainers;
+
         entry["manifestPath"] = "vix.json";
         entry["homepage"] = httpsUrl;
+        entry["repo"] = json::object({{"url", httpsUrl}, {"defaultBranch", defaultBranch}});
+        entry["type"] = "header-only";
+
+        entry["quality"] = quality;
+
         entry["versions"] = json::object();
       }
 
@@ -934,12 +1137,17 @@ namespace vix::commands
         return 1;
       }
 
-      // Ensure versions exists and is an object
+      if (!entry.contains("api") || !entry["api"].is_object())
+        entry["api"] = json::object();
+
+      entry["api"]["format"] = "vix-api-1";
+      entry["api"]["generatedBy"] = "vix-cli";
+      entry["api"]["path"] = "vix.api.json";
+      entry["api"]["updatedAt"] = iso_utc_now();
+
       if (!entry.contains("versions") || !entry["versions"].is_object())
         entry["versions"] = json::object();
 
-      // Always include the version being published so registry PR validates.
-      // This avoids relying on the index_from_tags workflow before merge.
       entry["versions"][opt.version] = json::object({
           {"tag", tag},
           {"commit", commit},

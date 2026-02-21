@@ -934,6 +934,17 @@ namespace vix::commands
         return 1;
       }
 
+      // Ensure versions exists and is an object
+      if (!entry.contains("versions") || !entry["versions"].is_object())
+        entry["versions"] = json::object();
+
+      // Always include the version being published so registry PR validates.
+      // This avoids relying on the index_from_tags workflow before merge.
+      entry["versions"][opt.version] = json::object({
+          {"tag", tag},
+          {"commit", commit},
+      });
+
       if (opt.dryRun)
       {
         vix::cli::util::ok_line(std::cout, "dry-run: would update: " + entryPath.string());

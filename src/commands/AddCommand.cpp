@@ -25,6 +25,8 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <unordered_set>
+#include <optional>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -35,6 +37,9 @@ namespace vix::commands
 
   namespace
   {
+    static std::string find_latest_version(const json &entry);
+    static std::vector<std::string> list_versions(const json &entry);
+
     std::string home_dir()
     {
 #ifdef _WIN32
@@ -72,7 +77,11 @@ namespace vix::commands
     {
       std::string ns;
       std::string name;
-      std::string version;
+
+      std::string requestedVersion;
+      std::string resolvedVersion;
+
+      std::string id() const { return ns + "/" + name; }
     };
 
     static std::string to_lower(std::string s)
@@ -101,21 +110,50 @@ namespace vix::commands
         return false;
 
       const auto at = raw.find('@');
+
+      out.ns = trim_copy(raw.substr(0, slash));
+
       if (at == std::string::npos)
+      {
+        out.name = trim_copy(raw.substr(slash + 1));
+        out.requestedVersion.clear();
+      }
+      else
+      {
+        out.name = trim_copy(raw.substr(slash + 1, at - (slash + 1)));
+        out.requestedVersion = trim_copy(raw.substr(at + 1));
+      }
+
+      out.resolvedVersion.clear();
+
+      if (out.ns.empty() || out.name.empty())
         return false;
 
-      out.ns = raw.substr(0, slash);
-      out.name = raw.substr(slash + 1, at - (slash + 1));
-      out.version = raw.substr(at + 1);
-
-      out.ns = trim_copy(out.ns);
-      out.name = trim_copy(out.name);
-      out.version = trim_copy(out.version);
-
-      if (out.ns.empty() || out.name.empty() || out.version.empty())
+      // Si @ est présent, la version doit etre non vide
+      if (at != std::string::npos && out.requestedVersion.empty())
         return false;
 
       return true;
+    }
+
+    static int resolve_version_v1(const json &entry, PkgSpec &spec)
+    {
+      if (!spec.requestedVersion.empty())
+      {
+        spec.resolvedVersion = spec.requestedVersion;
+        return 0;
+      }
+
+      const std::string latest = find_latest_version(entry);
+      if (latest.empty())
+      {
+        vix::cli::util::err_line(std::cerr,
+                                 "no versions available for: " + spec.ns + "/" + spec.name);
+        return 1;
+      }
+
+      spec.resolvedVersion = latest;
+      return 0;
     }
 
     static json read_json_file_or_throw(const fs::path &p)
@@ -174,7 +212,7 @@ namespace vix::commands
 
       json dep;
       dep["id"] = wantedId;
-      dep["version"] = spec.version;
+      dep["version"] = spec.resolvedVersion; // IMPORTANT
       dep["repo"] = repoUrl;
       dep["tag"] = tag;
       dep["commit"] = commitSha;
@@ -385,6 +423,140 @@ namespace vix::commands
       vix::cli::util::warn_line(std::cerr, "  - Ensure the tag exists on origin: git push --tags");
       vix::cli::util::warn_line(std::cerr, "  - Or publish a new version with a valid tag/commit (recommended).");
     }
+
+    static std::optional<PkgSpec> parse_dep_obj_v1(const json &d)
+    {
+      if (!d.is_object())
+        return std::nullopt;
+
+      const std::string id = d.value("id", "");
+      const std::string ver = d.value("version", "");
+
+      const auto slash = id.find('/');
+      if (slash == std::string::npos)
+        return std::nullopt;
+
+      PkgSpec s;
+      s.ns = trim_copy(id.substr(0, slash));
+      s.name = trim_copy(id.substr(slash + 1));
+
+      s.requestedVersion = trim_copy(ver); // ici
+      s.resolvedVersion.clear();
+
+      if (s.ns.empty() || s.name.empty() || s.requestedVersion.empty())
+        return std::nullopt;
+
+      return s;
+    }
+
+    static std::vector<PkgSpec> read_vix_json_deps_v1(const fs::path &repoDir)
+    {
+      std::vector<PkgSpec> out;
+
+      const fs::path p = repoDir / "vix.json";
+      if (!fs::exists(p))
+        return out;
+
+      json j;
+      try
+      {
+        j = read_json_file_or_throw(p);
+      }
+      catch (...)
+      {
+        return out;
+      }
+
+      if (!j.contains("deps") || !j["deps"].is_array())
+        return out;
+
+      for (const auto &d : j["deps"])
+      {
+        auto spec = parse_dep_obj_v1(d);
+        if (spec)
+          out.push_back(*spec);
+      }
+
+      return out;
+    }
+
+    static int ensure_install_one_v1(
+        PkgSpec &spec,
+        std::string &outInstalledDir,
+        std::string &outRepoUrl,
+        std::string &outCommit,
+        std::string &outTag)
+    {
+      const fs::path p = entry_path(spec.ns, spec.name);
+      if (!fs::exists(p))
+      {
+        vix::cli::util::err_line(std::cerr, "package not found: " + spec.id());
+        return 1;
+      }
+
+      const json entry = read_json_file_or_throw(p);
+
+      const int vr = resolve_version_v1(entry, spec);
+      if (vr != 0)
+        return vr;
+
+      const std::string repoUrl = entry.at("repo").at("url").get<std::string>();
+      const json versions = entry.at("versions");
+
+      if (!versions.contains(spec.resolvedVersion))
+      {
+        vix::cli::util::err_line(std::cerr,
+                                 "version not found: " + spec.id() + "@" + spec.resolvedVersion);
+        return 1;
+      }
+
+      const json v = versions.at(spec.resolvedVersion);
+      const std::string tag = v.at("tag").get<std::string>();
+      const std::string commit = v.at("commit").get<std::string>();
+
+      const std::string idDot = spec.ns + "." + spec.name;
+
+      std::string outDir;
+      const int rc = clone_checkout(repoUrl, idDot, commit, outDir);
+      if (rc != 0)
+        return rc;
+
+      outInstalledDir = outDir;
+      outRepoUrl = repoUrl;
+      outCommit = commit;
+      outTag = tag;
+
+      // lockfile = version exacte résolue + commit
+      write_lockfile_append(spec, repoUrl, commit, tag);
+
+      return 0;
+    }
+
+    static int install_transitive_v1(
+        PkgSpec root,
+        std::unordered_set<std::string> &visited)
+    {
+      // on installe root (resolve inside ensure_install_one_v1)
+      std::string dir, repo, commit, tag;
+      const int rc = ensure_install_one_v1(root, dir, repo, commit, tag);
+      if (rc != 0)
+        return rc;
+
+      const std::string key = root.ns + "/" + root.name + "@" + root.resolvedVersion;
+      if (visited.count(key))
+        return 0;
+      visited.insert(key);
+
+      const auto deps = read_vix_json_deps_v1(fs::path(dir));
+      for (auto d : deps)
+      {
+        const int rc2 = install_transitive_v1(d, visited);
+        if (rc2 != 0)
+          return rc2;
+      }
+
+      return 0;
+    }
   }
 
   int AddCommand::run(const std::vector<std::string> &args)
@@ -401,7 +573,8 @@ namespace vix::commands
     if (!parse_pkg_spec(raw, spec))
     {
       vix::cli::util::err_line(std::cerr, "invalid package spec");
-      vix::cli::util::warn_line(std::cerr, "Expected: <namespace>/<name>@<version>");
+      vix::cli::util::warn_line(std::cerr, "Expected: <namespace>/<name>[@<version>]");
+      vix::cli::util::warn_line(std::cerr, "Example:  vix add gaspardkirira/tree");
       vix::cli::util::warn_line(std::cerr, "Example:  vix add gaspardkirira/tree@0.1.0");
       vix::cli::util::warn_line(std::cerr, std::string("Try search: vix search ") + raw);
       return 1;
@@ -410,7 +583,7 @@ namespace vix::commands
     const fs::path p = entry_path(spec.ns, spec.name);
     if (!fs::exists(p))
     {
-      vix::cli::util::err_line(std::cerr, "package not found: " + spec.ns + "/" + spec.name);
+      vix::cli::util::err_line(std::cerr, "package not found: " + spec.id());
 
       vix::cli::util::section(std::cout, "Search");
       vix::cli::util::kv(std::cout, "query", vix::cli::util::quote(spec.name));
@@ -426,12 +599,22 @@ namespace vix::commands
     {
       const json entry = read_json_file_or_throw(p);
 
-      const std::string repoUrl = entry.at("repo").at("url").get<std::string>();
-      const json versions = entry.at("versions");
+      // resolve version (latest if omitted)
+      const int vr = resolve_version_v1(entry, spec);
+      if (vr != 0)
+        return vr;
 
-      if (!versions.contains(spec.version))
+      if (spec.requestedVersion.empty())
       {
-        vix::cli::util::err_line(std::cerr, "version not found: " + spec.version);
+        vix::cli::util::ok_line(std::cout,
+                                "resolved: " + spec.ns + "/" + spec.name + "@" + spec.resolvedVersion);
+      }
+
+      const json versions = entry.at("versions");
+      if (!versions.contains(spec.resolvedVersion))
+      {
+        vix::cli::util::err_line(std::cerr,
+                                 "version not found: " + spec.id() + "@" + spec.resolvedVersion);
 
         const std::string latest = find_latest_version(entry);
         const auto all = list_versions(entry);
@@ -445,49 +628,34 @@ namespace vix::commands
         }
 
         if (!latest.empty())
-          vix::cli::util::warn_line(std::cerr, "Try: vix add " + spec.ns + "/" + spec.name + "@" + latest);
+          vix::cli::util::warn_line(std::cerr, "Try: vix add " + spec.id() + "@" + latest);
 
         return 1;
       }
 
-      const json v = versions.at(spec.version);
+      const json v = versions.at(spec.resolvedVersion);
       const std::string tag = v.at("tag").get<std::string>();
       const std::string commit = v.at("commit").get<std::string>();
 
-      const std::string pkgId = spec.ns + "/" + spec.name;
-      const std::string idDot = spec.ns + "." + spec.name;
+      const std::string repoUrl = entry.at("repo").at("url").get<std::string>();
+      const std::string pkgId = spec.id();
 
       vix::cli::util::section(std::cout, "Add");
       vix::cli::util::kv(std::cout, "id", pkgId);
-      vix::cli::util::kv(std::cout, "version", spec.version);
+      vix::cli::util::kv(std::cout, "version", spec.resolvedVersion);
       vix::cli::util::kv(std::cout, "tag", tag);
       vix::cli::util::kv(std::cout, "commit", commit);
 
-      step("fetching sources...");
+      step("installing dependencies (transitive)...");
 
-      std::string outDir;
-      const int rc = clone_checkout(repoUrl, idDot, commit, outDir);
+      std::unordered_set<std::string> visited;
+      const int rc = install_transitive_v1(spec, visited);
       if (rc != 0)
-      {
-        vix::cli::util::err_line(std::cerr, "fetch failed");
-
-        print_commit_missing_help(pkgId, repoUrl, tag, commit);
-
-        vix::cli::util::section(std::cout, "Search");
-        vix::cli::util::kv(std::cout, "query", vix::cli::util::quote(spec.name));
-        const auto hits = search_registry_local(spec.name);
-        print_search_hits(hits);
-
-        vix::cli::util::warn_line(std::cerr, "Then retry: vix add " + pkgId + "@" + spec.version);
         return rc;
-      }
 
-      write_lockfile_append(spec, repoUrl, commit, tag);
-
-      vix::cli::util::ok_line(std::cout, "added: " + pkgId + " (pinned " + commit + ")");
+      vix::cli::util::ok_line(std::cout, "added: " + pkgId + "@" + spec.resolvedVersion);
       vix::cli::util::ok_line(std::cout, "lock:  " + lock_path().string());
-      vix::cli::util::ok_line(std::cout, "store: " + outDir);
-
+      vix::cli::util::ok_line(std::cout, "deps:  " + std::to_string(visited.size()));
       return 0;
     }
     catch (const std::exception &ex)
@@ -501,13 +669,27 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix add <namespace>/<name>@<version>\n\n"
-        << "Example:\n"
+        << "  vix add <namespace>/<name>[@<version>]\n\n"
+
+        << "Description:\n"
+        << "  Install a package from the Vix Registry.\n"
+        << "  If @version is omitted, the latest version is resolved automatically.\n\n"
+
+        << "Examples:\n"
         << "  vix registry sync\n"
+        << "  vix add gaspardkirira/tree\n"
         << "  vix add gaspardkirira/tree@0.1.0\n\n"
+
+        << "Behavior:\n"
+        << "  - Resolves the requested version (or latest if omitted)\n"
+        << "  - Clones the repository at the exact commit\n"
+        << "  - Installs transitive dependencies\n"
+        << "  - Writes a vix.lock file pinning the resolved commit SHA\n\n"
+
         << "Notes:\n"
-        << "  - V1 requires an exact version.\n"
-        << "  - The lockfile pins the resolved commit SHA.\n";
+        << "  - Run 'vix registry sync' if a package cannot be found.\n"
+        << "  - The lockfile guarantees deterministic builds.\n";
+
     return 0;
   }
 }

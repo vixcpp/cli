@@ -33,6 +33,13 @@ namespace vix::commands::RunCommand::detail
 {
   namespace fs = std::filesystem;
 
+  enum class AutoDepsMode
+  {
+    None,
+    Local,
+    Up
+  };
+
   struct Options
   {
     std::string appName;
@@ -54,6 +61,7 @@ namespace vix::commands::RunCommand::detail
     bool singleCpp = false;
     std::filesystem::path cppFile;
     bool watch = false;
+    AutoDepsMode autoDeps = AutoDepsMode::None;
 
     bool forceServerLike = false;  // --force-server
     bool forceScriptLike = false;  // --force-script
@@ -75,6 +83,10 @@ namespace vix::commands::RunCommand::detail
     bool badDoubleDashRuntimeArgs = false;
     std::string badDoubleDashArg;
     std::optional<bool> docs;
+    bool warnedVixFlagAfterDoubleDash = false;
+    std::string warnedArg;
+    bool parseFailed = false;
+    int parseExitCode = 0;
   };
 
   struct ScriptRunResult

@@ -49,6 +49,79 @@ namespace vix::commands::RunCommand::detail
     return code == 130; // standard: 128 + SIGINT(2)
   }
 
+  static void apply_auto_deps_includes_from_deps_folder(
+      vix::commands::RunCommand::detail::Options &opt,
+      const std::filesystem::path &startDir)
+  {
+    namespace fs = std::filesystem;
+
+    auto already_has_I = [&](const std::string &inc) -> bool
+    {
+      const std::string flag = "-I" + inc;
+      for (const auto &f : opt.scriptFlags)
+      {
+        if (f == flag)
+          return true;
+        if (f.rfind("-I", 0) == 0 && f.substr(2) == inc)
+          return true;
+      }
+      return false;
+    };
+
+    auto scan_one = [&](const fs::path &baseDir)
+    {
+      const fs::path depsRoot = baseDir / ".vix" / "deps";
+      std::error_code ec;
+
+      if (!fs::exists(depsRoot, ec) || ec)
+        return;
+
+      for (auto it = fs::directory_iterator(depsRoot, ec);
+           !ec && it != fs::directory_iterator(); ++it)
+      {
+        if (!it->is_directory())
+          continue;
+
+        const fs::path inc = it->path() / "include";
+        if (!fs::exists(inc, ec) || ec)
+          continue;
+
+        const std::string incStr = inc.string();
+        if (!already_has_I(incStr))
+          opt.scriptFlags.push_back("-I" + incStr);
+      }
+    };
+
+    // Local: scan startDir only
+    if (opt.autoDeps == AutoDepsMode::Local)
+    {
+      scan_one(startDir);
+      return;
+    }
+
+    // Up: scan startDir and all parents up to filesystem root
+    if (opt.autoDeps == AutoDepsMode::Up)
+    {
+      fs::path cur = startDir;
+      for (;;)
+      {
+        scan_one(cur);
+
+        std::error_code ec;
+        fs::path parent = cur.parent_path();
+        if (parent.empty() || parent == cur)
+          break;
+
+        // Stop at root ("/" or drive root)
+        if (fs::equivalent(parent, cur, ec) && !ec)
+          break;
+
+        cur = parent;
+      }
+      return;
+    }
+  }
+
 #ifndef _WIN32
   static bool dev_verbose_ui(const Options &opt)
   {
@@ -184,20 +257,27 @@ namespace vix::commands::RunCommand::detail
     using namespace std;
     namespace fs = std::filesystem;
 
-    if (opt.badDoubleDashRuntimeArgs)
+    Options o = opt; // copie modifiable
+
+    if (o.warnedVixFlagAfterDoubleDash)
     {
-      error("Invalid usage: you passed a runtime argument after `--` (" + opt.badDoubleDashArg + ").");
-      hint("In .cpp script mode, everything after `--` is treated as compiler/linker flags.");
-      hint("Use repeatable --args for runtime arguments.");
-      hint("example: vix run main.cpp --cwd ./data --args --config --args config.json");
-      return 1;
+      hint("Note: '" + o.warnedArg + "' was passed after `--` so it will be treated as a compiler/linker flag.");
+      hint("If you meant a Vix option, move it before `--`.");
+      hint("If you meant a runtime arg, use repeatable --args.");
     }
 
-    const fs::path script = opt.cppFile;
+    const fs::path script = o.cppFile;
+
     if (!fs::exists(script))
     {
       error("C++ file not found: " + script.string());
       return 1;
+    }
+
+    // auto deps (single .cpp)
+    if (o.autoDeps != AutoDepsMode::None)
+    {
+      apply_auto_deps_includes_from_deps_folder(o, script.parent_path());
     }
 
     const string exeName = script.stem().string();
@@ -214,14 +294,14 @@ namespace vix::commands::RunCommand::detail
 
     {
       ofstream ofs(cmakeLists);
-      ofs << make_script_cmakelists(exeName, script, useVixRuntime, opt.scriptFlags);
+      ofs << make_script_cmakelists(exeName, script, useVixRuntime, o.scriptFlags);
     }
 
     fs::path buildDir = projectDir / "build-ninja";
     const fs::path sigFile = projectDir / ".vix-config.sig";
 
     const std::string sig = make_script_config_signature(
-        useVixRuntime, opt.enableSanitizers, opt.enableUbsanOnly, opt.scriptFlags);
+        useVixRuntime, o.enableSanitizers, o.enableUbsanOnly, o.scriptFlags);
 
     bool needConfigure = true;
     {
@@ -255,7 +335,7 @@ namespace vix::commands::RunCommand::detail
             << " -DCMAKE_C_COMPILER_LAUNCHER=ccache";
       }
 
-      if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
+      if (want_sanitizers(o.enableSanitizers, o.enableUbsanOnly))
       {
         oss << " -DVIX_ENABLE_SANITIZERS=ON"
             << " -DVIX_SANITIZER_MODE="

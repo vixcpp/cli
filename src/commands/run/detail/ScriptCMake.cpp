@@ -80,6 +80,12 @@ namespace vix::commands::RunCommand::detail
         continue;
       }
 
+      if (f.rfind("-I", 0) == 0 || f == "-I" || f.rfind("-D", 0) == 0 || f == "-D" ||
+          f.rfind("-isystem", 0) == 0 || f == "-isystem")
+      {
+        continue;
+      }
+
       out.linkOpts.push_back(f);
     }
 
@@ -115,6 +121,72 @@ namespace vix::commands::RunCommand::detail
   {
     auto cwd = fs::current_path();
     return cwd / ".vix-scripts";
+  }
+
+  struct ScriptCompileFlags
+  {
+    std::vector<std::string> includeDirs; // -I...
+    std::vector<std::string> systemDirs;  // -isystem ...
+    std::vector<std::string> defines;     // -DKEY=VAL
+    std::vector<std::string> compileOpts; // autres options compile
+  };
+
+  static inline bool starts_with(const std::string &s, const char *p)
+  {
+    return s.rfind(p, 0) == 0;
+  }
+
+  static ScriptCompileFlags parse_compile_flags(const std::vector<std::string> &flags)
+  {
+    ScriptCompileFlags out;
+
+    for (std::size_t i = 0; i < flags.size(); ++i)
+    {
+      const std::string &f = flags[i];
+
+      // -I/path or -I /path
+      if (starts_with(f, "-I") && f.size() > 2)
+      {
+        out.includeDirs.push_back(f.substr(2));
+        continue;
+      }
+      if (f == "-I" && i + 1 < flags.size())
+      {
+        out.includeDirs.push_back(flags[++i]);
+        continue;
+      }
+
+      // -isystem/path or -isystem /path
+      if (starts_with(f, "-isystem") && f.size() > 8)
+      {
+        out.systemDirs.push_back(f.substr(8));
+        continue;
+      }
+      if (f == "-isystem" && i + 1 < flags.size())
+      {
+        out.systemDirs.push_back(flags[++i]);
+        continue;
+      }
+
+      // -DKEY or -DKEY=VAL or -D KEY=VAL
+      if (starts_with(f, "-D") && f.size() > 2)
+      {
+        out.defines.push_back(f.substr(2));
+        continue;
+      }
+      if (f == "-D" && i + 1 < flags.size())
+      {
+        out.defines.push_back(flags[++i]);
+        continue;
+      }
+
+      // sinon, c est une option compile generique
+      // exemple: -O2, -g, -std=c++20, -fPIC, -Wno-...
+      if (!f.empty() && f[0] == '-')
+        out.compileOpts.push_back(f);
+    }
+
+    return out;
   }
 
   std::string make_script_cmakelists(
@@ -171,6 +243,40 @@ namespace vix::commands::RunCommand::detail
     // Executable
     s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
     auto lf = parse_link_flags(scriptFlags);
+
+    const auto cf = parse_compile_flags(scriptFlags);
+
+    if (!cf.includeDirs.empty() || !cf.systemDirs.empty())
+    {
+      s += "target_include_directories(" + exeName + " PRIVATE\n";
+      for (const auto &d : cf.includeDirs)
+        s += "  " + q(d) + "\n";
+      s += ")\n\n";
+
+      if (!cf.systemDirs.empty())
+      {
+        s += "target_include_directories(" + exeName + " SYSTEM PRIVATE\n";
+        for (const auto &d : cf.systemDirs)
+          s += "  " + q(d) + "\n";
+        s += ")\n\n";
+      }
+    }
+
+    if (!cf.defines.empty())
+    {
+      s += "target_compile_definitions(" + exeName + " PRIVATE\n";
+      for (const auto &d : cf.defines)
+        s += "  " + d + "\n";
+      s += ")\n\n";
+    }
+
+    if (!cf.compileOpts.empty())
+    {
+      s += "target_compile_options(" + exeName + " PRIVATE\n";
+      for (const auto &o : cf.compileOpts)
+        s += "  " + o + "\n";
+      s += ")\n\n";
+    }
 
     auto hasLib = [&](const std::string &name) -> bool
     {

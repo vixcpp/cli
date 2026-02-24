@@ -55,6 +55,144 @@ namespace
     return true;
   }
 
+  static std::string trim_copy_local(std::string s)
+  {
+    auto is_ws = [](unsigned char c)
+    { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+    while (!s.empty() && is_ws((unsigned char)s.back()))
+      s.pop_back();
+    size_t i = 0;
+    while (i < s.size() && is_ws((unsigned char)s[i]))
+      ++i;
+    s.erase(0, i);
+    return s;
+  }
+
+  static std::string to_dep_folder_name(const std::string &pkg)
+  {
+    // "gaspardkirira/strings@0.1.9" -> "gaspardkirira.strings"
+    // "gaspardkirira/strings" -> "gaspardkirira.strings"
+    std::string s = pkg;
+    const auto at = s.find('@');
+    if (at != std::string::npos)
+      s = s.substr(0, at);
+
+    const auto slash = s.find('/');
+    if (slash == std::string::npos)
+      return s;
+
+    return s.substr(0, slash) + "." + s.substr(slash + 1);
+  }
+
+  static std::vector<std::string> parse_manifest_dep_packages_v1(const std::filesystem::path &manifestFile)
+  {
+    // Minimal parser for:
+    // [deps]
+    // packages = ["a/b@x", "c/d@y"]
+    std::ifstream ifs(manifestFile);
+    std::vector<std::string> out;
+    if (!ifs)
+      return out;
+
+    bool inDeps = false;
+    std::string line;
+
+    while (std::getline(ifs, line))
+    {
+      line = trim_copy_local(line);
+      if (line.empty())
+        continue;
+      if (line[0] == '#')
+        continue;
+
+      if (line.size() >= 2 && line.front() == '[' && line.back() == ']')
+      {
+        const std::string sec = line.substr(1, line.size() - 2);
+        inDeps = (sec == "deps");
+        continue;
+      }
+
+      if (!inDeps)
+        continue;
+
+      const std::string key = "packages";
+      if (line.rfind(key, 0) != 0)
+        continue;
+
+      const auto eq = line.find('=');
+      if (eq == std::string::npos)
+        continue;
+
+      std::string rhs = trim_copy_local(line.substr(eq + 1));
+
+      // Expect: ["x","y"]
+      const auto lb = rhs.find('[');
+      const auto rb = rhs.rfind(']');
+      if (lb == std::string::npos || rb == std::string::npos || rb <= lb)
+        continue;
+
+      std::string arr = rhs.substr(lb + 1, rb - lb - 1);
+
+      // Split by quotes, minimal
+      for (size_t i = 0; i < arr.size(); ++i)
+      {
+        if (arr[i] != '"')
+          continue;
+        const size_t j = arr.find('"', i + 1);
+        if (j == std::string::npos)
+          break;
+        out.push_back(arr.substr(i + 1, j - i - 1));
+        i = j;
+      }
+    }
+
+    return out;
+  }
+
+  static void apply_manifest_auto_deps_includes(
+      vix::commands::RunCommand::detail::Options &opt,
+      const std::filesystem::path &manifestFile)
+  {
+    namespace fs = std::filesystem;
+
+    const fs::path manifestDir = manifestFile.parent_path();
+    const fs::path depsRoot = manifestDir / ".vix" / "deps";
+
+    if (!fs::exists(depsRoot))
+      return;
+
+    const auto pkgs = parse_manifest_dep_packages_v1(manifestFile);
+    if (pkgs.empty())
+      return;
+
+    auto already_has_I = [&](const std::string &inc) -> bool
+    {
+      const std::string flag = "-I" + inc;
+      for (const auto &f : opt.scriptFlags)
+      {
+        if (f == flag)
+          return true;
+        if (f.rfind("-I", 0) == 0 && f.substr(2) == inc)
+          return true;
+      }
+      return false;
+    };
+
+    for (const auto &p : pkgs)
+    {
+      const std::string folder = to_dep_folder_name(p);
+      const fs::path inc = depsRoot / folder / "include";
+
+      std::error_code ec;
+      if (!fs::exists(inc, ec) || ec)
+        continue;
+
+      const std::string incStr = inc.string();
+      if (!already_has_I(incStr))
+        opt.scriptFlags.push_back("-I" + incStr);
+    }
+  }
+
   static void clear_terminal_if_enabled()
   {
     if (!should_clear_terminal_now())
@@ -113,7 +251,7 @@ namespace
           std::to_string(total) + "] " + label;
 
       if (!extra.empty())
-        msg += " — " + extra;
+        msg += " - " + extra;
 
       const double seconds = static_cast<double>(ms) / 1000.0;
 
@@ -270,6 +408,9 @@ namespace vix::commands::RunCommand
     Options opt = parse(args);
     const bool showUi = ui_enabled();
 
+    if (opt.parseFailed)
+      return opt.parseExitCode;
+
     if (opt.manifestMode)
     {
       vix::cli::manifest::Manifest mf{};
@@ -288,6 +429,11 @@ namespace vix::commands::RunCommand
     {
       opt.singleCpp = true;
       opt.cppFile = detail::manifest_entry_cpp(opt.manifestFile);
+    }
+
+    if (opt.manifestMode && opt.singleCpp)
+    {
+      apply_manifest_auto_deps_includes(opt, opt.manifestFile);
     }
 
     if (!opt.cwd.empty())
@@ -965,19 +1111,31 @@ namespace vix::commands::RunCommand
     out << "Usage:\n";
     out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags]\n\n";
 
-    out << "Description:\n";
-    out << "  Configure, build, and run a Vix.cpp application.\n";
-    out << "  - Manifest mode: runs a .vix file (script/project) and merges options.\n";
-    out << "  - Project mode : builds a CMake project (presets when available).\n";
-    out << "  - Script mode  : compiles and runs a single .cpp file.\n\n";
+    out << "What it does:\n";
+    out << "  Build + run a Vix.cpp app.\n";
+    out << "  This command supports 3 inputs:\n";
+    out << "    1) project name   (vix run api)\n";
+    out << "    2) single script  (vix run main.cpp)\n";
+    out << "    3) manifest file  (vix run app.vix)\n\n";
 
-    out << "Manifest mode (.vix):\n";
-    out << "  - Script manifest : [app].kind=\"script\"  with entry pointing to a .cpp file.\n";
-    out << "  - Project manifest: [app].kind=\"project\" with entry like \"src/main.cpp\".\n";
-    out << "  Notes:\n";
-    out << "    • CLI flags override manifest values.\n";
-    out << "    • Runtime program args must be passed with repeatable --args.\n";
-    out << "    • `--` is only for compiler/linker flags (script build), not runtime args.\n\n";
+    out << "Modes:\n";
+    out << "  Project mode:\n";
+    out << "    • Finds a CMake project (auto or via --dir)\n";
+    out << "    • Uses CMake presets when available (recommended)\n\n";
+    out << "  Script mode (.cpp):\n";
+    out << "    • Compiles one .cpp file and runs it\n";
+    out << "    • Everything after `--` is compiler/linker flags (NOT runtime args)\n\n";
+    out << "  Manifest mode (.vix):\n";
+    out << "    • Loads a .vix file then merges CLI options on top\n";
+    out << "    • If [app].kind=\"project\", it behaves like project mode\n";
+    out << "    • If [app].kind=\"script\", it behaves like script mode\n\n";
+
+    out << "Most common mistakes:\n";
+    out << "  1) Passing runtime args after `--` (wrong)\n";
+    out << "     vix run main.cpp -- --port 8080\n";
+    out << "     # `--port` is treated as a compiler flag.\n\n";
+    out << "  2) Correct way: runtime args use repeatable --args\n";
+    out << "     vix run main.cpp --args --port --args 8080\n\n";
 
     out << "Options:\n";
     out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
@@ -987,21 +1145,24 @@ namespace vix::commands::RunCommand
     out << "  --clear <auto|always|never>   Clear terminal before runtime output (default: auto)\n";
     out << "  --no-clear                    Alias for --clear=never\n\n";
 
-    out << "Runtime options:\n";
+    out << "Runtime options (argv / env):\n";
     out << "  --cwd <path>                  Run the program with this working directory\n";
-    out << "  --env <K=V>                   Add or override one environment variable (repeatable)\n";
+    out << "  --env <K=V>                   Add/override one env var (repeatable)\n";
     out << "  --args <value>                Add one runtime argument (repeatable)\n\n";
 
-    out << "Watch / reload:\n";
+    out << "Watch / lifecycle:\n";
     out << "  --watch, --reload             Rebuild and restart on file changes\n";
-    out << "  --force-server                Treat process as long-lived (server-like)\n";
-    out << "  --force-script                Treat process as short-lived (script-like)\n\n";
+    out << "  --force-server                Treat as long-lived (server-like)\n";
+    out << "  --force-script                Treat as short-lived (script-like)\n\n";
 
-    out << "Script mode (single .cpp) flags:\n";
+    out << "Script mode extras:\n";
+    out << "  --auto-deps                   Auto-add -I from ./.vix/deps/*/include\n";
+    out << "  --auto-deps=local             Same as --auto-deps\n";
+    out << "  --auto-deps=up                Also search deps in parent folders (future/optional)\n";
     out << "  --san                         Enable ASan and UBSan\n";
     out << "  --ubsan                       Enable UBSan only\n\n";
 
-    out << "Documentation (OpenAPI / Swagger):\n";
+    out << "Documentation:\n";
     out << "  --docs                        Enable auto docs (sets VIX_DOCS=1)\n";
     out << "  --no-docs                     Disable auto docs (sets VIX_DOCS=0)\n";
     out << "  --docs=<0|1|true|false>       Explicitly control docs generation\n\n";
@@ -1011,44 +1172,38 @@ namespace vix::commands::RunCommand
     out << "  --verbose                     Alias for --log-level=debug\n";
     out << "  -q, --quiet                   Alias for --log-level=warn\n";
     out << "  --log-format <kv|json|json-pretty>\n";
-    out << "                               Structured output format (maps to VIX_LOG_FORMAT)\n";
-    out << "                               Default: kv\n";
+    out << "                               Maps to VIX_LOG_FORMAT (default: kv)\n";
     out << "  --log-color <auto|always|never>\n";
-    out << "                               JSON pretty colors (maps to VIX_COLOR)\n";
-    out << "  --no-color                    Alias for --log-color=never (also respects NO_COLOR)\n\n";
+    out << "                               Maps to VIX_COLOR (NO_COLOR disables colors)\n";
+    out << "  --no-color                    Alias for --log-color=never\n\n";
 
-    out << "Important: runtime args vs compiler flags:\n";
-    out << "  - Runtime args (argv)  : use repeatable --args\n";
-    out << "  - Compiler/linker flags: use `--` then flags (script mode build only)\n\n";
-
-    out << "Passing compiler/linker flags (script mode):\n";
-    out << "  Use `--` to separate Vix options from compiler/linker flags.\n";
-    out << "  Everything after `--` is forwarded to the script build.\n\n";
+    out << "Compiler/linker flags (script mode only):\n";
+    out << "  Use `--` to stop parsing Vix options and forward flags to the compiler.\n";
+    out << "  Example:\n";
+    out << "    vix run main.cpp -- -O2 -DNDEBUG -lssl -lcrypto\n\n";
 
     out << "Examples:\n";
-    out << "  # Script mode (.cpp) runtime args + cwd\n";
-    out << "  vix run main.cpp --cwd ./data --args --config --args config.json\n\n";
-
-    out << "  # Script mode (.cpp) compiler/linker flags\n";
-    out << "  vix run main.cpp -- -lssl -lcrypto\n";
-    out << "  vix run main.cpp -- -L/usr/lib -lssl\n";
-    out << "  vix run main.cpp -- -DDEBUG\n\n";
-
-    out << "  # Disable auto docs\n";
-    out << "  vix run api.cpp --no-docs\n\n";
-
-    out << "  # Manifest mode (.vix)\n";
-    out << "  vix run api.vix\n";
-    out << "  vix run api.vix --args --port --args 8080\n";
-    out << "  vix dev api.vix\n\n";
-
     out << "  # Project mode (auto-detect)\n";
     out << "  vix run\n";
     out << "  vix run api --args --port --args 8080\n";
-    out << "  vix run --dir ./examples/blog\n";
-    out << "  vix run api --preset dev-ninja --run-preset run-dev-ninja\n";
+    out << "  vix run --dir ./examples/blog\n\n";
+
+    out << "  # Project mode + presets\n";
+    out << "  vix run api --preset dev-ninja\n";
+    out << "  vix run api --preset dev-ninja --run-preset run-dev-ninja\n\n";
+
+    out << "  # Watch mode\n";
     out << "  vix run --watch api\n";
     out << "  vix run --force-server --watch api\n\n";
+
+    out << "  # Script mode (.cpp)\n";
+    out << "  vix run main.cpp --cwd ./data --args --config --args config.json\n";
+    out << "  vix run main.cpp -- -lssl -lcrypto\n\n";
+
+    out << "  # Manifest mode (.vix)\n";
+    out << "  vix run app.vix\n";
+    out << "  vix run app.vix --args --port --args 8080\n";
+    out << "  vix dev app.vix\n\n";
 
     out << "  # Umbrella repo examples\n";
     out << "  vix run example main\n";
@@ -1059,7 +1214,8 @@ namespace vix::commands::RunCommand
     out << "  VIX_LOG_LEVEL   trace|debug|info|warn|error|critical|off\n";
     out << "  VIX_LOG_FORMAT  kv|json|json-pretty\n";
     out << "  VIX_COLOR       auto|always|never   (NO_COLOR disables colors)\n";
-    out << "  VIX_STDOUT_MODE line               (used by CLI for smoother live output)\n\n";
+    out << "  VIX_STDOUT_MODE line               Used by CLI for smoother live output\n";
+    out << "  VIX_CLI_CLEAR   auto|always|never   Clear terminal before runtime output\n\n";
 
     return 0;
   }

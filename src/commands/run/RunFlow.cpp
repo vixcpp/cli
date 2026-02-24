@@ -26,6 +26,7 @@
 #include <vector>
 #include <cctype>
 #include <fstream>
+#include <cstring>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -182,16 +183,39 @@ namespace vix::commands::RunCommand::detail
     {
       const auto &a = args[i];
 
+      auto is_known_vix_flag = [&](const std::string &v) -> bool
+      {
+        // flags Vix qui n'ont rien à faire après `--`
+        return v == "--verbose" || v == "--quiet" || v == "--watch" || v == "--reload" ||
+               v == "--force-server" || v == "--force-script" ||
+               v == "--san" || v == "--ubsan" ||
+               v == "--docs" || v == "--no-docs" ||
+               v == "--no-color" ||
+               v == "--preset" || v.rfind("--preset=", 0) == 0 ||
+               v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
+               v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
+               v == "--env" || v.rfind("--env=", 0) == 0 ||
+               v == "--args" || v.rfind("--args=", 0) == 0 ||
+               v == "--log-level" || v.rfind("--log-level=", 0) == 0 ||
+               v == "--log-format" || v.rfind("--log-format=", 0) == 0 ||
+               v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
+               v == "--clear" || v.rfind("--clear=", 0) == 0;
+      };
+
       if (a == "--")
       {
         for (size_t j = i + 1; j < args.size(); ++j)
         {
           const std::string v = args[j];
 
-          if (!v.empty() && v.rfind("--", 0) == 0)
+          if (v == "--")
+            continue; // allow accidental extra separator
+
+          // Warning only (ne bloque pas)
+          if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
           {
-            o.badDoubleDashRuntimeArgs = true;
-            o.badDoubleDashArg = v;
+            o.warnedVixFlagAfterDoubleDash = true;
+            o.warnedArg = v;
           }
 
           o.scriptFlags.push_back(v);
@@ -328,7 +352,32 @@ namespace vix::commands::RunCommand::detail
         o.enableUbsanOnly = true;
         o.enableSanitizers = false;
       }
+      else if (a == "--auto-deps")
+      {
+        o.autoDeps = AutoDepsMode::Local;
+      }
+      else if (a.rfind("--auto-deps=", 0) == 0)
+      {
+        const std::string v = a.substr(std::string("--auto-deps=").size());
 
+        if (v == "up")
+        {
+          o.autoDeps = AutoDepsMode::Up;
+        }
+        else if (v == "local")
+        {
+          o.autoDeps = AutoDepsMode::Local;
+        }
+        else
+        {
+          error("Invalid value for --auto-deps: " + v);
+          hint("Valid values: local, up");
+
+          o.parseFailed = true;
+          o.parseExitCode = 2;
+          return o;
+        }
+      }
       else if (a == "--clear" && i + 1 < args.size())
       {
         o.clearMode = args[++i];
@@ -456,12 +505,48 @@ namespace vix::commands::RunCommand::detail
     return true;
   }
 
+  static bool ends_with_2to1(const std::string &s)
+  {
+    // Simple check: ignore trailing spaces
+    std::size_t end = s.find_last_not_of(" \t\r\n");
+    if (end == std::string::npos)
+      return false;
+
+    // Look for "2>&1" at end
+    const std::string needle = "2>&1";
+    if (end + 1 < needle.size())
+      return false;
+
+    std::size_t start = end + 1 - needle.size();
+    return s.compare(start, needle.size(), needle) == 0;
+  }
+
+  static int normalize_exit_status(int status)
+  {
+#if defined(_WIN32)
+    // On Windows, _pclose typically returns the process exit code.
+    return status;
+#else
+    if (status == -1)
+      return -1;
+
+    if (WIFEXITED(status))
+      return WEXITSTATUS(status);
+
+    if (WIFSIGNALED(status))
+      return 128 + WTERMSIG(status); // common convention
+
+    return status;
+#endif
+  }
+
   std::string run_and_capture_with_code(const std::string &cmd, int &exitCode)
   {
     std::string out;
 
     std::string captureCmd = cmd;
-    captureCmd += " 2>&1";
+    if (!ends_with_2to1(captureCmd))
+      captureCmd += " 2>&1";
 
 #if defined(_WIN32)
     FILE *p = _popen(captureCmd.c_str(), "r");
@@ -480,11 +565,12 @@ namespace vix::commands::RunCommand::detail
       out.append(buf);
 
 #if defined(_WIN32)
-    exitCode = _pclose(p);
+    int status = _pclose(p);
 #else
-    exitCode = pclose(p);
+    int status = pclose(p);
 #endif
 
+    exitCode = normalize_exit_status(status);
     return out;
   }
 

@@ -178,6 +178,8 @@ namespace vix::commands::RunCommand::detail
   Options parse(const std::vector<std::string> &args)
   {
     Options o;
+    bool inScriptFlags = false;
+    bool inRunArgs = false;
 
     for (size_t i = 0; i < args.size(); ++i)
     {
@@ -201,6 +203,39 @@ namespace vix::commands::RunCommand::detail
                v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
                v == "--clear" || v.rfind("--clear=", 0) == 0;
       };
+
+      if (a == "--")
+      {
+        inScriptFlags = true;
+        inRunArgs = false;
+        continue;
+      }
+
+      if (a == "--run")
+      {
+        inRunArgs = true;
+        inScriptFlags = false;
+        o.hasRunSeparator = true;
+        continue;
+      }
+
+      if (inRunArgs)
+      {
+        o.runArgs.push_back(a);
+        continue;
+      }
+
+      if (inScriptFlags)
+      {
+        if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(a))
+        {
+          o.warnedVixFlagAfterDoubleDash = true;
+          o.warnedArg = a;
+        }
+
+        o.scriptFlags.push_back(a);
+        continue;
+      }
 
       if (a == "--")
       {

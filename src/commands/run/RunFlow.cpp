@@ -204,22 +204,23 @@ namespace vix::commands::RunCommand::detail
 
       if (a == "--")
       {
+        o.hasDoubleDash = true;
+
         for (size_t j = i + 1; j < args.size(); ++j)
         {
           const std::string v = args[j];
-
           if (v == "--")
-            continue; // allow accidental extra separator
+            continue;
 
-          // Warning only (ne bloque pas)
           if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
           {
             o.warnedVixFlagAfterDoubleDash = true;
             o.warnedArg = v;
           }
 
-          o.scriptFlags.push_back(v);
+          o.doubleDashArgs.push_back(v);
         }
+
         break;
       }
 

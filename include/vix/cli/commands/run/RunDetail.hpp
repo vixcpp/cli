@@ -87,6 +87,9 @@ namespace vix::commands::RunCommand::detail
     std::string warnedArg;
     bool parseFailed = false;
     int parseExitCode = 0;
+
+    bool hasDoubleDash = false;
+    std::vector<std::string> doubleDashArgs;
   };
 
   struct ScriptRunResult

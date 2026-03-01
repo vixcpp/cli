@@ -431,6 +431,24 @@ namespace vix::commands::RunCommand
       opt.cppFile = detail::manifest_entry_cpp(opt.manifestFile);
     }
 
+    if (opt.hasDoubleDash && !opt.doubleDashArgs.empty())
+    {
+      if (opt.singleCpp)
+      {
+        opt.scriptFlags.insert(opt.scriptFlags.end(),
+                               opt.doubleDashArgs.begin(),
+                               opt.doubleDashArgs.end());
+      }
+      else
+      {
+        opt.runArgs.insert(opt.runArgs.end(),
+                           opt.doubleDashArgs.begin(),
+                           opt.doubleDashArgs.end());
+      }
+
+      opt.doubleDashArgs.clear();
+    }
+
     if (opt.manifestMode && opt.singleCpp)
     {
       apply_manifest_auto_deps_includes(opt, opt.manifestFile);

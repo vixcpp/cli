@@ -204,14 +204,33 @@ namespace vix::commands::RunCommand::detail
 
       if (a == "--")
       {
+        bool afterRun = false;
+
         for (size_t j = i + 1; j < args.size(); ++j)
         {
           const std::string v = args[j];
 
           if (v == "--")
-            continue; // allow accidental extra separator
+            continue;
 
-          // Warning only (ne bloque pas)
+          if (!afterRun && v == "--run")
+          {
+            afterRun = true;
+            continue;
+          }
+
+          if (!afterRun && v == "--args")
+          {
+            afterRun = true;
+            continue;
+          }
+
+          if (afterRun)
+          {
+            o.runArgs.push_back(v);
+            continue;
+          }
+
           if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
           {
             o.warnedVixFlagAfterDoubleDash = true;
@@ -223,6 +242,18 @@ namespace vix::commands::RunCommand::detail
         break;
       }
 
+      if (a == "--run")
+      {
+        o.hasRunSeparator = true;
+        for (size_t j = i + 1; j < args.size(); ++j)
+        {
+          const std::string v = args[j];
+          if (v == "--")
+            continue; // ignore accidental
+          o.runArgs.push_back(v);
+        }
+        break;
+      }
       if (a == "--preset" && i + 1 < args.size())
       {
         o.preset = args[++i];

@@ -207,6 +207,12 @@ namespace
   {
     const fs::path presetsPath = projectDir / "CMakePresets.json";
 
+    auto fallback_build_dir = [&]() -> fs::path
+    {
+      std::error_code ec2;
+      return fs::weakly_canonical(projectDir / "build", ec2);
+    };
+
     std::error_code ec;
     if (!fs::exists(presetsPath, ec))
     {
@@ -216,21 +222,25 @@ namespace
           projectDir / "bld" / presetName,
           projectDir / "bld",
           projectDir / ("cmake-build-" + presetName),
+          projectDir / "build",
       };
 
       for (const auto &c : candidates)
       {
         if (fs::exists(c, ec) && fs::is_directory(c, ec))
-          return fs::weakly_canonical(c);
+        {
+          std::error_code ec2;
+          return fs::weakly_canonical(c, ec2);
+        }
       }
 
-      return projectDir;
+      return fallback_build_dir();
     }
 
     std::ifstream in(presetsPath);
     if (!in)
     {
-      return projectDir;
+      return fallback_build_dir();
     }
 
     nlohmann::json j;
@@ -240,13 +250,13 @@ namespace
     }
     catch (...)
     {
-      return projectDir;
+      return fallback_build_dir();
     }
 
     try
     {
       if (!j.contains("configurePresets") || !j["configurePresets"].is_array())
-        return projectDir;
+        return fallback_build_dir();
 
       for (const auto &p : j["configurePresets"])
       {
@@ -265,14 +275,14 @@ namespace
         if (!buildDirectory.empty())
           return normalize_binary_dir(projectDir, buildDirectory);
 
-        return projectDir;
+        return fallback_build_dir();
       }
 
-      return projectDir;
+      return fallback_build_dir();
     }
     catch (...)
     {
-      return projectDir;
+      return fallback_build_dir();
     }
   }
 
@@ -352,6 +362,16 @@ namespace
       error("Build directory does not exist.");
       hint("Run: vix check (or vix build) first to configure/build the project.");
       step(buildDir.string());
+      return 1;
+    }
+
+    const fs::path ctestFile = buildDir / "CTestTestfile.cmake";
+    if (!fs::exists(ctestFile, ec) || ec)
+    {
+      error("No CTest configuration found in build directory.");
+      hint("This project is not configured/built yet (or tests are disabled).");
+      hint("Run first: vix check (or vix build), then re-run: vix tests");
+      step(std::string("Expected file: ") + ctestFile.string());
       return 1;
     }
 

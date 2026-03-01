@@ -1127,7 +1127,7 @@ namespace vix::commands::RunCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags]\n\n";
+    out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
 
     out << "What it does:\n";
     out << "  Build + run a Vix.cpp app.\n";
@@ -1142,7 +1142,8 @@ namespace vix::commands::RunCommand
     out << "    • Uses CMake presets when available (recommended)\n\n";
     out << "  Script mode (.cpp):\n";
     out << "    • Compiles one .cpp file and runs it\n";
-    out << "    • Everything after `--` is compiler/linker flags (NOT runtime args)\n\n";
+    out << "    • Everything after `--` is compiler/linker flags (NOT runtime args)\n";
+    out << "    • Use `--run` to pass runtime args (argv) to the script\n\n";
     out << "  Manifest mode (.vix):\n";
     out << "    • Loads a .vix file then merges CLI options on top\n";
     out << "    • If [app].kind=\"project\", it behaves like project mode\n";
@@ -1152,8 +1153,10 @@ namespace vix::commands::RunCommand
     out << "  1) Passing runtime args after `--` (wrong)\n";
     out << "     vix run main.cpp -- --port 8080\n";
     out << "     # `--port` is treated as a compiler flag.\n\n";
-    out << "  2) Correct way: runtime args use repeatable --args\n";
-    out << "     vix run main.cpp --args --port --args 8080\n\n";
+    out << "  2) Correct way: use `--run` for runtime args\n";
+    out << "     vix run main.cpp --run --port 8080\n";
+    out << "     # Alternative: repeatable --args\n";
+    out << "     # vix run main.cpp --args --port --args 8080\n\n";
 
     out << "Options:\n";
     out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
@@ -1167,6 +1170,7 @@ namespace vix::commands::RunCommand
     out << "  --cwd <path>                  Run the program with this working directory\n";
     out << "  --env <K=V>                   Add/override one env var (repeatable)\n";
     out << "  --args <value>                Add one runtime argument (repeatable)\n\n";
+    out << "  --run <args...>               Runtime args for script mode (everything after is argv)\n";
 
     out << "Watch / lifecycle:\n";
     out << "  --watch, --reload             Rebuild and restart on file changes\n";
@@ -1216,6 +1220,8 @@ namespace vix::commands::RunCommand
 
     out << "  # Script mode (.cpp)\n";
     out << "  vix run main.cpp --cwd ./data --args --config --args config.json\n";
+    out << "  vix run main.cpp --run hello 123 test\n";
+    out << "  vix run main.cpp -- -O2 -DNDEBUG --run hello 123\n";
     out << "  vix run main.cpp -- -lssl -lcrypto\n\n";
 
     out << "  # Manifest mode (.vix)\n";

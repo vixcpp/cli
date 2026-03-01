@@ -178,6 +178,44 @@ namespace vix::commands::RunCommand::detail
     return s;
   }
 
+  static bool log_looks_like_linker_missing_file_due_to_runtime_args(const std::string &log)
+  {
+    // Typical patterns:
+    //  /usr/bin/ld: cannot find 123: No such file or directory
+    //  ld: cannot find hello
+    //  collect2: error: ld returned 1 exit status
+    if (log.empty())
+      return false;
+
+    const bool hasLd =
+        (log.find("/usr/bin/ld:") != std::string::npos) ||
+        (log.find(" ld:") != std::string::npos) ||
+        (log.find("collect2: error: ld returned") != std::string::npos);
+
+    if (!hasLd)
+      return false;
+
+    if (log.find("cannot find ") != std::string::npos &&
+        log.find("No such file or directory") != std::string::npos)
+      return true;
+
+    // Sometimes ld says "cannot find X" without the trailing message
+    if (log.find("cannot find ") != std::string::npos)
+      return true;
+
+    return false;
+  }
+
+  static void print_script_runtime_args_hint()
+  {
+    hint("It looks like you passed runtime args after `--`.");
+    hint("In script mode, `--` forwards compiler/linker flags.");
+    hint("Use `--run` for runtime arguments:");
+    step("vix run file.cpp --run arg1 arg2 arg3");
+    hint("Or use repeatable --args:");
+    step("vix run file.cpp --args arg1 --args arg2 --args arg3");
+  }
+
   static bool cache_is_ninja_build(const fs::path &buildDir)
   {
     std::error_code ec;
@@ -263,7 +301,7 @@ namespace vix::commands::RunCommand::detail
     {
       hint("Note: '" + o.warnedArg + "' was passed after `--` so it will be treated as a compiler/linker flag.");
       hint("If you meant a Vix option, move it before `--`.");
-      hint("If you meant a runtime arg, use repeatable --args.");
+      hint("If you meant a runtime arg, use `--run` (or repeatable --args).");
     }
 
     const fs::path script = o.cppFile;
@@ -767,6 +805,10 @@ namespace vix::commands::RunCommand::detail
 
       if (!logContent.empty())
       {
+        if (log_looks_like_linker_missing_file_due_to_runtime_args(logContent))
+        {
+          print_script_runtime_args_hint();
+        }
         vix::cli::ErrorHandler::printBuildErrors(
             logContent,
             script,

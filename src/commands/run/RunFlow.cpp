@@ -204,13 +204,32 @@ namespace vix::commands::RunCommand::detail
 
       if (a == "--")
       {
-        o.hasDoubleDash = true;
+        bool afterRun = false;
 
         for (size_t j = i + 1; j < args.size(); ++j)
         {
           const std::string v = args[j];
+
           if (v == "--")
             continue;
+
+          if (!afterRun && v == "--run")
+          {
+            afterRun = true;
+            continue;
+          }
+
+          if (!afterRun && v == "--args")
+          {
+            afterRun = true;
+            continue;
+          }
+
+          if (afterRun)
+          {
+            o.runArgs.push_back(v);
+            continue;
+          }
 
           if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
           {
@@ -218,12 +237,23 @@ namespace vix::commands::RunCommand::detail
             o.warnedArg = v;
           }
 
-          o.doubleDashArgs.push_back(v);
+          o.scriptFlags.push_back(v);
         }
-
         break;
       }
 
+      if (a == "--run")
+      {
+        o.hasRunSeparator = true;
+        for (size_t j = i + 1; j < args.size(); ++j)
+        {
+          const std::string v = args[j];
+          if (v == "--")
+            continue; // ignore accidental
+          o.runArgs.push_back(v);
+        }
+        break;
+      }
       if (a == "--preset" && i + 1 < args.size())
       {
         o.preset = args[++i];

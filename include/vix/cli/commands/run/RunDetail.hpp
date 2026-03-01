@@ -90,6 +90,8 @@ namespace vix::commands::RunCommand::detail
 
     bool hasDoubleDash = false;
     std::vector<std::string> doubleDashArgs;
+    std::vector<std::string> runArgsAfterRun;
+    bool hasRunSeparator = false;
   };
 
   struct ScriptRunResult

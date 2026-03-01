@@ -31,6 +31,7 @@
 #include <sstream>
 #include <optional>
 #include <cstdlib>
+#include <algorithm>
 
 #include <nlohmann/json.hpp>
 
@@ -351,6 +352,38 @@ namespace
     return vix::cli::process::normalize_exit_code(raw);
   }
 
+  static int ensure_project_configured_and_built(
+      const vix::commands::TestsCommand::detail::Options &opt,
+      const std::string &presetName)
+  {
+    info("CTest is not ready. Auto-configure/auto-build via `vix check`.");
+
+    std::vector<std::string> forwarded = opt.forwarded;
+
+    auto has_flag = [&](const std::string &flag) -> bool
+    {
+      for (const auto &a : forwarded)
+      {
+        if (a == flag)
+          return true;
+      }
+      return false;
+    };
+
+    // Ensure tests are enabled
+    if (!has_flag("--tests"))
+      forwarded.push_back("--tests");
+
+    // Ensure the same preset is used for check/build
+    if (!value_after_flag(forwarded, "--preset") && !value_after_flag(forwarded, "-p"))
+    {
+      forwarded.push_back("--preset");
+      forwarded.push_back(presetName);
+    }
+
+    return vix::commands::CheckCommand::run(forwarded);
+  }
+
   static int run_ctest(const vix::commands::TestsCommand::detail::Options &opt)
   {
     const std::string presetName = resolve_preset_name(opt);
@@ -359,20 +392,36 @@ namespace
     std::error_code ec;
     if (!fs::exists(buildDir, ec) || !fs::is_directory(buildDir, ec))
     {
-      error("Build directory does not exist.");
-      hint("Run: vix check (or vix build) first to configure/build the project.");
-      step(buildDir.string());
-      return 1;
+      const int checkCode = ensure_project_configured_and_built(opt, presetName);
+      if (checkCode != 0)
+        return checkCode;
+
+      const fs::path newBuildDir = resolve_build_dir_or_fallback(opt.projectDir, presetName);
+
+      std::error_code ec2;
+      if (!fs::exists(newBuildDir, ec2) || !fs::is_directory(newBuildDir, ec2))
+      {
+        error("Build directory still does not exist after auto-build.");
+        step(newBuildDir.string());
+        return 1;
+      }
     }
 
     const fs::path ctestFile = buildDir / "CTestTestfile.cmake";
     if (!fs::exists(ctestFile, ec) || ec)
     {
-      error("No CTest configuration found in build directory.");
-      hint("This project is not configured/built yet (or tests are disabled).");
-      hint("Run first: vix check (or vix build), then re-run: vix tests");
-      step(std::string("Expected file: ") + ctestFile.string());
-      return 1;
+      const int checkCode = ensure_project_configured_and_built(opt, presetName);
+      if (checkCode != 0)
+        return checkCode;
+
+      std::error_code ec2;
+      if (!fs::exists(ctestFile, ec2) || ec2)
+      {
+        error("CTest is still not available after auto-build.");
+        hint("Tests may be disabled in the project (enable_testing/add_test missing).");
+        step(std::string("Expected file: ") + ctestFile.string());
+        return 1;
+      }
     }
 
     info("Running tests (CTest).");

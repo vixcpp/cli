@@ -544,15 +544,16 @@ namespace vix::commands::RunCommand
         }
         else
         {
-          std::ostringstream oss;
+          std::string cmd = detail::cmake_configure_cmd(projectDir, configurePreset, buildDir);
+
 #ifdef _WIN32
-          oss << "cmd /C \"cd /D " << quote(projectDir.string())
-              << " && cmake --preset " << quote(configurePreset) << "\"";
+          // cmake_configure_cmd renvoie deja "cd ... && cmake --preset ..."
+          // donc on wrap juste avec cmd /C + cd /D
+          cmd = "cmd /C \"cd /D " + quote(projectDir.string()) + " && cmake --preset " + quote(configurePreset) + "\"";
 #else
-          oss << "cd " << quote(projectDir.string())
-              << " && cmake --log-level=WARNING --preset " << quote(configurePreset);
+          // si tu veux garder le log-level warning, tu peux l’injecter ici:
+          cmd = "cd " + quote(projectDir.string()) + " && cmake --log-level=WARNING --preset " + quote(configurePreset);
 #endif
-          const std::string cmd = oss.str();
 
           const LiveRunResult cr = run_cmd_live_filtered_capture(
               cmd,
@@ -947,18 +948,18 @@ namespace vix::commands::RunCommand
     {
       progress.phase_start("Build project (fallback)");
 
-      std::ostringstream oss;
+      std::string cmd;
+
 #ifdef _WIN32
-      oss << "cd /D " << quote(buildDir.string()) << " && cmake --build .";
+      cmd = "cd /D " + quote(buildDir.string()) + " && cmake --build .";
       if (opt.jobs > 0)
-        oss << " -j " << opt.jobs;
+        cmd += " --parallel " + std::to_string(opt.jobs);
 #else
-      oss << "cd " << quote(buildDir.string())
-          << " && cmake --log-level=WARNING --build .";
+      cmd = "cd " + quote(projectDir.string()) +
+            " && cmake --build " + quote(buildDir.string());
       if (opt.jobs > 0)
-        oss << " -j " << opt.jobs;
+        cmd += " --parallel " + std::to_string(opt.jobs);
 #endif
-      const std::string cmd = oss.str();
 
       std::string buildLog;
 

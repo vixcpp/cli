@@ -168,12 +168,41 @@ namespace vix::commands::RunCommand::detail
 
   // Build / run flow helpers
   std::string quote(const std::string &s);
+
+  inline std::string cmake_configure_cmd(
+      const fs::path &projectDir,
+      const std::string &configurePreset,
+      const fs::path &buildDir)
+  {
+#ifdef _WIN32
+    // Windows: ne pas utiliser "cd" en shell POSIX, on retourne une commande cmd
+    if (!configurePreset.empty())
+    {
+      return "cmd /C \"cd /D " + quote(projectDir.string()) +
+             " && cmake --preset " + quote(configurePreset) + "\"";
+    }
+
+    return "cmd /C \"cd /D " + quote(projectDir.string()) +
+           " && cmake -S . -B " + quote(buildDir.string()) + " -G Ninja\"";
+#else
+    if (!configurePreset.empty())
+    {
+      return "cd " + quote(projectDir.string()) +
+             " && cmake --preset " + quote(configurePreset);
+    }
+
+    return "cd " + quote(projectDir.string()) +
+           " && cmake -S . -B " + quote(buildDir.string()) + " -G Ninja";
+#endif
+  }
+
   void handle_runtime_exit_code(
       int code,
       const std::string &context,
       bool alreadyHandled);
 
   bool has_presets(const fs::path &projectDir);
+
   std::string choose_run_preset(
       const fs::path &dir,
       const std::string &configurePreset,

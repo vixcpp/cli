@@ -178,130 +178,123 @@ namespace vix::commands::RunCommand::detail
   Options parse(const std::vector<std::string> &args)
   {
     Options o;
-    bool inScriptFlags = false;
-    bool inRunArgs = false;
+
+    enum class Zone
+    {
+      Vix,    // parse flags Vix et appName / manifest / cpp
+      Script, // compiler flags for script mode
+      Run     // runtime args
+    };
+
+    Zone zone = Zone::Vix;
+
+    auto is_known_vix_flag = [&](const std::string &v) -> bool
+    {
+      return v == "--verbose" || v == "--quiet" || v == "-q" ||
+             v == "--watch" || v == "--reload" ||
+             v == "--force-server" || v == "--force-script" ||
+             v == "--san" || v == "--ubsan" ||
+             v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
+             v == "--no-color" ||
+             v == "--preset" || v.rfind("--preset=", 0) == 0 ||
+             v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
+             v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
+             v == "--env" || v.rfind("--env=", 0) == 0 ||
+             v == "--args" || v.rfind("--args=", 0) == 0 ||
+             v == "--log-level" || v.rfind("--log-level=", 0) == 0 ||
+             v == "--log-format" || v.rfind("--log-format=", 0) == 0 ||
+             v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
+             v == "--clear" || v.rfind("--clear=", 0) == 0 ||
+             v == "--no-clear" ||
+             v == "--auto-deps" || v.rfind("--auto-deps=", 0) == 0 ||
+             v == "-j" || v == "--jobs";
+    };
+
+    auto warn_if_vix_flag_in_script = [&](const std::string &v)
+    {
+      if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
+      {
+        o.warnedVixFlagAfterDoubleDash = true;
+        o.warnedArg = v;
+      }
+    };
+
+    auto take_value = [&](size_t &i, const std::string &flag) -> std::string
+    {
+      if (i + 1 >= args.size())
+      {
+        error("Missing value for " + flag);
+        o.parseFailed = true;
+        o.parseExitCode = 2;
+        return {};
+      }
+      return args[++i];
+    };
+
+    auto take_eq_value = [&](const std::string &a, const std::string &prefix) -> std::string
+    {
+      return a.substr(prefix.size());
+    };
 
     for (size_t i = 0; i < args.size(); ++i)
     {
-      const auto &a = args[i];
+      const std::string &a = args[i];
 
-      auto is_known_vix_flag = [&](const std::string &v) -> bool
-      {
-        // flags Vix qui n'ont rien à faire après `--`
-        return v == "--verbose" || v == "--quiet" || v == "--watch" || v == "--reload" ||
-               v == "--force-server" || v == "--force-script" ||
-               v == "--san" || v == "--ubsan" ||
-               v == "--docs" || v == "--no-docs" ||
-               v == "--no-color" ||
-               v == "--preset" || v.rfind("--preset=", 0) == 0 ||
-               v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
-               v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
-               v == "--env" || v.rfind("--env=", 0) == 0 ||
-               v == "--args" || v.rfind("--args=", 0) == 0 ||
-               v == "--log-level" || v.rfind("--log-level=", 0) == 0 ||
-               v == "--log-format" || v.rfind("--log-format=", 0) == 0 ||
-               v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
-               v == "--clear" || v.rfind("--clear=", 0) == 0;
-      };
-
-      if (a == "--")
-      {
-        inScriptFlags = true;
-        inRunArgs = false;
-        continue;
-      }
-
+      // Zone switches (allowed anywhere)
       if (a == "--run")
       {
-        inRunArgs = true;
-        inScriptFlags = false;
         o.hasRunSeparator = true;
+        zone = Zone::Run;
+        continue;
+      }
+      if (a == "--")
+      {
+        zone = Zone::Script;
         continue;
       }
 
-      if (inRunArgs)
+      // Consume by zone (Run / Script are "raw capture")
+      if (zone == Zone::Run)
       {
         o.runArgs.push_back(a);
         continue;
       }
-
-      if (inScriptFlags)
+      if (zone == Zone::Script)
       {
-        if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(a))
-        {
-          o.warnedVixFlagAfterDoubleDash = true;
-          o.warnedArg = a;
-        }
-
+        warn_if_vix_flag_in_script(a);
         o.scriptFlags.push_back(a);
         continue;
       }
 
-      if (a == "--")
+      // zone == Vix : normal option parsing
+      if (a == "--preset")
       {
-        bool afterRun = false;
-
-        for (size_t j = i + 1; j < args.size(); ++j)
-        {
-          const std::string v = args[j];
-
-          if (v == "--")
-            continue;
-
-          if (!afterRun && v == "--run")
-          {
-            afterRun = true;
-            continue;
-          }
-
-          if (!afterRun && v == "--args")
-          {
-            afterRun = true;
-            continue;
-          }
-
-          if (afterRun)
-          {
-            o.runArgs.push_back(v);
-            continue;
-          }
-
-          if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
-          {
-            o.warnedVixFlagAfterDoubleDash = true;
-            o.warnedArg = v;
-          }
-
-          o.scriptFlags.push_back(v);
-        }
-        break;
+        o.preset = take_value(i, "--preset");
+        if (o.parseFailed)
+          return o;
       }
-
-      if (a == "--run")
+      else if (a.rfind("--preset=", 0) == 0)
       {
-        o.hasRunSeparator = true;
-        for (size_t j = i + 1; j < args.size(); ++j)
-        {
-          const std::string v = args[j];
-          if (v == "--")
-            continue; // ignore accidental
-          o.runArgs.push_back(v);
-        }
-        break;
+        o.preset = take_eq_value(a, "--preset=");
       }
-      if (a == "--preset" && i + 1 < args.size())
+      else if (a == "--run-preset")
       {
-        o.preset = args[++i];
+        o.runPreset = take_value(i, "--run-preset");
+        if (o.parseFailed)
+          return o;
       }
-      else if (a == "--run-preset" && i + 1 < args.size())
+      else if (a.rfind("--run-preset=", 0) == 0)
       {
-        o.runPreset = args[++i];
+        o.runPreset = take_eq_value(a, "--run-preset=");
       }
-      else if ((a == "-j" || a == "--jobs") && i + 1 < args.size())
+      else if (a == "-j" || a == "--jobs")
       {
+        std::string v = take_value(i, a);
+        if (o.parseFailed)
+          return o;
         try
         {
-          o.jobs = std::stoi(args[++i]);
+          o.jobs = std::stoi(v);
         }
         catch (...)
         {
@@ -316,35 +309,40 @@ namespace vix::commands::RunCommand::detail
       {
         o.verbose = true;
       }
-      else if ((a == "--log-level" || a == "--loglevel") && i + 1 < args.size())
+      else if (a == "--log-level" || a == "--loglevel")
       {
-        o.logLevel = args[++i];
+        o.logLevel = take_value(i, a);
+        if (o.parseFailed)
+          return o;
       }
       else if (a.rfind("--log-level=", 0) == 0)
       {
-        o.logLevel = a.substr(std::string("--log-level=").size());
+        o.logLevel = take_eq_value(a, "--log-level=");
       }
-      else if (a == "--log-format" && i + 1 < args.size())
+      else if (a == "--log-format")
       {
-        o.logFormat = args[++i];
+        o.logFormat = take_value(i, "--log-format");
+        if (o.parseFailed)
+          return o;
       }
       else if (a.rfind("--log-format=", 0) == 0)
       {
-        o.logFormat = a.substr(std::string("--log-format=").size());
+        o.logFormat = take_eq_value(a, "--log-format=");
       }
-      else if (a == "--log-color" && i + 1 < args.size())
+      else if (a == "--log-color")
       {
-        o.logColor = args[++i]; // auto|always|never
+        o.logColor = take_value(i, "--log-color");
+        if (o.parseFailed)
+          return o;
       }
       else if (a.rfind("--log-color=", 0) == 0)
       {
-        o.logColor = a.substr(std::string("--log-color=").size());
+        o.logColor = take_eq_value(a, "--log-color=");
       }
       else if (a == "--no-color")
       {
         o.noColor = true;
       }
-
       else if (a == "--watch" || a == "--reload")
       {
         o.watch = true;
@@ -375,9 +373,11 @@ namespace vix::commands::RunCommand::detail
         else
           hint("Invalid value for --docs. Use 0|1|true|false.");
       }
-      else if (a == "--cwd" && i + 1 < args.size())
+      else if (a == "--cwd")
       {
-        std::filesystem::path p = args[++i];
+        std::filesystem::path p = take_value(i, "--cwd");
+        if (o.parseFailed)
+          return o;
         if (p.is_relative())
           p = std::filesystem::absolute(p);
         o.cwd = p.string();
@@ -389,24 +389,26 @@ namespace vix::commands::RunCommand::detail
           p = std::filesystem::absolute(p);
         o.cwd = p.string();
       }
-      // --env K=V (repeatable)
-      else if (a == "--env" && i + 1 < args.size())
+      else if (a == "--env")
       {
-        o.runEnv.push_back(args[++i]);
+        o.runEnv.push_back(take_value(i, "--env"));
+        if (o.parseFailed)
+          return o;
       }
       else if (a.rfind("--env=", 0) == 0)
       {
-        o.runEnv.push_back(a.substr(std::string("--env=").size()));
+        o.runEnv.push_back(take_eq_value(a, "--env="));
       }
-      // --args value (repeatable)
-      // Exemple: --args --port --args 8080
-      else if (a == "--args" && i + 1 < args.size())
+      // --args value (repeatable). This is runtime args even without --run.
+      else if (a == "--args")
       {
-        o.runArgs.push_back(args[++i]);
+        o.runArgs.push_back(take_value(i, "--args"));
+        if (o.parseFailed)
+          return o;
       }
       else if (a.rfind("--args=", 0) == 0)
       {
-        o.runArgs.push_back(a.substr(std::string("--args=").size()));
+        o.runArgs.push_back(take_eq_value(a, "--args="));
       }
       else if (a == "--san")
       {
@@ -425,40 +427,36 @@ namespace vix::commands::RunCommand::detail
       else if (a.rfind("--auto-deps=", 0) == 0)
       {
         const std::string v = a.substr(std::string("--auto-deps=").size());
-
         if (v == "up")
-        {
           o.autoDeps = AutoDepsMode::Up;
-        }
         else if (v == "local")
-        {
           o.autoDeps = AutoDepsMode::Local;
-        }
         else
         {
           error("Invalid value for --auto-deps: " + v);
           hint("Valid values: local, up");
-
           o.parseFailed = true;
           o.parseExitCode = 2;
           return o;
         }
       }
-      else if (a == "--clear" && i + 1 < args.size())
+      else if (a == "--clear")
       {
-        o.clearMode = args[++i];
+        o.clearMode = take_value(i, "--clear");
+        if (o.parseFailed)
+          return o;
       }
       else if (a.rfind("--clear=", 0) == 0)
       {
-        o.clearMode = a.substr(std::string("--clear=").size());
+        o.clearMode = take_eq_value(a, "--clear=");
       }
       else if (a == "--no-clear")
       {
         o.clearMode = "never";
       }
-
       else if (!a.empty() && a[0] != '-')
       {
+        // positional: app / example / manifest / cpp
         if (o.appName.empty())
         {
           o.appName = a;
@@ -476,20 +474,24 @@ namespace vix::commands::RunCommand::detail
         }
 
         std::filesystem::path p{a};
-
         if (p.extension() == ".vix")
         {
           o.manifestMode = true;
           o.manifestFile = std::filesystem::absolute(p);
-
-          // On ne force pas singleCpp ici
-          // Le manifest va décider project/script
         }
         else if (p.extension() == ".cpp")
         {
           o.singleCpp = true;
           o.cppFile = std::filesystem::absolute(p);
         }
+      }
+      else if (!a.empty() && a[0] == '-')
+      {
+        error("Unknown option: " + a);
+        hint("Use: vix run --help");
+        o.parseFailed = true;
+        o.parseExitCode = 2;
+        return o;
       }
     }
 
@@ -498,14 +500,14 @@ namespace vix::commands::RunCommand::detail
 
     if (o.forceServerLike && o.forceScriptLike)
     {
-      hint("Both --force-server and --force-script were provided; "
-           "preferring --force-server.");
+      hint("Both --force-server and --force-script were provided; preferring --force-server.");
       o.forceScriptLike = false;
     }
 
     // normalize clearMode
     for (auto &c : o.clearMode)
       c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
     if (o.clearMode != "auto" && o.clearMode != "always" && o.clearMode != "never")
     {
       hint("Invalid value for --clear. Using 'auto'. Valid: auto|always|never.");

@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <cctype>
+#include <system_error>
 
 #if defined(_WIN32)
 #include <conio.h>
@@ -49,6 +51,24 @@ using namespace vix::cli::style;
 
 namespace
 {
+  static bool is_dot_path(const std::string &s)
+  {
+    return s == "." || s == "./" || s == ".\\";
+  }
+
+  static std::string current_dir_name()
+  {
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(fs::current_path(), ec);
+    if (ec)
+      p = fs::current_path();
+
+    std::string name = p.filename().string();
+    if (name.empty())
+      name = "app";
+    return name;
+  }
+
   enum class TemplateKind
   {
     App,
@@ -700,6 +720,27 @@ int main()
         return res;
       }
     }
+  }
+
+  enum class InPlaceDirChoice
+  {
+    Proceed,
+    Cancel
+  };
+
+  static SelectResult<InPlaceDirChoice> confirm_inplace_dir_interactive(const fs::path &dir)
+  {
+    std::cout << PAD << GRAY << dir.string() << RESET << "\n";
+
+    const std::vector<std::string> items = {
+        "Continue (overwrite template files in current directory)",
+        "Cancel"};
+
+    const std::vector<InPlaceDirChoice> values = {
+        InPlaceDirChoice::Proceed,
+        InPlaceDirChoice::Cancel};
+
+    return menu_select<InPlaceDirChoice>("Current directory is not empty", items, 1, values);
   }
 
   // ---------- Multi select (Features) ----------
@@ -1502,6 +1543,7 @@ namespace vix::commands::NewCommand
     }
 
     const std::string nameOrPath = args[0];
+    const bool inPlace = is_dot_path(nameOrPath);
 
     try
     {
@@ -1551,7 +1593,13 @@ namespace vix::commands::NewCommand
       }
 
       fs::path projectDir = dest;
-      const std::string projName = projectDir.filename().string();
+      std::string projName = projectDir.filename().string();
+
+      if (inPlace)
+      {
+        projectDir = fs::current_path();
+        projName = current_dir_name();
+      }
 
       if (g_cancelled.load())
         return 2;
@@ -1567,37 +1615,60 @@ namespace vix::commands::NewCommand
 
         if (!dir_is_empty(projectDir))
         {
-          if (force)
+          // Special case: vix new . must never delete the current directory
+          if (inPlace)
           {
-            std::error_code ec;
-            fs::remove_all(projectDir, ec);
-            if (ec)
+            if (force)
             {
-              error("Failed to remove existing directory.");
-              hint(ec.message());
-              return 1;
+              // Proceed: overwrite template files, but do not delete the folder
             }
-          }
-          else if (can_interact())
-          {
-            const auto choice = confirm_overwrite_interactive(projectDir);
-            if (choice.cancelled || choice.value == OverwriteChoice::Cancel)
-              return 2;
-
-            std::error_code ec;
-            fs::remove_all(projectDir, ec);
-            if (ec)
+            else if (can_interact())
             {
-              error("Failed to remove existing directory.");
-              hint(ec.message());
+              const auto choice = confirm_inplace_dir_interactive(projectDir);
+              if (choice.cancelled || choice.value == InPlaceDirChoice::Cancel)
+                return 2;
+            }
+            else
+            {
+              error("Cannot create project in current directory: directory is not empty.");
+              hint("Use --force to overwrite template files.");
               return 1;
             }
           }
           else
           {
-            error("Cannot create project in '" + projectDir.string() + "': directory is not empty.");
-            hint("Use --force to overwrite.");
-            return 1;
+            if (force)
+            {
+              std::error_code ec;
+              fs::remove_all(projectDir, ec);
+              if (ec)
+              {
+                error("Failed to remove existing directory.");
+                hint(ec.message());
+                return 1;
+              }
+            }
+            else if (can_interact())
+            {
+              const auto choice = confirm_overwrite_interactive(projectDir);
+              if (choice.cancelled || choice.value == OverwriteChoice::Cancel)
+                return 2;
+
+              std::error_code ec;
+              fs::remove_all(projectDir, ec);
+              if (ec)
+              {
+                error("Failed to remove existing directory.");
+                hint(ec.message());
+                return 1;
+              }
+            }
+            else
+            {
+              error("Cannot create project in '" + projectDir.string() + "': directory is not empty.");
+              hint("Use --force to overwrite.");
+              return 1;
+            }
           }
 
           if (g_cancelled.load())
@@ -1717,6 +1788,7 @@ namespace vix::commands::NewCommand
 
     out << "Examples:\n";
     out << "  vix new api\n";
+    out << "  vix new .\n";
     out << "  vix new tree --lib\n";
     out << "  vix new blog -d ./projects\n";
     out << "  vix new api --force\n";

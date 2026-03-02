@@ -103,25 +103,36 @@ namespace vix::commands
       return s;
     }
 
-    static bool parse_pkg_spec(const std::string &raw, PkgSpec &out)
+    static bool parse_pkg_spec(const std::string &raw_in, PkgSpec &out)
     {
+      const std::string raw = trim_copy(raw_in);
+
       const auto slash = raw.find('/');
       if (slash == std::string::npos)
         return false;
 
-      const auto at = raw.find('@');
+      if (!raw.empty() && raw[0] == '@')
+      {
+        if (slash <= 1)
+          return false;
+        out.ns = trim_copy(raw.substr(1, slash - 1));
+      }
+      else
+      {
+        out.ns = trim_copy(raw.substr(0, slash));
+      }
 
-      out.ns = trim_copy(raw.substr(0, slash));
+      const auto at_version = raw.find('@', slash + 1);
 
-      if (at == std::string::npos)
+      if (at_version == std::string::npos)
       {
         out.name = trim_copy(raw.substr(slash + 1));
         out.requestedVersion.clear();
       }
       else
       {
-        out.name = trim_copy(raw.substr(slash + 1, at - (slash + 1)));
-        out.requestedVersion = trim_copy(raw.substr(at + 1));
+        out.name = trim_copy(raw.substr(slash + 1, at_version - (slash + 1)));
+        out.requestedVersion = trim_copy(raw.substr(at_version + 1));
       }
 
       out.resolvedVersion.clear();
@@ -129,8 +140,7 @@ namespace vix::commands
       if (out.ns.empty() || out.name.empty())
         return false;
 
-      // Si @ est présent, la version doit etre non vide
-      if (at != std::string::npos && out.requestedVersion.empty())
+      if (at_version != std::string::npos && out.requestedVersion.empty())
         return false;
 
       return true;
@@ -669,16 +679,19 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix add <namespace>/<name>[@<version>]\n\n"
+        << "  vix add [@]namespace/name[@version]\n\n"
 
         << "Description:\n"
         << "  Install a package from the Vix Registry.\n"
-        << "  If @version is omitted, the latest version is resolved automatically.\n\n"
+        << "  If @version is omitted, the latest version is resolved automatically.\n"
+        << "  The namespace may optionally be prefixed with '@' (npm-style scope).\n\n"
 
         << "Examples:\n"
         << "  vix registry sync\n"
         << "  vix add gaspardkirira/tree\n"
-        << "  vix add gaspardkirira/tree@0.1.0\n\n"
+        << "  vix add gaspardkirira/tree@0.1.0\n"
+        << "  vix add @gaspardkirira/tree\n"
+        << "  vix add @gaspardkirira/tree@0.1.0\n\n"
 
         << "Behavior:\n"
         << "  - Resolves the requested version (or latest if omitted)\n"
@@ -688,7 +701,8 @@ namespace vix::commands
 
         << "Notes:\n"
         << "  - Run 'vix registry sync' if a package cannot be found.\n"
-        << "  - The lockfile guarantees deterministic builds.\n";
+        << "  - The lockfile guarantees deterministic builds.\n"
+        << "  - Scoped packages follow the format '@namespace/name'.\n";
 
     return 0;
   }

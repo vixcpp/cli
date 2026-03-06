@@ -505,6 +505,18 @@ int main()
       if (ch == L'q' || ch == L'Q')
         return Key::Quit;
 
+      if (ch == L'k' || ch == L'K')
+        return Key::Up;
+
+      if (ch == L'j' || ch == L'J')
+        return Key::Down;
+
+      if (ch == L'l' || ch == L'L')
+        return Key::Enter;
+
+      if (ch == L'h' || ch == L'H')
+        return Key::Escape;
+
       // unknown key -> ignore
       return Key::None;
     }
@@ -544,6 +556,18 @@ int main()
 
       if (c == 'a' || c == 'A')
         return Key::ToggleAll;
+
+      if (c == 'k' || c == 'K')
+        return Key::Up;
+
+      if (c == 'j' || c == 'J')
+        return Key::Down;
+
+      if (c == 'l' || c == 'L')
+        return Key::Enter;
+
+      if (c == 'h' || c == 'H')
+        return Key::Escape;
 
       if (c == '\n' || c == '\r')
         return Key::Enter;

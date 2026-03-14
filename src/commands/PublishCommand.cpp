@@ -1183,8 +1183,12 @@ namespace vix::commands
         if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to update local registry repo (pull --ff-only)");
+
           if (!r.err.empty())
             vix::cli::util::warn_line(std::cerr, r.err);
+
+          vix::cli::util::tip_line(std::cerr, "Run 'vix registry sync' to reset the local registry.");
+
           return r.exitCode;
         }
       }

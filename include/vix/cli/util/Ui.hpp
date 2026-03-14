@@ -59,6 +59,14 @@ namespace vix::cli::util
     os << "  " << YELLOW << "!" << RESET << " " << msg << "\n";
   }
 
+  inline void tip_line(std::ostream &os, std::string_view msg)
+  {
+    os << "  "
+       << CYAN << "tip:" << RESET
+       << " "
+       << BOLD << msg << RESET
+       << "\n";
+  }
   inline void err_line(std::ostream &os, std::string_view msg)
   {
     os << "  " << RED << "✖" << RESET << " " << msg << "\n";

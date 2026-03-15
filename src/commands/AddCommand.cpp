@@ -14,6 +14,7 @@
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/util/Shell.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/util/Hash.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
@@ -191,7 +192,8 @@ namespace vix::commands
         const PkgSpec &spec,
         const std::string &repoUrl,
         const std::string &commitSha,
-        const std::string &tag)
+        const std::string &tag,
+        const std::string &contentHash)
     {
       json lock;
 
@@ -222,10 +224,11 @@ namespace vix::commands
 
       json dep;
       dep["id"] = wantedId;
-      dep["version"] = spec.resolvedVersion; // IMPORTANT
+      dep["version"] = spec.resolvedVersion;
       dep["repo"] = repoUrl;
       dep["tag"] = tag;
       dep["commit"] = commitSha;
+      dep["hash"] = contentHash;
 
       deps.push_back(dep);
 
@@ -536,8 +539,12 @@ namespace vix::commands
       outCommit = commit;
       outTag = tag;
 
-      // lockfile = version exacte résolue + commit
-      write_lockfile_append(spec, repoUrl, commit, tag);
+      // Compute content hash for deterministic verify
+      const auto contentHash = vix::cli::util::sha256_directory(outDir);
+      const std::string hashStr = contentHash.value_or("");
+
+      // lockfile = version exacte résolue + commit + hash
+      write_lockfile_append(spec, repoUrl, commit, tag, hashStr);
 
       return 0;
     }

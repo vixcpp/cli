@@ -169,16 +169,18 @@ namespace vix::commands
       return 0;
     }
 
-    int store_gc_project()
+    int store_gc_project(bool dryRun = false)
     {
       const fs::path root = store_root_git();
       const fs::path lockP = lock_path();
 
-      vix::cli::util::section(std::cout, "Store");
-      vix::cli::util::kv(std::cout, "action", "gc");
+      vix::cli::util::section(std::cout, "Store GC");
       vix::cli::util::kv(std::cout, "scope", "project");
       vix::cli::util::kv(std::cout, "lock", lockP.string());
       vix::cli::util::kv(std::cout, "root", root.string());
+
+      if (dryRun)
+        vix::cli::util::kv(std::cout, "mode", "dry-run");
 
       if (!fs::exists(lockP))
       {
@@ -187,12 +189,13 @@ namespace vix::commands
         return 1;
       }
 
+      vix::cli::util::warn_line(std::cerr, "WARNING: This will remove any store entries NOT used by THIS project.");
+      vix::cli::util::warn_line(std::cerr, "If you have other Vix projects, their cached dependencies might be deleted.");
+      std::cerr << "\n";
+
       if (!fs::exists(root))
       {
-        vix::cli::util::ok_line(std::cout, "GC done.");
-        vix::cli::util::kv(std::cout, "removed commits", "0");
-        vix::cli::util::kv(std::cout, "removed packages", "0");
-        vix::cli::util::kv(std::cout, "freed", "0 B");
+        vix::cli::util::ok_line(std::cout, "GC done (store empty).");
         return 0;
       }
 
@@ -259,36 +262,52 @@ namespace vix::commands
 
         for (const auto &cdir : commitsToRemove)
         {
-          freed += dir_size_bytes(cdir);
+          const auto sz = dir_size_bytes(cdir);
+          freed += sz;
 
-          std::error_code rmec;
-          fs::remove_all(cdir, rmec);
-          if (!rmec)
+          if (!dryRun)
+          {
+            std::error_code rmec;
+            fs::remove_all(cdir, rmec);
+            if (!rmec)
+            {
+              vix::cli::util::info_line(std::cout, "removed: " + pkgName + " [" + cdir.filename().string().substr(0, 8) + "...]");
+              ++removedCommits;
+            }
+          }
+          else
+          {
+            vix::cli::util::info_line(std::cout, "would remove: " + pkgName + " [" + cdir.filename().string().substr(0, 8) + "...]");
             ++removedCommits;
+          }
         }
 
         // If package dir empty -> remove it
-        std::error_code ec3;
-        bool empty = true;
-        for (auto it = fs::directory_iterator(pkgDir, fs::directory_options::skip_permission_denied, ec3);
-             it != fs::directory_iterator(); ++it)
+        if (!dryRun)
         {
-          empty = false;
-          break;
-        }
-        if (!ec3 && empty)
-        {
-          std::error_code rmec2;
-          fs::remove(pkgDir, rmec2);
-          if (!rmec2)
-            ++removedPackages;
+          std::error_code ec3;
+          bool empty = true;
+          for (auto it = fs::directory_iterator(pkgDir, fs::directory_options::skip_permission_denied, ec3);
+               it != fs::directory_iterator(); ++it)
+          {
+            empty = false;
+            break;
+          }
+          if (!ec3 && empty)
+          {
+            std::error_code rmec2;
+            fs::remove(pkgDir, rmec2);
+            if (!rmec2)
+              ++removedPackages;
+          }
         }
       }
 
-      vix::cli::util::ok_line(std::cout, "GC done.");
-      vix::cli::util::kv(std::cout, "removed commits", std::to_string(removedCommits));
-      vix::cli::util::kv(std::cout, "removed packages", std::to_string(removedPackages));
-      vix::cli::util::kv(std::cout, "freed", human_bytes(freed));
+      vix::cli::util::one_line_spacer(std::cout);
+      vix::cli::util::ok_line(std::cout, dryRun ? "GC dry-run finished." : "GC finished.");
+      vix::cli::util::kv(std::cout, dryRun ? "would remove commits" : "removed commits", std::to_string(removedCommits));
+      vix::cli::util::kv(std::cout, dryRun ? "would remove packages" : "removed packages", std::to_string(removedPackages));
+      vix::cli::util::kv(std::cout, dryRun ? "would free" : "freed", human_bytes(freed));
       return 0;
     }
   }
@@ -304,11 +323,31 @@ namespace vix::commands
       return store_path();
 
     if (sub == "gc")
-      return store_gc_project();
+    {
+      bool dryRun = false;
+      bool projectScope = false;
+
+      for (std::size_t i = 1; i < args.size(); ++i)
+      {
+        if (args[i] == "--dry-run")
+          dryRun = true;
+        else if (args[i] == "--project")
+          projectScope = true;
+      }
+
+      if (!projectScope)
+      {
+        vix::cli::util::err_line(std::cerr, "GC requires --project scope in this version.");
+        vix::cli::util::warn_line(std::cerr, "Use: vix store gc --project");
+        return 1;
+      }
+
+      return store_gc_project(dryRun);
+    }
 
     vix::cli::util::err_line(std::cerr, "unknown store subcommand: " + sub);
     vix::cli::util::warn_line(std::cerr, "Try: vix store path");
-    vix::cli::util::warn_line(std::cerr, "Try: vix store gc");
+    vix::cli::util::warn_line(std::cerr, "Try: vix store gc --project");
     return help();
   }
 
@@ -316,12 +355,16 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix store <subcommand>\n\n"
+        << "  vix store <subcommand> [options]\n\n"
         << "Subcommands:\n"
         << "  path        Print local store root path\n"
-        << "  gc          Garbage collect the store (project scope)\n\n"
+        << "  gc          Garbage collect the store\n\n"
+        << "GC Options:\n"
+        << "  --project   Scope GC to the current project (uses vix.lock)\n"
+        << "  --dry-run   List files that would be removed without deleting them\n\n"
         << "Notes:\n"
-        << "  - GC scope=project keeps commits referenced by ./vix.lock\n";
+        << "  - GC --project keeps commits referenced by ./vix.lock\n"
+        << "  - WARNING: GC --project is destructive for other projects sharing the same store.\n";
     return 0;
   }
 }

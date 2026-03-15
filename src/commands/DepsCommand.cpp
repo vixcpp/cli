@@ -14,6 +14,7 @@
 #include <vix/cli/commands/DepsCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Shell.hpp>
+#include <vix/cli/util/Hash.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -207,6 +208,7 @@ namespace vix::commands
       std::string repo;
       std::string tag;
       std::string commit;
+      std::string hash;
 
       std::string type;    // "header-only" etc.
       std::string include; // include folder for header-only
@@ -222,6 +224,7 @@ namespace vix::commands
       dep.repo = d.value("repo", "");
       dep.tag = d.value("tag", "");
       dep.commit = d.value("commit", "");
+      dep.hash = d.value("hash", "");
 
       if (dep.id.empty() || dep.repo.empty() || dep.commit.empty())
         throw std::runtime_error("invalid dependency entry in vix.lock (missing id/repo/commit)");
@@ -404,6 +407,32 @@ namespace vix::commands
         }
 
         vix::cli::util::kv(std::cout, "status", "fetched");
+      }
+
+      // Verify hash if present in lockfile
+      if (!dep.hash.empty())
+      {
+        const auto actualHashOpt = vix::cli::util::sha256_directory(dep.checkout);
+        if (actualHashOpt)
+        {
+          if (*actualHashOpt != dep.hash)
+          {
+            vix::cli::util::err_line(std::cerr, "integrity check failed: " + dep.id);
+            vix::cli::util::err_line(std::cerr, "  expected: " + dep.hash);
+            vix::cli::util::err_line(std::cerr, "  actual:   " + *actualHashOpt);
+            vix::cli::util::warn_line(std::cerr, "The checkout in store has been modified or is corrupt.");
+            vix::cli::util::warn_line(std::cerr, "Try: vix store gc && vix deps");
+            return 1;
+          }
+          else
+          {
+            vix::cli::util::kv(std::cout, "verify", "ok");
+          }
+        }
+        else
+        {
+          vix::cli::util::warn_line(std::cerr, "could not compute hash for: " + dep.id);
+        }
       }
 
       load_dep_manifest(dep);

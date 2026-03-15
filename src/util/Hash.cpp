@@ -15,8 +15,11 @@
 #include <algorithm>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include <vix/cli/util/Fs.hpp>
+#include <vix/crypto/hash.hpp>
+#include <vix/crypto/hex.hpp>
 
 namespace vix::cli::util
 {
@@ -72,6 +75,61 @@ namespace vix::cli::util
     }
 
     return hex64(h);
+  }
+
+  std::optional<std::string> sha256_file(const fs::path &p)
+  {
+    std::ifstream ifs(p, std::ios::binary);
+    if (!ifs)
+      return std::nullopt;
+
+    std::vector<char> buf((std::istreambuf_iterator<char>(ifs)),
+                          (std::istreambuf_iterator<char>()));
+
+    std::uint8_t out[32];
+    auto res = vix::crypto::sha256(std::string_view(buf.data(), buf.size()), out);
+    if (!res)
+      return std::nullopt;
+
+    return vix::crypto::hex_lower(out);
+  }
+
+  std::optional<std::string> sha256_directory(const fs::path &dir)
+  {
+    std::error_code ec;
+    if (!fs::exists(dir, ec) || !fs::is_directory(dir, ec))
+      return std::nullopt;
+
+    std::vector<fs::path> files;
+    for (const auto &it : fs::recursive_directory_iterator(dir, ec))
+    {
+      if (ec)
+        break;
+      if (it.is_regular_file())
+        files.push_back(it.path());
+    }
+
+    if (ec)
+      return std::nullopt;
+
+    std::sort(files.begin(), files.end());
+
+    std::string combined;
+    for (const auto &p : files)
+    {
+      auto rel = fs::relative(p, dir).string();
+      auto h = sha256_file(p);
+      if (!h)
+        return std::nullopt;
+      combined += rel + ":" + *h + "\n";
+    }
+
+    std::uint8_t out[32];
+    auto res = vix::crypto::sha256(combined, out);
+    if (!res)
+      return std::nullopt;
+
+    return vix::crypto::hex_lower(out);
   }
 
   std::string compute_project_files_fingerprint(const fs::path &projectDir)

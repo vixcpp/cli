@@ -29,6 +29,11 @@ namespace vix::cli::util
   std::uint64_t fnv1a64_str(const std::string &s, std::uint64_t seed);
   std::string hex64(std::uint64_t v);
   std::optional<std::string> read_file_hash_hex(const fs::path &p);
+
+  // SHA256 hashing
+  std::optional<std::string> sha256_file(const fs::path &p);
+  std::optional<std::string> sha256_directory(const fs::path &dir);
+
   std::string compute_project_files_fingerprint(const fs::path &projectDir);
   bool signature_matches(const fs::path &sigFile, const std::string &sig);
   std::string signature_join(const std::vector<std::pair<std::string, std::string>> &kvs);

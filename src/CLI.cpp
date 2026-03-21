@@ -24,7 +24,7 @@
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
-#include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/SearchCommand.hpp>
@@ -150,8 +150,8 @@ namespace vix
     { return commands::TestsCommand::run(args); };
     commands_["repl"] = [](auto args)
     { return commands::ReplCommand::run(args); };
-    commands_["install"] = [](auto args)
-    { return commands::InstallCommand::run(args); };
+    commands_["cache"] = [](auto args)
+    { return commands::CacheCommand::run(args); };
 
     commands_["-h"] = [this](auto args)
     { return help(args); };
@@ -344,8 +344,8 @@ namespace vix
         return commands::TestsCommand::help();
       if (cmd == "repl")
         return commands::ReplCommand::help();
-      if (cmd == "install")
-        return commands::InstallCommand::help();
+      if (cmd == "cache")
+        return commands::CacheCommand::help();
       if (cmd == "registry")
         return commands::RegistryCommand::help();
       if (cmd == "registry")
@@ -362,7 +362,7 @@ namespace vix
         return commands::StoreCommand::help();
       if (cmd == "publish")
         return commands::PublishCommand::help();
-      if (cmd == "deps")
+      if (cmd == "deps" || cmd == "install")
         return commands::DepsCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
@@ -393,87 +393,78 @@ namespace vix
       out << indent(2) << "Docs: " << link(url) << "\n";
     };
 
-    out << "Vix.cpp - Modern C++ backend runtime\n";
+    out << "Vix.cpp\n";
+    out << "Fast. Simple. Built for real apps.\n";
     out << "Version: " << VIX_CLI_VERSION << "\n\n";
 
-    out << indent(1) << "Usage:\n";
-    out << indent(2) << "vix <command> [options] [args...]\n";
-    out << indent(2) << "vix help <command>\n\n";
-
-    out << indent(1) << "Quick start:\n";
+    out << indent(1) << "Start in seconds:\n";
     out << indent(2) << "vix new api\n";
-    out << indent(2) << "cd api && vix dev\n";
-    out << indent(2) << "vix pack --version 1.0.0 && vix verify\n";
-    out << indent(2) << "vix doctor --online\n";
-    out << indent(2) << "vix upgrade\n\n";
+    out << indent(2) << "cd api\n";
+    out << indent(2) << "vix install\n";
+    out << indent(2) << "vix dev\n\n";
+
+    out << indent(1) << "Core workflow:\n";
+    out << indent(2) << "add      Add a dependency\n";
+    out << indent(2) << "install  Install project dependencies\n";
+    out << indent(2) << "run      Run your app\n";
+    out << indent(2) << "deploy   Deploy your app (coming soon)\n\n";
 
     out << indent(1) << "Commands:\n\n";
 
     // Project
     out << indent(2) << "Project:\n";
     docs("https://vixcpp.com/docs/modules/cli/new");
-    out << indent(3) << "new <name>               Create a new Vix project in ./<name>\n";
-    out << indent(3) << "build [name]             Configure + build (root project or app)\n";
-    out << indent(3) << "run   [name] [--args]    Build (if needed) then run\n";
-    out << indent(3) << "dev   [name]             Dev mode (watch, rebuild, reload)\n";
-    out << indent(3) << "check [path]             Validate a project or compile a single .cpp (no execution)\n";
-    out << indent(3) << "tests [path]             Run project tests (alias of check --tests)\n";
-    out << indent(3) << "repl                     Start interactive Vix REPL\n";
-    out << indent(3) << "modules <subcommand>     Opt-in module system (init/add/check)\n\n";
+    out << indent(3) << "new <name>        Create a new project\n";
+    out << indent(3) << "dev               Start dev server (hot reload)\n";
+    out << indent(3) << "run               Build and run\n";
+    out << indent(3) << "build             Build project\n";
+    out << indent(3) << "check             Validate build or file\n";
+    out << indent(3) << "tests             Run tests\n";
+    out << indent(3) << "repl              Interactive REPL\n\n";
 
     // Registry
-    out << indent(2) << "Registry:\n";
+    out << indent(2) << "Dependencies:\n";
     docs("https://vixcpp.com/docs/modules/cli/search");
-    out << indent(3) << "registry <subcommand>    Sync/search registry index (git-based)\n";
-    out << indent(3) << "registry unpublish <pkg> Remove a package from the registry (opens PR, destructive)\n";
-    out << indent(3) << "search <query>           Search packages in local registry index (offline)\n";
-    out << indent(3) << "add <pkg>@<version>      Add a dependency from registry (pins commit)\n";
-    out << indent(3) << "remove <pkg>             Remove a dependency from vix.lock\n";
-    out << indent(3) << "list                     List project dependencies from vix.lock\n";
-    out << indent(3) << "store <subcommand>       Manage local store cache (gc/path)\n";
-    out << indent(3) << "publish <version>        Publish current repo to registry (JSON + PR)\n";
-    out << indent(3) << "deps                     Install deps from vix.lock (generate .vix/vix_deps.cmake)\n\n";
+    out << indent(3) << "add <pkg>@<ver>   Add dependency\n";
+    out << indent(3) << "install           Install dependencies\n";
+    out << indent(3) << "deps              Alias of install\n";
+    out << indent(3) << "remove <pkg>      Remove dependency\n";
+    out << indent(3) << "list              List dependencies\n\n";
 
-    // Packaging & security
-    out << indent(2) << "Packaging & security:\n";
+    // Packaging
+    out << indent(2) << "Build & share:\n";
     docs("https://vixcpp.com/docs/modules/cli/pack");
-    out << indent(3) << "pack   [options]         Create dist/<name>@<version> (+ optional .vixpkg)\n";
-    out << indent(3) << "verify [options]         Verify dist/<name>@<version> or a .vixpkg artifact\n";
-    out << indent(3) << "install [options]        Install dist/<name>@<version> or a .vixpkg into the local store\n\n";
+    out << indent(3) << "pack              Build distributable package\n";
+    out << indent(3) << "verify            Verify package integrity\n";
+    out << indent(3) << "cache             Store package locally\n\n";
 
-    // Database
-    out << indent(2) << "Database:\n";
-    docs("https://vixcpp.com/docs/modules/cli/orm");
-    out << indent(3) << "orm <subcommand>         Migrations/status/rollback\n\n";
-
-    // Network
-    out << indent(2) << "Network:\n";
-    docs("https://vixcpp.com/docs/modules/cli/p2p");
-    out << indent(3) << "p2p [options]            Run P2P node (tcp + discovery + bootstrap)\n\n";
+    // Advanced
+    out << indent(2) << "Advanced:\n";
+    out << indent(3) << "registry          Sync/search packages\n";
+    out << indent(3) << "store             Manage local cache\n";
+    out << indent(3) << "orm               Database migrations\n";
+    out << indent(3) << "p2p               Run P2P node\n\n";
 
     // Maintenance
-    out << indent(2) << "Maintenance:\n";
-    docs("https://vixcpp.com/docs/modules/cli/doctor");
-    out << indent(3) << "doctor [options]         Check environment and install health\n";
-    out << indent(3) << "upgrade [options]        Upgrade Vix binary (writes install.json)\n";
-    out << indent(3) << "uninstall [options]      Remove Vix CLI (use --all, --purge)\n\n";
+    out << indent(2) << "System:\n";
+    out << indent(3) << "doctor            Check environment\n";
+    out << indent(3) << "upgrade           Update Vix\n";
+    out << indent(3) << "uninstall         Remove Vix\n\n";
 
     // Info
-    out << indent(2) << "Info:\n";
-    docs("https://vixcpp.com/docs/modules/cli/index");
-    out << indent(3) << "help [command]           Show help for CLI or a specific command\n";
-    out << indent(3) << "version                  Show version information\n\n";
+    out << indent(2) << "Help:\n";
+    out << indent(3) << "help [command]    Show command help\n";
+    out << indent(3) << "version           Show version\n\n";
 
     out << indent(1) << "Global options:\n";
-    out << indent(2) << "--verbose                Enable debug logs (same as: --log-level debug)\n";
-    out << indent(2) << "-q, --quiet              Only show warnings and errors\n";
-    out << indent(2) << "--log-level <level>      trace|debug|info|warn|error|critical\n";
-    out << indent(2) << "-h, --help               Show CLI help (or: vix help)\n";
-    out << indent(2) << "-v, --version            Show version info\n\n";
+    out << indent(2) << "--verbose         Debug logs\n";
+    out << indent(2) << "-q, --quiet       Only warnings/errors\n";
+    out << indent(2) << "--log-level       trace|debug|info|warn|error|critical\n";
+    out << indent(2) << "-h, --help        Show help\n";
+    out << indent(2) << "-v, --version     Show version\n\n";
 
     out << indent(1) << "Docs:     " << link("https://vixcpp.com/docs") << "\n";
     out << indent(1) << "Registry: " << link("https://vixcpp.com/registry") << "\n";
-    out << indent(1) << "Bugs:     " << link("https://github.com/vixcpp/vix/issues") << "\n";
     out << indent(1) << "GitHub:   " << link("https://github.com/vixcpp/vix") << "\n\n";
 
     return 0;

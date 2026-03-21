@@ -339,7 +339,7 @@ namespace vix::commands
   {
     (void)args;
 
-    bool all_cached = true;
+    bool did_work = false;
     bool printed_header = false;
 
     const fs::path lp = lock_path();
@@ -384,11 +384,13 @@ namespace vix::commands
     {
       DepResolved dep = resolve_dep_from_lock_entry(d);
 
-      const bool cached = fs::exists(dep.checkout);
-      if (!cached)
-      {
-        all_cached = false;
+      const fs::path link = project_deps_dir() / sanitize_id_dot(dep.id);
 
+      const bool checkout_existed_before = fs::exists(dep.checkout);
+      const bool link_existed_before = fs::exists(link);
+
+      if (!checkout_existed_before)
+      {
         if (!printed_header)
         {
           vix::cli::util::section(std::cout, "Installing dependencies");
@@ -403,6 +405,8 @@ namespace vix::commands
           vix::cli::util::warn_line(std::cerr, "Check git access, network, or re-add with a valid version.");
           return rc;
         }
+
+        did_work = true;
       }
 
       if (!dep.hash.empty())
@@ -428,14 +432,23 @@ namespace vix::commands
 
       load_dep_manifest(dep);
 
-      const fs::path link = project_deps_dir() / sanitize_id_dot(dep.id);
+      if (!link_existed_before)
+        did_work = true;
+
       ensure_symlink_or_copy_dir(dep.checkout, link);
       dep.linkDir = link;
 
       resolved.push_back(dep);
 
-      if (!cached)
+      if (!checkout_existed_before || !link_existed_before)
       {
+        if (!printed_header)
+        {
+          vix::cli::util::section(std::cout, "Installing dependencies");
+          vix::cli::util::one_line_spacer(std::cout);
+          printed_header = true;
+        }
+
         std::cout << "  " << CYAN << "•" << RESET << " "
                   << CYAN << BOLD << dep.id << RESET
                   << GRAY << "@" << RESET
@@ -445,6 +458,8 @@ namespace vix::commands
                   << "\n";
       }
     }
+
+    const bool cmake_existed_before = fs::exists(project_deps_cmake());
 
     try
     {
@@ -456,7 +471,10 @@ namespace vix::commands
       return 1;
     }
 
-    if (all_cached)
+    if (!cmake_existed_before)
+      did_work = true;
+
+    if (!did_work)
     {
       vix::cli::util::ok_line(std::cout, "Dependencies already up to date");
       return 0;

@@ -685,31 +685,28 @@ namespace vix::commands
   int AddCommand::help()
   {
     std::cout
-        << "Usage:\n"
+        << "vix add\n"
+        << "Install a package into your project.\n\n"
+
+        << "Usage\n"
         << "  vix add [@]namespace/name[@version]\n\n"
 
-        << "Description:\n"
-        << "  Install a package from the Vix Registry.\n"
-        << "  If @version is omitted, the latest version is resolved automatically.\n"
-        << "  The namespace may optionally be prefixed with '@' (npm-style scope).\n\n"
+        << "Examples\n"
+        << "  vix add gk/jwt\n"
+        << "  vix add gk/jwt@1.0.0\n"
+        << "  vix add @gk/jwt\n"
+        << "  vix add @gk/jwt@1.0.0\n\n"
 
-        << "Examples:\n"
-        << "  vix registry sync\n"
-        << "  vix add gaspardkirira/tree\n"
-        << "  vix add gaspardkirira/tree@0.1.0\n"
-        << "  vix add @gaspardkirira/tree\n"
-        << "  vix add @gaspardkirira/tree@0.1.0\n\n"
+        << "What happens\n"
+        << "  • Resolves the exact version (latest if not specified)\n"
+        << "  • Fetches the package at a pinned commit\n"
+        << "  • Installs all required dependencies\n"
+        << "  • Updates vix.lock for reproducible builds\n\n"
 
-        << "Behavior:\n"
-        << "  - Resolves the requested version (or latest if omitted)\n"
-        << "  - Clones the repository at the exact commit\n"
-        << "  - Installs transitive dependencies\n"
-        << "  - Writes a vix.lock file pinning the resolved commit SHA\n\n"
-
-        << "Notes:\n"
-        << "  - Run 'vix registry sync' if a package cannot be found.\n"
-        << "  - The lockfile guarantees deterministic builds.\n"
-        << "  - Scoped packages follow the format '@namespace/name'.\n";
+        << "Notes\n"
+        << "  • Use 'vix registry sync' if a package is not found\n"
+        << "  • '@namespace/name' is supported (scoped packages)\n"
+        << "  • Every install is deterministic via vix.lock\n";
 
     return 0;
   }

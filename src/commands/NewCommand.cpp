@@ -1797,25 +1797,38 @@ namespace vix::commands::NewCommand
   {
     std::ostream &out = std::cout;
 
-    out << "Usage:\n";
-    out << "  vix new <name|path> [options]\n\n";
+    out
+        << "vix new\n"
+        << "Create a new Vix project.\n\n"
 
-    out << "Options:\n";
-    out << "  -d, --dir <base_dir>    Base directory where the project folder will be created\n";
-    out << "  --app                   Generate an application template\n";
-    out << "  --lib                   Generate a library template (header-only)\n";
-    out << "  --force                 Overwrite if directory exists (no prompt)\n\n";
+        << "Usage\n"
+        << "  vix new <name|path> [options]\n\n"
 
-    out << "Environment:\n";
-    out << "  VIX_NONINTERACTIVE=1    Disable interactive prompts\n";
-    out << "  CI=1                    Disable interactive prompts\n\n";
+        << "Examples\n"
+        << "  vix new api\n"
+        << "  vix new .\n"
+        << "  vix new tree --lib\n"
+        << "  vix new blog -d ./projects\n"
+        << "  vix new api --force\n\n"
 
-    out << "Examples:\n";
-    out << "  vix new api\n";
-    out << "  vix new .\n";
-    out << "  vix new tree --lib\n";
-    out << "  vix new blog -d ./projects\n";
-    out << "  vix new api --force\n";
+        << "What happens\n"
+        << "  • Generates a ready-to-run Vix project\n"
+        << "  • Sets up CMake, source structure, and config files\n"
+        << "  • Applies the selected template (app or library)\n\n"
+
+        << "Options\n"
+        << "  --app       Generate an application (default)\n"
+        << "  --lib       Generate a header-only library\n"
+        << "  -d, --dir   Base directory for project creation\n"
+        << "  --force     Overwrite existing directory\n\n"
+
+        << "Environment\n"
+        << "  VIX_NONINTERACTIVE=1   Disable prompts\n"
+        << "  CI=1                   Disable prompts\n\n"
+
+        << "Notes\n"
+        << "  • Use '.' to initialize in the current directory\n"
+        << "  • Designed for fast start with zero setup\n";
 
     return 0;
   }

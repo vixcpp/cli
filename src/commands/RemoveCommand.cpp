@@ -65,16 +65,41 @@ namespace vix::commands
       raw = trim_copy(raw);
 
       Target t;
-      const auto pos = raw.find('@');
-      if (pos == std::string::npos)
+
+      const auto slash = raw.find('/');
+      if (slash == std::string::npos)
+        return t;
+
+      if (!raw.empty() && raw[0] == '@')
       {
-        t.id = raw;
+        if (slash <= 1)
+          return Target{};
+        t.id = trim_copy(raw.substr(1, slash - 1)) + "/";
+      }
+      else
+      {
+        t.id = trim_copy(raw.substr(0, slash)) + "/";
+      }
+
+      const auto at_version = raw.find('@', slash + 1);
+
+      if (at_version == std::string::npos)
+      {
+        const std::string name = trim_copy(raw.substr(slash + 1));
+        if (name.empty())
+          return Target{};
+        t.id += name;
         return t;
       }
-      t.id = raw.substr(0, pos);
-      t.version = raw.substr(pos + 1);
-      t.id = trim_copy(t.id);
-      t.version = trim_copy(t.version);
+
+      const std::string name = trim_copy(raw.substr(slash + 1, at_version - (slash + 1)));
+      const std::string version = trim_copy(raw.substr(at_version + 1));
+
+      if (name.empty() || version.empty())
+        return Target{};
+
+      t.id += name;
+      t.version = version;
       return t;
     }
 
@@ -321,26 +346,33 @@ namespace vix::commands
   int RemoveCommand::help()
   {
     std::cout
-        << "Usage:\n"
-        << "  vix remove <pkg>\n"
-        << "  vix remove <pkg>@<version>\n"
-        << "  vix remove <pkg> --purge [-y|--yes]\n\n"
+        << "vix remove\n"
+        << "Remove a package from your project.\n\n"
 
-        << "Description:\n"
-        << "  Remove a dependency from the current project.\n\n"
+        << "Usage\n"
+        << "  vix remove [@]namespace/name[@version]\n"
+        << "  vix remove [@]namespace/name[@version] --purge [-y]\n\n"
 
-        << "Options:\n"
-        << "  --purge        Also delete the local package directory (.vix/deps/<namespace>.<name>)\n"
-        << "  -y, --yes      Skip confirmation (used with --purge)\n\n"
-
-        << "Notes:\n"
-        << "  - This command only affects the current project.\n"
-        << "  - The registry is never modified.\n\n"
-
-        << "Examples:\n"
+        << "Examples\n"
+        << "  vix remove gk/jwt\n"
+        << "  vix remove gk/jwt@1.0.0\n"
         << "  vix remove @gk/jwt\n"
-        << "  vix remove rix/fs@0.1.0\n"
-        << "  vix remove @vix/app --purge\n";
+        << "  vix remove @gk/jwt@1.0.0\n"
+        << "  vix remove @gk/jwt --purge -y\n\n"
+
+        << "What happens\n"
+        << "  • Removes the dependency from vix.lock\n"
+        << "  • Updates project dependency links\n"
+        << "  • Keeps cached packages unless --purge is used\n\n"
+
+        << "Options\n"
+        << "  --purge    Delete local package files (.vix/deps/...)\n"
+        << "  -y         Skip confirmation when using --purge\n\n"
+
+        << "Notes\n"
+        << "  • Only affects the current project\n"
+        << "  • Does not modify the registry\n"
+        << "  • Supports scoped packages (@namespace/name)\n";
 
     return 0;
   }

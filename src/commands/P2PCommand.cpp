@@ -339,41 +339,50 @@ namespace
   static void usage(std::ostream &out)
   {
     out
-        << "Usage:\n"
-        << "  vix p2p --id <node_id> --listen <port> [options]\n"
-        << "\n"
-        << "Core:\n"
-        << "  --id <node_id>                 Node id (string)\n"
-        << "  --listen <port>                TCP listen port\n"
-        << "  --connect <host:port>          Connect to a peer after start\n"
-        << "  --connect-delay <ms>           Delay before connect()\n"
-        << "  --run <seconds>                Auto-stop after N seconds\n"
-        << "  --stats-every <ms>             Stats interval (default: 1000)\n"
-        << "  --tui <on|off>                 Single-line live stats (default: auto on TTY)\n"
-        << "  --quiet                        Print only final stats\n"
-        << "  --no-connect                   Disable auto connect (discovery/bootstrap callbacks)\n"
-        << "\n"
-        << "Discovery (UDP):\n"
-        << "  --discovery <on|off>           Default: on\n"
-        << "  --disc-port <port>             Default: 37020\n"
-        << "  --disc-mode <broadcast|multicast> Default: broadcast\n"
-        << "  --disc-interval <ms>           Default: 2000\n"
-        << "\n"
-        << "Bootstrap (HTTP registry):\n"
-        << "  --bootstrap <on|off>           Default: off\n"
-        << "  --registry <url>               Default: http://127.0.0.1:8080/p2p/v1\n"
-        << "  --boot-interval <seconds>      Default: 15\n"
-        << "  --announce <on|off>            Default: on\n"
-        << "\n"
-        << "Logging:\n"
-        << "  --log-level <level>            trace|debug|info|warn|error|critical|off\n"
-        << "\n"
-        << "Help:\n"
-        << "  --help, -h\n"
-        << "\n"
-        << "Examples:\n"
+        << "vix p2p\n"
+        << "Run a peer-to-peer node.\n\n"
+
+        << "Usage\n"
+        << "  vix p2p --id <node_id> --listen <port> [options]\n\n"
+
+        << "Examples\n"
         << "  vix p2p --id A --listen 9001\n"
-        << "  vix p2p --id B --listen 9002 --connect 127.0.0.1:9001\n";
+        << "  vix p2p --id B --listen 9002 --connect 127.0.0.1:9001\n\n"
+
+        << "What happens\n"
+        << "  • Starts a P2P node with TCP transport\n"
+        << "  • Optionally connects to peers\n"
+        << "  • Enables discovery and/or bootstrap if configured\n"
+        << "  • Streams live stats (TUI or logs)\n\n"
+
+        << "Core\n"
+        << "  --id <node_id>           Unique node identifier\n"
+        << "  --listen <port>          TCP listen port\n"
+        << "  --connect <host:port>    Connect to a peer on startup\n"
+        << "  --connect-delay <ms>     Delay before connecting\n"
+        << "  --run <seconds>          Auto-stop after N seconds\n"
+        << "  --stats-every <ms>       Stats interval (default: 1000)\n"
+        << "  --tui <on|off>           Live stats display (auto on TTY)\n"
+        << "  --quiet                  Print only final stats\n"
+        << "  --no-connect             Disable auto connect\n\n"
+
+        << "Discovery (UDP)\n"
+        << "  --discovery <on|off>     Enable peer discovery (default: on)\n"
+        << "  --disc-port <port>       Discovery port (default: 37020)\n"
+        << "  --disc-mode <mode>       broadcast|multicast (default: broadcast)\n"
+        << "  --disc-interval <ms>     Discovery interval (default: 2000)\n\n"
+
+        << "Bootstrap (Registry)\n"
+        << "  --bootstrap <on|off>     Enable registry bootstrap (default: off)\n"
+        << "  --registry <url>         Registry endpoint\n"
+        << "  --boot-interval <sec>    Refresh interval (default: 15)\n"
+        << "  --announce <on|off>      Announce node to registry (default: on)\n\n"
+
+        << "Logging\n"
+        << "  --log-level <level>      trace|debug|info|warn|error|critical|off\n\n"
+
+        << "Help\n"
+        << "  -h, --help\n";
   }
 
   static bool parse_on_off(const std::string &s, bool &out)

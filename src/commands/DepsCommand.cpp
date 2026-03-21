@@ -313,20 +313,20 @@ namespace vix::commands
     {
       vix::cli::util::one_line_spacer(std::cout);
 
-      vix::cli::util::ok_line(std::cout, "Dependencies installed");
-      vix::cli::util::kv(std::cout, "deps", std::to_string(deps.size()));
-      vix::cli::util::kv(std::cout, "dir", project_deps_dir().string());
-      vix::cli::util::kv(std::cout, "cmake", project_deps_cmake().string());
+      vix::cli::util::ok_line(std::cout, "Dependencies ready");
+      vix::cli::util::info(std::cout, std::to_string(deps.size()) + " package(s) installed");
+      vix::cli::util::info(std::cout, "CMake integration generated");
       std::cout << "\n";
 
-      vix::cli::util::warn_line(std::cout, "Next steps (CMake):");
-      vix::cli::util::warn_line(std::cout, "If you edit vix.lock, run 'vix deps' again to refresh CMake.");
-      std::cout << "  " << GRAY << "• " << RESET << "Add this to your CMakeLists.txt:\n\n";
+      vix::cli::util::warn_line(std::cout, "Next:");
+      std::cout << "  " << GRAY << "• " << RESET
+                << "Add this to your "
+                << CYAN << BOLD << "CMakeLists.txt" << RESET
+                << ":\n\n";
 
       std::cout << "    include(.vix/vix_deps.cmake)\n";
       std::cout << "    add_executable(app main.cpp)\n";
 
-      // Generate target list: ns::name
       std::cout << "    target_link_libraries(app PRIVATE";
       for (const auto &d : deps)
         std::cout << " " << cmake_alias_target(d.id);
@@ -339,12 +339,10 @@ namespace vix::commands
   {
     (void)args;
 
-    vix::cli::util::section(std::cout, "Deps");
+    bool all_cached = true;
+    bool printed_header = false;
 
     const fs::path lp = lock_path();
-    vix::cli::util::kv(std::cout, "lock", lp.string());
-    vix::cli::util::kv(std::cout, "depsDir", project_deps_dir().string());
-    vix::cli::util::kv(std::cout, "cmake", project_deps_cmake().string());
 
     if (!fs::exists(lp))
     {
@@ -370,10 +368,10 @@ namespace vix::commands
       return 1;
     }
 
-    const auto depsArr = lock["dependencies"];
+    const auto &depsArr = lock["dependencies"];
     if (depsArr.empty())
     {
-      vix::cli::util::warn_line(std::cout, "No dependencies in vix.lock");
+      vix::cli::util::warn_line(std::cout, "No dependencies to install");
       return 0;
     }
 
@@ -386,17 +384,17 @@ namespace vix::commands
     {
       DepResolved dep = resolve_dep_from_lock_entry(d);
 
-      vix::cli::util::info_line(std::cout, dep.id + "@" + dep.version);
-
       const bool cached = fs::exists(dep.checkout);
-      if (cached)
+      if (!cached)
       {
-        vix::cli::util::kv(std::cout, "status", "cached");
-      }
-      else
-      {
-        vix::cli::util::kv(std::cout, "status", "fetching");
-        vix::cli::util::kv(std::cout, "repo", dep.repo);
+        all_cached = false;
+
+        if (!printed_header)
+        {
+          vix::cli::util::section(std::cout, "Installing dependencies");
+          vix::cli::util::one_line_spacer(std::cout);
+          printed_header = true;
+        }
 
         const int rc = ensure_checkout_present(dep.repo, dep.id, dep.commit);
         if (rc != 0)
@@ -405,11 +403,8 @@ namespace vix::commands
           vix::cli::util::warn_line(std::cerr, "Check git access, network, or re-add with a valid version.");
           return rc;
         }
-
-        vix::cli::util::kv(std::cout, "status", "fetched");
       }
 
-      // Verify hash if present in lockfile
       if (!dep.hash.empty())
       {
         const auto actualHashOpt = vix::cli::util::sha256_directory(dep.checkout);
@@ -418,15 +413,11 @@ namespace vix::commands
           if (*actualHashOpt != dep.hash)
           {
             vix::cli::util::err_line(std::cerr, "integrity check failed: " + dep.id);
-            vix::cli::util::err_line(std::cerr, "  expected: " + dep.hash);
-            vix::cli::util::err_line(std::cerr, "  actual:   " + *actualHashOpt);
-            vix::cli::util::warn_line(std::cerr, "The checkout in store has been modified or is corrupt.");
-            vix::cli::util::warn_line(std::cerr, "Try: vix store gc && vix deps");
+            vix::cli::util::err_line(std::cerr, "expected: " + dep.hash);
+            vix::cli::util::err_line(std::cerr, "actual:   " + *actualHashOpt);
+            vix::cli::util::warn_line(std::cerr, "The cached checkout appears modified or corrupt.");
+            vix::cli::util::warn_line(std::cerr, "Try: vix store gc && vix install");
             return 1;
-          }
-          else
-          {
-            vix::cli::util::kv(std::cout, "verify", "ok");
           }
         }
         else
@@ -436,26 +427,41 @@ namespace vix::commands
       }
 
       load_dep_manifest(dep);
-      vix::cli::util::kv(std::cout, "commit", dep.commit);
 
-      // Create stable project-local link
       const fs::path link = project_deps_dir() / sanitize_id_dot(dep.id);
       ensure_symlink_or_copy_dir(dep.checkout, link);
       dep.linkDir = link;
 
-      // Affiche link seulement si on a vraiment fait quelque chose
-      if (!cached)
-        vix::cli::util::kv(std::cout, "link", dep.linkDir.string());
+      resolved.push_back(dep);
 
-      // Create a stable project-local link:
-      // .vix/deps/<ns>.<name> -> ~/.vix/store/git/<ns>.<name>/<commit>
-      ensure_symlink_or_copy_dir(dep.checkout, link);
-      dep.linkDir = link;
-      vix::cli::util::kv(std::cout, "link", dep.linkDir.string());
-      resolved.push_back(std::move(dep));
+      if (!cached)
+      {
+        std::cout << "  " << CYAN << "•" << RESET << " "
+                  << CYAN << BOLD << dep.id << RESET
+                  << GRAY << "@" << RESET
+                  << YELLOW << BOLD << dep.version << RESET
+                  << "  "
+                  << GRAY << "installed" << RESET
+                  << "\n";
+      }
     }
 
-    generate_cmake(resolved);
+    try
+    {
+      generate_cmake(resolved);
+    }
+    catch (const std::exception &ex)
+    {
+      vix::cli::util::err_line(std::cerr, std::string("failed to generate CMake integration: ") + ex.what());
+      return 1;
+    }
+
+    if (all_cached)
+    {
+      vix::cli::util::ok_line(std::cout, "Dependencies already up to date");
+      return 0;
+    }
+
     print_next_steps(resolved);
     return 0;
   }
@@ -464,17 +470,29 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
+        << "  vix install\n"
         << "  vix deps\n\n"
 
-        << "Description:\n"
-        << "  Install dependencies listed in vix.lock.\n"
-        << "  Packages are fetched into ./.vix/deps.\n"
-        << "  Generates ./.vix/vix_deps.cmake.\n\n"
+        << "What this does:\n"
+        << "  Install project dependencies from vix.lock.\n"
+        << "  Packages are fetched and linked into ./.vix/deps.\n\n"
+
+        << "Why it matters:\n"
+        << "  • One command to set up your project\n"
+        << "  • Reuses cached packages when available\n"
+        << "  • Generates CMake integration automatically\n\n"
+
+        << "Outputs:\n"
+        << "  ./.vix/deps/\n"
+        << "  ./.vix/vix_deps.cmake\n\n"
 
         << "Examples:\n"
-        << "  vix add gaspardkirira/tree@0.4.0\n"
-        << "  vix add gaspardkirira/binary_search@0.1.1\n"
-        << "  vix deps\n";
+        << "  vix add @rix/io\n"
+        << "  vix add @gk/jwt\n"
+        << "  vix install\n\n"
+
+        << "Compatibility:\n"
+        << "  vix deps is an alias of vix install.\n";
 
     return 0;
   }

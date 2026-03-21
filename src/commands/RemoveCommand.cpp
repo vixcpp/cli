@@ -338,9 +338,9 @@ namespace vix::commands
         << "  - The registry is never modified.\n\n"
 
         << "Examples:\n"
-        << "  vix remove gaspardkirira/strings\n"
-        << "  vix remove gaspardkirira/strings@0.1.4\n"
-        << "  vix remove gaspardkirira/strings --purge\n";
+        << "  vix remove @gk/jwt\n"
+        << "  vix remove rix/fs@0.1.0\n"
+        << "  vix remove @vix/app --purge\n";
 
     return 0;
   }

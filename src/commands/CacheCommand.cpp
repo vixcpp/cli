@@ -1,6 +1,6 @@
 /**
  *
- *  @file InstallCommand.cpp
+ *  @file CacheCommand.cpp
  *  @author Gaspard Kirira
  *
  *  Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -12,17 +12,17 @@
  *
  */
 // ============================================================================
-// InstallCommand.cpp — Install a Vix package into a local store (Vix.cpp CLI)
+// CacheCommand.cpp — Cache a Vix package into a local store (Vix.cpp CLI)
 // ----------------------------------------------------------------------------
 // Features:
 //   - --path <folder|artifact.vixpkg>
 //   - --store <dir> (override store root)
-//   - --force (overwrite installed package)
+//   - --force (overwrite cached package)
 //   - --no-verify (skip verification; NOT recommended)
 //   - --require-signature, --pubkey <path> (signature verification)
 //   - extraction of .vixpkg (POSIX: unzip)
 //   - verifies: manifest minimal + payload digest + checksums + minisign signature
-//   - atomic install: copy to tmp dir then rename() into final destination
+//   - atomic cache: copy to tmp dir then rename() into final destination
 //
 // Default store (POSIX):
 //   1) $VIX_STORE if set
@@ -31,12 +31,12 @@
 //   store path becomes: <root>/packs/<name>/<version>/<os>-<arch>/
 //
 // Usage:
-//   vix install --path ./dist/blog@1.0.0.vixpkg
-//   vix install --path ./dist/blog@1.0.0 --force
-//   vix install --path ./blog@1.0.0.vixpkg --require-signature --pubkey ./keys/vix-pack.pub
+//   vix cache --path ./dist/blog@1.0.0.vixpkg
+//   vix cache --path ./dist/blog@1.0.0 --force
+//   vix cache --path ./blog@1.0.0.vixpkg --require-signature --pubkey ./keys/vix-pack.pub
 // ============================================================================
 
-#include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
@@ -314,7 +314,7 @@ namespace
       return std::nullopt;
 
     const int pid = static_cast<int>(::getpid());
-    const fs::path tmp = dir / (".vix_install_tmp_" + std::to_string(pid) + ".txt");
+    const fs::path tmp = dir / (".vix_cache_tmp_" + std::to_string(pid) + ".txt");
 
     write_text_file(tmp, data);
 
@@ -357,7 +357,7 @@ namespace
       return std::nullopt;
 
     const int pid = static_cast<int>(::getpid());
-    fs::path tmp = fs::temp_directory_path() / ("vix_install_" + std::to_string(pid));
+    fs::path tmp = fs::temp_directory_path() / ("vix_cache_" + std::to_string(pid));
 
     std::error_code ec;
     fs::remove_all(tmp, ec);
@@ -784,8 +784,8 @@ namespace
     }
   }
 
-  // Atomic install (copy -> rename)
-  void atomic_install_folder(
+  // Atomic cache (copy -> rename)
+  void atomic_cache_folder(
       const fs::path &packRoot,
       const fs::path &dstFinal,
       bool force,
@@ -795,7 +795,7 @@ namespace
     if (has_dir(dstFinal) || has_file(dstFinal))
     {
       if (!force)
-        throw std::runtime_error("Package already installed: " + dstFinal.string() + " (use --force)");
+        throw std::runtime_error("Package already cached: " + dstFinal.string() + " (use --force)");
       std::error_code ec;
       fs::remove_all(dstFinal, ec);
       if (ec)
@@ -936,7 +936,7 @@ namespace
     // If user didn't provide --path, try a sane default:
     // - if ./dist exists, pick latest dist/* by manifest.json mtime? (optional)
     // For now keep strict: require --path.
-    throw std::runtime_error("Missing --path. Try: vix install --path <folder|artifact.vixpkg>");
+    throw std::runtime_error("Missing --path. Try: vix cache --path <folder|artifact.vixpkg>");
   }
 
   // Extract package identity from manifest (name/version/os/arch)
@@ -993,7 +993,7 @@ namespace
 
 } // namespace
 
-namespace vix::commands::InstallCommand
+namespace vix::commands::CacheCommand
 {
   int run(const std::vector<std::string> &args)
   {
@@ -1005,8 +1005,8 @@ namespace vix::commands::InstallCommand
     }
     catch (const std::exception &ex)
     {
-      vix::cli::style::error(std::string("install: ") + ex.what());
-      vix::cli::style::hint("Try: vix install --help");
+      vix::cli::style::error(std::string("cache: ") + ex.what());
+      vix::cli::style::hint("Try: vix cache --help");
       return 1;
     }
 
@@ -1020,7 +1020,7 @@ namespace vix::commands::InstallCommand
       catch (const std::exception &ex)
       {
         vix::cli::style::error(ex.what());
-        vix::cli::style::hint("Example: vix install --path ./dist/blog@1.0.0.vixpkg");
+        vix::cli::style::hint("Example: vix cache --path ./dist/blog@1.0.0.vixpkg");
         return {};
       }
     }();
@@ -1028,7 +1028,7 @@ namespace vix::commands::InstallCommand
     if (input.empty())
       return 1;
 
-    vix::cli::style::section_title(std::cout, "vix install");
+    vix::cli::style::section_title(std::cout, "vix cache");
 
     // resolve package root (folder or extracted temp)
     std::optional<fs::path> tmp;
@@ -1141,28 +1141,24 @@ namespace vix::commands::InstallCommand
     vix::cli::style::info("Target store:");
     vix::cli::style::step(storeRoot.string());
 
-    vix::cli::style::info("Installing:");
+    vix::cli::style::info("Caching:");
     vix::cli::style::step(pkg.name + "@" + pkg.version + " (" + pkg.abi_tag() + ")");
     vix::cli::style::step(dstFinal.string());
 
     try
     {
-      // atomic install: copy -> rename
-      // NOTE: if input is a folder inside dist/, and store is elsewhere,
-      // we still do copy into storeRoot and then atomic rename within same parent.
-      // The "atomic" part is for finalization of the install.
-      atomic_install_folder(packRoot, dstFinal, opt.force, opt.verbose);
+      atomic_cache_folder(packRoot, dstFinal, opt.force, opt.verbose);
     }
     catch (const std::exception &ex)
     {
-      vix::cli::style::error(std::string("install failed: ") + ex.what());
+      vix::cli::style::error(std::string("cache failed: ") + ex.what());
       cleanup_temp_dir(tmp);
       return 1;
     }
 
     cleanup_temp_dir(tmp);
 
-    vix::cli::style::success("Package installed:");
+    vix::cli::style::success("Package cached:");
     vix::cli::style::step(dstFinal.string());
 
     vix::cli::style::hint("Next: vix get " + pkg.name + "@" + pkg.version + " --out ./<folder> (coming soon)");
@@ -1174,31 +1170,37 @@ namespace vix::commands::InstallCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix install --path <folder|artifact.vixpkg> [options]\n\n";
+    out << "  vix cache --path <folder|artifact.vixpkg> [options]\n\n";
 
-    out << "Description:\n";
-    out << "  Install a Vix package into a local store (cache/store).\n";
-    out << "  By default, it verifies payload digest, checksums, and signature (if present).\n\n";
+    out << "What this does:\n";
+    out << "  Cache a Vix package locally so it can be reused instantly.\n";
+    out << "  Ideal before running, sharing, or deploying applications.\n\n";
+
+    out << "Why it matters:\n";
+    out << "  • No rebuilds — reuse prebuilt artifacts\n";
+    out << "  • Safe — integrity and signature verification\n";
+    out << "  • Fast — optimized local storage\n\n";
 
     out << "Options:\n";
     out << "  -p, --path <path>          Package folder or .vixpkg artifact (required)\n";
-    out << "  --store <dir>              Override store root (default: VIX_STORE, XDG_DATA_HOME/vix, ~/.local/share/vix)\n";
-    out << "  --force                    Overwrite if already installed\n";
-    out << "  --no-verify                Skip verification (NOT recommended)\n";
-    out << "  --verbose                  Print detailed checks and copied files\n";
-    out << "  --require-signature        Fail if signature is missing or cannot be verified\n";
-    out << "  --pubkey <path>            minisign public key (or set VIX_MINISIGN_PUBKEY)\n";
+    out << "  --store <dir>              Custom store location\n";
+    out << "  --force                    Overwrite if already cached\n";
+    out << "  --no-verify                Skip verification (not recommended)\n";
+    out << "  --verbose                  Show detailed operations\n";
+    out << "  --require-signature        Require valid signature\n";
+    out << "  --pubkey <path>            Minisign public key\n";
     out << "  -h, --help                 Show this help\n\n";
 
-    out << "Store layout:\n";
-    out << "  <store>/packs/<name>/<version>/<os>-<arch>/\n\n";
-
     out << "Examples:\n";
-    out << "  vix install --path ./dist/blog@1.0.0.vixpkg\n";
-    out << "  vix install --path ./dist/blog@1.0.0 --force\n";
-    out << "  vix install --path ./blog@1.0.0.vixpkg --require-signature --pubkey ./keys/vix-pack.pub\n";
+    out << "  vix cache --path ./dist/blog@1.0.0.vixpkg\n";
+    out << "  vix cache --path ./dist/blog@1.0.0 --force\n";
+    out << "  vix cache --path ./blog@1.0.0.vixpkg --require-signature --pubkey ./keys/vix-pack.pub\n\n";
+
+    out << "Next step:\n";
+    out << "  Once cached, you'll soon be able to deploy instantly with:\n";
+    out << "  vix deploy <name>@<version>\n";
 
     return 0;
   }
 
-} // namespace vix::commands::InstallCommand
+} // namespace vix::commands::CacheCommand

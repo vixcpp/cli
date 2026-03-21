@@ -21,7 +21,7 @@
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
-#include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
@@ -146,13 +146,13 @@ namespace vix::cli::dispatch
          { return vix::commands::VerifyCommand::run(a); },
          []()
          { return vix::commands::VerifyCommand::help(); }});
-    add({"install",
+    add({"cache",
          "Packaging",
-         "Install a package into the local store",
+         "Cache a package into the local store",
          [](const Args &a)
-         { return vix::commands::InstallCommand::run(a); },
+         { return vix::commands::CacheCommand::run(a); },
          []()
-         { return vix::commands::InstallCommand::help(); }});
+         { return vix::commands::CacheCommand::help(); }});
 
     // Registry
     add({"registry",
@@ -226,6 +226,14 @@ namespace vix::cli::dispatch
     add({"deps",
          "Registry",
          "Install deps from vix.lock into .vix/ and generate CMake file",
+         [](const Args &a)
+         { return vix::commands::DepsCommand::run(a); },
+         []()
+         { return vix::commands::DepsCommand::help(); }});
+
+    add({"install",
+         "Registry",
+         "Install project dependencies from vix.lock",
          [](const Args &a)
          { return vix::commands::DepsCommand::run(a); },
          []()

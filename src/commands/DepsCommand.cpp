@@ -292,17 +292,40 @@ namespace vix::commands
         const std::string alias = cmake_alias_target(dep.id);
 
         out << "# " << dep.id << " @" << dep.version << " (" << dep.commit << ")\n";
-        out << "add_library(" << safe << " INTERFACE)\n";
-        out << "add_library(" << alias << " ALIAS " << safe << ")\n";
 
         if (dep.type == "header-only" || dep.type == "header_only" || dep.type == "headers")
         {
           const fs::path inc = dep.linkDir / dep.include;
-          out << "target_include_directories(" << safe << " INTERFACE " << cmake_quote(inc.string()) << ")\n";
+          out << "add_library(" << safe << " INTERFACE)\n";
+          out << "add_library(" << alias << " ALIAS " << safe << ")\n";
+          out << "target_include_directories(" << safe << " INTERFACE "
+              << cmake_quote(inc.string()) << ")\n";
+        }
+        else if (dep.type == "library" ||
+                 dep.type == "header-and-source" ||
+                 dep.type == "header_and_source" ||
+                 dep.type == "headers-and-sources")
+        {
+          const fs::path depSourceDir = dep.linkDir;
+          const std::string buildDirName = "_vix_build_" + sanitize_id_dot(dep.id);
+
+          out << "if(NOT TARGET " << alias << ")\n";
+          out << "  add_subdirectory("
+              << cmake_quote(depSourceDir.string()) << " "
+              << cmake_quote((project_vix_dir() / buildDirName).string()) << ")\n";
+          out << "endif()\n";
+
+          out << "if(NOT TARGET " << alias << ")\n";
+          out << "  message(FATAL_ERROR "
+              << cmake_quote("Dependency " + dep.id + " did not define expected target " + alias)
+              << ")\n";
+          out << "endif()\n";
         }
         else
         {
-          out << "# NOTE: non header-only package type not installed automatically in V1\n";
+          out << "message(WARNING "
+              << cmake_quote("Unsupported Vix package type for " + dep.id + ": " + dep.type)
+              << ")\n";
         }
 
         out << "\n";

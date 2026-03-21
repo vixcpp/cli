@@ -16,6 +16,9 @@
 #include <fstream>
 #include <string>
 #include <algorithm>
+#include <nlohmann/json.hpp>
+#include <unordered_map>
+#include <queue>
 
 namespace vix::commands::RunCommand::detail
 {
@@ -26,6 +29,139 @@ namespace vix::commands::RunCommand::detail
     bool usesDb = false;
     bool usesMysql = false;
   };
+
+  static std::vector<std::string> load_package_dependencies_from_manifest(const fs::path &pkgPath)
+  {
+    std::vector<std::string> deps;
+
+    const fs::path manifestPath = pkgPath / "vix.json";
+    if (!fs::exists(manifestPath))
+      return deps;
+
+    std::ifstream ifs(manifestPath);
+    if (!ifs)
+      return deps;
+
+    nlohmann::json j;
+    ifs >> j;
+
+    if (!j.contains("dependencies"))
+      return deps;
+
+    const auto &d = j["dependencies"];
+
+    if (d.is_object())
+    {
+      for (auto it = d.begin(); it != d.end(); ++it)
+        deps.push_back(it.key());
+    }
+    else if (d.is_array())
+    {
+      for (const auto &item : d)
+      {
+        if (item.is_string())
+        {
+          deps.push_back(item.get<std::string>());
+        }
+        else if (item.is_object())
+        {
+          if (item.contains("id") && item["id"].is_string())
+            deps.push_back(item["id"].get<std::string>());
+          else if (item.contains("name") && item["name"].is_string())
+            deps.push_back(item["name"].get<std::string>());
+          else if (item.contains("package") && item["package"].is_string())
+            deps.push_back(item["package"].get<std::string>());
+        }
+      }
+    }
+
+    return deps;
+  }
+
+  static std::string dep_dir_to_id(const std::string &pkgDir)
+  {
+    std::string id = pkgDir;
+    std::replace(id.begin(), id.end(), '.', '/');
+    return id;
+  }
+
+  static std::string dep_id_to_dir(std::string depId)
+  {
+    depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
+    std::replace(depId.begin(), depId.end(), '/', '.');
+    return depId;
+  }
+
+  static std::vector<std::pair<std::string, std::string>> topo_sort_dep_packages(
+      const std::vector<std::pair<std::string, std::string>> &depPackages)
+  {
+    std::vector<std::pair<std::string, std::string>> ordered;
+
+    std::unordered_map<std::string, std::string> dirToPath;
+    std::unordered_map<std::string, std::vector<std::string>> graph;
+    std::unordered_map<std::string, int> indegree;
+
+    for (const auto &[pkgDir, pkgPath] : depPackages)
+    {
+      dirToPath[pkgDir] = pkgPath;
+      graph[pkgDir] = {};
+      indegree[pkgDir] = 0;
+    }
+
+    for (const auto &[pkgDir, pkgPath] : depPackages)
+    {
+      const auto manifestDeps = load_package_dependencies_from_manifest(pkgPath);
+
+      for (const auto &depId : manifestDeps)
+      {
+        const std::string depDir = dep_id_to_dir(depId);
+
+        if (!dirToPath.contains(depDir))
+          continue;
+
+        graph[depDir].push_back(pkgDir);
+        indegree[pkgDir]++;
+      }
+    }
+
+    std::queue<std::string> q;
+
+    std::vector<std::string> zero;
+    for (const auto &[pkgDir, _] : depPackages)
+    {
+      if (indegree[pkgDir] == 0)
+        zero.push_back(pkgDir);
+    }
+
+    std::sort(zero.begin(), zero.end());
+    for (const auto &pkgDir : zero)
+      q.push(pkgDir);
+
+    while (!q.empty())
+    {
+      const std::string cur = q.front();
+      q.pop();
+
+      ordered.push_back({cur, dirToPath[cur]});
+
+      auto nexts = graph[cur];
+      std::sort(nexts.begin(), nexts.end());
+
+      for (const auto &next : nexts)
+      {
+        indegree[next]--;
+        if (indegree[next] == 0)
+          q.push(next);
+      }
+    }
+
+    if (ordered.size() != depPackages.size())
+    {
+      return depPackages;
+    }
+
+    return ordered;
+  }
 
   static ScriptFeatures detect_script_features(const fs::path &cppPath)
   {
@@ -125,10 +261,10 @@ namespace vix::commands::RunCommand::detail
 
   struct ScriptCompileFlags
   {
-    std::vector<std::string> includeDirs; // -I...
-    std::vector<std::string> systemDirs;  // -isystem ...
-    std::vector<std::string> defines;     // -DKEY=VAL
-    std::vector<std::string> compileOpts; // autres options compile
+    std::vector<std::string> includeDirs;
+    std::vector<std::string> systemDirs;
+    std::vector<std::string> defines;
+    std::vector<std::string> compileOpts;
   };
 
   static inline bool starts_with(const std::string &s, const char *p)
@@ -144,7 +280,6 @@ namespace vix::commands::RunCommand::detail
     {
       const std::string &f = flags[i];
 
-      // -I/path or -I /path
       if (starts_with(f, "-I") && f.size() > 2)
       {
         out.includeDirs.push_back(f.substr(2));
@@ -156,7 +291,6 @@ namespace vix::commands::RunCommand::detail
         continue;
       }
 
-      // -isystem/path or -isystem /path
       if (starts_with(f, "-isystem") && f.size() > 8)
       {
         out.systemDirs.push_back(f.substr(8));
@@ -168,7 +302,6 @@ namespace vix::commands::RunCommand::detail
         continue;
       }
 
-      // -DKEY or -DKEY=VAL or -D KEY=VAL
       if (starts_with(f, "-D") && f.size() > 2)
       {
         out.defines.push_back(f.substr(2));
@@ -180,10 +313,137 @@ namespace vix::commands::RunCommand::detail
         continue;
       }
 
-      // sinon, c est une option compile generique
-      // exemple: -O2, -g, -std=c++20, -fPIC, -Wno-...
       if (!f.empty() && f[0] == '-')
         out.compileOpts.push_back(f);
+    }
+
+    return out;
+  }
+
+  static std::string dep_id_to_cmake_alias(const std::string &id)
+  {
+    std::string alias = id;
+    std::replace(alias.begin(), alias.end(), '/', ':');
+    const auto pos = alias.find(':');
+    if (pos != std::string::npos)
+      alias.replace(pos, 1, "::");
+    return alias;
+  }
+
+  static std::vector<std::string> extract_dep_aliases_from_include_dirs(
+      const std::vector<std::string> &includeDirs)
+  {
+    std::vector<std::string> aliases;
+
+    for (const auto &d : includeDirs)
+    {
+      const std::string marker = "/.vix/deps/";
+      const auto pos = d.find(marker);
+      if (pos == std::string::npos)
+        continue;
+
+      std::string tail = d.substr(pos + marker.size());
+      const auto slash = tail.find('/');
+      if (slash == std::string::npos)
+        continue;
+
+      std::string pkg = tail.substr(0, slash);
+      std::replace(pkg.begin(), pkg.end(), '.', '/');
+
+      aliases.push_back(dep_id_to_cmake_alias(pkg));
+    }
+
+    std::sort(aliases.begin(), aliases.end());
+    aliases.erase(std::unique(aliases.begin(), aliases.end()), aliases.end());
+    return aliases;
+  }
+
+  static std::vector<std::string> load_ordered_packages_from_lock(const fs::path &lockPath)
+  {
+    std::vector<std::string> ordered;
+
+    if (!fs::exists(lockPath))
+      return ordered;
+
+    std::ifstream ifs(lockPath);
+    if (!ifs)
+      return ordered;
+
+    nlohmann::json j;
+    ifs >> j;
+
+    if (j.is_array())
+    {
+      for (const auto &pkg : j)
+      {
+        if (!pkg.is_object())
+          continue;
+
+        if (pkg.contains("id") && pkg["id"].is_string())
+          ordered.push_back(pkg["id"].get<std::string>());
+      }
+      return ordered;
+    }
+
+    if (j.is_object())
+    {
+      if (j.contains("packages") && j["packages"].is_array())
+      {
+        for (const auto &pkg : j["packages"])
+        {
+          if (!pkg.is_object())
+            continue;
+
+          if (pkg.contains("id") && pkg["id"].is_string())
+            ordered.push_back(pkg["id"].get<std::string>());
+        }
+        return ordered;
+      }
+
+      if (j.contains("dependencies") && j["dependencies"].is_object())
+      {
+        for (auto it = j["dependencies"].begin(); it != j["dependencies"].end(); ++it)
+          ordered.push_back(it.key());
+        return ordered;
+      }
+    }
+
+    return ordered;
+  }
+
+  static std::vector<std::pair<std::string, std::string>> extract_dep_packages_from_include_dirs(
+      const std::vector<std::string> &includeDirs)
+  {
+    std::vector<std::pair<std::string, std::string>> out;
+
+    for (const auto &d : includeDirs)
+    {
+      const std::string marker = "/.vix/deps/";
+      const auto pos = d.find(marker);
+      if (pos == std::string::npos)
+        continue;
+
+      const std::string depsRoot = d.substr(0, pos + marker.size());
+      std::string tail = d.substr(pos + marker.size());
+
+      const auto slash = tail.find('/');
+      if (slash == std::string::npos)
+        continue;
+
+      const std::string pkgDir = tail.substr(0, slash);
+
+      bool exists = false;
+      for (const auto &it : out)
+      {
+        if (it.first == pkgDir)
+        {
+          exists = true;
+          break;
+        }
+      }
+
+      if (!exists)
+        out.push_back({pkgDir, depsRoot + pkgDir});
     }
 
     return out;
@@ -214,25 +474,34 @@ namespace vix::commands::RunCommand::detail
       return out;
     };
 
+    auto q_raw = [](const std::string &p)
+    {
+      return "\"" + p + "\"";
+    };
+
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + exeName + " LANGUAGES CXX)\n\n";
+
+    const fs::path scriptDir = cppPath.parent_path() / ".vix-scripts" / exeName;
+    const fs::path depsFile = scriptDir / "vix_deps.cmake";
+
+    s += "if (EXISTS " + q(depsFile.string()) + ")\n";
+    s += "  include(" + q(depsFile.string()) + ")\n";
+    s += "endif()\n\n";
 
     s += "set(CMAKE_VERBOSE_MAKEFILE ON)\n";
     s += "set(CMAKE_RULE_MESSAGES OFF)\n\n";
 
-    // Standard
     s += "set(CMAKE_CXX_STANDARD 20)\n";
     s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
     s += "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
 
-    // Default build type
     s += "if (NOT CMAKE_BUILD_TYPE)\n";
     s += "  set(CMAKE_BUILD_TYPE Debug CACHE STRING \"Build type\" FORCE)\n";
     s += "endif()\n\n";
 
     auto feat = detect_script_features(cppPath);
 
-    // Options
     s += "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)\n";
     s += "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan or ubsan\")\n";
     s += "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan)\n";
@@ -240,11 +509,78 @@ namespace vix::commands::RunCommand::detail
     s += "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)\n";
     s += std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")\n";
 
-    // Executable
-    s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
     auto lf = parse_link_flags(scriptFlags);
-
     const auto cf = parse_compile_flags(scriptFlags);
+    const auto autoDepAliases = extract_dep_aliases_from_include_dirs(cf.includeDirs);
+
+    const fs::path lockPath = cppPath.parent_path() / "vix.lock";
+    auto orderedDeps = load_ordered_packages_from_lock(lockPath);
+
+    const fs::path depsRoot = cppPath.parent_path() / ".vix" / "deps";
+
+    if (orderedDeps.empty())
+    {
+      const auto depPackages = extract_dep_packages_from_include_dirs(cf.includeDirs);
+      for (const auto &[pkgDir, _pkgPath] : depPackages)
+        orderedDeps.push_back(pkgDir);
+    }
+
+    std::vector<std::pair<std::string, fs::path>> cmakeDeps;
+    cmakeDeps.reserve(orderedDeps.size());
+
+    for (const auto &depId : orderedDeps)
+    {
+      std::string pkgDir = depId;
+      fs::path pkgPath;
+
+      if (depId.find('/') != std::string::npos || depId.find('@') != std::string::npos)
+      {
+        pkgDir = dep_id_to_dir(depId);
+        pkgPath = depsRoot / pkgDir;
+      }
+      else
+      {
+        pkgPath = depsRoot / depId;
+      }
+
+      if (fs::exists(pkgPath / "CMakeLists.txt"))
+        cmakeDeps.emplace_back(pkgDir, pkgPath);
+    }
+
+    auto rank_dep = [](const std::string &pkgDir) -> int
+    {
+      if (pkgDir == "softadastra.core")
+        return 0;
+      if (pkgDir == "softadastra.fs")
+        return 1;
+      if (pkgDir == "softadastra.wal")
+        return 2;
+      if (pkgDir == "softadastra.store")
+        return 3;
+      if (pkgDir == "softadastra.sync")
+        return 4;
+      if (pkgDir == "softadastra.transport")
+        return 5;
+      return 100;
+    };
+
+    std::stable_sort(cmakeDeps.begin(), cmakeDeps.end(),
+                     [&](const auto &a, const auto &b)
+                     {
+                       return rank_dep(a.first) < rank_dep(b.first);
+                     });
+
+    for (const auto &[pkgDir, pkgPath] : cmakeDeps)
+    {
+      s += "if (EXISTS " + q((pkgPath / "CMakeLists.txt").string()) + ")\n";
+      s += "  add_subdirectory(" + q(pkgPath.string()) + " " +
+           q_raw("${CMAKE_BINARY_DIR}/_deps/" + pkgDir) +
+           " EXCLUDE_FROM_ALL)\n";
+      s += "endif()\n";
+    }
+
+    s += "\n";
+    s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
 
     if (!cf.includeDirs.empty() || !cf.systemDirs.empty())
     {
@@ -260,6 +596,14 @@ namespace vix::commands::RunCommand::detail
           s += "  " + q(d) + "\n";
         s += ")\n\n";
       }
+    }
+
+    if (!autoDepAliases.empty())
+    {
+      s += "target_link_libraries(" + exeName + " PRIVATE\n";
+      for (const auto &alias : autoDepAliases)
+        s += "  " + alias + "\n";
+      s += ")\n\n";
     }
 
     if (!cf.defines.empty())
@@ -295,7 +639,7 @@ namespace vix::commands::RunCommand::detail
     {
       s += "target_link_libraries(" + exeName + " PRIVATE\n";
       for (const auto &L : lf.libs)
-        s += "  " + L + "\n"; // ssl crypto
+        s += "  " + L + "\n";
       s += ")\n\n";
     }
 
@@ -303,11 +647,10 @@ namespace vix::commands::RunCommand::detail
     {
       s += "target_link_options(" + exeName + " PRIVATE\n";
       for (const auto &o : lf.linkOpts)
-        s += "  " + o + "\n"; // ex: -Wl,--as-needed
+        s += "  " + o + "\n";
       s += ")\n\n";
     }
 
-    // Warnings
     s += "if (MSVC)\n";
     s += "  target_compile_options(" + exeName + " PRIVATE /W4 /permissive- /EHsc)\n";
     s += "  target_compile_definitions(" + exeName + " PRIVATE _CRT_SECURE_NO_WARNINGS)\n";
@@ -319,7 +662,6 @@ namespace vix::commands::RunCommand::detail
     s += "  )\n";
     s += "endif()\n\n";
 
-    // Better backtraces
     s += "if (NOT MSVC)\n";
     s += "  target_compile_options(" + exeName + " PRIVATE -fno-omit-frame-pointer)\n";
     s += "  if (UNIX AND NOT APPLE)\n";
@@ -327,18 +669,15 @@ namespace vix::commands::RunCommand::detail
     s += "  endif()\n";
     s += "endif()\n\n";
 
-    // libstdc++ assertions
     s += "if (VIX_ENABLE_LIBCXX_ASSERTS AND NOT MSVC)\n";
     s += "  target_compile_definitions(" + exeName + " PRIVATE _GLIBCXX_ASSERTIONS)\n";
     s += "endif()\n\n";
 
-    // Hardening
     s += "if (VIX_ENABLE_HARDENING AND NOT MSVC)\n";
     s += "  target_compile_options(" + exeName + " PRIVATE -D_FORTIFY_SOURCE=2)\n";
     s += "  target_link_options(" + exeName + " PRIVATE -Wl,-z,relro -Wl,-z,now)\n";
     s += "endif()\n\n";
 
-    // Link libs if standalone
     if (!useVixRuntime)
     {
       s += "if (UNIX AND NOT APPLE)\n";
@@ -369,7 +708,6 @@ namespace vix::commands::RunCommand::detail
 
       s += "target_link_libraries(" + exeName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
 
-      s += "# Optional ORM (and DB)\n";
       s += "if (VIX_USE_ORM)\n";
       s += "  if (TARGET vix::orm)\n";
       s += "    target_link_libraries(" + exeName + " PRIVATE vix::orm)\n";
@@ -390,7 +728,6 @@ namespace vix::commands::RunCommand::detail
       s += "  endif()\n";
       s += "endif()\n\n";
 
-      // Auto-link MySQL connector only when needed and not already provided
       if (feat.usesMysql && !hasLib("mysqlcppconn8") && !hasLib("mysqlcppconn"))
       {
         s += "# Auto-link MySQL connector when script uses MySQL\n";
@@ -405,7 +742,6 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
-    // Sanitizers (mode-aware)
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
     s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
     s += "    message(STATUS \"Sanitizers: UBSan enabled\")\n";
@@ -429,7 +765,6 @@ namespace vix::commands::RunCommand::detail
     s += "  endif()\n";
     s += "endif()\n\n";
 
-    // Always keep some debug info on Linux
     s += "if (UNIX AND NOT APPLE)\n";
     s += "  target_compile_options(" + exeName + " PRIVATE -g)\n";
     s += "endif()\n";

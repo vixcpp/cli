@@ -511,8 +511,6 @@ namespace vix::commands::RunCommand::detail
 
     auto lf = parse_link_flags(scriptFlags);
     const auto cf = parse_compile_flags(scriptFlags);
-    const auto autoDepAliases = extract_dep_aliases_from_include_dirs(cf.includeDirs);
-
     const fs::path lockPath = cppPath.parent_path() / "vix.lock";
     auto orderedDeps = load_ordered_packages_from_lock(lockPath);
 
@@ -546,6 +544,19 @@ namespace vix::commands::RunCommand::detail
       if (fs::exists(pkgPath / "CMakeLists.txt"))
         cmakeDeps.emplace_back(pkgDir, pkgPath);
     }
+
+    std::vector<std::string> cmakeDepAliases;
+    cmakeDepAliases.reserve(cmakeDeps.size());
+
+    for (const auto &[pkgDir, _pkgPath] : cmakeDeps)
+    {
+      cmakeDepAliases.push_back(dep_id_to_cmake_alias(dep_dir_to_id(pkgDir)));
+    }
+
+    std::sort(cmakeDepAliases.begin(), cmakeDepAliases.end());
+    cmakeDepAliases.erase(
+        std::unique(cmakeDepAliases.begin(), cmakeDepAliases.end()),
+        cmakeDepAliases.end());
 
     auto rank_dep = [](const std::string &pkgDir) -> int
     {
@@ -598,12 +609,15 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
-    if (!autoDepAliases.empty())
+    if (!cmakeDepAliases.empty())
     {
-      s += "target_link_libraries(" + exeName + " PRIVATE\n";
-      for (const auto &alias : autoDepAliases)
-        s += "  " + alias + "\n";
-      s += ")\n\n";
+      for (const auto &alias : cmakeDepAliases)
+      {
+        s += "if (TARGET " + alias + ")\n";
+        s += "  target_link_libraries(" + exeName + " PRIVATE " + alias + ")\n";
+        s += "endif()\n";
+      }
+      s += "\n";
     }
 
     if (!cf.defines.empty())

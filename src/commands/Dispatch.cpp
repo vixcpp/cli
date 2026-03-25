@@ -30,13 +30,14 @@
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
-#include <vix/cli/commands/DepsCommand.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/P2PCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
+#include <vix/cli/util/Ui.hpp>
 
 #include <stdexcept>
 
@@ -223,21 +224,35 @@ namespace vix::cli::dispatch
            return vix::commands::UnpublishCommand{}.help();
          }});
 
-    add({"deps",
-         "Registry",
-         "Install deps from vix.lock into .vix/ and generate CMake file",
-         [](const Args &a)
-         { return vix::commands::DepsCommand::run(a); },
-         []()
-         { return vix::commands::DepsCommand::help(); }});
-
     add({"install",
          "Registry",
          "Install project dependencies from vix.lock",
          [](const Args &a)
-         { return vix::commands::DepsCommand::run(a); },
+         { return vix::commands::InstallCommand::run(a); },
          []()
-         { return vix::commands::DepsCommand::help(); }});
+         { return vix::commands::InstallCommand::help(); }});
+
+    add({"i",
+         "Registry",
+         "Alias for install",
+         [](const Args &a)
+         { return vix::commands::InstallCommand::run(a); },
+         []()
+         { return vix::commands::InstallCommand::help(); }});
+
+    add({"deps",
+         "Registry",
+         "Alias for install (deprecated)",
+         [](const Args &a)
+         {
+           vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
+           return vix::commands::InstallCommand::run(a);
+         },
+         []()
+         {
+           vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
+           return 0;
+         }});
 
     add({"upgrade",
          "Info",

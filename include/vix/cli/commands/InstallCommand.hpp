@@ -1,6 +1,6 @@
 /**
  *
- *  @file DepsCommand.hpp
+ *  @file InstallCommand.hpp
  *  @author Gaspard Kirira
  *
  *  Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -11,15 +11,15 @@
  *  Vix.cpp
  *
  */
-#ifndef VIX_DEPS_COMMAND_HPP
-#define VIX_DEPS_COMMAND_HPP
+#ifndef VIX_INSTALL_COMMAND_HPP
+#define VIX_INSTALL_COMMAND_HPP
 
 #include <string>
 #include <vector>
 
 namespace vix::commands
 {
-  struct DepsCommand
+  struct InstallCommand
   {
     static int run(const std::vector<std::string> &args);
     static int help();

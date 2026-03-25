@@ -539,11 +539,9 @@ namespace vix::commands
       outCommit = commit;
       outTag = tag;
 
-      // Compute content hash for deterministic verify
       const auto contentHash = vix::cli::util::sha256_directory(outDir);
       const std::string hashStr = contentHash.value_or("");
 
-      // lockfile = version exacte résolue + commit + hash
       write_lockfile_append(spec, repoUrl, commit, tag, hashStr);
 
       return 0;
@@ -553,7 +551,6 @@ namespace vix::commands
         PkgSpec root,
         std::unordered_set<std::string> &visited)
     {
-      // on installe root (resolve inside ensure_install_one_v1)
       std::string dir, repo, commit, tag;
       const int rc = ensure_install_one_v1(root, dir, repo, commit, tag);
       if (rc != 0)
@@ -616,7 +613,6 @@ namespace vix::commands
     {
       const json entry = read_json_file_or_throw(p);
 
-      // resolve version (latest if omitted)
       const int vr = resolve_version_v1(entry, spec);
       if (vr != 0)
         return vr;

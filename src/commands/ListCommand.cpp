@@ -234,7 +234,7 @@ namespace vix::commands
     if (!fs::exists(p))
     {
       vix::cli::util::err_line(std::cerr, "missing lock file: " + p.string());
-      vix::cli::util::warn_line(std::cerr, "Tip: vix add <pkg>@<version>");
+      vix::cli::util::warn_line(std::cerr, "Tip: add a package with: vix add <pkg>@<version>");
       return 1;
     }
 

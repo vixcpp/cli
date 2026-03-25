@@ -43,6 +43,8 @@ namespace vix::commands
       bool system = false;            // include /usr/local/bin (linux) / typical system dir
       std::optional<fs::path> prefix; // explicit prefix (ex: /usr/local)
       std::optional<fs::path> path;   // explicit full path to remove
+      bool global = false;
+      std::string pkg;
     };
 
     fs::path get_install_json_path()
@@ -153,6 +155,64 @@ namespace vix::commands
       return fs::absolute(fs::path(env));
     }
 
+    fs::path global_manifest_path()
+    {
+      return get_store_path() / "global" / "installed.json";
+    }
+
+    bool uninstall_global_pkg(const std::string &pkg)
+    {
+      fs::path manifest = global_manifest_path();
+
+      if (!fs::exists(manifest))
+      {
+        vix::cli::util::err_line(std::cerr, "No global packages installed.");
+        return false;
+      }
+
+      json j;
+      {
+        std::ifstream in(manifest);
+        in >> j;
+      }
+
+      if (!j.contains("packages") || !j["packages"].is_array())
+      {
+        vix::cli::util::err_line(std::cerr, "Invalid global manifest.");
+        return false;
+      }
+
+      auto &pkgs = j["packages"];
+
+      for (auto it = pkgs.begin(); it != pkgs.end(); ++it)
+      {
+        if (it->value("id", "") == pkg)
+        {
+          const std::string path = it->value("installed_path", "");
+
+          if (!path.empty())
+          {
+            std::error_code ec;
+            fs::remove_all(path, ec);
+
+            if (!ec)
+              vix::cli::util::ok_line(std::cout, "Removed: " + path);
+          }
+
+          pkgs.erase(it);
+
+          std::ofstream out(manifest);
+          out << j.dump(2);
+
+          vix::cli::util::ok_line(std::cout, "Uninstalled " + pkg);
+          return true;
+        }
+      }
+
+      vix::cli::util::err_line(std::cerr, "Package not found: " + pkg);
+      return false;
+    }
+
     std::optional<fs::path> resolve_path_from_shell()
     {
 #ifdef _WIN32
@@ -254,6 +314,16 @@ namespace vix::commands
           // handled by caller
           continue;
         }
+        if (a == "-g" || a == "--global")
+        {
+          o.global = true;
+          continue;
+        }
+        if (!a.empty() && a[0] != '-')
+        {
+          o.pkg = a;
+          continue;
+        }
 
         throw std::runtime_error("unknown argument: " + a);
       }
@@ -339,17 +409,31 @@ namespace vix::commands
   {
     try
     {
-      // Parse
       bool wantHelp = false;
       for (const auto &a : args)
       {
         if (a == "-h" || a == "--help")
+        {
           wantHelp = true;
+          break;
+        }
       }
+
       if (wantHelp)
         return help();
 
       const Opt opt = parse_args(args);
+
+      if (opt.global)
+      {
+        if (opt.pkg.empty())
+        {
+          vix::cli::util::err_line(std::cerr, "Missing package name.");
+          return 1;
+        }
+
+        return uninstall_global_pkg(opt.pkg) ? 0 : 1;
+      }
 
       vix::cli::util::section(std::cout, "Uninstall");
 
@@ -414,7 +498,6 @@ namespace vix::commands
       vix::cli::util::info_line(std::cout, "You may need to run: hash -r (bash/zsh)");
       vix::cli::util::ok_line(std::cout, removedAny ? "Uninstall complete." : "Uninstall finished (nothing removed).");
 
-      // Helpful: show if another vix still exists in PATH
       print_post_check();
 
       vix::cli::util::warn_line(std::cerr, "Tip: run: hash -r (bash/zsh) or restart your terminal.");
@@ -430,19 +513,26 @@ namespace vix::commands
   int UninstallCommand::help()
   {
     std::cout
-        << "Usage:\n"
-        << "  vix uninstall [options]\n\n"
-        << "Description:\n"
-        << "  Remove the Vix CLI binary and install metadata.\n\n"
-        << "Options:\n"
+        << "vix uninstall\n"
+        << "Remove the Vix CLI or a globally installed package.\n\n"
+
+        << "Usage\n"
+        << "  vix uninstall [options]\n"
+        << "  vix uninstall -g <pkg>\n\n"
+
+        << "Examples\n"
+        << "  vix uninstall\n"
+        << "  vix uninstall --purge\n"
+        << "  vix uninstall -g gk/jwt\n\n"
+
+        << "Options\n"
+        << "  -g, --global      Remove a globally installed package\n"
         << "  --purge           Remove local store/cache as well\n"
         << "  --all             Try to remove every detected vix in common locations\n"
         << "  --system          Include system locations (/usr/local/bin, /usr/bin)\n"
-        << "  --prefix <dir>    Remove <dir>/bin/vix (example: /usr/local)\n"
-        << "  --path <file>     Remove the binary at an explicit path\n\n"
-        << "Notes:\n"
-        << "  - Default behavior removes the best detected match, then stops.\n"
-        << "  - If another vix exists earlier in PATH, it will still be found.\n";
+        << "  --prefix <dir>    Remove <dir>/bin/vix\n"
+        << "  --path <file>     Remove the binary at an explicit path\n";
+
     return 0;
   }
 }

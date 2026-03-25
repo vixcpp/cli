@@ -42,6 +42,7 @@
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
+#include <vix/cli/util/Ui.hpp>
 
 #include <iostream>
 #include <unordered_map>
@@ -362,8 +363,16 @@ namespace vix
         return commands::StoreCommand::help();
       if (cmd == "publish")
         return commands::PublishCommand::help();
-      if (cmd == "deps" || cmd == "install")
+      if (cmd == "deps")
+      {
+        vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
         return commands::InstallCommand::help();
+      }
+
+      if (cmd == "install" || cmd == "i")
+      {
+        return commands::InstallCommand::help();
+      }
       if (cmd == "modules")
         return commands::ModulesCommand::help();
       if (cmd == "p2p")
@@ -427,7 +436,8 @@ namespace vix
     docs("https://vixcpp.com/docs/modules/cli/search");
     out << indent(3) << "add <pkg>@<ver>   Add dependency\n";
     out << indent(3) << "install           Install dependencies\n";
-    out << indent(3) << "deps              Alias of install\n";
+    out << indent(3) << "i                 Alias for install\n";
+    out << indent(3) << "deps              Legacy alias for install\n";
     out << indent(3) << "remove <pkg>      Remove dependency\n";
     out << indent(3) << "list              List dependencies\n\n";
 

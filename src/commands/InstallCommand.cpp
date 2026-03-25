@@ -1,6 +1,6 @@
 /**
  *
- *  @file DepsCommand.cpp
+ *  @file InstallCommand.cpp
  *  @author Gaspard Kirira
  *
  *  Copyright 2025, Gaspard Kirira.  All rights reserved.

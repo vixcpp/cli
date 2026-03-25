@@ -30,7 +30,7 @@
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
-#include <vix/cli/commands/DepsCommand.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/P2PCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
@@ -227,17 +227,17 @@ namespace vix::cli::dispatch
          "Registry",
          "Install deps from vix.lock into .vix/ and generate CMake file",
          [](const Args &a)
-         { return vix::commands::DepsCommand::run(a); },
+         { return vix::commands::InstallCommand::run(a); },
          []()
-         { return vix::commands::DepsCommand::help(); }});
+         { return vix::commands::InstallCommand::help(); }});
 
     add({"install",
          "Registry",
          "Install project dependencies from vix.lock",
          [](const Args &a)
-         { return vix::commands::DepsCommand::run(a); },
+         { return vix::commands::InstallCommand::run(a); },
          []()
-         { return vix::commands::DepsCommand::help(); }});
+         { return vix::commands::InstallCommand::help(); }});
 
     add({"upgrade",
          "Info",

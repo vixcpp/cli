@@ -65,11 +65,6 @@ namespace vix::commands
 
     static int normalize_registry_worktree(const fs::path &dir)
     {
-      // Important:
-      // Publish can leave this clone checked out on a temporary publish-* branch.
-      // That branch can be deleted after merge, and later pulls will fail.
-      // So sync must always re-attach the worktree to origin/main.
-
       step("fetching origin (prune)...");
       {
         const std::string cmd =
@@ -81,7 +76,6 @@ namespace vix::commands
 
       step("checking out main...");
       {
-        // Force checkout even if HEAD is detached or on a deleted publish branch.
         const std::string cmd =
             "git -C " + dir.string() + " checkout -q -B main origin/main";
         const int rc = git_run(cmd);
@@ -91,7 +85,6 @@ namespace vix::commands
 
       step("resetting to origin/main...");
       {
-        // Ensure local main matches origin/main exactly.
         const std::string cmd =
             "git -C " + dir.string() + " reset -q --hard origin/main";
         const int rc = git_run(cmd);
@@ -126,7 +119,6 @@ namespace vix::commands
           return rc;
         }
 
-        // After clone, still normalize to avoid any odd state.
         const int nrc = normalize_registry_worktree(dir);
         if (nrc != 0)
         {

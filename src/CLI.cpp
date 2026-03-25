@@ -32,7 +32,7 @@
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
-#include <vix/cli/commands/DepsCommand.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/P2PCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
@@ -363,7 +363,7 @@ namespace vix
       if (cmd == "publish")
         return commands::PublishCommand::help();
       if (cmd == "deps" || cmd == "install")
-        return commands::DepsCommand::help();
+        return commands::InstallCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
       if (cmd == "p2p")

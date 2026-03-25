@@ -504,6 +504,15 @@ namespace vix::commands::RunCommand::detail
       o.forceScriptLike = false;
     }
 
+    // Auto-enable deps for single-file C++ scripts so that:
+    //   vix run main.cpp
+    // also resolves local/global packages without requiring --auto-deps.
+    if (o.singleCpp)
+    {
+      if (o.autoDeps != AutoDepsMode::Up)
+        o.autoDeps = AutoDepsMode::Local;
+    }
+
     // normalize clearMode
     for (auto &c : o.clearMode)
       c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

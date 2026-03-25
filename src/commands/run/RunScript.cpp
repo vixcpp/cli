@@ -29,6 +29,11 @@
 #include <cstring>
 #include <iostream>
 #include <chrono>
+#include <optional>
+#include <unordered_set>
+#include <cstdlib>
+#include <algorithm>
+#include <nlohmann/json.hpp>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -68,6 +73,39 @@ namespace vix::commands::RunCommand::detail
       return false;
     };
 
+    auto home_dir = []() -> std::optional<std::string>
+    {
+#ifdef _WIN32
+      const char *home = std::getenv("USERPROFILE");
+#else
+      const char *home = std::getenv("HOME");
+#endif
+      if (!home || std::string(home).empty())
+        return std::nullopt;
+      return std::string(home);
+    };
+
+    auto vix_root = [&]() -> fs::path
+    {
+      if (const auto home = home_dir(); home)
+        return fs::path(*home) / ".vix";
+      return fs::path(".vix");
+    };
+
+    auto global_manifest_path = [&]() -> fs::path
+    {
+      return vix_root() / "global" / "installed.json";
+    };
+
+    auto dep_id_to_dir = [](std::string depId) -> std::string
+    {
+      depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
+      std::replace(depId.begin(), depId.end(), '/', '.');
+      return depId;
+    };
+
+    std::unordered_set<std::string> localPkgDirs;
+
     auto scan_one = [&](const fs::path &baseDir)
     {
       const fs::path depsRoot = baseDir / ".vix" / "deps";
@@ -82,6 +120,10 @@ namespace vix::commands::RunCommand::detail
         if (!it->is_directory())
           continue;
 
+        const std::string pkgDir = it->path().filename().string();
+        if (!pkgDir.empty())
+          localPkgDirs.insert(pkgDir);
+
         const fs::path inc = it->path() / "include";
         if (!fs::exists(inc, ec) || ec)
           continue;
@@ -92,14 +134,66 @@ namespace vix::commands::RunCommand::detail
       }
     };
 
-    // Local: scan startDir only
+    auto scan_global = [&]()
+    {
+      const fs::path manifestPath = global_manifest_path();
+      if (!fs::exists(manifestPath))
+        return;
+
+      std::ifstream ifs(manifestPath);
+      if (!ifs)
+        return;
+
+      nlohmann::json root;
+      ifs >> root;
+
+      if (!root.is_object() || !root.contains("packages") || !root["packages"].is_array())
+        return;
+
+      for (const auto &item : root["packages"])
+      {
+        if (!item.is_object())
+          continue;
+
+        if (!item.contains("id") || !item["id"].is_string())
+          continue;
+
+        if (!item.contains("installed_path") || !item["installed_path"].is_string())
+          continue;
+
+        const std::string id = item["id"].get<std::string>();
+        const std::string pkgDir = dep_id_to_dir(id);
+
+        // priorité au local
+        if (localPkgDirs.contains(pkgDir))
+          continue;
+
+        std::string includeDir = "include";
+        if (item.contains("include") && item["include"].is_string())
+          includeDir = item["include"].get<std::string>();
+
+        const fs::path installedPath = fs::path(item["installed_path"].get<std::string>());
+        const fs::path inc = installedPath / includeDir;
+
+        std::error_code ec;
+        if (!fs::exists(inc, ec) || ec)
+          continue;
+
+        const std::string incStr = inc.string();
+        if (!already_has_I(incStr))
+          opt.scriptFlags.push_back("-I" + incStr);
+      }
+    };
+
+    // Local: scan startDir only, then globals
     if (opt.autoDeps == AutoDepsMode::Local)
     {
       scan_one(startDir);
+      scan_global();
       return;
     }
 
-    // Up: scan startDir and all parents up to filesystem root
+    // Up: scan startDir and all parents up to filesystem root, then globals
     if (opt.autoDeps == AutoDepsMode::Up)
     {
       fs::path cur = startDir;
@@ -112,12 +206,13 @@ namespace vix::commands::RunCommand::detail
         if (parent.empty() || parent == cur)
           break;
 
-        // Stop at root ("/" or drive root)
         if (fs::equivalent(parent, cur, ec) && !ec)
           break;
 
         cur = parent;
       }
+
+      scan_global();
       return;
     }
   }
@@ -648,11 +743,19 @@ namespace vix::commands::RunCommand::detail
     using namespace std;
     namespace fs = std::filesystem;
 
-    const fs::path script = opt.cppFile;
+    Options o = opt;
+
+    const fs::path script = o.cppFile;
     if (!fs::exists(script))
     {
       error("C++ file not found: " + script.string());
       return 1;
+    }
+
+    // auto deps (single .cpp)
+    if (o.autoDeps != AutoDepsMode::None)
+    {
+      apply_auto_deps_includes_from_deps_folder(o, script.parent_path());
     }
 
     const string exeName = script.stem().string();
@@ -673,7 +776,7 @@ namespace vix::commands::RunCommand::detail
           exeName,
           script,
           useVixRuntime,
-          opt.scriptFlags);
+          o.scriptFlags);
     }
 
     fs::path buildDir = projectDir / "build-ninja";
@@ -681,9 +784,9 @@ namespace vix::commands::RunCommand::detail
 
     const std::string sig = make_script_config_signature(
         useVixRuntime,
-        opt.enableSanitizers,
-        opt.enableUbsanOnly,
-        opt.scriptFlags);
+        o.enableSanitizers,
+        o.enableUbsanOnly,
+        o.scriptFlags);
 
     bool needConfigure = true;
     {

@@ -18,7 +18,12 @@
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
+#include <unordered_set>
 #include <queue>
+#include <optional>
+#include <filesystem>
+#include <cstdlib>
+#include <cctype>
 
 namespace vix::commands::RunCommand::detail
 {
@@ -29,6 +34,67 @@ namespace vix::commands::RunCommand::detail
     bool usesDb = false;
     bool usesMysql = false;
   };
+
+  struct GlobalPackage
+  {
+    std::string id;
+    std::string pkgDir;
+    std::string includeDir{"include"};
+    std::string type{"header-only"};
+    fs::path installedPath;
+  };
+
+  static std::string trim_copy(std::string s)
+  {
+    auto is_ws = [](unsigned char c)
+    { return std::isspace(c) != 0; };
+
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front())))
+      s.erase(s.begin());
+
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back())))
+      s.pop_back();
+
+    return s;
+  }
+
+  static std::string dep_dir_to_id(const std::string &pkgDir)
+  {
+    std::string id = pkgDir;
+    std::replace(id.begin(), id.end(), '.', '/');
+    return id;
+  }
+
+  static std::string dep_id_to_dir(std::string depId)
+  {
+    depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
+    std::replace(depId.begin(), depId.end(), '/', '.');
+    return depId;
+  }
+
+  static std::optional<std::string> home_dir()
+  {
+#ifdef _WIN32
+    const char *home = std::getenv("USERPROFILE");
+#else
+    const char *home = std::getenv("HOME");
+#endif
+    if (!home || std::string(home).empty())
+      return std::nullopt;
+    return std::string(home);
+  }
+
+  static fs::path vix_root()
+  {
+    if (const auto home = home_dir(); home)
+      return fs::path(*home) / ".vix";
+    return fs::path(".vix");
+  }
+
+  static fs::path global_manifest_path()
+  {
+    return vix_root() / "global" / "installed.json";
+  }
 
   static std::vector<std::string> load_package_dependencies_from_manifest(const fs::path &pkgPath)
   {
@@ -76,20 +142,6 @@ namespace vix::commands::RunCommand::detail
     }
 
     return deps;
-  }
-
-  static std::string dep_dir_to_id(const std::string &pkgDir)
-  {
-    std::string id = pkgDir;
-    std::replace(id.begin(), id.end(), '.', '/');
-    return id;
-  }
-
-  static std::string dep_id_to_dir(std::string depId)
-  {
-    depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
-    std::replace(depId.begin(), depId.end(), '/', '.');
-    return depId;
   }
 
   static std::vector<std::pair<std::string, std::string>> topo_sort_dep_packages(
@@ -156,9 +208,7 @@ namespace vix::commands::RunCommand::detail
     }
 
     if (ordered.size() != depPackages.size())
-    {
       return depPackages;
-    }
 
     return ordered;
   }
@@ -449,6 +499,171 @@ namespace vix::commands::RunCommand::detail
     return out;
   }
 
+  static std::vector<std::string> extract_script_include_prefixes(const fs::path &cppPath)
+  {
+    std::vector<std::string> prefixes;
+
+    std::ifstream ifs(cppPath);
+    if (!ifs)
+      return prefixes;
+
+    std::string line;
+    while (std::getline(ifs, line))
+    {
+      const auto incPos = line.find("#include");
+      if (incPos == std::string::npos)
+        continue;
+
+      std::size_t start = line.find('<', incPos);
+      char closer = '>';
+      if (start == std::string::npos)
+      {
+        start = line.find('"', incPos);
+        closer = '"';
+      }
+
+      if (start == std::string::npos)
+        continue;
+
+      const std::size_t end = line.find(closer, start + 1);
+      if (end == std::string::npos || end <= start + 1)
+        continue;
+
+      std::string inc = trim_copy(line.substr(start + 1, end - start - 1));
+      if (inc.empty())
+        continue;
+
+      const auto slash = inc.find('/');
+      const std::string prefix = (slash == std::string::npos) ? inc : inc.substr(0, slash);
+      if (prefix.empty())
+        continue;
+
+      prefixes.push_back(prefix);
+    }
+
+    std::sort(prefixes.begin(), prefixes.end());
+    prefixes.erase(std::unique(prefixes.begin(), prefixes.end()), prefixes.end());
+    return prefixes;
+  }
+
+  static std::vector<GlobalPackage> load_global_packages()
+  {
+    std::vector<GlobalPackage> out;
+
+    const fs::path manifestPath = global_manifest_path();
+    if (!fs::exists(manifestPath))
+      return out;
+
+    std::ifstream ifs(manifestPath);
+    if (!ifs)
+      return out;
+
+    nlohmann::json root;
+    ifs >> root;
+
+    if (!root.is_object() || !root.contains("packages") || !root["packages"].is_array())
+      return out;
+
+    for (const auto &item : root["packages"])
+    {
+      if (!item.is_object())
+        continue;
+
+      if (!item.contains("id") || !item["id"].is_string())
+        continue;
+
+      if (!item.contains("installed_path") || !item["installed_path"].is_string())
+        continue;
+
+      GlobalPackage pkg;
+      pkg.id = item["id"].get<std::string>();
+      pkg.pkgDir = dep_id_to_dir(pkg.id);
+      pkg.installedPath = fs::path(item["installed_path"].get<std::string>());
+
+      if (item.contains("include") && item["include"].is_string())
+        pkg.includeDir = item["include"].get<std::string>();
+
+      if (item.contains("type") && item["type"].is_string())
+        pkg.type = item["type"].get<std::string>();
+
+      out.push_back(std::move(pkg));
+    }
+
+    return out;
+  }
+
+  static bool package_matches_script_includes(
+      const GlobalPackage &pkg,
+      const std::vector<std::string> &includePrefixes)
+  {
+    const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
+    if (!fs::exists(includeRoot) || !fs::is_directory(includeRoot))
+      return false;
+
+    for (const auto &prefix : includePrefixes)
+    {
+      if (fs::exists(includeRoot / prefix))
+        return true;
+    }
+
+    return false;
+  }
+
+  static std::vector<GlobalPackage> select_global_packages_for_script(
+      const fs::path &cppPath,
+      const std::vector<std::string> &localPackageIds)
+  {
+    std::vector<GlobalPackage> selected;
+    const auto allGlobals = load_global_packages();
+    const auto includePrefixes = extract_script_include_prefixes(cppPath);
+
+    if (allGlobals.empty() || includePrefixes.empty())
+      return selected;
+
+    std::unordered_set<std::string> localIds(localPackageIds.begin(), localPackageIds.end());
+    std::unordered_map<std::string, GlobalPackage> globalsById;
+
+    for (const auto &pkg : allGlobals)
+      globalsById[pkg.id] = pkg;
+
+    std::unordered_set<std::string> visited;
+
+    std::function<void(const GlobalPackage &)> visit = [&](const GlobalPackage &pkg)
+    {
+      if (pkg.id.empty())
+        return;
+
+      if (localIds.contains(pkg.id))
+        return;
+
+      if (!visited.insert(pkg.id).second)
+        return;
+
+      selected.push_back(pkg);
+
+      for (const auto &depId : load_package_dependencies_from_manifest(pkg.installedPath))
+      {
+        if (localIds.contains(depId))
+          continue;
+
+        const auto it = globalsById.find(depId);
+        if (it != globalsById.end())
+          visit(it->second);
+      }
+    };
+
+    for (const auto &pkg : allGlobals)
+    {
+      if (localIds.contains(pkg.id))
+        continue;
+
+      if (package_matches_script_includes(pkg, includePrefixes))
+        visit(pkg);
+    }
+
+    return selected;
+  }
+
   std::string make_script_cmakelists(
       const std::string &exeName,
       const fs::path &cppPath,
@@ -456,7 +671,7 @@ namespace vix::commands::RunCommand::detail
       const std::vector<std::string> &scriptFlags)
   {
     std::string s;
-    s.reserve(6200);
+    s.reserve(10000);
 
     auto q = [](const std::string &p)
     {
@@ -510,7 +725,8 @@ namespace vix::commands::RunCommand::detail
     s += std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")\n";
 
     auto lf = parse_link_flags(scriptFlags);
-    const auto cf = parse_compile_flags(scriptFlags);
+    auto cf = parse_compile_flags(scriptFlags);
+
     const fs::path lockPath = cppPath.parent_path() / "vix.lock";
     auto orderedDeps = load_ordered_packages_from_lock(lockPath);
 
@@ -521,6 +737,15 @@ namespace vix::commands::RunCommand::detail
       const auto depPackages = extract_dep_packages_from_include_dirs(cf.includeDirs);
       for (const auto &[pkgDir, _pkgPath] : depPackages)
         orderedDeps.push_back(pkgDir);
+    }
+
+    std::unordered_set<std::string> localPackageIds;
+    for (const auto &depId : orderedDeps)
+    {
+      if (depId.find('/') != std::string::npos || depId.find('@') != std::string::npos)
+        localPackageIds.insert(depId);
+      else
+        localPackageIds.insert(dep_dir_to_id(depId));
     }
 
     std::vector<std::pair<std::string, fs::path>> cmakeDeps;
@@ -545,13 +770,49 @@ namespace vix::commands::RunCommand::detail
         cmakeDeps.emplace_back(pkgDir, pkgPath);
     }
 
-    std::vector<std::string> cmakeDepAliases;
-    cmakeDepAliases.reserve(cmakeDeps.size());
+    const auto globalPkgs = select_global_packages_for_script(cppPath, orderedDeps);
 
-    for (const auto &[pkgDir, _pkgPath] : cmakeDeps)
+    for (const auto &pkg : globalPkgs)
     {
-      cmakeDepAliases.push_back(dep_id_to_cmake_alias(dep_dir_to_id(pkgDir)));
+      const fs::path includePath = pkg.installedPath / pkg.includeDir;
+      if (fs::exists(includePath))
+      {
+        const std::string includeStr = includePath.string();
+        if (std::find(cf.includeDirs.begin(), cf.includeDirs.end(), includeStr) == cf.includeDirs.end())
+          cf.includeDirs.push_back(includeStr);
+      }
+
+      if (fs::exists(pkg.installedPath / "CMakeLists.txt"))
+        cmakeDeps.emplace_back(pkg.pkgDir, pkg.installedPath);
     }
+
+    std::vector<std::pair<std::string, std::string>> topoInput;
+    topoInput.reserve(cmakeDeps.size());
+    for (const auto &[pkgDir, pkgPath] : cmakeDeps)
+      topoInput.emplace_back(pkgDir, pkgPath.string());
+
+    const auto topoSorted = topo_sort_dep_packages(topoInput);
+
+    std::vector<std::pair<std::string, fs::path>> cmakeDepsSorted;
+    cmakeDepsSorted.reserve(topoSorted.size());
+    for (const auto &[pkgDir, pkgPath] : topoSorted)
+      cmakeDepsSorted.emplace_back(pkgDir, fs::path(pkgPath));
+
+    std::unordered_set<std::string> seenPkgDirs;
+    std::vector<std::pair<std::string, fs::path>> uniqueCmakeDeps;
+    uniqueCmakeDeps.reserve(cmakeDepsSorted.size());
+
+    for (const auto &[pkgDir, pkgPath] : cmakeDepsSorted)
+    {
+      if (seenPkgDirs.insert(pkgDir).second)
+        uniqueCmakeDeps.emplace_back(pkgDir, pkgPath);
+    }
+
+    std::vector<std::string> cmakeDepAliases;
+    cmakeDepAliases.reserve(uniqueCmakeDeps.size());
+
+    for (const auto &[pkgDir, _pkgPath] : uniqueCmakeDeps)
+      cmakeDepAliases.push_back(dep_id_to_cmake_alias(dep_dir_to_id(pkgDir)));
 
     std::sort(cmakeDepAliases.begin(), cmakeDepAliases.end());
     cmakeDepAliases.erase(
@@ -575,13 +836,13 @@ namespace vix::commands::RunCommand::detail
       return 100;
     };
 
-    std::stable_sort(cmakeDeps.begin(), cmakeDeps.end(),
+    std::stable_sort(uniqueCmakeDeps.begin(), uniqueCmakeDeps.end(),
                      [&](const auto &a, const auto &b)
                      {
                        return rank_dep(a.first) < rank_dep(b.first);
                      });
 
-    for (const auto &[pkgDir, pkgPath] : cmakeDeps)
+    for (const auto &[pkgDir, pkgPath] : uniqueCmakeDeps)
     {
       s += "if (EXISTS " + q((pkgPath / "CMakeLists.txt").string()) + ")\n";
       s += "  add_subdirectory(" + q(pkgPath.string()) + " " +

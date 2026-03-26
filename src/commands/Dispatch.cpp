@@ -37,6 +37,7 @@
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
+#include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 
 #include <stdexcept>
@@ -195,6 +196,22 @@ namespace vix::cli::dispatch
          { return vix::commands::ListCommand::run(a); },
          []()
          { return vix::commands::ListCommand::help(); }});
+
+    add({"update",
+         "Registry",
+         "Update all dependencies to latest versions",
+         [](const Args &a)
+         { return vix::commands::UpdateCommand::run(a); },
+         []()
+         { return vix::commands::UpdateCommand::help(); }});
+
+    add({"up",
+         "Registry",
+         "Alias for update",
+         [](const Args &a)
+         { return vix::commands::UpdateCommand::run(a); },
+         []()
+         { return vix::commands::UpdateCommand::help(); }});
 
     add({"store",
          "Registry",

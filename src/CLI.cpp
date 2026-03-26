@@ -39,6 +39,7 @@
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
+#include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -353,6 +354,8 @@ namespace vix
         return commands::RegistryCommand::help();
       if (cmd == "add")
         return commands::AddCommand::help();
+      if (cmd == "update")
+        return commands::UpdateCommand::help();
       if (cmd == "search")
         return commands::SearchCommand::help();
       if (cmd == "remove")
@@ -436,6 +439,7 @@ namespace vix
     docs("https://vixcpp.com/docs/modules/cli/search");
     out << indent(3) << "add <pkg>@<ver>   Add dependency\n";
     out << indent(3) << "install           Install dependencies\n";
+    out << indent(3) << "update            Update dependencies\n";
     out << indent(3) << "i                 Alias for install\n";
     out << indent(3) << "deps              Legacy alias for install\n";
     out << indent(3) << "remove <pkg>      Remove dependency\n";

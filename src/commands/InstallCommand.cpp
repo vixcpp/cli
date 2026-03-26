@@ -30,6 +30,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <queue>
+#include <unordered_map>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -71,6 +73,8 @@ namespace vix::commands
 
       std::string type;
       std::string include{"include"};
+      std::vector<std::string> dependencies;
+
       fs::path checkout;
       fs::path linkDir;
     };
@@ -464,6 +468,7 @@ namespace vix::commands
       {
         dep.type = "unknown";
         dep.include = "include";
+        dep.dependencies.clear();
         return;
       }
 
@@ -477,6 +482,99 @@ namespace vix::commands
         dep.include = j["include"].get<std::string>();
       else
         dep.include = "include";
+
+      dep.dependencies.clear();
+
+      if (j.contains("dependencies"))
+      {
+        const auto &d = j["dependencies"];
+
+        if (d.is_array())
+        {
+          for (const auto &item : d)
+          {
+            if (item.is_string())
+            {
+              dep.dependencies.push_back(item.get<std::string>());
+            }
+            else if (item.is_object())
+            {
+              const std::string id = item.value("id", "");
+              if (!id.empty())
+                dep.dependencies.push_back(id);
+            }
+          }
+        }
+        else if (d.is_object())
+        {
+          for (auto it = d.begin(); it != d.end(); ++it)
+          {
+            dep.dependencies.push_back(it.key());
+          }
+        }
+      }
+    }
+
+    static std::vector<DepResolved> sort_deps_topologically(const std::vector<DepResolved> &deps)
+    {
+      std::unordered_map<std::string, DepResolved> byId;
+      std::unordered_map<std::string, std::vector<std::string>> graph;
+      std::unordered_map<std::string, int> indegree;
+
+      for (const auto &dep : deps)
+      {
+        byId[dep.id] = dep;
+        indegree[dep.id] = 0;
+      }
+
+      for (const auto &dep : deps)
+      {
+        for (const auto &childId : dep.dependencies)
+        {
+          if (!byId.count(childId))
+            continue;
+
+          graph[childId].push_back(dep.id);
+          indegree[dep.id]++;
+        }
+      }
+
+      std::queue<std::string> q;
+      for (const auto &[id, deg] : indegree)
+      {
+        if (deg == 0)
+          q.push(id);
+      }
+
+      std::vector<DepResolved> ordered;
+      ordered.reserve(deps.size());
+
+      while (!q.empty())
+      {
+        const std::string id = q.front();
+        q.pop();
+
+        ordered.push_back(byId.at(id));
+
+        auto it = graph.find(id);
+        if (it == graph.end())
+          continue;
+
+        for (const auto &next : it->second)
+        {
+          indegree[next]--;
+          if (indegree[next] == 0)
+            q.push(next);
+        }
+      }
+
+      if (ordered.size() != deps.size())
+      {
+        throw std::runtime_error(
+            "dependency cycle detected while generating .vix/vix_deps.cmake");
+      }
+
+      return ordered;
     }
 
     static DepResolved resolve_dep_from_lock_entry(const json &d)
@@ -935,7 +1033,8 @@ namespace vix::commands
 
       try
       {
-        generate_cmake(resolved);
+        auto ordered = sort_deps_topologically(resolved);
+        generate_cmake(ordered);
       }
       catch (const std::exception &ex)
       {

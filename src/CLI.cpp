@@ -40,6 +40,7 @@
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
+#include <vix/cli/commands/OutdatedCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -356,6 +357,8 @@ namespace vix
         return commands::AddCommand::help();
       if (cmd == "update")
         return commands::UpdateCommand::help();
+      if (cmd == "outdated")
+        return commands::OutdatedCommand::help();
       if (cmd == "search")
         return commands::SearchCommand::help();
       if (cmd == "remove")
@@ -418,6 +421,7 @@ namespace vix
     out << indent(1) << "Core workflow:\n";
     out << indent(2) << "add      Add a dependency\n";
     out << indent(2) << "install  Install project dependencies\n";
+    out << indent(2) << "update   Update dependencies\n";
     out << indent(2) << "run      Run your app\n";
     out << indent(2) << "deploy   Deploy your app (coming soon)\n\n";
 
@@ -434,16 +438,20 @@ namespace vix
     out << indent(3) << "tests             Run tests\n";
     out << indent(3) << "repl              Interactive REPL\n\n";
 
-    // Registry
+    // Dependencies
     out << indent(2) << "Dependencies:\n";
     docs("https://vixcpp.com/docs/modules/cli/search");
     out << indent(3) << "add <pkg>@<ver>   Add dependency\n";
     out << indent(3) << "install           Install dependencies\n";
     out << indent(3) << "update            Update dependencies\n";
-    out << indent(3) << "i                 Alias for install\n";
-    out << indent(3) << "deps              Legacy alias for install\n";
+    out << indent(3) << "outdated          Check available dependency updates\n";
     out << indent(3) << "remove <pkg>      Remove dependency\n";
     out << indent(3) << "list              List dependencies\n\n";
+
+    out << indent(2) << "Aliases:\n";
+    out << indent(3) << "up                Alias for update\n";
+    out << indent(3) << "i                 Alias for install\n";
+    out << indent(3) << "deps              Legacy alias for install\n\n";
 
     // Packaging
     out << indent(2) << "Build & share:\n";
@@ -459,13 +467,13 @@ namespace vix
     out << indent(3) << "orm               Database migrations\n";
     out << indent(3) << "p2p               Run P2P node\n\n";
 
-    // Maintenance
+    // System
     out << indent(2) << "System:\n";
     out << indent(3) << "doctor            Check environment\n";
     out << indent(3) << "upgrade           Update Vix\n";
     out << indent(3) << "uninstall         Remove Vix\n\n";
 
-    // Info
+    // Help
     out << indent(2) << "Help:\n";
     out << indent(3) << "help [command]    Show command help\n";
     out << indent(3) << "version           Show version\n\n";

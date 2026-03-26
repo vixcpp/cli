@@ -38,6 +38,7 @@
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
+#include <vix/cli/commands/OutdatedCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 
 #include <stdexcept>
@@ -212,6 +213,14 @@ namespace vix::cli::dispatch
          { return vix::commands::UpdateCommand::run(a); },
          []()
          { return vix::commands::UpdateCommand::help(); }});
+
+    add({"outdated",
+         "Registry",
+         "Check which dependencies are behind the latest versions",
+         [](const Args &a)
+         { return vix::commands::OutdatedCommand::run(a); },
+         []()
+         { return vix::commands::OutdatedCommand::help(); }});
 
     add({"store",
          "Registry",

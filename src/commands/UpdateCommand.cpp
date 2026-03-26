@@ -470,14 +470,18 @@ namespace vix::commands
   int UpdateCommand::help()
   {
     std::cout
-        << "vix update\n"
+        << "vix update (alias: up)\n"
         << "Update project dependencies to newer versions.\n\n"
 
         << "Usage\n"
         << "  vix update\n"
+        << "  vix up\n"
         << "  vix update [@]namespace/name[@version]\n"
+        << "  vix up [@]namespace/name[@version]\n"
         << "  vix update [@]namespace/name[@version] [@]namespace/name[@version]\n"
-        << "  vix update [options]\n\n"
+        << "  vix up [@]namespace/name[@version] [@]namespace/name[@version]\n"
+        << "  vix update [options]\n"
+        << "  vix up [options]\n\n"
 
         << "Options\n"
         << "  --dry-run    Show what would be updated without changing vix.lock\n"
@@ -487,13 +491,16 @@ namespace vix::commands
 
         << "Examples\n"
         << "  vix update\n"
+        << "  vix up\n"
         << "  vix update gk/jwt\n"
+        << "  vix up gk/jwt\n"
         << "  vix update @gk/jwt\n"
+        << "  vix up @gk/jwt\n"
         << "  vix update gk/jwt@1.0.0\n"
-        << "  vix update @gk/jwt@1.x.x\n"
+        << "  vix up @gk/jwt@1.x.x\n"
         << "  vix update gk/jwt gk/pdf --install\n"
-        << "  vix update --dry-run\n"
-        << "  vix update @gk/jwt --json\n\n"
+        << "  vix up --dry-run\n"
+        << "  vix up @gk/jwt --json\n\n"
 
         << "What happens\n"
         << "  • Reads dependencies from vix.lock\n"

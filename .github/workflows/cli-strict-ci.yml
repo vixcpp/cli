@@ -61,6 +61,7 @@ env:
     libmysqlcppconn-dev
   BUILD_JOBS: 2
   VIX_GIT_BRANCH: dev
+  VIX_LOCAL_PREFIX: /tmp/vix-cli-prefix
 
 jobs:
   build:
@@ -83,24 +84,32 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare shared Asio copy
         run: |
           set -e
+          rm -rf /tmp/vix-asio
           mkdir -p /tmp/vix-asio/include
           cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
           test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
 
-      - name: Fetch sibling dependencies
+      - name: Fetch sibling repositories
         run: |
-          rm -rf ../core ../utils ../async ../json ../template ../p2p ../crypto
+          rm -rf \
+            ../core ../utils ../async ../json ../template \
+            ../crypto ../p2p ../net ../sync ../cache \
+            "${VIX_LOCAL_PREFIX}"
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -108,32 +117,45 @@ jobs:
           rm -rf ../async/third_party/asio/include
           cp -r /tmp/vix-asio/include ../async/third_party/asio/
 
+          mkdir -p ../p2p/third_party/asio
+          rm -rf ../p2p/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
+
           echo "---- sibling dependencies ----"
           ls -la ../core || true
           ls -la ../utils || true
           ls -la ../async || true
-          ls -la ../async/third_party/asio/include || true
           ls -la ../json || true
           ls -la ../template || true
-          ls -la ../p2p || true
           ls -la ../crypto || true
+          ls -la ../p2p || true
+          ls -la ../net || true
+          ls -la ../sync || true
+          ls -la ../cache || true
 
       - name: Verify required sibling dependencies
         run: |
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
+          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
 
-      - name: Export dependency include paths
+      - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
           if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../sync/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../sync/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
@@ -148,14 +170,52 @@ jobs:
             echo "CXX=g++" >> "$GITHUB_ENV"
           fi
 
-      - name: Configure
+      - name: Build and install crypto package
+        run: |
+          cmake -G Ninja -S ../crypto -B ../crypto/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_CRYPTO_USE_OPENSSL=ON \
+            -DVIX_CRYPTO_FETCH_UTILS=OFF \
+            -DVIX_CRYPTO_FETCH_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../crypto/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../crypto/build-ci
+
+      - name: Build and install p2p package
+        run: |
+          cmake -G Ninja -S ../p2p -B ../p2p/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_SANITIZERS=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_P2P_FETCH_NET=OFF \
+            -DVIX_P2P_FETCH_UTILS=OFF \
+            -DVIX_P2P_FETCH_SYNC=OFF \
+            -DVIX_P2P_FETCH_CACHE=OFF \
+            -DVIX_P2P_WITH_UTILS=AUTO \
+            -DVIX_P2P_WITH_SYNC=AUTO \
+            -DVIX_P2P_WITH_CACHE=AUTO \
+            -DVIX_P2P_WITH_JSON=AUTO \
+            -DVIX_P2P_WITH_SSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../p2p/build-ci
+
+      - name: Show local package prefix
+        run: |
+          echo "---- local prefix ----"
+          find "${VIX_LOCAL_PREFIX}" -maxdepth 8 -type f | sort || true
+
+      - name: Configure CLI
         run: |
           cmake -G Ninja -S . -B build \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
             -DVIX_ENABLE_LTO=OFF
 
-      - name: Build
+      - name: Build CLI
         run: |
           cmake --build build -j"${BUILD_JOBS}"
 
@@ -180,24 +240,32 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare shared Asio copy
         run: |
           set -e
+          rm -rf /tmp/vix-asio
           mkdir -p /tmp/vix-asio/include
           cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
           test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
 
-      - name: Fetch sibling dependencies
+      - name: Fetch sibling repositories
         run: |
-          rm -rf ../core ../utils ../async ../json ../template ../p2p ../crypto
+          rm -rf \
+            ../core ../utils ../async ../json ../template \
+            ../crypto ../p2p ../net ../sync ../cache \
+            "${VIX_LOCAL_PREFIX}"
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -205,30 +273,74 @@ jobs:
           rm -rf ../async/third_party/asio/include
           cp -r /tmp/vix-asio/include ../async/third_party/asio/
 
+          mkdir -p ../p2p/third_party/asio
+          rm -rf ../p2p/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
+
       - name: Verify required sibling dependencies
         run: |
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
+          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
 
-      - name: Export dependency include paths
+      - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
           if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
           fi
+          if [ -d "$GITHUB_WORKSPACE/../sync/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../sync/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
+          fi
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install crypto package
+        run: |
+          cmake -G Ninja -S ../crypto -B ../crypto/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_CRYPTO_USE_OPENSSL=ON \
+            -DVIX_CRYPTO_FETCH_UTILS=OFF \
+            -DVIX_CRYPTO_FETCH_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../crypto/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../crypto/build-ci
+
+      - name: Build and install p2p package
+        run: |
+          cmake -G Ninja -S ../p2p -B ../p2p/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_SANITIZERS=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_P2P_FETCH_NET=OFF \
+            -DVIX_P2P_FETCH_UTILS=OFF \
+            -DVIX_P2P_FETCH_SYNC=OFF \
+            -DVIX_P2P_FETCH_CACHE=OFF \
+            -DVIX_P2P_WITH_UTILS=AUTO \
+            -DVIX_P2P_WITH_SYNC=AUTO \
+            -DVIX_P2P_WITH_CACHE=AUTO \
+            -DVIX_P2P_WITH_JSON=AUTO \
+            -DVIX_P2P_WITH_SSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../p2p/build-ci
 
       - name: Configure runtime build
         run: |
           cmake -G Ninja -S . -B build-runtime \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
             -DVIX_ENABLE_LTO=OFF
 
       - name: Build runtime artifacts
@@ -291,24 +403,32 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare shared Asio copy
         run: |
           set -e
+          rm -rf /tmp/vix-asio
           mkdir -p /tmp/vix-asio/include
           cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
           test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
 
-      - name: Fetch sibling dependencies
+      - name: Fetch sibling repositories
         run: |
-          rm -rf ../core ../utils ../async ../json ../template ../p2p ../crypto
+          rm -rf \
+            ../core ../utils ../async ../json ../template \
+            ../crypto ../p2p ../net ../sync ../cache \
+            "${VIX_LOCAL_PREFIX}"
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -316,31 +436,75 @@ jobs:
           rm -rf ../async/third_party/asio/include
           cp -r /tmp/vix-asio/include ../async/third_party/asio/
 
+          mkdir -p ../p2p/third_party/asio
+          rm -rf ../p2p/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
+
       - name: Verify required sibling dependencies
         run: |
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
+          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
 
-      - name: Export dependency include paths
+      - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
           if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
           fi
+          if [ -d "$GITHUB_WORKSPACE/../sync/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../sync/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
+          fi
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install crypto package
+        run: |
+          cmake -G Ninja -S ../crypto -B ../crypto/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_CRYPTO_USE_OPENSSL=ON \
+            -DVIX_CRYPTO_FETCH_UTILS=OFF \
+            -DVIX_CRYPTO_FETCH_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../crypto/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../crypto/build-ci
+
+      - name: Build and install p2p package
+        run: |
+          cmake -G Ninja -S ../p2p -B ../p2p/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_SANITIZERS=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_P2P_FETCH_NET=OFF \
+            -DVIX_P2P_FETCH_UTILS=OFF \
+            -DVIX_P2P_FETCH_SYNC=OFF \
+            -DVIX_P2P_FETCH_CACHE=OFF \
+            -DVIX_P2P_WITH_UTILS=AUTO \
+            -DVIX_P2P_WITH_SYNC=AUTO \
+            -DVIX_P2P_WITH_CACHE=AUTO \
+            -DVIX_P2P_WITH_JSON=AUTO \
+            -DVIX_P2P_WITH_SSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../p2p/build-ci
 
       - name: Configure for analysis
         run: |
           cmake -G Ninja -S . -B build-analyze \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
             -DVIX_ENABLE_LTO=OFF
 
       - name: Run clang-tidy on source files
@@ -393,24 +557,32 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare shared Asio copy
         run: |
           set -e
+          rm -rf /tmp/vix-asio
           mkdir -p /tmp/vix-asio/include
           cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
           test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
 
-      - name: Fetch sibling dependencies
+      - name: Fetch sibling repositories
         run: |
-          rm -rf ../core ../utils ../async ../json ../template ../p2p ../crypto
+          rm -rf \
+            ../core ../utils ../async ../json ../template \
+            ../crypto ../p2p ../net ../sync ../cache \
+            "${VIX_LOCAL_PREFIX}"
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -418,30 +590,74 @@ jobs:
           rm -rf ../async/third_party/asio/include
           cp -r /tmp/vix-asio/include ../async/third_party/asio/
 
+          mkdir -p ../p2p/third_party/asio
+          rm -rf ../p2p/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
+
       - name: Verify required sibling dependencies
         run: |
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
+          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
 
-      - name: Export dependency include paths
+      - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
           if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
           fi
+          if [ -d "$GITHUB_WORKSPACE/../sync/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../sync/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
+          fi
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install crypto package
+        run: |
+          cmake -G Ninja -S ../crypto -B ../crypto/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_CRYPTO_USE_OPENSSL=ON \
+            -DVIX_CRYPTO_FETCH_UTILS=OFF \
+            -DVIX_CRYPTO_FETCH_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../crypto/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../crypto/build-ci
+
+      - name: Build and install p2p package
+        run: |
+          cmake -G Ninja -S ../p2p -B ../p2p/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_SANITIZERS=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_P2P_FETCH_NET=OFF \
+            -DVIX_P2P_FETCH_UTILS=OFF \
+            -DVIX_P2P_FETCH_SYNC=OFF \
+            -DVIX_P2P_FETCH_CACHE=OFF \
+            -DVIX_P2P_WITH_UTILS=AUTO \
+            -DVIX_P2P_WITH_SYNC=AUTO \
+            -DVIX_P2P_WITH_CACHE=AUTO \
+            -DVIX_P2P_WITH_JSON=AUTO \
+            -DVIX_P2P_WITH_SSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../p2p/build-ci
 
       - name: Configure valgrind build
         run: |
           cmake -G Ninja -S . -B build-valgrind \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
             -DVIX_ENABLE_LTO=OFF
 
       - name: Build
@@ -489,24 +705,32 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare shared Asio copy
         run: |
           set -e
+          rm -rf /tmp/vix-asio
           mkdir -p /tmp/vix-asio/include
           cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
           test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
 
-      - name: Fetch sibling dependencies
+      - name: Fetch sibling repositories
         run: |
-          rm -rf ../core ../utils ../async ../json ../template ../p2p ../crypto
+          rm -rf \
+            ../core ../utils ../async ../json ../template \
+            ../crypto ../p2p ../net ../sync ../cache \
+            "${VIX_LOCAL_PREFIX}"
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -514,30 +738,74 @@ jobs:
           rm -rf ../async/third_party/asio/include
           cp -r /tmp/vix-asio/include ../async/third_party/asio/
 
+          mkdir -p ../p2p/third_party/asio
+          rm -rf ../p2p/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
+
       - name: Verify required sibling dependencies
         run: |
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
+          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
 
-      - name: Export dependency include paths
+      - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
           if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
           fi
+          if [ -d "$GITHUB_WORKSPACE/../sync/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../sync/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
+          fi
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install crypto package
+        run: |
+          cmake -G Ninja -S ../crypto -B ../crypto/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_CRYPTO_USE_OPENSSL=ON \
+            -DVIX_CRYPTO_FETCH_UTILS=OFF \
+            -DVIX_CRYPTO_FETCH_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../crypto/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../crypto/build-ci
+
+      - name: Build and install p2p package
+        run: |
+          cmake -G Ninja -S ../p2p -B ../p2p/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_SANITIZERS=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_P2P_FETCH_NET=OFF \
+            -DVIX_P2P_FETCH_UTILS=OFF \
+            -DVIX_P2P_FETCH_SYNC=OFF \
+            -DVIX_P2P_FETCH_CACHE=OFF \
+            -DVIX_P2P_WITH_UTILS=AUTO \
+            -DVIX_P2P_WITH_SYNC=AUTO \
+            -DVIX_P2P_WITH_CACHE=AUTO \
+            -DVIX_P2P_WITH_JSON=AUTO \
+            -DVIX_P2P_WITH_SSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../p2p/build-ci
 
       - name: Configure installable standalone build
         run: |
           cmake -G Ninja -S . -B build-install \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
             -DVIX_ENABLE_LTO=OFF \
             -DCMAKE_INSTALL_PREFIX="${PWD}/.ci-install"
 
@@ -555,3 +823,165 @@ jobs:
           find .ci-install -maxdepth 8 -type f | sort || true
           test -f .ci-install/include/vix/cli/CLI.hpp || (echo "::error::cli headers not found"; exit 1)
           test -f .ci-install/bin/vix || (echo "::error::vix binary not found in install tree"; exit 1)
+
+  config-coverage:
+    name: Configuration Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout cli repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y $DEPS
+          test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
+
+      - name: Prepare shared Asio copy
+        run: |
+          set -e
+          rm -rf /tmp/vix-asio
+          mkdir -p /tmp/vix-asio/include
+          cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
+          test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
+
+      - name: Fetch sibling repositories
+        run: |
+          rm -rf \
+            ../core ../utils ../async ../json ../template \
+            ../crypto ../p2p ../net ../sync ../cache \
+            "${VIX_LOCAL_PREFIX}"
+
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
+
+          git -C ../async submodule update --init --recursive --depth 1 || true
+
+          mkdir -p ../async/third_party/asio
+          rm -rf ../async/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../async/third_party/asio/
+
+          mkdir -p ../p2p/third_party/asio
+          rm -rf ../p2p/third_party/asio/include
+          cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
+
+      - name: Verify required sibling dependencies
+        run: |
+          test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
+          test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
+          test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
+          test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
+          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+
+      - name: Export sibling include paths for local builds
+        run: |
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
+          if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../sync/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../sync/include"
+          fi
+          if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
+            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
+          fi
+          echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
+          echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install crypto package
+        run: |
+          cmake -G Ninja -S ../crypto -B ../crypto/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_CRYPTO_USE_OPENSSL=ON \
+            -DVIX_CRYPTO_FETCH_UTILS=OFF \
+            -DVIX_CRYPTO_FETCH_OPENSSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../crypto/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../crypto/build-ci
+
+      - name: Build and install p2p package
+        run: |
+          cmake -G Ninja -S ../p2p -B ../p2p/build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_SANITIZERS=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_P2P_FETCH_NET=OFF \
+            -DVIX_P2P_FETCH_UTILS=OFF \
+            -DVIX_P2P_FETCH_SYNC=OFF \
+            -DVIX_P2P_FETCH_CACHE=OFF \
+            -DVIX_P2P_WITH_UTILS=AUTO \
+            -DVIX_P2P_WITH_SYNC=AUTO \
+            -DVIX_P2P_WITH_CACHE=AUTO \
+            -DVIX_P2P_WITH_JSON=AUTO \
+            -DVIX_P2P_WITH_SSL=OFF \
+            -DCMAKE_INSTALL_PREFIX="${VIX_LOCAL_PREFIX}"
+          cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
+          cmake --install ../p2p/build-ci
+
+      - name: Configure release mode without LTO
+        run: |
+          cmake -G Ninja -S . -B build-release-min \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
+            -DVIX_ENABLE_LTO=OFF
+
+      - name: Build release mode without LTO
+        run: |
+          cmake --build build-release-min -j"${BUILD_JOBS}"
+
+      - name: Configure release mode with LTO
+        run: |
+          cmake -G Ninja -S . -B build-release-lto \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
+            -DVIX_ENABLE_LTO=ON
+
+      - name: Build release mode with LTO
+        run: |
+          cmake --build build-release-lto -j"${BUILD_JOBS}"
+
+  summary:
+    name: CLI Strict CI Summary
+    needs:
+      [
+        build,
+        runtime-smoke,
+        static-analysis,
+        valgrind,
+        standalone-package-check,
+        config-coverage,
+      ]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Print summary
+        run: |
+          echo "CLI strict CI completed."
+          echo "This workflow validates:"
+          echo "- debug builds"
+          echo "- runtime help/version smoke checks"
+          echo "- static analysis"
+          echo "- valgrind"
+          echo "- standalone package install"
+          echo "- release mode"
+          echo "- release LTO mode"
+          echo "- local crypto package resolution"
+          echo "- local p2p package resolution"

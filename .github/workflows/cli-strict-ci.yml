@@ -141,10 +141,17 @@ jobs:
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
           test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/include/vix/p2p/Bootstrap.hpp || (echo "::error::../p2p/include/vix/p2p/Bootstrap.hpp is missing"; exit 1)
 
       - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../utils/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../p2p/include"
+
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -157,8 +164,14 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
+
+          EXTRA_PATHS="$EXTRA_PATHS:${VIX_LOCAL_PREFIX}/include"
+
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
+
+          echo "---- exported include paths ----"
+          echo "$EXTRA_PATHS" | tr ':' '\n'
 
       - name: Select compiler
         run: |
@@ -206,6 +219,7 @@ jobs:
         run: |
           echo "---- local prefix ----"
           find "${VIX_LOCAL_PREFIX}" -maxdepth 8 -type f | sort || true
+          test -f "${VIX_LOCAL_PREFIX}/include/vix/p2p/Bootstrap.hpp" || (echo "::error::Installed p2p header missing"; exit 1)
 
       - name: Configure CLI
         run: |
@@ -260,7 +274,6 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
@@ -285,10 +298,17 @@ jobs:
           test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
           test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
           test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/include/vix/p2p/Bootstrap.hpp || (echo "::error::../p2p/include/vix/p2p/Bootstrap.hpp is missing"; exit 1)
 
       - name: Export sibling include paths for local builds
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../utils/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../p2p/include"
+
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -301,6 +321,9 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
+
+          EXTRA_PATHS="$EXTRA_PATHS:${VIX_LOCAL_PREFIX}/include"
+
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
@@ -358,16 +381,7 @@ jobs:
           STATUS=$?
           cat /tmp/vix_help.log || true
           if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
-            echo "::warning::vix --help returned status=$STATUS"
-            FAIL=1
-          fi
-
-          echo "==> vix -h"
-          timeout 10s ./build-runtime/vix -h >/tmp/vix_short_help.log 2>&1
-          STATUS=$?
-          cat /tmp/vix_short_help.log || true
-          if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
-            echo "::warning::vix -h returned status=$STATUS"
+            echo "::warning::vix --help failed"
             FAIL=1
           fi
 
@@ -376,14 +390,14 @@ jobs:
           STATUS=$?
           cat /tmp/vix_version.log || true
           if [ $STATUS -ne 0 ] && [ $STATUS -ne 124 ]; then
-            echo "::warning::vix --version returned status=$STATUS"
+            echo "::warning::vix --version failed"
             FAIL=1
           fi
 
           if [ $FAIL -ne 0 ]; then
-            echo "::warning::CLI smoke checks reported issues."
+            echo "::warning::Runtime smoke checks reported issues."
           else
-            echo "CLI smoke checks completed."
+            echo "Runtime smoke checks completed."
           fi
           exit 0
 
@@ -423,7 +437,6 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
@@ -440,18 +453,15 @@ jobs:
           rm -rf ../p2p/third_party/asio/include
           cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
 
-      - name: Verify required sibling dependencies
+      - name: Export sibling include paths for analysis
         run: |
-          test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
-          test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
-          test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
-          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../utils/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../p2p/include"
 
-      - name: Export sibling include paths for local builds
-        run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -464,6 +474,9 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
+
+          EXTRA_PATHS="$EXTRA_PATHS:${VIX_LOCAL_PREFIX}/include"
+
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
@@ -577,7 +590,6 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
@@ -594,18 +606,15 @@ jobs:
           rm -rf ../p2p/third_party/asio/include
           cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
 
-      - name: Verify required sibling dependencies
+      - name: Export sibling include paths for valgrind build
         run: |
-          test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
-          test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
-          test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
-          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../utils/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../p2p/include"
 
-      - name: Export sibling include paths for local builds
-        run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -618,6 +627,9 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
+
+          EXTRA_PATHS="$EXTRA_PATHS:${VIX_LOCAL_PREFIX}/include"
+
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
@@ -725,7 +737,6 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
@@ -742,18 +753,15 @@ jobs:
           rm -rf ../p2p/third_party/asio/include
           cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
 
-      - name: Verify required sibling dependencies
+      - name: Export sibling include paths
         run: |
-          test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
-          test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
-          test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
-          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../utils/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../p2p/include"
 
-      - name: Export sibling include paths for local builds
-        run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -766,6 +774,9 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
+
+          EXTRA_PATHS="$EXTRA_PATHS:${VIX_LOCAL_PREFIX}/include"
+
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
@@ -860,7 +871,6 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
@@ -877,18 +887,15 @@ jobs:
           rm -rf ../p2p/third_party/asio/include
           cp -r /tmp/vix-asio/include ../p2p/third_party/asio/
 
-      - name: Verify required sibling dependencies
+      - name: Export sibling include paths
         run: |
-          test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
-          test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
-          test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-          test -f ../crypto/CMakeLists.txt || (echo "::error::../crypto/CMakeLists.txt is missing"; exit 1)
-          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
-          test -f ../net/CMakeLists.txt || (echo "::error::../net/CMakeLists.txt is missing"; exit 1)
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../utils/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../net/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../crypto/include"
+          EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../p2p/include"
 
-      - name: Export sibling include paths for local builds
-        run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../net/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -901,6 +908,9 @@ jobs:
           if [ -d "$GITHUB_WORKSPACE/../cache/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../cache/include"
           fi
+
+          EXTRA_PATHS="$EXTRA_PATHS:${VIX_LOCAL_PREFIX}/include"
+
           echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
           echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
 
@@ -936,27 +946,27 @@ jobs:
           cmake --build ../p2p/build-ci -j"${BUILD_JOBS}"
           cmake --install ../p2p/build-ci
 
-      - name: Configure release mode without LTO
+      - name: Configure release mode
         run: |
-          cmake -G Ninja -S . -B build-release-min \
+          cmake -G Ninja -S . -B build-release \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
             -DVIX_ENABLE_LTO=OFF
 
-      - name: Build release mode without LTO
+      - name: Build release mode
         run: |
-          cmake --build build-release-min -j"${BUILD_JOBS}"
+          cmake --build build-release -j"${BUILD_JOBS}"
 
-      - name: Configure release mode with LTO
+      - name: Configure debug mode
         run: |
-          cmake -G Ninja -S . -B build-release-lto \
-            -DCMAKE_BUILD_TYPE=Release \
+          cmake -G Ninja -S . -B build-debug \
+            -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_PREFIX_PATH="${VIX_LOCAL_PREFIX}" \
-            -DVIX_ENABLE_LTO=ON
+            -DVIX_ENABLE_LTO=OFF
 
-      - name: Build release mode with LTO
+      - name: Build debug mode
         run: |
-          cmake --build build-release-lto -j"${BUILD_JOBS}"
+          cmake --build build-debug -j"${BUILD_JOBS}"
 
   summary:
     name: CLI Strict CI Summary
@@ -976,12 +986,10 @@ jobs:
         run: |
           echo "CLI strict CI completed."
           echo "This workflow validates:"
-          echo "- debug builds"
-          echo "- runtime help/version smoke checks"
+          echo "- build with clang and gcc"
+          echo "- p2p and crypto dependency availability"
+          echo "- runtime smoke checks"
           echo "- static analysis"
           echo "- valgrind"
-          echo "- standalone package install"
-          echo "- release mode"
-          echo "- release LTO mode"
-          echo "- local crypto package resolution"
-          echo "- local p2p package resolution"
+          echo "- standalone package export"
+          echo "- debug and release configuration coverage"

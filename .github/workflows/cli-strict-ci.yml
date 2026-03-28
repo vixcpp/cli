@@ -83,23 +83,23 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare Asio layout for local async/core builds
         run: |
           set -e
-          mkdir -p ../async/third_party/asio/include || true
           mkdir -p /tmp/vix-asio/include
           cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
           test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
 
       - name: Fetch sibling dependencies
         run: |
-          rm -rf ../core ../utils ../async ../json ../template
+          rm -rf ../core ../utils ../async ../json ../template ../p2p
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -114,16 +114,18 @@ jobs:
           ls -la ../async/third_party/asio/include || true
           ls -la ../json || true
           ls -la ../template || true
+          ls -la ../p2p || true
 
       - name: Verify required sibling dependencies
         run: |
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
 
       - name: Export dependency include paths
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -175,7 +177,7 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare Asio layout for local async/core builds
         run: |
           set -e
           mkdir -p /tmp/vix-asio/include
@@ -184,13 +186,14 @@ jobs:
 
       - name: Fetch sibling dependencies
         run: |
-          rm -rf ../core ../utils ../async ../json ../template
+          rm -rf ../core ../utils ../async ../json ../template ../p2p
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -203,10 +206,11 @@ jobs:
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
 
       - name: Export dependency include paths
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -282,7 +286,7 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare Asio layout for local async/core builds
         run: |
           set -e
           mkdir -p /tmp/vix-asio/include
@@ -291,13 +295,14 @@ jobs:
 
       - name: Fetch sibling dependencies
         run: |
-          rm -rf ../core ../utils ../async ../json ../template
+          rm -rf ../core ../utils ../async ../json ../template ../p2p
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -310,10 +315,11 @@ jobs:
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
 
       - name: Export dependency include paths
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -380,7 +386,7 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare Asio layout for local async/core builds
         run: |
           set -e
           mkdir -p /tmp/vix-asio/include
@@ -389,13 +395,14 @@ jobs:
 
       - name: Fetch sibling dependencies
         run: |
-          rm -rf ../core ../utils ../async ../json ../template
+          rm -rf ../core ../utils ../async ../json ../template ../p2p
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -408,10 +415,11 @@ jobs:
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
 
       - name: Export dependency include paths
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -472,7 +480,7 @@ jobs:
           sudo apt-get install -y $DEPS
           test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
 
-      - name: Prepare Asio layout for local core builds
+      - name: Prepare Asio layout for local async/core builds
         run: |
           set -e
           mkdir -p /tmp/vix-asio/include
@@ -481,13 +489,14 @@ jobs:
 
       - name: Fetch sibling dependencies
         run: |
-          rm -rf ../core ../utils ../async ../json ../template
+          rm -rf ../core ../utils ../async ../json ../template ../p2p
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p
 
           git -C ../async submodule update --init --recursive --depth 1 || true
 
@@ -500,10 +509,11 @@ jobs:
           test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
           test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
           test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
+          test -f ../p2p/CMakeLists.txt || (echo "::error::../p2p/CMakeLists.txt is missing"; exit 1)
 
       - name: Export dependency include paths
         run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include"
+          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include:$GITHUB_WORKSPACE/../p2p/include"
           if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
             EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
           fi
@@ -531,108 +541,6 @@ jobs:
       - name: Verify installed package files
         run: |
           echo "---- install tree ----"
-          find .ci-install -maxdepth 6 -type f | sort || true
-          test -f .ci-install/bin/vix || (echo "::error::installed vix binary not found"; exit 1)
-
-  config-coverage:
-    name: Configuration Coverage
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout cli repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y $DEPS
-          test -f /usr/include/asio.hpp || (echo "::error::System Asio header not found after install"; exit 1)
-
-      - name: Prepare Asio layout for local core builds
-        run: |
-          set -e
-          mkdir -p /tmp/vix-asio/include
-          cp -r /usr/include/asio* /tmp/vix-asio/include/ || true
-          test -f /tmp/vix-asio/include/asio.hpp || (echo "::error::System Asio headers copy failed"; exit 1)
-
-      - name: Fetch sibling dependencies
-        run: |
-          rm -rf ../core ../utils ../async ../json ../template
-
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-
-          git -C ../async submodule update --init --recursive --depth 1 || true
-
-          mkdir -p ../async/third_party/asio
-          rm -rf ../async/third_party/asio/include
-          cp -r /tmp/vix-asio/include ../async/third_party/asio/
-
-      - name: Verify required sibling dependencies
-        run: |
-          test -f ../core/CMakeLists.txt || (echo "::error::../core/CMakeLists.txt is missing"; exit 1)
-          test -f ../utils/CMakeLists.txt || (echo "::error::../utils/CMakeLists.txt is missing"; exit 1)
-          test -f ../async/CMakeLists.txt || (echo "::error::../async/CMakeLists.txt is missing"; exit 1)
-
-      - name: Export dependency include paths
-        run: |
-          EXTRA_PATHS="$GITHUB_WORKSPACE/../core/include:$GITHUB_WORKSPACE/../utils/include:$GITHUB_WORKSPACE/../async/include"
-          if [ -d "$GITHUB_WORKSPACE/../json/include" ]; then
-            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../json/include"
-          fi
-          if [ -d "$GITHUB_WORKSPACE/../template/include" ]; then
-            EXTRA_PATHS="$EXTRA_PATHS:$GITHUB_WORKSPACE/../template/include"
-          fi
-          echo "CPATH=$EXTRA_PATHS${CPATH:+:$CPATH}" >> "$GITHUB_ENV"
-          echo "CPLUS_INCLUDE_PATH=$EXTRA_PATHS${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}" >> "$GITHUB_ENV"
-
-      - name: Configure release mode without LTO
-        run: |
-          cmake -G Ninja -S . -B build-release-min \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DVIX_ENABLE_LTO=OFF
-
-      - name: Build release mode without LTO
-        run: |
-          cmake --build build-release-min -j"${BUILD_JOBS}"
-
-      - name: Configure release mode with LTO
-        run: |
-          cmake -G Ninja -S . -B build-release-lto \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DVIX_ENABLE_LTO=ON
-
-      - name: Build release mode with LTO
-        run: |
-          cmake --build build-release-lto -j"${BUILD_JOBS}"
-
-  summary:
-    name: CLI Strict CI Summary
-    needs:
-      [
-        build,
-        runtime-smoke,
-        static-analysis,
-        valgrind,
-        standalone-package-check,
-        config-coverage,
-      ]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Print summary
-        run: |
-          echo "CLI strict CI completed."
-          echo "This workflow validates:"
-          echo "- debug builds"
-          echo "- runtime help/version smoke checks"
-          echo "- static analysis"
-          echo "- valgrind"
-          echo "- standalone package install"
-          echo "- release mode"
-          echo "- release LTO mode"
+          find .ci-install -maxdepth 8 -type f | sort || true
+          test -f .ci-install/include/vix/cli/CLI.hpp || (echo "::error::cli headers not found"; exit 1)
+          test -f .ci-install/bin/vix || (echo "::error::vix binary not found in install tree"; exit 1)

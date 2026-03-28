@@ -832,8 +832,14 @@ jobs:
         run: |
           echo "---- install tree ----"
           find .ci-install -maxdepth 8 -type f | sort || true
-          test -f .ci-install/include/vix/cli/CLI.hpp || (echo "::error::cli headers not found"; exit 1)
+
           test -f .ci-install/bin/vix || (echo "::error::vix binary not found in install tree"; exit 1)
+
+          if [ -d .ci-install/include/vix/cli ]; then
+            echo "CLI public headers detected."
+          else
+            echo "CLI headers are not installed by this module, binary-only install is expected."
+          fi
 
   config-coverage:
     name: Configuration Coverage

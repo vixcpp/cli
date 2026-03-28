@@ -1,4 +1,4 @@
-#  @file CMakeLists.cpp
+#  @file CMakeLists.txt
 #  @author Gaspard Kirira
 #
 #  Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -7,8 +7,9 @@
 #  that can be found in the License file.
 #
 # ====================================================================
-# Vix.cpp — CLI Module
+# Vix.cpp - CLI Module
 # ====================================================================
+
 cmake_minimum_required(VERSION 3.20)
 
 # ----------------------------------------------------
@@ -28,6 +29,8 @@ set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option(VIX_ENABLE_LTO "Enable LTO in Release builds" OFF)
 
 file(GLOB_RECURSE CLI_SOURCES
   CONFIGURE_DEPENDS
@@ -63,7 +66,23 @@ else()
 endif()
 
 # ----------------------------------------------------
+# Dependency resolution helpers
+# ----------------------------------------------------
+set(_VIX_LOCAL_LINK_TARGETS "")
+set(_VIX_LOCAL_INCLUDE_DIRS "")
+
+function(vix_append_if_exists out_var path_value)
+  if (EXISTS "${path_value}")
+    set(${out_var} "${${out_var}};${path_value}" PARENT_SCOPE)
+  endif()
+endfunction()
+
+# ----------------------------------------------------
 # Link dependencies
+# Priority:
+# 1) umbrella targets already present
+# 2) local sibling modules when building in repo layout
+# 3) installed packages via find_package
 # ----------------------------------------------------
 if (TARGET vix::vix)
   message(STATUS "[cli] Using umbrella target vix::vix")
@@ -74,28 +93,158 @@ elseif (TARGET vix::core)
   target_link_libraries(vix_cli PRIVATE vix::core)
 
 else()
-  # Standalone or external build using installed package
   get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
-  set(_VIX_CORE_DIR  "${_VIX_MODULES_DIR}/core")
-  set(_VIX_UTILS_DIR "${_VIX_MODULES_DIR}/utils")
 
+  set(_VIX_CORE_DIR     "${_VIX_MODULES_DIR}/core")
+  set(_VIX_UTILS_DIR    "${_VIX_MODULES_DIR}/utils")
+  set(_VIX_ASYNC_DIR    "${_VIX_MODULES_DIR}/async")
+  set(_VIX_JSON_DIR     "${_VIX_MODULES_DIR}/json")
+  set(_VIX_TEMPLATE_DIR "${_VIX_MODULES_DIR}/template")
+  set(_VIX_NET_DIR      "${_VIX_MODULES_DIR}/net")
+  set(_VIX_CRYPTO_DIR   "${_VIX_MODULES_DIR}/crypto")
+  set(_VIX_P2P_DIR      "${_VIX_MODULES_DIR}/p2p")
+  set(_VIX_SYNC_DIR     "${_VIX_MODULES_DIR}/sync")
+  set(_VIX_CACHE_DIR    "${_VIX_MODULES_DIR}/cache")
+
+  set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
-    message(STATUS "[cli] Building inside Vix repo → adding local modules/core & modules/utils")
-    add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
-    add_subdirectory("${_VIX_CORE_DIR}"  "${CMAKE_BINARY_DIR}/_vix_core")
-    target_link_libraries(vix_cli PRIVATE vix::core)
+    set(_LOCAL_LAYOUT_OK TRUE)
+  endif()
+
+  if (_LOCAL_LAYOUT_OK)
+    message(STATUS "[cli] Building inside Vix repo -> resolving local sibling modules")
+
+    if (EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt" AND NOT TARGET vix::utils)
+      add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
+    endif()
+
+    if (EXISTS "${_VIX_ASYNC_DIR}/CMakeLists.txt" AND NOT TARGET vix::async)
+      add_subdirectory("${_VIX_ASYNC_DIR}" "${CMAKE_BINARY_DIR}/_vix_async")
+    endif()
+
+    if (EXISTS "${_VIX_JSON_DIR}/CMakeLists.txt" AND NOT TARGET vix::json)
+      add_subdirectory("${_VIX_JSON_DIR}" "${CMAKE_BINARY_DIR}/_vix_json")
+    endif()
+
+    if (EXISTS "${_VIX_TEMPLATE_DIR}/CMakeLists.txt" AND NOT TARGET vix::template)
+      add_subdirectory("${_VIX_TEMPLATE_DIR}" "${CMAKE_BINARY_DIR}/_vix_template")
+    endif()
+
+    if (EXISTS "${_VIX_NET_DIR}/CMakeLists.txt" AND NOT TARGET vix::net)
+      add_subdirectory("${_VIX_NET_DIR}" "${CMAKE_BINARY_DIR}/_vix_net")
+    endif()
+
+    if (EXISTS "${_VIX_CRYPTO_DIR}/CMakeLists.txt" AND NOT TARGET vix::crypto)
+      add_subdirectory("${_VIX_CRYPTO_DIR}" "${CMAKE_BINARY_DIR}/_vix_crypto")
+    endif()
+
+    if (EXISTS "${_VIX_SYNC_DIR}/CMakeLists.txt" AND NOT TARGET vix::sync)
+      add_subdirectory("${_VIX_SYNC_DIR}" "${CMAKE_BINARY_DIR}/_vix_sync")
+    endif()
+
+    if (EXISTS "${_VIX_CACHE_DIR}/CMakeLists.txt" AND NOT TARGET vix::cache)
+      add_subdirectory("${_VIX_CACHE_DIR}" "${CMAKE_BINARY_DIR}/_vix_cache")
+    endif()
+
+    if (EXISTS "${_VIX_P2P_DIR}/CMakeLists.txt" AND NOT TARGET vix::p2p)
+      add_subdirectory("${_VIX_P2P_DIR}" "${CMAKE_BINARY_DIR}/_vix_p2p")
+    endif()
+
+    if (TARGET vix::core)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::core)
+    endif()
+
+    if (TARGET vix::utils)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::utils)
+    endif()
+
+    if (TARGET vix::async)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::async)
+    endif()
+
+    if (TARGET vix::json)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::json)
+    endif()
+
+    if (TARGET vix::template)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::template)
+    endif()
+
+    if (TARGET vix::net)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::net)
+    endif()
+
+    if (TARGET vix::crypto)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::crypto)
+    endif()
+
+    if (TARGET vix::sync)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::sync)
+    endif()
+
+    if (TARGET vix::cache)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::cache)
+    endif()
+
+    if (TARGET vix::p2p)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::p2p)
+    endif()
+
+    # Fallback header visibility for modules that expose headers but not imported targets
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UTILS_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ASYNC_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_JSON_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_TEMPLATE_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_NET_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
+
+    if (_VIX_LOCAL_LINK_TARGETS)
+      list(REMOVE_DUPLICATES _VIX_LOCAL_LINK_TARGETS)
+      message(STATUS "[cli] Linking local modules: ${_VIX_LOCAL_LINK_TARGETS}")
+      target_link_libraries(vix_cli PRIVATE ${_VIX_LOCAL_LINK_TARGETS})
+    else()
+      message(FATAL_ERROR
+        "[cli] Local Vix repository layout detected, but no usable module targets were created."
+      )
+    endif()
+
+    if (_VIX_LOCAL_INCLUDE_DIRS)
+      list(REMOVE_DUPLICATES _VIX_LOCAL_INCLUDE_DIRS)
+      target_include_directories(vix_cli PRIVATE ${_VIX_LOCAL_INCLUDE_DIRS})
+    endif()
+
   else()
-    find_package(Vix CONFIG REQUIRED)
+    message(STATUS "[cli] Local sibling modules not found -> trying installed packages")
+
+    find_package(Vix CONFIG QUIET)
+    find_package(vixcrypto CONFIG QUIET)
+    find_package(vixp2p CONFIG QUIET)
+
     if (TARGET vix::vix)
-      message(STATUS "[cli] Using system Vix package (vix::vix)")
+      message(STATUS "[cli] Using installed package target vix::vix")
       target_link_libraries(vix_cli PRIVATE vix::vix)
     elseif (TARGET vix::core)
-      message(STATUS "[cli] Using system Vix package (vix::core)")
+      message(STATUS "[cli] Using installed package target vix::core")
       target_link_libraries(vix_cli PRIVATE vix::core)
+
+      if (TARGET vix::crypto)
+        target_link_libraries(vix_cli PRIVATE vix::crypto)
+      endif()
+
+      if (TARGET vix::p2p)
+        target_link_libraries(vix_cli PRIVATE vix::p2p)
+      endif()
     else()
       message(FATAL_ERROR
         "Missing dependencies for vix_cli.\n"
-        "Expected vix::vix or vix::core from the installed Vix package."
+        "Expected one of:\n"
+        "  - umbrella targets vix::vix or vix::core\n"
+        "  - local sibling modules in ../core, ../utils, ../p2p, ../crypto, etc.\n"
+        "  - installed packages providing vix::vix or vix::core"
       )
     endif()
   endif()

@@ -36,6 +36,7 @@
 #include <vix/cli/util/Strings.hpp>
 #include <vix/cli/cmake/CMakeBuild.hpp>
 #include <vix/cli/cmake/Toolchain.hpp>
+#include <vix/cli/cmake/GlobalPackages.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -468,7 +469,8 @@ namespace vix::commands::BuildCommand
         const process::Preset &p, const process::Options &opt,
         const fs::path &toolchainFile,
         const std::optional<std::string> &launcher,
-        const std::optional<std::string> &fastLinkerFlag)
+        const std::optional<std::string> &fastLinkerFlag,
+        const fs::path &globalPackagesFile)
     {
       std::vector<std::pair<std::string, std::string>> vars;
       vars.reserve(32);
@@ -484,6 +486,9 @@ namespace vix::commands::BuildCommand
 
       if (!opt.targetTriple.empty())
         vars.emplace_back("VIX_TARGET_TRIPLE", opt.targetTriple);
+
+      if (!globalPackagesFile.empty())
+        vars.emplace_back("CMAKE_PROJECT_TOP_LEVEL_INCLUDES", globalPackagesFile.string());
 
       if (launcher && !launcher->empty())
       {
@@ -586,15 +591,21 @@ namespace vix::commands::BuildCommand
       plan.buildLog = plan.buildDir / "build.log";
       plan.sigFile = plan.buildDir / ".vix-config.sig";
       plan.toolchainFile = plan.buildDir / "vix-toolchain.cmake";
+      const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
       std::string toolchainContent;
       if (!opt.targetTriple.empty())
         toolchainContent =
             build::toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
 
+      const auto globalPackages = build::load_global_packages();
+      const std::string globalPackagesCMake =
+          build::make_global_packages_cmake(globalPackages);
+
       plan.cmakeVars = build_cmake_vars(
           plan.preset, opt, plan.toolchainFile,
-          plan.launcher, plan.fastLinkerFlag);
+          plan.launcher, plan.fastLinkerFlag,
+          globalPackagesFile);
       plan.signature = make_signature(plan, opt, toolchainContent);
 
       return plan;
@@ -631,6 +642,7 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = *planOpt;
+        const fs::path globalPackagesFile = plan_.buildDir / "vix-global-packages.cmake";
 
         const bool defer = (!opt_.quiet && !opt_.cmakeVerbose);
         DeferredConsole out(defer);
@@ -671,7 +683,8 @@ namespace vix::commands::BuildCommand
 
         plan_.cmakeVars = build_cmake_vars(
             plan_.preset, opt_, plan_.toolchainFile,
-            plan_.launcher, plan_.fastLinkerFlag);
+            plan_.launcher, plan_.fastLinkerFlag,
+            globalPackagesFile);
 
         if (!opt_.targetTriple.empty())
           tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
@@ -702,6 +715,17 @@ namespace vix::commands::BuildCommand
               hint(err);
             return 1;
           }
+        }
+
+        const auto globalPackages = build::load_global_packages();
+        const std::string globalPackagesCMake =
+            build::make_global_packages_cmake(globalPackages);
+
+        if (!util::write_text_file_atomic(globalPackagesFile, globalPackagesCMake))
+        {
+          error("Failed to write global packages file: " + globalPackagesFile.string());
+          hint("Check filesystem permissions.");
+          return 1;
         }
 
         if (!opt_.quiet)

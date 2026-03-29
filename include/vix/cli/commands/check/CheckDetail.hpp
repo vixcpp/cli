@@ -21,40 +21,126 @@ namespace vix::commands::CheckCommand::detail
 {
   namespace fs = std::filesystem;
 
+  /**
+   * @brief Parsed options for `vix check`.
+   *
+   * This structure is shared by both project mode and script mode.
+   *
+   * Project mode:
+   * - configure
+   * - build
+   * - optional tests
+   * - optional runtime validation
+   *
+   * Script mode:
+   * - temporary configure
+   * - build
+   * - optional runtime validation when sanitizers are enabled
+   */
   struct Options
   {
-    // common
+    /**
+     * @name Common options
+     * @{
+     */
+
+    /// Explicit project directory passed with --dir.
     std::string dir;
+
+    /// Configure preset name used in project mode.
     std::string preset = "dev-ninja";
-    std::string buildPreset; // optional (override)
+
+    /// Optional build preset override.
+    std::string buildPreset;
+
+    /// Number of parallel jobs for the build step.
     int jobs = 0;
+
+    /// Minimal output mode.
     bool quiet = false;
+
+    /// More verbose output mode.
     bool verbose = false;
+
+    /// Optional log level for the current check session.
     std::string logLevel;
 
-    // script mode
+    /** @} */
+
+    /**
+     * @name Script mode
+     * @{
+     */
+
+    /// True when the user passed a single .cpp file.
     bool singleCpp = false;
+
+    /// Absolute path of the .cpp file to validate.
     fs::path cppFile;
-    bool enableSanitizers = false; // --san
-    bool enableUbsanOnly = false;  // --ubsan
 
-    // project checks
-    bool tests = false;                 // --tests
-    std::string ctestPreset;            // --ctest-preset
-    std::vector<std::string> ctestArgs; // repeatable: --ctest-arg <...>
+    /// Enable AddressSanitizer + UBSan.
+    bool enableSanitizers = false;
 
-    // runtime check (project mode + optional)
-    bool runAfterBuild = false; // --run
-    int runTimeoutSec = 0;      // --run-timeout <sec> (0 = no timeout)
+    /// Enable UBSan only.
+    bool enableUbsanOnly = false;
+
+    /** @} */
+
+    /**
+     * @name Project test options
+     * @{
+     */
+
+    /// Run tests after build.
+    bool tests = false;
+
+    /// Optional CTest preset override.
+    std::string ctestPreset;
+
+    /// Extra arguments forwarded to CTest.
+    std::vector<std::string> ctestArgs;
+
+    /** @} */
+
+    /**
+     * @name Runtime validation
+     * @{
+     */
+
+    /// Run the built executable after build.
+    bool runAfterBuild = false;
+
+    /// Runtime timeout in seconds. 0 means no explicit timeout override.
+    int runTimeoutSec = 0;
+
+    /** @} */
   };
 
+  /**
+   * @brief Parse CLI arguments for `vix check`.
+   *
+   * @param args Raw command arguments.
+   * @return Parsed options.
+   */
   Options parse(const std::vector<std::string> &args);
 
-  // script mode
+  /**
+   * @brief Validate a single C++ script in temporary project mode.
+   *
+   * @param opt Parsed options.
+   * @return Process exit code.
+   */
   int check_single_cpp(const Options &opt);
-  // project mode
+
+  /**
+   * @brief Validate a CMake project.
+   *
+   * @param opt Parsed options.
+   * @param projectDir Resolved project directory.
+   * @return Process exit code.
+   */
   int check_project(const Options &opt, const fs::path &projectDir);
 
 } // namespace vix::commands::CheckCommand::detail
 
-#endif
+#endif // VIX_CHECK_DETAIL_HPP

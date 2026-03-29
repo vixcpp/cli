@@ -15,119 +15,203 @@
 #include <vix/cli/Style.hpp>
 
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <optional>
+#include <string>
 #include <string_view>
-
-using namespace vix::cli::style;
+#include <vector>
 
 namespace vix::commands::CheckCommand::detail
 {
   namespace fs = std::filesystem;
 
-  static std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
+  namespace
   {
-    auto is_opt = [](std::string_view s)
-    { return !s.empty() && s.front() == '-'; };
-
-    for (size_t i = 0; i < args.size(); ++i)
+    static bool is_option(std::string_view s)
     {
-      const auto &a = args[i];
+      return !s.empty() && s.front() == '-';
+    }
 
-      if (a == "-d" || a == "--dir")
-      {
-        if (i + 1 < args.size() && !is_opt(args[i + 1]))
-          return args[i + 1];
+    static std::optional<std::string> take_attached_value(
+        const std::string &arg,
+        const char *prefix)
+    {
+      if (arg.rfind(prefix, 0) != 0)
         return std::nullopt;
+
+      std::string value = arg.substr(std::char_traits<char>::length(prefix));
+      if (value.empty())
+        return std::nullopt;
+
+      return value;
+    }
+
+    static std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
+    {
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        const auto &a = args[i];
+
+        if (a == "-d" || a == "--dir")
+        {
+          if (i + 1 < args.size() && !is_option(args[i + 1]))
+            return args[i + 1];
+          return std::nullopt;
+        }
+
+        if (auto v = take_attached_value(a, "--dir="))
+          return v;
       }
 
-      constexpr const char pfx[] = "--dir=";
-      if (a.rfind(pfx, 0) == 0)
+      return std::nullopt;
+    }
+
+    static int parse_int_or_default(const std::string &value, int fallback)
+    {
+      try
       {
-        std::string v = a.substr(sizeof(pfx) - 1);
-        if (v.empty())
-          return std::nullopt;
-        return v;
+        return std::stoi(value);
+      }
+      catch (...)
+      {
+        return fallback;
       }
     }
-    return std::nullopt;
-  }
+
+    static int parse_non_negative_int_or_default(const std::string &value, int fallback)
+    {
+      try
+      {
+        return std::max(0, std::stoi(value));
+      }
+      catch (...)
+      {
+        return fallback;
+      }
+    }
+
+    static bool looks_like_cpp_file(const std::string &arg)
+    {
+      const fs::path p(arg);
+      return p.extension() == ".cpp";
+    }
+
+    static bool is_help_flag(const std::string &arg)
+    {
+      return arg == "-h" || arg == "--help";
+    }
+  } // namespace
 
   Options parse(const std::vector<std::string> &args)
   {
     Options o;
 
-    for (size_t i = 0; i < args.size(); ++i)
+    for (std::size_t i = 0; i < args.size(); ++i)
     {
       const auto &a = args[i];
 
-      if (a == "--preset" && i + 1 < args.size())
-        o.preset = args[++i];
-
-      else if ((a == "-j" || a == "--jobs") && i + 1 < args.size())
+      if (is_help_flag(a))
       {
-        try
-        {
-          o.jobs = std::stoi(args[++i]);
-        }
-        catch (...)
-        {
-          o.jobs = 0;
-        }
+        continue;
+      }
+      else if (a == "--preset")
+      {
+        if (i + 1 < args.size())
+          o.preset = args[++i];
+      }
+      else if (auto v = take_attached_value(a, "--preset="))
+      {
+        o.preset = *v;
+      }
+      else if (a == "-j" || a == "--jobs")
+      {
+        if (i + 1 < args.size())
+          o.jobs = parse_int_or_default(args[++i], 0);
+      }
+      else if (auto v = take_attached_value(a, "--jobs="))
+      {
+        o.jobs = parse_int_or_default(*v, 0);
       }
       else if (a == "--quiet" || a == "-q")
-        o.quiet = true;
-      else if (a == "--verbose")
-        o.verbose = true;
-      else if ((a == "--log-level" || a == "--loglevel") && i + 1 < args.size())
-        o.logLevel = args[++i];
-      else if (a.rfind("--log-level=", 0) == 0)
-        o.logLevel = a.substr(std::string("--log-level=").size());
-
-      // script sanitizers
-      else if (a == "--san")
-        o.enableSanitizers = true;
-      else if (a == "--ubsan")
-        o.enableUbsanOnly = true;
-
-      // project checks
-      else if (a == "--tests")
-        o.tests = true;
-      else if (a == "--build-preset" && i + 1 < args.size())
-        o.buildPreset = args[++i];
-      else if (a == "--ctest-preset" && i + 1 < args.size())
-        o.ctestPreset = args[++i];
-
-      // extra ctest args
-      else if (a == "--ctest-arg" && i + 1 < args.size())
       {
-        o.ctestArgs.push_back(args[++i]);
+        o.quiet = true;
       }
-
-      // runtime check
+      else if (a == "--verbose")
+      {
+        o.verbose = true;
+      }
+      else if (a == "--log-level" || a == "--loglevel")
+      {
+        if (i + 1 < args.size())
+          o.logLevel = args[++i];
+      }
+      else if (auto v = take_attached_value(a, "--log-level="))
+      {
+        o.logLevel = *v;
+      }
+      else if (auto v = take_attached_value(a, "--loglevel="))
+      {
+        o.logLevel = *v;
+      }
+      else if (a == "--san")
+      {
+        o.enableSanitizers = true;
+      }
+      else if (a == "--ubsan")
+      {
+        o.enableUbsanOnly = true;
+      }
+      else if (a == "--tests")
+      {
+        o.tests = true;
+      }
+      else if (a == "--build-preset")
+      {
+        if (i + 1 < args.size())
+          o.buildPreset = args[++i];
+      }
+      else if (auto v = take_attached_value(a, "--build-preset="))
+      {
+        o.buildPreset = *v;
+      }
+      else if (a == "--ctest-preset")
+      {
+        if (i + 1 < args.size())
+          o.ctestPreset = args[++i];
+      }
+      else if (auto v = take_attached_value(a, "--ctest-preset="))
+      {
+        o.ctestPreset = *v;
+      }
+      else if (a == "--ctest-arg")
+      {
+        if (i + 1 < args.size())
+          o.ctestArgs.push_back(args[++i]);
+      }
+      else if (auto v = take_attached_value(a, "--ctest-arg="))
+      {
+        o.ctestArgs.push_back(*v);
+      }
       else if (a == "--run")
       {
         o.runAfterBuild = true;
       }
-      else if (a == "--run-timeout" && i + 1 < args.size())
+      else if (a == "--run-timeout")
       {
-        try
-        {
-          o.runTimeoutSec = std::max(0, std::stoi(args[++i]));
-        }
-        catch (...)
-        {
-          o.runTimeoutSec = 0;
-        }
+        if (i + 1 < args.size())
+          o.runTimeoutSec = parse_non_negative_int_or_default(args[++i], 0);
       }
-
-      // positional
-      else if (!a.empty() && a != "--" && a[0] != '-')
+      else if (auto v = take_attached_value(a, "--run-timeout="))
       {
-        fs::path p{a};
-        if (p.extension() == ".cpp")
+        o.runTimeoutSec = parse_non_negative_int_or_default(*v, 0);
+      }
+      else if (!a.empty() && a != "--" && !is_option(a))
+      {
+        if (looks_like_cpp_file(a))
         {
           o.singleCpp = true;
-          o.cppFile = fs::absolute(p);
+          o.cppFile = fs::absolute(fs::path(a));
         }
       }
     }
@@ -137,6 +221,12 @@ namespace vix::commands::CheckCommand::detail
 
     if (o.enableUbsanOnly)
       o.enableSanitizers = false;
+
+    if ((o.enableSanitizers || o.enableUbsanOnly) && !o.singleCpp)
+      o.runAfterBuild = true;
+
+    if (o.quiet && o.verbose)
+      o.verbose = false;
 
     return o;
   }

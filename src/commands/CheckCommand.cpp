@@ -129,17 +129,18 @@ namespace vix::commands::CheckCommand
     out << "  vix check [path|file.cpp] [options]\n\n";
 
     print_help_section_header(out, "Description");
-    out << "  Validate a Vix/CMake project or a single-file C++ script.\n\n";
+    out << "  Validate a Vix/CMake project or a single C++ file.\n";
+    out << "  Vix can check build health, test health, runtime health, and sanitizer safety.\n\n";
 
     print_help_section_header(out, "Project mode");
-    out << "  - Configure the project\n";
-    out << "  - Build the project\n";
-    out << "  - Optional: run tests with CTest\n";
-    out << "  - Optional: run the built executable\n";
-    out << "  - With --san / --ubsan, use an isolated check profile\n\n";
+    out << "  - Detect and configure the project\n";
+    out << "  - Build the selected check profile\n";
+    out << "  - Optionally run tests with CTest\n";
+    out << "  - Optionally run the built executable\n";
+    out << "  - With sanitizers, use an isolated build profile\n\n";
 
     print_help_section_header(out, "Script mode");
-    out << "  - Create a temporary CMake project\n";
+    out << "  - Create a temporary CMake project around the file\n";
     out << "  - Compile the file\n";
     out << "  - With sanitizers enabled, also run the binary for runtime validation\n\n";
 
@@ -159,16 +160,27 @@ namespace vix::commands::CheckCommand
 
     print_help_section_header(out, "Sanitizers");
     out << "  --san                    Enable AddressSanitizer + UBSan\n";
-    out << "  --ubsan                  Enable UBSan only\n\n";
+    out << "  --ubsan                  Enable UBSan only\n";
+    out << "  --full                   Force the complete sanitizer check, including full project configure\n\n";
+
+    print_help_section_header(out, "Sanitizer modes");
+    out << "  Default sanitizer mode is smart.\n";
+    out << "  - Small projects: Vix checks the full project normally.\n";
+    out << "  - Large or umbrella projects: Vix may switch to a reduced sanitizer\n";
+    out << "    configure to avoid unrelated packaging/export/install failures.\n";
+    out << "  - Use --full to force the complete sanitizer configure.\n";
+    out << "    This is useful when you want to detect real CMake/export issues.\n\n";
 
     print_help_section_header(out, "Notes");
     out << "  - Project checks use isolated build directories per profile.\n";
     out << "    Example: build-ninja, build-ninja-san, build-ninja-ubsan.\n";
     out << "  - If a dedicated sanitizer preset does not exist, Vix falls back to\n";
     out << "    manual configure/build for that check profile.\n";
-    out << "  - In project mode, --san and --ubsan also trigger runtime validation.\n";
+    out << "  - In project mode, --san and --ubsan also enable runtime validation.\n";
     out << "  - In script mode, sanitizers validate both build and runtime.\n";
-    out << "  - Global packages installed by Vix are integrated into project checks.\n\n";
+    out << "  - Global packages installed by Vix are integrated into project checks.\n";
+    out << "  - --san is the recommended mode for day-to-day validation.\n";
+    out << "  - --san --full is stricter and can reveal real project-level CMake issues.\n\n";
 
     print_help_section_header(out, "Examples");
     out << "  vix check\n";
@@ -176,8 +188,10 @@ namespace vix::commands::CheckCommand
     out << "  vix check --run\n";
     out << "  vix check --tests --run\n";
     out << "  vix check --san\n";
+    out << "  vix check --san --full\n";
     out << "  vix check --san --tests\n";
     out << "  vix check --san --tests --run-timeout 20\n";
+    out << "  vix check --ubsan\n";
     out << "  vix check --dir ./examples/api\n";
     out << "  vix check main.cpp\n";
     out << "  vix check main.cpp --san\n";

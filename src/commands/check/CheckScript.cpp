@@ -19,52 +19,144 @@
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/ErrorHandler.hpp>
+#include <vix/cli/util/Ui.hpp>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <cstdlib>
-
-using namespace vix::cli::style;
+#include <system_error>
+#include <vector>
 
 namespace vix::commands::CheckCommand::detail
 {
   namespace fs = std::filesystem;
-
   namespace text = vix::cli::commands::helpers;
+  namespace run = vix::commands::RunCommand::detail;
+  namespace ui = vix::cli::util;
+  namespace style = vix::cli::style;
+
   using vix::cli::commands::helpers::quote;
 
-  namespace run = vix::commands::RunCommand::detail;
-
+  namespace
+  {
 #ifndef _WIN32
-  static inline const char *null_redirect() noexcept
-  {
-    return " >/dev/null 2>&1";
-  }
+    static inline const char *null_redirect() noexcept
+    {
+      return " >/dev/null 2>&1";
+    }
 #else
-  static inline const char *null_redirect() noexcept
-  {
-    return " >nul 2>nul";
-  }
+    static inline const char *null_redirect() noexcept
+    {
+      return " >nul 2>nul";
+    }
 #endif
 
-  static bool write_file_or_report(const fs::path &path, const std::string &content)
-  {
-    std::ofstream ofs(path);
-    if (!ofs)
+    struct ScriptCheckSummary
     {
-      error("Failed to write file: " + path.string());
-      return false;
-    }
-    ofs << content;
-    if (!ofs)
+      bool configured = false;
+      bool built = false;
+      bool runtimeRan = false;
+      bool sanitizersEnabled = false;
+      bool ubsanOnly = false;
+    };
+
+    static bool write_file_or_report(const fs::path &path, const std::string &content)
     {
-      error("Failed to write file (I/O error): " + path.string());
-      return false;
+      std::ofstream ofs(path);
+      if (!ofs)
+      {
+        style::error("Failed to write file: " + path.string());
+        return false;
+      }
+
+      ofs << content;
+      if (!ofs)
+      {
+        style::error("Failed to write file (I/O error): " + path.string());
+        return false;
+      }
+
+      return true;
     }
-    return true;
-  }
+
+    static std::string make_summary(const ScriptCheckSummary &summary)
+    {
+      std::vector<std::string> parts;
+
+      if (summary.built)
+        parts.push_back("build");
+
+      if (summary.runtimeRan)
+        parts.push_back("runtime");
+
+      if (summary.sanitizersEnabled)
+      {
+        if (summary.ubsanOnly)
+          parts.push_back("ubsan");
+        else
+          parts.push_back("asan+ubsan");
+      }
+
+      if (parts.empty())
+        return "nothing";
+
+      std::ostringstream os;
+      for (std::size_t i = 0; i < parts.size(); ++i)
+      {
+        if (i > 0)
+          os << ", ";
+        os << parts[i];
+      }
+
+      return os.str();
+    }
+
+    static std::string profile_name(bool san, bool ubsanOnly)
+    {
+      if (san)
+        return "asan+ubsan";
+      if (ubsanOnly)
+        return "ubsan";
+      return "default";
+    }
+
+    static std::string build_dir_name(bool san, bool ubsanOnly)
+    {
+      if (san)
+        return "build-san";
+      if (ubsanOnly)
+        return "build-ubsan";
+      return "build";
+    }
+
+    static void print_header(
+        const Options &opt,
+        const fs::path &script,
+        const fs::path &projectDir,
+        const fs::path &buildDir)
+    {
+      if (opt.quiet)
+        return;
+
+      ui::section(std::cout, "Check");
+      ui::kv(std::cout, "script", script.string());
+      ui::kv(std::cout, "project dir", projectDir.string());
+      ui::kv(std::cout, "build dir", buildDir.string());
+      ui::kv(std::cout, "profile", profile_name(opt.enableSanitizers, opt.enableUbsanOnly));
+      ui::kv(
+          std::cout,
+          "runtime",
+#ifndef _WIN32
+          run::want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly) ? "enabled" : "disabled"
+#else
+          "disabled"
+#endif
+      );
+      ui::one_line_spacer(std::cout);
+    }
+  } // namespace
 
   int check_single_cpp(const Options &opt)
   {
@@ -72,40 +164,69 @@ namespace vix::commands::CheckCommand::detail
 
     if (script.empty())
     {
-      error("No C++ file provided.");
-      return 1;
-    }
-    if (!fs::exists(script))
-    {
-      error("C++ file not found: " + script.string());
+      style::error("No C++ file provided.");
       return 1;
     }
 
+    if (!fs::exists(script))
+    {
+      style::error("C++ file not found: " + script.string());
+      return 1;
+    }
+
+    ScriptCheckSummary summary;
+    summary.sanitizersEnabled = opt.enableSanitizers || opt.enableUbsanOnly;
+    summary.ubsanOnly = opt.enableUbsanOnly;
+
+    const bool enableSan = opt.enableSanitizers;
+    const bool enableUbsanOnly = opt.enableUbsanOnly;
     const std::string exeName = script.stem().string();
 
     fs::path scriptsRoot = run::get_scripts_root();
-    fs::create_directories(scriptsRoot);
-    fs::path projectDir = scriptsRoot / exeName;
-    fs::create_directories(projectDir);
-    fs::path cmakeLists = projectDir / "CMakeLists.txt";
-    const bool useVixRuntime = run::script_uses_vix(script);
-
-    if (!write_file_or_report(cmakeLists, run::make_script_cmakelists(exeName, script, useVixRuntime, /*scriptFlags=*/{})))
+    std::error_code ec;
+    fs::create_directories(scriptsRoot, ec);
+    if (ec)
+    {
+      style::error("Failed to create scripts root: " + scriptsRoot.string());
+      style::hint(ec.message());
       return 1;
+    }
 
-    fs::path buildDir = projectDir / "build";
-    const fs::path sigFile = projectDir / ".vix-config.sig";
-    const bool enableSan = opt.enableSanitizers;
-    const bool enableUbsanOnly = opt.enableUbsanOnly;
+    fs::path projectDir = scriptsRoot / exeName;
+    fs::create_directories(projectDir, ec);
+    if (ec)
+    {
+      style::error("Failed to create script project dir: " + projectDir.string());
+      style::hint(ec.message());
+      return 1;
+    }
+
+    const fs::path cmakeLists = projectDir / "CMakeLists.txt";
+    const bool useVixRuntime = run::script_uses_vix(script);
+    const fs::path buildDir = projectDir / build_dir_name(enableSan, enableUbsanOnly);
+    const fs::path sigFile = projectDir / (build_dir_name(enableSan, enableUbsanOnly) + ".vix-config.sig");
+    const fs::path logPath = projectDir / (build_dir_name(enableSan, enableUbsanOnly) + ".build.log");
+
+    print_header(opt, script, projectDir, buildDir);
+
+    if (!write_file_or_report(
+            cmakeLists,
+            run::make_script_cmakelists(exeName, script, useVixRuntime, /*scriptFlags=*/{})))
+    {
+      return 1;
+    }
 
     const std::string sig =
-        run::make_script_config_signature(useVixRuntime, enableSan, enableUbsanOnly, /*scriptFlags=*/{});
-    ;
+        run::make_script_config_signature(
+            useVixRuntime,
+            enableSan,
+            enableUbsanOnly,
+            /*scriptFlags=*/{});
 
     bool needConfigure = true;
     {
-      std::error_code ec{};
-      if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
+      std::error_code cacheEc;
+      if (fs::exists(buildDir / "CMakeCache.txt", cacheEc) && !cacheEc)
       {
         const std::string oldSig = text::read_text_file_or_empty(sigFile);
         if (!oldSig.empty() && oldSig == sig)
@@ -115,48 +236,77 @@ namespace vix::commands::CheckCommand::detail
 
     if (needConfigure)
     {
-      std::ostringstream oss;
-      oss << "cd " << quote(projectDir.string()) << " && cmake -S . -B build";
+      if (!opt.quiet)
+      {
+        ui::info_line(std::cout, "No matching cache found for this script profile.");
+        ui::kv(std::cout, "action", "configure");
+        ui::one_line_spacer(std::cout);
+      }
+
+      std::ostringstream conf;
+      conf << "cd " << quote(projectDir.string())
+           << " && cmake -S . -B " << quote(buildDir.string());
 
       if (run::want_sanitizers(enableSan, enableUbsanOnly))
       {
-        oss << " -DVIX_ENABLE_SANITIZERS=ON"
-            << " -DVIX_SANITIZER_MODE=" << run::sanitizer_mode_string(enableSan, enableUbsanOnly);
+        conf << " -DVIX_ENABLE_SANITIZERS=ON"
+             << " -DVIX_SANITIZER_MODE="
+             << run::sanitizer_mode_string(enableSan, enableUbsanOnly);
       }
       else
       {
-        oss << " -DVIX_ENABLE_SANITIZERS=OFF";
+        conf << " -DVIX_ENABLE_SANITIZERS=OFF";
       }
 
-      oss << null_redirect();
+      conf << null_redirect();
 
-      const int code = run::normalize_exit_code(std::system(oss.str().c_str()));
+      const int code = run::normalize_exit_code(std::system(conf.str().c_str()));
       if (code != 0)
       {
-        error("Script configure failed.");
-        hint("Try running the configure command manually inside: " + projectDir.string());
+        style::error("Script configure failed.");
+        style::hint("Try running the configure command manually inside: " + projectDir.string());
         return code;
       }
 
       (void)text::write_text_file(sigFile, sig);
+      summary.configured = true;
+
+      if (!opt.quiet)
+        ui::ok_line(std::cout, "Configure OK.");
+    }
+    else
+    {
+      if (!opt.quiet)
+      {
+        ui::ok_line(std::cout, "Matching cache detected for this script profile.");
+        ui::kv(std::cout, "build dir", buildDir.string());
+        ui::one_line_spacer(std::cout);
+      }
     }
 
-    fs::path logPath = projectDir / "build.log";
+    if (!opt.quiet)
+    {
+      ui::info_line(std::cout, "Starting build.");
+      ui::kv(std::cout, "target", exeName);
+      ui::one_line_spacer(std::cout);
+    }
 
-    std::ostringstream b;
+    std::ostringstream buildCmd;
 #ifndef _WIN32
-    b << "cd " << quote(projectDir.string())
-      << " && cmake --build build --target " << exeName;
+    buildCmd << "cd " << quote(projectDir.string())
+             << " && cmake --build " << quote(buildDir.string())
+             << " --target " << exeName;
     if (opt.jobs > 0)
-      b << " -- -j " << opt.jobs;
-    b << " >" << quote(logPath.string()) << " 2>&1";
+      buildCmd << " -- -j " << opt.jobs;
+    buildCmd << " >" << quote(logPath.string()) << " 2>&1";
 #else
-    b << "cd " << quote(projectDir.string())
-      << " && cmake --build build --target " << exeName
-      << " >" << quote(logPath.string()) << " 2>&1";
+    buildCmd << "cd " << quote(projectDir.string())
+             << " && cmake --build " << quote(buildDir.string())
+             << " --target " << exeName
+             << " >" << quote(logPath.string()) << " 2>&1";
 #endif
 
-    const int buildCode = run::normalize_exit_code(std::system(b.str().c_str()));
+    const int buildCode = run::normalize_exit_code(std::system(buildCmd.str().c_str()));
     if (buildCode != 0)
     {
       const std::string log = text::read_text_file_or_empty(logPath);
@@ -164,31 +314,39 @@ namespace vix::commands::CheckCommand::detail
       if (!log.empty())
       {
         vix::cli::ErrorHandler::printBuildErrors(
-            log, script, "Script check failed (build)");
+            log,
+            script,
+            "Script check failed (build)");
       }
       else
       {
-        error("Script check failed (no compiler log captured).");
-        hint("No build log found at: " + logPath.string());
+        style::error("Script check failed (no compiler log captured).");
+        style::hint("No build log found at: " + logPath.string());
       }
 
       return buildCode;
     }
 
+    summary.built = true;
+
+    if (!opt.quiet)
+      ui::ok_line(std::cout, "Build OK.");
+
 #ifndef _WIN32
-    // If sanitizers requested, run the binary to actually trigger UBSan/ASan
     if (run::want_sanitizers(enableSan, enableUbsanOnly))
     {
-      fs::path exePath = buildDir / exeName;
+      ui::one_line_spacer(std::cout);
+      ui::info_line(std::cout, "Running runtime validation.");
+
+      const fs::path exePath = buildDir / exeName;
 
       if (!fs::exists(exePath))
       {
-        error("Script binary not found: " + exePath.string());
-        hint("Try rebuilding: cmake --build build --target " + exeName);
+        style::error("Script binary not found: " + exePath.string());
+        style::hint("Try rebuilding: cmake --build " + buildDir.string() + " --target " + exeName);
         return 1;
       }
 
-      // Apply runtime env (UBSAN_OPTIONS / ASAN_OPTIONS)
       run::apply_sanitizer_env_if_needed(enableSan, enableUbsanOnly);
 
       const std::string cmdRun =
@@ -197,9 +355,8 @@ namespace vix::commands::CheckCommand::detail
       auto rr = run::run_cmd_live_filtered_capture(
           cmdRun,
           "Checking runtime (sanitizers)",
-          /*passthroughRuntime*/ false);
+          /*passthroughRuntime=*/false);
 
-      // rr.exitCode is already normalized in run_cmd_live_filtered_capture()
       const int code = rr.exitCode;
 
       if (code != 0)
@@ -222,12 +379,15 @@ namespace vix::commands::CheckCommand::detail
         if (!runtimeLog.empty())
         {
           handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-              runtimeLog, script, "Script check failed (runtime sanitizers)");
+              runtimeLog,
+              script,
+              "Script check failed (runtime sanitizers)");
 
-          // optionnel (si tu veux aussi les known failures en check)
           if (!handled &&
               vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))
+          {
             handled = true;
+          }
         }
 
         run::handle_runtime_exit_code(
@@ -238,12 +398,20 @@ namespace vix::commands::CheckCommand::detail
         return code;
       }
 
-      success("Script check OK (compiled + runtime sanitizers passed).");
-      return 0;
+      summary.runtimeRan = true;
+
+      if (!opt.quiet)
+        ui::ok_line(std::cout, "Runtime OK.");
     }
 #endif
 
-    success("Script check OK (compiled successfully).");
+    ui::one_line_spacer(std::cout);
+
+    if (!opt.quiet)
+      ui::ok_line(std::cout, "Script check OK (" + make_summary(summary) + ").");
+    else
+      style::success("Script check OK (" + make_summary(summary) + ").");
+
     return 0;
   }
 

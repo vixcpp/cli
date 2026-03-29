@@ -418,25 +418,6 @@ namespace vix::commands
       return 0;
     }
 
-    static void print_commit_missing_help(
-        const std::string &pkgId,
-        const std::string &repoUrl,
-        const std::string &tag,
-        const std::string &commit)
-    {
-      vix::cli::util::warn_line(std::cerr, "The registry entry points to a commit that is not reachable in the remote repository.");
-      vix::cli::util::warn_line(std::cerr, "This usually happens when the tag/commit was not pushed, or history was rewritten (force-push/rebase).");
-      std::cerr << "\n";
-      vix::cli::util::kv(std::cout, "package", pkgId);
-      vix::cli::util::kv(std::cout, "repo", repoUrl);
-      vix::cli::util::kv(std::cout, "tag", tag);
-      vix::cli::util::kv(std::cout, "commit", commit);
-      std::cout << "\n";
-      vix::cli::util::warn_line(std::cerr, "Fix:");
-      vix::cli::util::warn_line(std::cerr, "  - Ensure the tag exists on origin: git push --tags");
-      vix::cli::util::warn_line(std::cerr, "  - Or publish a new version with a valid tag/commit (recommended).");
-    }
-
     static std::optional<PkgSpec> parse_dep_obj_v1(const json &d)
     {
       if (!d.is_object())

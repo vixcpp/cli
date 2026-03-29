@@ -157,33 +157,6 @@ namespace vix::commands
       std::string err;
     };
 
-    static std::string join_for_log(const std::vector<std::string> &args)
-    {
-      std::ostringstream oss;
-      for (size_t i = 0; i < args.size(); ++i)
-      {
-        if (i)
-          oss << ' ';
-        const std::string &a = args[i];
-        const bool needsQuotes = (a.find(' ') != std::string::npos) || (a.find('"') != std::string::npos);
-        if (!needsQuotes)
-        {
-          oss << a;
-          continue;
-        }
-        oss << '"';
-        for (char c : a)
-        {
-          if (c == '"')
-            oss << "\\\"";
-          else
-            oss << c;
-        }
-        oss << '"';
-      }
-      return oss.str();
-    }
-
 #if defined(_WIN32)
 
     static std::string win_last_error()
@@ -578,24 +551,6 @@ namespace vix::commands
       return std::nullopt;
     }
 
-    static std::optional<std::string> read_vix_json_string(const fs::path &repoRoot, const char *key)
-    {
-      const fs::path p = repoRoot / "vix.json";
-      if (!file_exists_nonempty(p))
-        return std::nullopt;
-
-      try
-      {
-        const json j = read_json_or_throw(p);
-        if (j.is_object() && j.contains(key) && j[key].is_string())
-          return j[key].get<std::string>();
-      }
-      catch (...)
-      {
-      }
-      return std::nullopt;
-    }
-
     static json read_vix_json_object(const fs::path &repoRoot)
     {
       const fs::path p = repoRoot / "vix.json";
@@ -656,20 +611,6 @@ namespace vix::commands
       if (r.exitCode == 0 && !r.out.empty())
         return trim_copy(r.out);
       return {};
-    }
-
-    static json ensure_object(json &o, const char *key)
-    {
-      if (!o.contains(key) || !o[key].is_object())
-        o[key] = json::object();
-      return o[key];
-    }
-
-    static json ensure_array(json &o, const char *key)
-    {
-      if (!o.contains(key) || !o[key].is_array())
-        o[key] = json::array();
-      return o[key];
     }
 
     static std::optional<std::pair<std::string, std::string>> infer_from_git_remote()
@@ -755,13 +696,6 @@ namespace vix::commands
     static bool gh_is_authed()
     {
       const auto r = run_process_capture({"gh", "auth", "status", "-h", "github.com"});
-      return r.exitCode == 0;
-    }
-
-    static bool gh_workflow_run_by_file(const std::string &repo, const std::string &workflowFile)
-    {
-      // stable: target the workflow file, not the display name
-      const auto r = run_process_capture({"gh", "workflow", "run", workflowFile, "--repo", repo});
       return r.exitCode == 0;
     }
 

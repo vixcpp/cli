@@ -134,33 +134,6 @@ namespace vix::commands
       std::string err;
     };
 
-    static std::string join_for_log(const std::vector<std::string> &args)
-    {
-      std::ostringstream oss;
-      for (size_t i = 0; i < args.size(); ++i)
-      {
-        if (i)
-          oss << ' ';
-        const std::string &a = args[i];
-        const bool needsQuotes = (a.find(' ') != std::string::npos) || (a.find('"') != std::string::npos);
-        if (!needsQuotes)
-        {
-          oss << a;
-          continue;
-        }
-        oss << '"';
-        for (char c : a)
-        {
-          if (c == '"')
-            oss << "\\\"";
-          else
-            oss << c;
-        }
-        oss << '"';
-      }
-      return oss.str();
-    }
-
 #if defined(_WIN32)
 
     static std::string win_last_error()

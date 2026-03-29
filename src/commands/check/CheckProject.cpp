@@ -339,6 +339,43 @@ namespace vix::commands::CheckCommand::detail
       return {};
     }
 
+    static bool cmake_cache_has_global_packages_include(
+        const fs::path &buildDir,
+        const fs::path &expectedFile)
+    {
+      const fs::path cacheFile = buildDir / "CMakeCache.txt";
+      if (!fs::exists(cacheFile))
+        return false;
+
+      const std::string value =
+          read_cmake_cache_value(cacheFile, "CMAKE_PROJECT_TOP_LEVEL_INCLUDES");
+
+      if (value.empty())
+        return false;
+
+      std::error_code ec1, ec2;
+      const fs::path lhs = fs::weakly_canonical(fs::path(value), ec1);
+      const fs::path rhs = fs::weakly_canonical(expectedFile, ec2);
+
+      if (!ec1 && !ec2)
+        return lhs == rhs;
+
+      return fs::path(value) == expectedFile;
+    }
+
+    static bool should_force_reconfigure_for_global_packages(
+        const fs::path &buildDir,
+        const fs::path &globalPackagesFile)
+    {
+      if (!has_cmake_cache(buildDir))
+        return true;
+
+      if (!fs::exists(globalPackagesFile))
+        return true;
+
+      return !cmake_cache_has_global_packages_include(buildDir, globalPackagesFile);
+    }
+
 #ifndef _WIN32
     static std::string guess_project_name_from_dir(const fs::path &projectDir)
     {
@@ -680,21 +717,24 @@ namespace vix::commands::CheckCommand::detail
 
       print_header(opt, projectDir, configurePreset, buildDir, hasDedicatedSanPreset, shouldRunRuntime);
 
-      if (!has_cmake_cache(buildDir))
+      const auto globalPackagesFile = write_global_packages_file(buildDir);
+      if (!globalPackagesFile)
+      {
+        style::error("Failed to prepare global packages integration file.");
+        style::hint("Check filesystem permissions for the build directory.");
+        return 2;
+      }
+
+      const bool needsConfigure =
+          should_force_reconfigure_for_global_packages(buildDir, *globalPackagesFile);
+
+      if (needsConfigure)
       {
         if (!opt.quiet)
         {
-          ui::info_line(std::cout, "No matching CMake cache found for this check profile.");
+          ui::info_line(std::cout, "Project configuration is required for this check profile.");
           ui::kv(std::cout, "action", "configure");
           ui::one_line_spacer(std::cout);
-        }
-
-        const auto globalPackagesFile = write_global_packages_file(buildDir);
-        if (!globalPackagesFile)
-        {
-          style::error("Failed to prepare global packages integration file.");
-          style::hint("Check filesystem permissions for the build directory.");
-          return 2;
         }
 
 #ifdef _WIN32
@@ -768,6 +808,7 @@ namespace vix::commands::CheckCommand::detail
         {
           ui::ok_line(std::cout, "CMake cache detected for this check profile.");
           ui::kv(std::cout, "build dir", buildDir.string());
+          ui::kv(std::cout, "global deps", "ready");
           ui::one_line_spacer(std::cout);
         }
       }
@@ -917,15 +958,18 @@ namespace vix::commands::CheckCommand::detail
       return 1;
     }
 
-    if (!has_cmake_cache(buildDir))
+    const auto globalPackagesFile = write_global_packages_file(buildDir);
+    if (!globalPackagesFile)
     {
-      const auto globalPackagesFile = write_global_packages_file(buildDir);
-      if (!globalPackagesFile)
-      {
-        style::error("Failed to prepare global packages integration file.");
-        return 2;
-      }
+      style::error("Failed to prepare global packages integration file.");
+      return 2;
+    }
 
+    const bool needsConfigure =
+        should_force_reconfigure_for_global_packages(buildDir, *globalPackagesFile);
+
+    if (needsConfigure)
+    {
 #ifdef _WIN32
       std::ostringstream conf;
       conf << "cmd /C \"cd /D " << quote(projectDir.string())
@@ -980,7 +1024,10 @@ namespace vix::commands::CheckCommand::detail
     else
     {
       if (!opt.quiet)
+      {
         ui::ok_line(std::cout, "CMake cache detected.");
+        ui::kv(std::cout, "global deps", "ready");
+      }
     }
 
 #ifdef _WIN32

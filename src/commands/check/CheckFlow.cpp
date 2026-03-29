@@ -141,6 +141,10 @@ namespace vix::commands::CheckCommand::detail
       {
         o.verbose = true;
       }
+      else if (a == "--full")
+      {
+        o.full = true;
+      }
       else if (a == "--log-level" || a == "--loglevel")
       {
         if (i + 1 < args.size())

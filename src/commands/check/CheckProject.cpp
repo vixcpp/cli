@@ -677,6 +677,31 @@ namespace vix::commands::CheckCommand::detail
 
       ui::one_line_spacer(std::cout);
     }
+
+    static bool should_use_smart_sanitizer_mode(
+        const Options &opt,
+        const fs::path &projectDir)
+    {
+      if (opt.full)
+        return false;
+
+      if (!(opt.enableSanitizers || opt.enableUbsanOnly))
+        return false;
+
+      if (fs::exists(projectDir / ".gitmodules"))
+        return true;
+
+      if (fs::exists(projectDir / "examples"))
+        return true;
+
+      if (fs::exists(projectDir / "modules"))
+        return true;
+
+      if (fs::exists(projectDir / "tests"))
+        return true;
+
+      return false;
+    }
   } // namespace
 
   int check_project(const Options &opt, const fs::path &projectDir)
@@ -689,6 +714,9 @@ namespace vix::commands::CheckCommand::detail
 
     const bool shouldRunRuntime =
         opt.runAfterBuild || opt.enableSanitizers || opt.enableUbsanOnly;
+
+    const bool smartSanitizerMode =
+        should_use_smart_sanitizer_mode(opt, projectDir);
 
     if (has_presets(projectDir))
     {
@@ -747,8 +775,18 @@ namespace vix::commands::CheckCommand::detail
                << " -DCMAKE_BUILD_TYPE=Debug"
                << " -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=" << quote(globalPackagesFile->string())
                << " -DVIX_ENABLE_SANITIZERS=ON"
-               << " -DVIX_SANITIZER_MODE=" << quote(summary.ubsanOnly ? "ubsan" : "asan-ubsan")
-               << "\"";
+               << " -DVIX_SANITIZER_MODE=" << quote(summary.ubsanOnly ? "ubsan" : "asan-ubsan");
+
+          if (smartSanitizerMode)
+          {
+            conf << " -DBUILD_TESTING=OFF"
+                 << " -DVIX_BUILD_TESTS=OFF"
+                 << " -DVIX_BUILD_EXAMPLES=OFF"
+                 << " -DCMAKE_SKIP_INSTALL_RULES=ON"
+                 << " -DVIX_INSTALL=OFF";
+          }
+
+          conf << "\"";
         }
         else
         {
@@ -780,6 +818,15 @@ namespace vix::commands::CheckCommand::detail
                << " -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=" << quote(globalPackagesFile->string())
                << " -DVIX_ENABLE_SANITIZERS=ON"
                << " -DVIX_SANITIZER_MODE=" << quote(summary.ubsanOnly ? "ubsan" : "asan-ubsan");
+
+          if (smartSanitizerMode)
+          {
+            conf << " -DBUILD_TESTING=OFF"
+                 << " -DVIX_BUILD_TESTS=OFF"
+                 << " -DVIX_BUILD_EXAMPLES=OFF"
+                 << " -DCMAKE_SKIP_INSTALL_RULES=ON"
+                 << " -DVIX_INSTALL=OFF";
+          }
         }
         else
         {
@@ -982,6 +1029,15 @@ namespace vix::commands::CheckCommand::detail
         conf << " -DVIX_ENABLE_SANITIZERS=ON"
              << " -DVIX_SANITIZER_MODE="
              << quote(summary.ubsanOnly ? "ubsan" : "asan-ubsan");
+
+        if (smartSanitizerMode)
+        {
+          conf << " -DBUILD_TESTING=OFF"
+               << " -DVIX_BUILD_TESTS=OFF"
+               << " -DVIX_BUILD_EXAMPLES=OFF"
+               << " -DCMAKE_SKIP_INSTALL_RULES=ON"
+               << " -DVIX_INSTALL=OFF";
+        }
       }
 
       conf << "\"";
@@ -1007,6 +1063,15 @@ namespace vix::commands::CheckCommand::detail
         conf << " -DVIX_ENABLE_SANITIZERS=ON"
              << " -DVIX_SANITIZER_MODE="
              << quote(summary.ubsanOnly ? "ubsan" : "asan-ubsan");
+
+        if (smartSanitizerMode)
+        {
+          conf << " -DBUILD_TESTING=OFF"
+               << " -DVIX_BUILD_TESTS=OFF"
+               << " -DVIX_BUILD_EXAMPLES=OFF"
+               << " -DCMAKE_SKIP_INSTALL_RULES=ON"
+               << " -DVIX_INSTALL=OFF";
+        }
       }
 
       const int code = run_cmd_live_filtered(conf.str(), "Configuring (fallback)");

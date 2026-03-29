@@ -113,6 +113,8 @@ namespace vix::commands::CheckCommand::detail
     /// Runtime timeout in seconds. 0 means no explicit timeout override.
     int runTimeoutSec = 0;
 
+    bool full = false;
+
     /** @} */
   };
 

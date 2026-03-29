@@ -380,34 +380,6 @@ namespace vix::commands::RunCommand::detail
     return alias;
   }
 
-  static std::vector<std::string> extract_dep_aliases_from_include_dirs(
-      const std::vector<std::string> &includeDirs)
-  {
-    std::vector<std::string> aliases;
-
-    for (const auto &d : includeDirs)
-    {
-      const std::string marker = "/.vix/deps/";
-      const auto pos = d.find(marker);
-      if (pos == std::string::npos)
-        continue;
-
-      std::string tail = d.substr(pos + marker.size());
-      const auto slash = tail.find('/');
-      if (slash == std::string::npos)
-        continue;
-
-      std::string pkg = tail.substr(0, slash);
-      std::replace(pkg.begin(), pkg.end(), '.', '/');
-
-      aliases.push_back(dep_id_to_cmake_alias(pkg));
-    }
-
-    std::sort(aliases.begin(), aliases.end());
-    aliases.erase(std::unique(aliases.begin(), aliases.end()), aliases.end());
-    return aliases;
-  }
-
   static std::vector<std::string> load_ordered_packages_from_lock(const fs::path &lockPath)
   {
     std::vector<std::string> ordered;

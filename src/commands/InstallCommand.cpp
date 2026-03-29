@@ -147,17 +147,6 @@ namespace vix::commands
       return global_root_dir() / "installed.json";
     }
 
-    static std::string to_lower(std::string s)
-    {
-      std::transform(
-          s.begin(),
-          s.end(),
-          s.begin(),
-          [](unsigned char c)
-          { return static_cast<char>(std::tolower(c)); });
-      return s;
-    }
-
     static std::string trim_copy(std::string s)
     {
       auto isws = [](unsigned char c)

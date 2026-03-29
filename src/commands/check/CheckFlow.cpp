@@ -120,18 +120,18 @@ namespace vix::commands::CheckCommand::detail
         if (i + 1 < args.size())
           o.preset = args[++i];
       }
-      else if (auto v = take_attached_value(a, "--preset="))
+      else if (auto preset_value = take_attached_value(a, "--preset="))
       {
-        o.preset = *v;
+        o.preset = *preset_value;
       }
       else if (a == "-j" || a == "--jobs")
       {
         if (i + 1 < args.size())
           o.jobs = parse_int_or_default(args[++i], 0);
       }
-      else if (auto v = take_attached_value(a, "--jobs="))
+      else if (auto jobs_value = take_attached_value(a, "--jobs="))
       {
-        o.jobs = parse_int_or_default(*v, 0);
+        o.jobs = parse_int_or_default(*jobs_value, 0);
       }
       else if (a == "--quiet" || a == "-q")
       {
@@ -150,13 +150,13 @@ namespace vix::commands::CheckCommand::detail
         if (i + 1 < args.size())
           o.logLevel = args[++i];
       }
-      else if (auto v = take_attached_value(a, "--log-level="))
+      else if (auto log_level_value = take_attached_value(a, "--log-level="))
       {
-        o.logLevel = *v;
+        o.logLevel = *log_level_value;
       }
-      else if (auto v = take_attached_value(a, "--loglevel="))
+      else if (auto loglevel_value = take_attached_value(a, "--loglevel="))
       {
-        o.logLevel = *v;
+        o.logLevel = *loglevel_value;
       }
       else if (a == "--san")
       {
@@ -175,27 +175,27 @@ namespace vix::commands::CheckCommand::detail
         if (i + 1 < args.size())
           o.buildPreset = args[++i];
       }
-      else if (auto v = take_attached_value(a, "--build-preset="))
+      else if (auto build_preset_value = take_attached_value(a, "--build-preset="))
       {
-        o.buildPreset = *v;
+        o.buildPreset = *build_preset_value;
       }
       else if (a == "--ctest-preset")
       {
         if (i + 1 < args.size())
           o.ctestPreset = args[++i];
       }
-      else if (auto v = take_attached_value(a, "--ctest-preset="))
+      else if (auto ctest_preset_value = take_attached_value(a, "--ctest-preset="))
       {
-        o.ctestPreset = *v;
+        o.ctestPreset = *ctest_preset_value;
       }
       else if (a == "--ctest-arg")
       {
         if (i + 1 < args.size())
           o.ctestArgs.push_back(args[++i]);
       }
-      else if (auto v = take_attached_value(a, "--ctest-arg="))
+      else if (auto ctest_arg_value = take_attached_value(a, "--ctest-arg="))
       {
-        o.ctestArgs.push_back(*v);
+        o.ctestArgs.push_back(*ctest_arg_value);
       }
       else if (a == "--run")
       {
@@ -206,9 +206,9 @@ namespace vix::commands::CheckCommand::detail
         if (i + 1 < args.size())
           o.runTimeoutSec = parse_non_negative_int_or_default(args[++i], 0);
       }
-      else if (auto v = take_attached_value(a, "--run-timeout="))
+      else if (auto run_timeout_value = take_attached_value(a, "--run-timeout="))
       {
-        o.runTimeoutSec = parse_non_negative_int_or_default(*v, 0);
+        o.runTimeoutSec = parse_non_negative_int_or_default(*run_timeout_value, 0);
       }
       else if (!a.empty() && a != "--" && !is_option(a))
       {
@@ -220,8 +220,8 @@ namespace vix::commands::CheckCommand::detail
       }
     }
 
-    if (auto d = pick_dir_opt_local(args))
-      o.dir = *d;
+    if (auto dir_value = pick_dir_opt_local(args))
+      o.dir = *dir_value;
 
     if (o.enableUbsanOnly)
       o.enableSanitizers = false;

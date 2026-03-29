@@ -1182,7 +1182,9 @@ namespace vix::commands
       return exec_status(cmd) == 0;
     }
 
-    void extract_archive_or_throw(const fs::path &archive, const fs::path &extractDir, const std::string &os)
+    void extract_archive_or_throw(
+        const fs::path &archive,
+        const fs::path &extractDir)
     {
       std::error_code ec;
       fs::create_directories(extractDir, ec);
@@ -1794,7 +1796,7 @@ namespace vix::commands
       if (!opt.jsonOut)
         vix::cli::util::info_line(std::cout, "extracting...");
 
-      extract_archive_or_throw(archive, extractDir, os);
+      extract_archive_or_throw(archive, extractDir);
 
       const std::string binName =
 #ifdef _WIN32

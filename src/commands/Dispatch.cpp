@@ -39,6 +39,7 @@
 #include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/cli/commands/OutdatedCommand.hpp>
+#include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 
 #include <stdexcept>
@@ -311,6 +312,14 @@ namespace vix::cli::dispatch
          { return vix::commands::ModulesCommand::run(a); },
          []()
          { return vix::commands::ModulesCommand::help(); }});
+
+    add({"make",
+         "Project",
+         "Generate C++ code scaffolding (class, struct, enum, function, ...)",
+         [](const Args &a)
+         { return vix::commands::MakeCommand::run(a); },
+         []()
+         { return vix::commands::MakeCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const

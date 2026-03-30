@@ -13,6 +13,7 @@
  */
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/cache/ArtifactCache.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 
 #include <algorithm>
@@ -29,26 +30,29 @@
 #include <thread>
 #include <vector>
 
+#include <vix/cli/cmake/CMakeBuild.hpp>
+#include <vix/cli/cmake/GlobalPackages.hpp>
+#include <vix/cli/cmake/Toolchain.hpp>
 #include <vix/cli/util/Args.hpp>
 #include <vix/cli/util/Console.hpp>
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Hash.hpp>
 #include <vix/cli/util/Strings.hpp>
 #include <vix/cli/util/Ui.hpp>
-#include <vix/cli/cmake/CMakeBuild.hpp>
-#include <vix/cli/cmake/Toolchain.hpp>
-#include <vix/cli/cmake/GlobalPackages.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
 namespace process = vix::cli::process;
 namespace util = vix::cli::util;
 namespace build = vix::cli::build;
+namespace artifact_cache = vix::cli::cache;
 
 namespace vix::commands::BuildCommand
 {
   namespace
   {
+    static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
+
     struct DeferredConsole
     {
       bool enabled{false};
@@ -138,6 +142,145 @@ namespace vix::commands::BuildCommand
       }
 
       return count;
+    }
+
+    static std::string sanitize_cache_component(std::string s)
+    {
+      for (char &c : s)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (!(std::isalnum(uc) || c == '.' || c == '_' || c == '-' || c == '+'))
+          c = '_';
+      }
+
+      if (s.empty())
+        return "unknown";
+
+      return s;
+    }
+
+    static std::string detect_native_target_triple()
+    {
+#if defined(__x86_64__) && defined(__linux__)
+      return "x86_64-linux-gnu";
+#elif defined(__aarch64__) && defined(__linux__)
+      return "aarch64-linux-gnu";
+#elif defined(__arm__) && defined(__linux__)
+      return "arm-linux-gnueabihf";
+#elif defined(__riscv) && (__riscv_xlen == 64) && defined(__linux__)
+      return "riscv64-linux-gnu";
+#elif defined(_WIN32) && defined(_M_X64)
+      return "x86_64-windows-msvc";
+#elif defined(_WIN32) && defined(_M_ARM64)
+      return "aarch64-windows-msvc";
+#elif defined(__APPLE__) && defined(__aarch64__)
+      return "aarch64-apple-darwin";
+#elif defined(__APPLE__) && defined(__x86_64__)
+      return "x86_64-apple-darwin";
+#else
+      return "unknown-target";
+#endif
+    }
+
+    static std::string first_line_of(std::string s)
+    {
+      s = util::trim(s);
+      const auto pos = s.find('\n');
+      if (pos != std::string::npos)
+        s = s.substr(0, pos);
+      return util::trim(s);
+    }
+
+    static std::string detect_compiler_identity()
+    {
+      const std::vector<std::string> candidates = {
+          "c++",
+          "clang++",
+          "g++"};
+
+      for (const auto &tool : candidates)
+      {
+        if (!util::executable_on_path(tool))
+          continue;
+
+        std::string out;
+        (void)build::run_process_capture({tool, "--version"}, {}, out);
+
+        out = first_line_of(out);
+        if (out.empty())
+          return sanitize_cache_component(tool);
+
+        return sanitize_cache_component(tool + "-" + out);
+      }
+
+      return "unknown-compiler";
+    }
+
+    static std::string make_artifact_fingerprint(
+        const process::Plan &plan,
+        const process::Options &opt,
+        const std::string &toolchainContent)
+    {
+      std::ostringstream oss;
+      oss << "project=" << plan.projectDir.string() << "\n";
+      oss << "preset=" << plan.preset.name << "\n";
+      oss << "buildType=" << plan.preset.buildType << "\n";
+      oss << "projectFingerprint=" << plan.projectFingerprint << "\n";
+      oss << "targetTriple=" << opt.targetTriple << "\n";
+      oss << "sysroot=" << opt.sysroot << "\n";
+      oss << "static=" << (opt.linkStatic ? "1" : "0") << "\n";
+      oss << "linker=" << static_cast<int>(opt.linker) << "\n";
+      oss << "launcher=" << static_cast<int>(opt.launcher) << "\n";
+
+      if (plan.fastLinkerFlag)
+        oss << "fastLinkerFlag=" << *plan.fastLinkerFlag << "\n";
+      if (plan.launcher)
+        oss << "launcherTool=" << *plan.launcher << "\n";
+
+      oss << "vars:\n";
+      oss << util::signature_join(plan.cmakeVars);
+
+      if (!toolchainContent.empty())
+      {
+        oss << "toolchain:\n";
+        oss << toolchainContent;
+        if (toolchainContent.back() != '\n')
+          oss << "\n";
+      }
+
+      const std::string payload = oss.str();
+      const std::uint64_t h = util::fnv1a64_str(payload, LOCAL_FNV_OFFSET);
+      return util::hex64(h);
+    }
+
+    static artifact_cache::Artifact make_project_artifact(
+        const process::Plan &plan,
+        const process::Options &opt,
+        const std::string &toolchainContent)
+    {
+      artifact_cache::Artifact a;
+      a.package = sanitize_cache_component(plan.projectDir.filename().string());
+      a.version = "local";
+      a.target = sanitize_cache_component(
+          opt.targetTriple.empty() ? detect_native_target_triple() : opt.targetTriple);
+      a.compiler = detect_compiler_identity();
+      a.buildType = sanitize_cache_component(plan.preset.buildType);
+      a.fingerprint = make_artifact_fingerprint(plan, opt, toolchainContent);
+
+      const fs::path root = artifact_cache::ArtifactCache::artifact_path(a);
+      a.root = root;
+      a.include = root / "include";
+      a.lib = root / "lib";
+
+      return a;
+    }
+
+    static bool persist_project_artifact(const artifact_cache::Artifact &a)
+    {
+      if (!artifact_cache::ArtifactCache::ensure_layout(a))
+        return false;
+
+      return artifact_cache::ArtifactCache::write_manifest(a);
     }
 
     static process::Options parse_args_or_exit(
@@ -606,7 +749,9 @@ namespace vix::commands::BuildCommand
       return util::trim(oss.str()) + "\n";
     }
 
-    static std::optional<process::Plan> make_plan(const process::Options &opt, const fs::path &cwd)
+    static std::optional<process::Plan> make_plan(
+        const process::Options &opt,
+        const fs::path &cwd)
     {
       fs::path base = cwd;
       if (!opt.dir.empty())
@@ -768,6 +913,17 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        artifact_cache::Artifact projectArtifact =
+            make_project_artifact(plan_, opt_, tc);
+
+        if (!opt_.quiet)
+        {
+          if (artifact_cache::ArtifactCache::exists(projectArtifact))
+            step("artifact cache: hit -> " + projectArtifact.root.string());
+          else if (verboseMode)
+            step("artifact cache: miss -> " + projectArtifact.root.string());
+        }
+
         const auto globalPackages = build::load_global_packages();
         const std::string globalPackagesCMake =
             build::make_global_packages_cmake(globalPackages);
@@ -788,6 +944,8 @@ namespace vix::commands::BuildCommand
         if (!opt_.targetTriple.empty())
         {
           tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
+          projectArtifact = make_project_artifact(plan_, opt_, tc);
+
           if (!write_if_different(plan_.toolchainFile, tc))
           {
             error("Failed to write toolchain file: " + plan_.toolchainFile.string());
@@ -886,6 +1044,9 @@ namespace vix::commands::BuildCommand
 
         if (opt_.fast && build::ninja_is_up_to_date(opt_, plan_))
         {
+          if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
+            hint("Warning: unable to persist artifact cache metadata");
+
           if (!opt_.quiet)
           {
             if (configuredThisRun)
@@ -941,6 +1102,9 @@ namespace vix::commands::BuildCommand
 
             return (r.exitCode == 0) ? 3 : r.exitCode;
           }
+
+          if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
+            hint("Warning: unable to persist artifact cache metadata");
 
           const std::string buildLog = util::read_text_file_or_empty(plan_.buildLog);
           const std::size_t builtTargets = count_built_targets_from_log(buildLog);
@@ -1017,7 +1181,8 @@ namespace vix::commands::BuildCommand
     out << "    • No shell/tee overhead (spawn + pipe)\n";
     out << "    • Strong signature cache (tool versions + cmake file hashes)\n";
     out << "    • Optional fast no-op exit via Ninja dry-run (--fast)\n";
-    out << "    • Auto sccache/ccache + mold/lld (auto)\n\n";
+    out << "    • Auto sccache/ccache + mold/lld (auto)\n";
+    out << "    • Prepare reusable global artifact metadata cache\n\n";
 
     out << "Presets (embedded):\n";
     out << "  dev        -> Ninja + Debug   (build-dev)\n";

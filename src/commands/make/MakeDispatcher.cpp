@@ -119,9 +119,52 @@ namespace vix::cli::make
       return ctx;
     }
 
+    [[nodiscard]] generators::ClassSpec build_class_spec(const MakeContext &ctx)
+    {
+      generators::ClassSpec spec;
+      spec.name = ctx.name;
+      spec.name_space = ctx.name_space;
+      spec.header_only = ctx.options.header_only;
+
+      const MakeClassOptions &class_opt = ctx.options.class_options;
+
+      spec.with_default_ctor = class_opt.with_default_ctor;
+      spec.with_value_ctor = class_opt.with_value_ctor;
+      spec.with_getters_setters = class_opt.with_getters_setters;
+      spec.with_copy_move = class_opt.with_copy_move;
+      spec.with_virtual_destructor = class_opt.with_virtual_destructor;
+
+      for (const auto &field : class_opt.fields)
+      {
+        generators::ClassField out_field;
+        out_field.name = trim(field.name);
+        out_field.type = trim(field.type);
+
+        if (!out_field.name.empty() && !out_field.type.empty())
+          spec.fields.push_back(std::move(out_field));
+      }
+
+      if (spec.fields.empty())
+      {
+        spec.fields.push_back(generators::ClassField{"id", "std::string"});
+      }
+
+      if (!class_opt.interactive)
+      {
+        if (ctx.options.header_only)
+          spec.header_only = true;
+      }
+
+      if (spec.fields.empty())
+        spec.with_value_ctor = false;
+
+      return spec;
+    }
+
     [[nodiscard]] MakeResult dispatch_class(const MakeContext &ctx)
     {
-      return generators::generate_class(ctx);
+      const generators::ClassSpec spec = build_class_spec(ctx);
+      return generators::generate_class(ctx, spec);
     }
 
     [[nodiscard]] MakeResult dispatch_struct(const MakeContext &ctx)

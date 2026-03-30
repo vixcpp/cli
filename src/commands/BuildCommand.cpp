@@ -916,11 +916,11 @@ namespace vix::commands::BuildCommand
         artifact_cache::Artifact projectArtifact =
             make_project_artifact(plan_, opt_, tc);
 
-        if (!opt_.quiet)
+        if (verboseMode && !opt_.quiet)
         {
           if (artifact_cache::ArtifactCache::exists(projectArtifact))
             step("artifact cache: hit -> " + projectArtifact.root.string());
-          else if (verboseMode)
+          else
             step("artifact cache: miss -> " + projectArtifact.root.string());
         }
 

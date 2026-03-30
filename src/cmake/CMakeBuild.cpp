@@ -26,10 +26,10 @@
 
 #ifndef _WIN32
 #include <fcntl.h>
-#include <sys/wait.h>
-#include <unistd.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 #ifndef _WIN32
@@ -53,7 +53,6 @@ namespace
       if (w < 0 && errno == EINTR)
         continue;
 
-      // best-effort: stop on any other error (EPIPE, EBADF, etc.)
       break;
     }
   }
@@ -74,7 +73,9 @@ namespace vix::cli::build
 
   bool is_configure_cmd(const std::vector<std::string> &argv)
   {
-    bool hasS = false, hasB = false;
+    bool hasS = false;
+    bool hasB = false;
+
     for (const auto &a : argv)
     {
       if (a == "-S")
@@ -82,6 +83,7 @@ namespace vix::cli::build
       if (a == "-B")
         hasB = true;
     }
+
     return !argv.empty() && argv[0] == "cmake" && hasS && hasB;
   }
 
@@ -121,8 +123,9 @@ namespace vix::cli::build
     return argv;
   }
 
-  std::vector<std::string> cmake_build_argv(const process::Plan &plan,
-                                            const process::Options &opt)
+  std::vector<std::string> cmake_build_argv(
+      const process::Plan &plan,
+      const process::Options &opt)
   {
     std::vector<std::string> argv;
     argv.reserve(16);
@@ -165,7 +168,7 @@ namespace vix::cli::build
       return env;
 
     if (plan.preset.generator == "Ninja")
-      env.emplace_back("NINJA_STATUS", "[%f/%t %p%%] ");
+      env.emplace_back("NINJA_STATUS", "[%f/%t] ");
 
     return env;
   }
@@ -213,7 +216,7 @@ namespace vix::cli::build
     std::string buf(8 * 1024, '\0');
     while (true)
     {
-      ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
+      const ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
       if (n > 0)
         outText.append(buf.data(), static_cast<std::size_t>(n));
       else
@@ -250,6 +253,7 @@ namespace vix::cli::build
     {
       if (quiet)
         return false;
+
       const char *v = vix::utils::vix_getenv("VIX_BUILD_HEARTBEAT");
       if (!v)
         return false;
@@ -278,11 +282,9 @@ namespace vix::cli::build
       return r;
     }
 
-    // Fork
     pid_t pid = ::fork();
     if (pid == 0)
     {
-      // Child: redirect stdout+stderr to pipe write end
       ::dup2(pipefd[1], STDOUT_FILENO);
       ::dup2(pipefd[1], STDERR_FILENO);
 
@@ -302,7 +304,6 @@ namespace vix::cli::build
       _exit(127);
     }
 
-    // Parent
     ::close(pipefd[1]);
 
     std::string firstLine;
@@ -311,18 +312,73 @@ namespace vix::cli::build
     std::string consoleBuf;
     consoleBuf.reserve(8192);
 
+    std::string currentProgressLine;
+    bool progressVisible = false;
+    std::size_t lastRenderedWidth = 0;
+
     auto is_progress_line = [](const std::string &line) -> bool
     {
       if (line.empty())
         return false;
       if (line[0] != '[')
         return false;
+
       const auto rb = line.find(']');
       if (rb == std::string::npos)
         return false;
+
       const auto slash = line.find('/', 1);
-      const auto pct = line.find('%', 1);
-      return (slash != std::string::npos && pct != std::string::npos && pct < rb);
+      if (slash == std::string::npos || slash > rb)
+        return false;
+
+      return true;
+    };
+
+    auto clear_progress_line = [&]() -> void
+    {
+      if (quiet)
+        return;
+      if (!progressVisible)
+        return;
+
+      std::string clear = "\r";
+      clear.append(lastRenderedWidth, ' ');
+      clear += "\r";
+      write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
+
+      progressVisible = false;
+      lastRenderedWidth = 0;
+    };
+
+    auto render_progress_line = [&](const std::string &line) -> void
+    {
+      if (quiet)
+        return;
+
+      std::string out = "\r" + line;
+
+      if (lastRenderedWidth > line.size())
+        out.append(lastRenderedWidth - line.size(), ' ');
+
+      write_all_fd(STDOUT_FILENO, out.data(), out.size());
+
+      progressVisible = true;
+      lastRenderedWidth = std::max(lastRenderedWidth, line.size());
+    };
+
+    auto flush_progress_line = [&]() -> void
+    {
+      if (quiet)
+        return;
+      if (!progressVisible)
+        return;
+
+      std::string out = "\n";
+      write_all_fd(STDOUT_FILENO, out.data(), out.size());
+
+      progressVisible = false;
+      lastRenderedWidth = 0;
+      currentProgressLine.clear();
     };
 
     auto should_echo_line = [&](const std::string &line) -> bool
@@ -336,9 +392,6 @@ namespace vix::cli::build
       if (!progressOnly)
         return true;
 
-      if (is_progress_line(line))
-        return true;
-
       if (line.rfind("FAILED:", 0) == 0)
         return true;
 
@@ -350,13 +403,11 @@ namespace vix::cli::build
 
     std::string buf(16 * 1024, '\0');
 
-    // Heartbeat state (only used if enabled)
     const auto startTs = std::chrono::steady_clock::now();
     auto lastOutputTs = startTs;
     auto lastHeartbeatTs = startTs;
     bool heartbeatPrinted = false;
 
-    // poll loop
     while (true)
     {
       struct pollfd pfd;
@@ -364,7 +415,6 @@ namespace vix::cli::build
       pfd.events = POLLIN | POLLHUP | POLLERR;
       pfd.revents = 0;
 
-      // 250ms tick -> lets us keep UI responsive (and optional heartbeat)
       const int pr = ::poll(&pfd, 1, 250);
 
       if (pr < 0)
@@ -374,7 +424,6 @@ namespace vix::cli::build
         break;
       }
 
-      // If data is ready, read it
       if (pr > 0 && (pfd.revents & POLLIN))
       {
         const ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
@@ -390,7 +439,7 @@ namespace vix::cli::build
         {
           for (ssize_t i = 0; i < n; ++i)
           {
-            char c = buf[static_cast<std::size_t>(i)];
+            const char c = buf[static_cast<std::size_t>(i)];
             if (c == '\n')
             {
               gotFirstLine = true;
@@ -408,16 +457,26 @@ namespace vix::cli::build
           std::size_t start = 0;
           while (true)
           {
-            std::size_t nl = consoleBuf.find('\n', start);
+            const std::size_t nl = consoleBuf.find('\n', start);
             if (nl == std::string::npos)
               break;
 
             std::string line = consoleBuf.substr(start, nl - start);
-            if (should_echo_line(line))
+
+            if (progressOnly && is_progress_line(line))
             {
+              currentProgressLine = line;
+              render_progress_line(currentProgressLine);
+            }
+            else if (should_echo_line(line))
+            {
+              if (progressVisible)
+                flush_progress_line();
+
               line.push_back('\n');
               write_all_fd(STDOUT_FILENO, line.data(), line.size());
             }
+
             start = nl + 1;
           }
 
@@ -428,7 +487,6 @@ namespace vix::cli::build
         continue;
       }
 
-      // EOF/HUP
       if (pr > 0 && (pfd.revents & (POLLHUP | POLLERR)))
         break;
 
@@ -440,30 +498,47 @@ namespace vix::cli::build
         const auto hbMs =
             std::chrono::duration_cast<std::chrono::milliseconds>(now - lastHeartbeatTs).count();
 
-        // print heartbeat every 5s of silence
         if (silenceMs >= 5000 && hbMs >= 5000)
         {
           lastHeartbeatTs = now;
           const auto elapsedMs =
               std::chrono::duration_cast<std::chrono::milliseconds>(now - startTs).count();
 
+          if (progressVisible)
+            clear_progress_line();
+
           std::string msg =
-              "\r[building] still running... (" + util::format_seconds(elapsedMs) + ")   ";
+              "[building] still running... (" + util::format_seconds(elapsedMs) + ")";
+          msg.push_back('\n');
           write_all_fd(STDOUT_FILENO, msg.data(), msg.size());
+
+          if (!currentProgressLine.empty())
+            render_progress_line(currentProgressLine);
+
           heartbeatPrinted = true;
         }
       }
     }
 
-    // flush a possible last partial line when process ends
     if (!quiet && !consoleBuf.empty())
     {
-      if (should_echo_line(consoleBuf))
+      if (progressOnly && is_progress_line(consoleBuf))
       {
+        currentProgressLine = consoleBuf;
+        render_progress_line(currentProgressLine);
+      }
+      else if (should_echo_line(consoleBuf))
+      {
+        if (progressVisible)
+          flush_progress_line();
+
         std::string tail = consoleBuf + "\n";
         write_all_fd(STDOUT_FILENO, tail.data(), tail.size());
       }
     }
+
+    if (!quiet && progressVisible)
+      flush_progress_line();
 
     ::close(pipefd[0]);
     ::close(logfd);
@@ -475,12 +550,9 @@ namespace vix::cli::build
       return r;
     }
 
-    // clear heartbeat line only if it was printed
     if (heartbeatEnabled && heartbeatPrinted)
     {
-      // best-effort: overwrite the line then return carriage
-      const std::string clear = "\r\033[2K\r";
-      write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
+      // nothing else to clear because heartbeat is now printed on its own line
     }
 
     r.exitCode = process::normalize_exit_code(status);
@@ -514,8 +586,8 @@ namespace vix::cli::build
       oss << "\"" << argv[i] << "\"";
     }
 
-    std::string cmd = oss.str() + " > \"" + tmp.string() + "\" 2>&1";
-    int raw = std::system(cmd.c_str());
+    const std::string cmd = oss.str() + " > \"" + tmp.string() + "\" 2>&1";
+    const int raw = std::system(cmd.c_str());
     r.exitCode = process::normalize_exit_code(raw);
 
     outText = util::read_text_file_or_empty(tmp);
@@ -552,14 +624,12 @@ namespace vix::cli::build
       oss << "\"" << argv[i] << "\"";
     }
 
-    std::string full = oss.str() + " > \"" + logPath.string() + "\" 2>&1";
-    int raw = std::system(full.c_str());
+    const std::string full = oss.str() + " > \"" + logPath.string() + "\" 2>&1";
+    const int raw = std::system(full.c_str());
     r.exitCode = process::normalize_exit_code(raw);
 
     if (!quiet)
-    {
       std::cerr << util::read_text_file_or_empty(logPath);
-    }
 
     return r;
   }
@@ -574,8 +644,11 @@ namespace vix::cli::build
       return false;
 
     std::string out;
-    process::ExecResult r = run_process_capture(ninja_dry_run_argv(plan, opt),
-                                                ninja_env(opt, plan), out);
+    const process::ExecResult r = run_process_capture(
+        ninja_dry_run_argv(plan, opt),
+        ninja_env(opt, plan),
+        out);
+
     if (r.exitCode != 0)
       return false;
 

@@ -36,6 +36,10 @@
 #include <cerrno>
 #include <cstddef>
 
+#ifndef _WIN32
+#include <sys/ioctl.h>
+#endif
+
 namespace
 {
   inline void write_all_fd(int fd, const char *data, std::size_t len) noexcept
@@ -57,6 +61,36 @@ namespace
     }
   }
 } // namespace
+#endif
+
+#ifndef _WIN32
+namespace
+{
+  std::size_t terminal_width() noexcept
+  {
+    struct winsize ws{};
+
+    if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+      return static_cast<std::size_t>(ws.ws_col);
+
+    return 120;
+  }
+
+  std::string truncate_progress_text(const std::string &line, std::size_t maxWidth)
+  {
+    if (maxWidth == 0)
+      return "";
+
+    if (line.size() <= maxWidth)
+      return line;
+
+    if (maxWidth <= 3)
+      return std::string(maxWidth, '.');
+
+    const std::size_t keep = maxWidth - 3;
+    return line.substr(0, keep) + "...";
+  }
+}
 #endif
 
 namespace vix::cli::build
@@ -355,15 +389,21 @@ namespace vix::cli::build
       if (quiet)
         return;
 
-      std::string out = "\r" + line;
+      const std::size_t width = terminal_width();
 
-      if (lastRenderedWidth > line.size())
-        out.append(lastRenderedWidth - line.size(), ' ');
+      std::string visibleLine = line;
+      if (width > 1)
+        visibleLine = truncate_progress_text(line, width - 1);
+
+      std::string out = "\r" + visibleLine;
+
+      if (lastRenderedWidth > visibleLine.size())
+        out.append(lastRenderedWidth - visibleLine.size(), ' ');
 
       write_all_fd(STDOUT_FILENO, out.data(), out.size());
 
       progressVisible = true;
-      lastRenderedWidth = std::max(lastRenderedWidth, line.size());
+      lastRenderedWidth = std::max(lastRenderedWidth, visibleLine.size());
     };
 
     auto flush_progress_line = [&]() -> void
@@ -396,6 +436,9 @@ namespace vix::cli::build
         return false;
 
       if (line.find("Re-running CMake...") != std::string::npos)
+        return false;
+
+      if (line.find("Copy compile_commands.json to project root") != std::string::npos)
         return false;
 
       if (line.rfind("FAILED:", 0) == 0)

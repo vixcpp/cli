@@ -34,6 +34,7 @@
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Hash.hpp>
 #include <vix/cli/util/Strings.hpp>
+#include <vix/cli/util/Ui.hpp>
 #include <vix/cli/cmake/CMakeBuild.hpp>
 #include <vix/cli/cmake/Toolchain.hpp>
 #include <vix/cli/cmake/GlobalPackages.hpp>
@@ -48,7 +49,6 @@ namespace vix::commands::BuildCommand
 {
   namespace
   {
-
     struct DeferredConsole
     {
       bool enabled{false};
@@ -94,10 +94,38 @@ namespace vix::commands::BuildCommand
     static std::optional<process::Preset> resolve_preset(const std::string &name)
     {
       const auto presets = builtin_presets();
-      auto it = presets.find(name);
+      const auto it = presets.find(name);
       if (it == presets.end())
         return std::nullopt;
       return it->second;
+    }
+
+    static std::size_t count_built_targets_from_log(const std::string &log)
+    {
+      std::size_t count = 0;
+      std::istringstream iss(log);
+      std::string line;
+
+      while (std::getline(iss, line))
+      {
+        line = util::trim(line);
+
+        if (line.empty())
+          continue;
+
+        if (line.find(" Linking CXX executable ") != std::string::npos ||
+            line.find(" Linking C executable ") != std::string::npos ||
+            line.find(" Linking CXX static library ") != std::string::npos ||
+            line.find(" Linking C static library ") != std::string::npos ||
+            line.find(" Linking CXX shared library ") != std::string::npos ||
+            line.find(" Linking C shared library ") != std::string::npos ||
+            line.find(" Built target ") != std::string::npos)
+        {
+          ++count;
+        }
+      }
+
+      return count;
     }
 
     static process::Options parse_args_or_exit(
@@ -122,6 +150,10 @@ namespace vix::commands::BuildCommand
         {
           exitCode = -2;
           return o;
+        }
+        else if (a == "--verbose" || a == "-v")
+        {
+          o.verbose = true;
         }
         else if (a == "--preset")
         {
@@ -188,7 +220,7 @@ namespace vix::commands::BuildCommand
         }
         else if (a == "--targets")
         {
-          auto targets = build::detect_available_targets();
+          const auto targets = build::detect_available_targets();
 
           info("Detected build targets:");
           for (const auto &t : targets)
@@ -235,10 +267,9 @@ namespace vix::commands::BuildCommand
             return o;
           }
 
-          int jobs = 0;
           try
           {
-            jobs = std::stoi(std::string(*v));
+            o.jobs = std::stoi(std::string(*v));
           }
           catch (...)
           {
@@ -246,8 +277,6 @@ namespace vix::commands::BuildCommand
             exitCode = 2;
             return o;
           }
-
-          o.jobs = jobs;
         }
         else if (a.rfind("--jobs=", 0) == 0)
         {
@@ -393,11 +422,13 @@ namespace vix::commands::BuildCommand
       case process::LauncherMode::None:
         return std::nullopt;
       case process::LauncherMode::Sccache:
-        return util::executable_on_path("sccache") ? std::optional<std::string>("sccache")
-                                                   : std::nullopt;
+        return util::executable_on_path("sccache")
+                   ? std::optional<std::string>("sccache")
+                   : std::nullopt;
       case process::LauncherMode::Ccache:
-        return util::executable_on_path("ccache") ? std::optional<std::string>("ccache")
-                                                  : std::nullopt;
+        return util::executable_on_path("ccache")
+                   ? std::optional<std::string>("ccache")
+                   : std::nullopt;
       case process::LauncherMode::Auto:
       default:
         if (util::executable_on_path("sccache"))
@@ -443,16 +474,13 @@ namespace vix::commands::BuildCommand
         return tool + ":<missing>\n";
 
       std::string out;
-#ifdef _WIN32
       (void)build::run_process_capture({tool, "--version"}, {}, out);
-#else
-      (void)build::run_process_capture({tool, "--version"}, {}, out);
-#endif
+
       out = util::trim(out);
       if (out.empty())
         return tool + ":<unknown>\n";
 
-      auto pos = out.find('\n');
+      const auto pos = out.find('\n');
       if (pos != std::string::npos)
         out = out.substr(0, pos);
 
@@ -466,7 +494,8 @@ namespace vix::commands::BuildCommand
 
     static std::vector<std::pair<std::string, std::string>>
     build_cmake_vars(
-        const process::Preset &p, const process::Options &opt,
+        const process::Preset &p,
+        const process::Options &opt,
         const fs::path &toolchainFile,
         const std::optional<std::string> &launcher,
         const std::optional<std::string> &fastLinkerFlag,
@@ -503,20 +532,24 @@ namespace vix::commands::BuildCommand
         vars.emplace_back("CMAKE_MODULE_LINKER_FLAGS", *fastLinkerFlag);
       }
 
-      std::sort(vars.begin(), vars.end(),
-                [](const auto &a, const auto &b)
-                { return a.first < b.first; });
+      std::sort(
+          vars.begin(),
+          vars.end(),
+          [](const auto &a, const auto &b)
+          {
+            return a.first < b.first;
+          });
 
       return vars;
     }
 
     static std::string make_signature(
-        const process::Plan &plan, const process::Options &opt,
+        const process::Plan &plan,
+        const process::Options &opt,
         const std::string &toolchainContent)
     {
       std::ostringstream oss;
 
-      // Core config
       oss << "preset=" << plan.preset.name << "\n";
       oss << "generator=" << plan.preset.generator << "\n";
       oss << "buildType=" << plan.preset.buildType << "\n";
@@ -527,6 +560,7 @@ namespace vix::commands::BuildCommand
       oss << "useCache=" << (opt.useCache ? "1" : "0") << "\n";
       oss << "linker=" << static_cast<int>(opt.linker) << "\n";
       oss << "launcher=" << static_cast<int>(opt.launcher) << "\n";
+      oss << "verbose=" << (opt.verbose ? "1" : "0") << "\n";
 
       oss << "tools:\n";
       oss << run_tool_version_line("cmake");
@@ -538,6 +572,7 @@ namespace vix::commands::BuildCommand
       oss << run_tool_version_line("mold");
       oss << run_tool_version_line("ld.lld");
 #endif
+
       if (plan.launcher)
         oss << "launcherTool:" << *plan.launcher << "\n";
       if (plan.fastLinkerFlag)
@@ -565,11 +600,11 @@ namespace vix::commands::BuildCommand
       if (!opt.dir.empty())
         base = fs::path(opt.dir);
 
-      auto root = util::find_project_root(base);
+      const auto root = util::find_project_root(base);
       if (!root)
         return std::nullopt;
 
-      auto presetOpt = resolve_preset(opt.preset);
+      const auto presetOpt = resolve_preset(opt.preset);
       if (!presetOpt)
         return std::nullopt;
 
@@ -582,8 +617,7 @@ namespace vix::commands::BuildCommand
       plan.projectFingerprint = util::compute_project_files_fingerprint(plan.projectDir);
 
       if (!opt.targetTriple.empty())
-        plan.buildDir =
-            plan.projectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
+        plan.buildDir = plan.projectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
       else
         plan.buildDir = plan.projectDir / plan.preset.buildDirName;
 
@@ -591,6 +625,7 @@ namespace vix::commands::BuildCommand
       plan.buildLog = plan.buildDir / "build.log";
       plan.sigFile = plan.buildDir / ".vix-config.sig";
       plan.toolchainFile = plan.buildDir / "vix-toolchain.cmake";
+
       const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
       std::string toolchainContent;
@@ -598,16 +633,15 @@ namespace vix::commands::BuildCommand
         toolchainContent =
             build::toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
 
-      const auto globalPackages = build::load_global_packages();
-      const std::string globalPackagesCMake =
-          build::make_global_packages_cmake(globalPackages);
-
       plan.cmakeVars = build_cmake_vars(
-          plan.preset, opt, plan.toolchainFile,
-          plan.launcher, plan.fastLinkerFlag,
+          plan.preset,
+          opt,
+          plan.toolchainFile,
+          plan.launcher,
+          plan.fastLinkerFlag,
           globalPackagesFile);
-      plan.signature = make_signature(plan, opt, toolchainContent);
 
+      plan.signature = make_signature(plan, opt, toolchainContent);
       return plan;
     }
 
@@ -633,7 +667,7 @@ namespace vix::commands::BuildCommand
       {
         const fs::path cwd = fs::current_path();
 
-        auto planOpt = make_plan(opt_, cwd);
+        const auto planOpt = make_plan(opt_, cwd);
         if (!planOpt)
         {
           error("Unable to determine the project directory (missing CMakeLists.txt?)");
@@ -644,7 +678,8 @@ namespace vix::commands::BuildCommand
         plan_ = *planOpt;
         const fs::path globalPackagesFile = plan_.buildDir / "vix-global-packages.cmake";
 
-        const bool defer = (!opt_.quiet && !opt_.cmakeVerbose);
+        const bool verboseMode = opt_.verbose || opt_.cmakeVerbose;
+        const bool defer = (!opt_.quiet && verboseMode);
         DeferredConsole out(defer);
 
         std::string tc;
@@ -682,8 +717,11 @@ namespace vix::commands::BuildCommand
         }
 
         plan_.cmakeVars = build_cmake_vars(
-            plan_.preset, opt_, plan_.toolchainFile,
-            plan_.launcher, plan_.fastLinkerFlag,
+            plan_.preset,
+            opt_,
+            plan_.toolchainFile,
+            plan_.launcher,
+            plan_.fastLinkerFlag,
             globalPackagesFile);
 
         if (!opt_.targetTriple.empty())
@@ -696,6 +734,7 @@ namespace vix::commands::BuildCommand
         {
           const std::string gcc = opt_.targetTriple + "-gcc";
           const std::string gxx = opt_.targetTriple + "-g++";
+
           if (!util::executable_on_path(gcc) || !util::executable_on_path(gxx))
           {
             error("Cross toolchain not found on PATH for target: " + opt_.targetTriple);
@@ -728,7 +767,7 @@ namespace vix::commands::BuildCommand
           return 1;
         }
 
-        if (!opt_.quiet)
+        if (verboseMode && !opt_.quiet)
         {
           out.print("  Using project directory:\n");
           out.print("    • " + plan_.projectDir.string() + "\n\n");
@@ -745,10 +784,14 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        // CONFIGURE
+        bool configuredThisRun = false;
+        long long totalMs = 0;
+
         if (need_configure(opt_, plan_))
         {
-          if (!opt_.quiet)
+          configuredThisRun = true;
+
+          if (verboseMode && !opt_.quiet)
           {
             out.print("  Configuring " + plan_.projectDir.filename().string() +
                       " (" + plan_.preset.name + ")\n");
@@ -765,11 +808,13 @@ namespace vix::commands::BuildCommand
           }
 
           const auto t0 = std::chrono::steady_clock::now();
-          auto argv = build::cmake_configure_argv(plan_, opt_);
+          const auto argv = build::cmake_configure_argv(plan_, opt_);
 
           const process::ExecResult r = build::run_process_live_to_log(
-              argv, {}, plan_.configureLog,
-              (opt_.quiet || defer),
+              argv,
+              {},
+              plan_.configureLog,
+              (opt_.quiet || !verboseMode),
               opt_.cmakeVerbose,
               /*progressOnly=*/false);
 
@@ -801,64 +846,70 @@ namespace vix::commands::BuildCommand
             }
           }
 
-          const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - t0)
-                              .count();
+          const auto ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0)
+                  .count();
 
-          if (!opt_.quiet)
+          totalMs += ms;
+
+          if (opt_.quiet)
+          {
+            success("Configured in " + util::format_seconds(ms));
+          }
+          else if (verboseMode)
+          {
             out.print(PAD + std::string(GREEN) + "✔ Configured in " + RESET +
                       util::format_seconds(ms) + "\n\n");
-          else
-            success("Configured in " + util::format_seconds(ms));
+          }
         }
         else
         {
-          if (!opt_.quiet)
+          if (verboseMode && !opt_.quiet)
           {
             out.print("  Using existing configuration (cache-friendly).\n");
             out.print("    • " + plan_.buildDir.string() + "\n\n");
           }
-          else
-          {
-            util::log_header_if(opt_.quiet, "Using existing configuration (cache-friendly).");
-            util::log_bullet_if(opt_.quiet, plan_.buildDir.string());
-          }
         }
 
-        // FAST NO-OP
         if (opt_.fast && build::ninja_is_up_to_date(opt_, plan_))
         {
           if (!opt_.quiet)
           {
-            out.print(PAD + std::string(GREEN) + "Up to date" + RESET + " (" +
-                      plan_.preset.name + ")\n\n");
-            out.flush_to_stdout();
+            if (configuredThisRun)
+              util::ok_line(std::cout, "Configured");
+            util::ok_line(std::cout, "Up to date");
+            util::ok_line(std::cout, "Done");
           }
           return 0;
         }
 
-        // BUILD
         {
-          if (!opt_.quiet)
+          if (verboseMode && !opt_.quiet)
+          {
             out.print("  Building " + plan_.projectDir.filename().string() + " [" +
                       plan_.preset.name + "]\n");
-
-          if (!opt_.quiet && defer)
             out.flush_to_stdout();
+          }
 
           const auto t0 = std::chrono::steady_clock::now();
-          auto argv = build::cmake_build_argv(plan_, opt_);
-          auto env = build::ninja_env(opt_, plan_);
+          const auto argv = build::cmake_build_argv(plan_, opt_);
+          const auto env = build::ninja_env(opt_, plan_);
 
           const process::ExecResult r = build::run_process_live_to_log(
-              argv, env, plan_.buildLog,
+              argv,
+              env,
+              plan_.buildLog,
               /*quiet=*/opt_.quiet,
               /*cmakeVerbose=*/opt_.cmakeVerbose,
-              /*progressOnly=*/true);
+              /*progressOnly=*/!verboseMode);
 
-          const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              std::chrono::steady_clock::now() - t0)
-                              .count();
+          const auto ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0)
+                  .count();
+
+          totalMs += ms;
 
           if (r.exitCode != 0)
           {
@@ -879,15 +930,35 @@ namespace vix::commands::BuildCommand
             return (r.exitCode == 0) ? 3 : r.exitCode;
           }
 
-          const std::string profile = (plan_.preset.buildType == "Release")
-                                          ? "release [optimized]"
-                                          : "dev [unoptimized + debuginfo]";
+          const std::string buildLog = util::read_text_file_or_empty(plan_.buildLog);
+          const std::size_t builtTargets = count_built_targets_from_log(buildLog);
 
-          if (!opt_.quiet)
-            out.print(PAD + std::string(GREEN) + "Finished" + RESET + " " + profile +
-                      " in " + util::format_seconds(ms) + "\n\n");
+          if (opt_.quiet)
+          {
+            success("Finished in " + util::format_seconds(totalMs));
+          }
+          else if (verboseMode)
+          {
+            const std::string profile =
+                (plan_.preset.buildType == "Release")
+                    ? "release [optimized]"
+                    : "dev [unoptimized + debuginfo]";
+
+            out.print(PAD + std::string(GREEN) + "Finished" + RESET + " " +
+                      profile + " in " + util::format_seconds(ms) + "\n\n");
+          }
           else
-            success("Finished " + profile + " in " + util::format_seconds(ms));
+          {
+            if (configuredThisRun)
+              util::ok_line(std::cout, "Configured");
+
+            if (builtTargets > 0)
+              util::ok_line(std::cout, "Built (" + std::to_string(builtTargets) + " targets)");
+            else
+              util::ok_line(std::cout, "Built");
+
+            util::ok_line(std::cout, "Done in " + util::format_seconds(totalMs));
+          }
         }
 
         out.flush_to_stdout();
@@ -938,7 +1009,7 @@ namespace vix::commands::BuildCommand
 
     out << "Presets (embedded):\n";
     out << "  dev        -> Ninja + Debug   (build-dev)\n";
-    out << "  dev-ninja  -> Ninja + Debug   (build-dev-ninja)\n";
+    out << "  dev-ninja  -> Ninja + Debug   (build-ninja)\n";
     out << "  release    -> Ninja + Release (build-release)\n\n";
 
     out << "Options:\n";
@@ -956,6 +1027,7 @@ namespace vix::commands::BuildCommand
     out << "  --no-up-to-date       Disable Ninja dry-run up-to-date detection\n";
     out << "  -d, --dir <path>      Project directory (where CMakeLists.txt lives)\n";
     out << "  -q, --quiet           Minimal output (still logs to files)\n";
+    out << "  -v, --verbose         Show detailed configure and build summary\n";
     out << "  --targets             List detected cross toolchains on PATH\n";
     out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
     out << "  --build-target <name> Build only a specific CMake target (ex: blog)\n";
@@ -967,6 +1039,7 @@ namespace vix::commands::BuildCommand
 
     out << "Examples:\n";
     out << "  vix build\n";
+    out << "  vix build --verbose\n";
     out << "  vix build --fast\n";
     out << "  vix build --preset release\n";
     out << "  vix build --preset release --static\n";

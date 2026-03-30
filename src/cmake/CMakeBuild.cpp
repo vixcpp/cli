@@ -368,6 +368,11 @@ namespace vix::cli::build
       return true;
     };
 
+    auto should_skip_progress_line = [](const std::string &line) -> bool
+    {
+      return line.find("Copy compile_commands.json to project root") != std::string::npos;
+    };
+
     auto clear_progress_line = [&]() -> void
     {
       if (quiet)
@@ -514,8 +519,11 @@ namespace vix::cli::build
 
             if (progressOnly && is_progress_line(line))
             {
-              currentProgressLine = line;
-              render_progress_line(currentProgressLine);
+              if (!should_skip_progress_line(line))
+              {
+                currentProgressLine = line;
+                render_progress_line(currentProgressLine);
+              }
             }
             else if (should_echo_line(line))
             {
@@ -573,8 +581,11 @@ namespace vix::cli::build
     {
       if (progressOnly && is_progress_line(consoleBuf))
       {
-        currentProgressLine = consoleBuf;
-        render_progress_line(currentProgressLine);
+        if (!should_skip_progress_line(consoleBuf))
+        {
+          currentProgressLine = consoleBuf;
+          render_progress_line(currentProgressLine);
+        }
       }
       else if (should_echo_line(consoleBuf))
       {

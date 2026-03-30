@@ -29,7 +29,6 @@ namespace vix::commands
 {
   namespace fs = std::filesystem;
   namespace ui = vix::cli::util;
-  using namespace vix::cli::style;
   namespace mk = vix::cli::make;
 
   namespace
@@ -94,7 +93,7 @@ namespace vix::commands
 
       std::size_t i = 0;
 
-      if (!args.empty() && is_make_colon_kind(args[0]))
+      if (is_make_colon_kind(args[0]))
       {
         opt.kind = extract_make_colon_kind(args[0]);
         i = 1;
@@ -164,41 +163,32 @@ namespace vix::commands
       return opt;
     }
 
-    void print_result_summary(const mk::MakeOptions &opt,
-                              const mk::MakeResult &result)
+    void print_files_list(const std::vector<mk::MakeFile> &files)
     {
-      ui::section(std::cout, "Make");
-      ui::kv(std::cout, "kind", opt.kind.empty() ? "(none)" : opt.kind, 12);
-      ui::kv(std::cout, "name", opt.name.empty() ? "(none)" : opt.name, 12);
-
-      if (!opt.name_space.empty())
-        ui::kv(std::cout, "namespace", opt.name_space, 12);
-
-      if (!opt.in.empty())
-        ui::kv(std::cout, "in", opt.in, 12);
-
-      if (opt.dry_run)
-        ui::kv(std::cout, "mode", "dry-run", 12);
-      else if (opt.print_only)
-        ui::kv(std::cout, "mode", "print", 12);
-      else
-        ui::kv(std::cout, "mode", "write", 12);
-
-      for (const auto &file : result.files)
-        ui::kv(std::cout, "file", file.path.string(), 12);
-
-      for (const auto &note : result.notes)
-        ui::warn_line(std::cout, note);
+      for (const auto &file : files)
+        ui::kv(std::cout, "file", file.path.string(), 10);
     }
 
-    void print_preview_if_needed(const mk::MakeResult &result)
+    void print_preview_output(const mk::MakeResult &result)
     {
-      if (result.preview.empty())
+      if (!result.preview.empty())
+      {
+        std::cout << result.preview;
+        if (result.preview.back() != '\n')
+          std::cout << "\n";
         return;
+      }
 
-      std::cout << "\n"
-                << BOLD << "Preview" << RESET << "\n\n"
-                << result.preview << "\n";
+      for (const auto &file : result.files)
+      {
+        std::cout << "// " << file.path.string() << "\n";
+        std::cout << file.content;
+
+        if (!file.content.empty() && file.content.back() != '\n')
+          std::cout << "\n";
+
+        std::cout << "\n";
+      }
     }
 
     [[nodiscard]] bool validate_write_targets(const std::vector<mk::MakeFile> &files,
@@ -246,30 +236,31 @@ namespace vix::commands
     {
       if (!result.ok)
       {
-        ui::section(std::cout, "Make");
         if (!result.error.empty())
           ui::err_line(std::cout, result.error);
         else
           ui::err_line(std::cout, "Generation failed.");
 
-        for (const auto &note : result.notes)
-          ui::warn_line(std::cout, note);
-
         return 1;
       }
 
-      print_result_summary(opt, result);
-      print_preview_if_needed(result);
-
       if (opt.print_only)
       {
-        ui::ok_line(std::cout, "Printed");
+        print_preview_output(result);
         return 0;
       }
 
       if (opt.dry_run)
       {
-        ui::ok_line(std::cout, "Dry-run complete");
+        ui::ok_line(std::cout, "Ready");
+        ui::kv(std::cout, "kind", opt.kind.empty() ? "(none)" : opt.kind, 10);
+        ui::kv(std::cout, "name", opt.name.empty() ? "(none)" : opt.name, 10);
+
+        if (!opt.name_space.empty())
+          ui::kv(std::cout, "namespace", opt.name_space, 10);
+
+        ui::kv(std::cout, "files", std::to_string(result.files.size()), 10);
+        print_files_list(result.files);
         return 0;
       }
 
@@ -287,23 +278,26 @@ namespace vix::commands
       }
 
       ui::ok_line(std::cout, "Generated");
-      ui::kv(std::cout, "count", std::to_string(result.files.size()), 12);
+      ui::kv(std::cout, "kind", opt.kind.empty() ? "(none)" : opt.kind, 10);
+      ui::kv(std::cout, "name", opt.name.empty() ? "(none)" : opt.name, 10);
+
+      if (!opt.name_space.empty())
+        ui::kv(std::cout, "namespace", opt.name_space, 10);
+
+      ui::kv(std::cout, "files", std::to_string(result.files.size()), 10);
+      print_files_list(result.files);
 
       return 0;
     }
 
     int run_direct(const mk::MakeOptions &opt)
     {
-      return run_make_result(opt, mk::dispatch_make(opt));
+      const mk::MakeResult result = mk::dispatch_make(opt);
+      return run_make_result(opt, result);
     }
 
     int run_class_prompt(mk::MakeOptions opt)
     {
-      ui::section(std::cout, "Make:Class");
-
-      // -------------------------
-      // NAME
-      // -------------------------
       if (opt.name.empty())
       {
         while (true)
@@ -332,22 +326,16 @@ namespace vix::commands
         }
       }
 
-      // -------------------------
-      // NAMESPACE
-      // -------------------------
       if (opt.name_space.empty())
       {
         opt.name_space = prompt_line("Namespace (optional): ");
       }
 
-      // -------------------------
-      // FIELDS COUNT
-      // -------------------------
       int field_count = 0;
 
       while (true)
       {
-        std::string input = prompt_line("How many fields? ");
+        const std::string input = prompt_line("How many fields? ");
 
         if (input.empty())
         {
@@ -369,9 +357,6 @@ namespace vix::commands
         }
       }
 
-      // -------------------------
-      // FIELDS INPUT
-      // -------------------------
       for (int i = 0; i < field_count; ++i)
       {
         std::string fname;
@@ -413,21 +398,6 @@ namespace vix::commands
             continue;
           }
 
-          if (ftype.empty())
-          {
-            while (true)
-            {
-              ftype = mk::trim(prompt_line("Type for '" + fname + "': "));
-              if (!ftype.empty())
-                break;
-
-              ui::warn_line(std::cout, "Field type cannot be empty.");
-            }
-          }
-
-          if (ftype == "string")
-            ftype = "std::string";
-
           bool duplicate = false;
           for (const auto &field : opt.class_options.fields)
           {
@@ -444,68 +414,45 @@ namespace vix::commands
             continue;
           }
 
+          if (ftype.empty())
+          {
+            while (true)
+            {
+              ftype = mk::trim(prompt_line("Type for '" + fname + "': "));
+
+              if (!ftype.empty())
+                break;
+
+              ui::warn_line(std::cout, "Field type cannot be empty.");
+            }
+          }
+
+          if (ftype == "string")
+            ftype = "std::string";
+
           break;
         }
 
         opt.class_options.fields.push_back({fname, ftype});
       }
 
-      // -------------------------
-      // OPTIONS
-      // -------------------------
       opt.class_options.interactive = true;
-
       opt.class_options.with_default_ctor =
           prompt_yes_no("Generate default constructor?", true);
-
       opt.class_options.with_value_ctor =
           prompt_yes_no("Generate value constructor?", true);
-
       opt.class_options.with_getters_setters =
           prompt_yes_no("Generate getters/setters?", true);
-
       opt.class_options.with_copy_move =
           prompt_yes_no("Generate copy/move?", true);
-
       opt.class_options.with_virtual_destructor =
           prompt_yes_no("Use virtual destructor?", true);
 
-      // -------------------------
-      // FILE OPTIONS
-      // -------------------------
-      opt.header_only =
-          prompt_yes_no("Header only?", false);
+      opt.header_only = prompt_yes_no("Header only?", false);
 
       if (opt.in.empty())
       {
         opt.in = prompt_line("Target folder (optional): ");
-      }
-
-      // -------------------------
-      // PREVIEW
-      // -------------------------
-      const bool preview_before_write =
-          (!opt.print_only && !opt.dry_run)
-              ? prompt_yes_no("Preview before write?", true)
-              : false;
-
-      mk::MakeOptions effective = opt;
-      if (preview_before_write)
-        effective.print_only = true;
-
-      const mk::MakeResult preview_result = mk::dispatch_make(effective);
-      const int preview_status = run_make_result(effective, preview_result);
-      if (preview_status != 0)
-        return preview_status;
-
-      if (preview_before_write)
-      {
-        const bool proceed = prompt_yes_no("Write these files?", true);
-        if (!proceed)
-        {
-          ui::warn_line(std::cout, "Cancelled.");
-          return 1;
-        }
       }
 
       return run_direct(opt);
@@ -530,7 +477,6 @@ namespace vix::commands
       case mk::MakeKind::Module:
       case mk::MakeKind::Unknown:
       default:
-        ui::section(std::cout, "Make");
         ui::err_line(std::cout,
                      "Interactive mode is not implemented yet for: " + opt.kind);
         return 1;

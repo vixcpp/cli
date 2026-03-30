@@ -167,9 +167,12 @@ namespace vix::cli::util
     for (const auto &p : files)
     {
       std::error_code ec{};
-      const fs::path rp = fs::weakly_canonical(p, ec);
-      const std::string pathStr = ec ? p.lexically_relative(projectDir).string()
-                                     : rp.lexically_relative(projectDir).string();
+      fs::path rel = fs::relative(p, projectDir, ec);
+
+      if (ec)
+        rel = p.filename();
+
+      const std::string pathStr = rel.generic_string();
 
       const auto hashOpt = read_file_hash_hex(p);
       const std::string line = pathStr + "=" + (hashOpt ? *hashOpt : "<missing>");

@@ -91,6 +91,18 @@ namespace vix::commands::BuildCommand
       return m;
     }
 
+    static bool write_if_different(const fs::path &path, const std::string &content)
+    {
+      if (util::file_exists(path))
+      {
+        const std::string current = util::read_text_file_or_empty(path);
+        if (current == content)
+          return true;
+      }
+
+      return util::write_text_file_atomic(path, content);
+    }
+
     static std::optional<process::Preset> resolve_preset(const std::string &name)
     {
       const auto presets = builtin_presets();
@@ -760,7 +772,7 @@ namespace vix::commands::BuildCommand
         const std::string globalPackagesCMake =
             build::make_global_packages_cmake(globalPackages);
 
-        if (!util::write_text_file_atomic(globalPackagesFile, globalPackagesCMake))
+        if (!write_if_different(globalPackagesFile, globalPackagesCMake))
         {
           error("Failed to write global packages file: " + globalPackagesFile.string());
           hint("Check filesystem permissions.");
@@ -776,7 +788,7 @@ namespace vix::commands::BuildCommand
         if (!opt_.targetTriple.empty())
         {
           tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
-          if (!util::write_text_file_atomic(plan_.toolchainFile, tc))
+          if (!write_if_different(plan_.toolchainFile, tc))
           {
             error("Failed to write toolchain file: " + plan_.toolchainFile.string());
             hint("Check filesystem permissions.");

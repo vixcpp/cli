@@ -392,6 +392,12 @@ namespace vix::cli::build
       if (!progressOnly)
         return true;
 
+      if (line == "ninja: no work to do.")
+        return false;
+
+      if (line.find("Re-running CMake...") != std::string::npos)
+        return false;
+
       if (line.rfind("FAILED:", 0) == 0)
         return true;
 

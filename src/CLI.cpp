@@ -41,6 +41,7 @@
 #include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/cli/commands/OutdatedCommand.hpp>
+#include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -137,6 +138,8 @@ namespace vix
     { return commands::RunCommand::run(args); };
     commands_["build"] = [](auto args)
     { return commands::BuildCommand::run(args); };
+    commands_["make"] = [](auto args)
+    { return commands::MakeCommand::run(args); };
     commands_["dev"] = [](auto args)
     { return commands::DevCommand::run(args); };
     commands_["orm"] = [](auto args)
@@ -431,6 +434,7 @@ namespace vix
     out << indent(2) << "Project:\n";
     docs("https://vixcpp.com/docs/modules/cli/new");
     out << indent(3) << "new <name>        Create a new project\n";
+    out << indent(3) << "make              Generate C++ scaffolding\n";
     out << indent(3) << "dev               Start dev server (hot reload)\n";
     out << indent(3) << "run               Build and run\n";
     out << indent(3) << "build             Build project\n";

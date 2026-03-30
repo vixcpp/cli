@@ -132,19 +132,35 @@ namespace vix::cli::util
     return vix::crypto::hex_lower(out);
   }
 
-  std::string compute_project_files_fingerprint(const fs::path &projectDir)
+  std::string compute_cmake_config_fingerprint(const fs::path &projectDir)
   {
     std::vector<fs::path> files;
     files.reserve(256);
 
-    files.push_back(projectDir / "CMakeLists.txt");
+    const fs::path rootCMake = projectDir / "CMakeLists.txt";
+    if (file_exists(rootCMake))
+      files.push_back(rootCMake);
+
     collect_files_recursive(projectDir / "cmake", ".cmake", files);
 
     const fs::path presets = projectDir / "CMakePresets.json";
     if (file_exists(presets))
       files.push_back(presets);
 
+    const fs::path userPresets = projectDir / "CMakeUserPresets.json";
+    if (file_exists(userPresets))
+      files.push_back(userPresets);
+
+    const fs::path vixJson = projectDir / "vix.json";
+    if (file_exists(vixJson))
+      files.push_back(vixJson);
+
+    const fs::path vixLock = projectDir / "vix.lock";
+    if (file_exists(vixLock))
+      files.push_back(vixLock);
+
     std::sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
 
     std::uint64_t h = FNV_OFFSET;
 
@@ -152,7 +168,8 @@ namespace vix::cli::util
     {
       std::error_code ec{};
       const fs::path rp = fs::weakly_canonical(p, ec);
-      const std::string pathStr = ec ? p.string() : rp.string();
+      const std::string pathStr = ec ? p.lexically_relative(projectDir).string()
+                                     : rp.lexically_relative(projectDir).string();
 
       const auto hashOpt = read_file_hash_hex(p);
       const std::string line = pathStr + "=" + (hashOpt ? *hashOpt : "<missing>");

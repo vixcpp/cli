@@ -34,7 +34,7 @@ namespace vix::cli::util
   std::optional<std::string> sha256_file(const fs::path &p);
   std::optional<std::string> sha256_directory(const fs::path &dir);
 
-  std::string compute_project_files_fingerprint(const fs::path &projectDir);
+  std::string compute_cmake_config_fingerprint(const fs::path &projectDir);
   bool signature_matches(const fs::path &sigFile, const std::string &sig);
   std::string signature_join(const std::vector<std::pair<std::string, std::string>> &kvs);
 

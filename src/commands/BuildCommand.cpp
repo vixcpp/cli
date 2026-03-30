@@ -626,7 +626,7 @@ namespace vix::commands::BuildCommand
 
       plan.launcher = detect_launcher(opt);
       plan.fastLinkerFlag = detect_fast_linker_flag(opt);
-      plan.projectFingerprint = util::compute_project_files_fingerprint(plan.projectDir);
+      plan.projectFingerprint = util::compute_cmake_config_fingerprint(plan.projectDir);
 
       if (!opt.targetTriple.empty())
         plan.buildDir = plan.projectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);

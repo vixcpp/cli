@@ -324,22 +324,52 @@ namespace vix::cli::dispatch
 
   bool Dispatcher::has(const std::string &cmd) const
   {
+    if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
+      return map_.find("make") != map_.end();
+
     return map_.find(cmd) != map_.end();
   }
 
   int Dispatcher::run(const std::string &cmd, const Args &args) const
   {
+    if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
+    {
+      auto it = map_.find("make");
+      if (it == map_.end())
+        return 127;
+
+      Args forwarded_args;
+      forwarded_args.reserve(args.size() + 1);
+      forwarded_args.push_back(cmd.substr(5));
+
+      for (const auto &arg : args)
+        forwarded_args.push_back(arg);
+
+      return it->second.run(forwarded_args);
+    }
+
     auto it = map_.find(cmd);
     if (it == map_.end())
       return 127;
+
     return it->second.run(args);
   }
 
   int Dispatcher::help(const std::string &cmd) const
   {
+    if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
+    {
+      auto it = map_.find("make");
+      if (it == map_.end())
+        return 127;
+
+      return it->second.help();
+    }
+
     auto it = map_.find(cmd);
     if (it == map_.end())
       return 127;
+
     return it->second.help();
   }
 

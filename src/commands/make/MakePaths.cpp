@@ -50,11 +50,6 @@ namespace vix::cli::make
       return s;
     }
 
-    static bool starts_with(std::string_view s, std::string_view pfx)
-    {
-      return s.size() >= pfx.size() && s.substr(0, pfx.size()) == pfx;
-    }
-
     static std::optional<std::string> read_file(const fs::path &p)
     {
       std::ifstream in(p.string(), std::ios::in | std::ios::binary);
@@ -112,7 +107,7 @@ namespace vix::cli::make
 
       return out.empty() ? "app" : out;
     }
-  }
+  } // namespace
 
   fs::path resolve_root(const std::string &dir_opt)
   {
@@ -229,40 +224,32 @@ namespace vix::cli::make
     layout.default_namespace = guess_default_namespace(layout.project);
 
     std::error_code ec{};
-    layout.base = in_path.empty() ? root : fs::absolute(root / in_path, ec);
+
+    if (in_path.empty())
+      layout.base = root;
+    else
+      layout.base = fs::absolute(root / in_path, ec);
+
     if (ec)
       layout.base = root;
 
-    layout.include_dir = root / "include";
-    layout.src_dir = root / "src";
-    layout.tests_dir = root / "tests";
+    /*
+     * vix make must behave like a file generator:
+     * - by default, generate into the current directory
+     * - if --in is provided, generate into that folder
+     *
+     * It must NOT force include/, src/, or tests/ for generic C++ elements.
+     */
+    layout.include_dir = layout.base;
+    layout.src_dir = layout.base;
+    layout.tests_dir = layout.base;
 
-    const fs::path relative = fs::relative(layout.base, root, ec);
-    if (ec)
-      return layout;
-
-    const std::string rel = relative.generic_string();
-
-    if (starts_with(rel, "modules/"))
-    {
-      const std::size_t first_slash = rel.find('/');
-      const std::size_t second_slash = rel.find('/', first_slash + 1);
-
-      const std::string module =
-          rel.substr(first_slash + 1,
-                     second_slash == std::string::npos
-                         ? std::string::npos
-                         : second_slash - (first_slash + 1));
-
-      if (!module.empty())
-      {
-        layout.in_module = true;
-        layout.module_name = module;
-        layout.include_dir = root / "modules" / module / "include" / module;
-        layout.src_dir = root / "modules" / module / "src";
-        layout.default_namespace += "::" + module;
-      }
-    }
+    /*
+     * Keep these fields neutral for generic make generation.
+     * Structured service/module scaffolding belongs to dedicated workflows.
+     */
+    layout.in_module = false;
+    layout.module_name.clear();
 
     return layout;
   }

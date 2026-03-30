@@ -15,9 +15,28 @@
 #define VIX_MAKE_OPTIONS_HPP
 
 #include <string>
+#include <vector>
 
 namespace vix::cli::make
 {
+  struct MakeFieldOption
+  {
+    std::string name;
+    std::string type;
+  };
+
+  struct MakeClassOptions
+  {
+    std::vector<MakeFieldOption> fields;
+
+    bool interactive = false;
+    bool with_default_ctor = true;
+    bool with_value_ctor = true;
+    bool with_getters_setters = true;
+    bool with_copy_move = true;
+    bool with_virtual_destructor = true;
+  };
+
   struct MakeOptions
   {
     std::string kind;
@@ -31,7 +50,9 @@ namespace vix::cli::make
     bool print_only = false;
     bool header_only = false;
     bool show_help = false;
+
+    MakeClassOptions class_options;
   };
-}
+} // namespace vix::cli::make
 
 #endif

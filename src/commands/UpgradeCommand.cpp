@@ -1190,18 +1190,15 @@ namespace vix::commands
       fs::create_directories(extractDir, ec);
 
 #ifdef _WIN32
-      if (os == "windows")
-      {
-        const std::string ps =
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-            "\"Expand-Archive -LiteralPath '" +
-            archive.string() + "' -DestinationPath '" + extractDir.string() + "' -Force\"";
+      const std::string ps =
+          "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+          "\"Expand-Archive -LiteralPath '" +
+          archive.string() + "' -DestinationPath '" + extractDir.string() + "' -Force\"";
 
-        if (exec_status(ps + " >nul 2>&1") != 0)
-          throw std::runtime_error("failed to extract archive");
+      if (exec_status(ps + " >nul 2>&1") != 0)
+        throw std::runtime_error("failed to extract archive");
 
-        return;
-      }
+      return;
 #endif
 
       if (!have_cmd("tar"))

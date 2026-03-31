@@ -76,9 +76,9 @@ namespace vix::commands::RunCommand::detail
     auto home_dir = []() -> std::optional<std::string>
     {
 #ifdef _WIN32
-      const char *home = std::getenv("USERPROFILE");
+      const char *home = vix::utils::vix_getenv("USERPROFILE");
 #else
-      const char *home = std::getenv("HOME");
+      const char *home = vix::utils::vix_getenv("HOME");
 #endif
       if (!home || std::string(home).empty())
         return std::nullopt;

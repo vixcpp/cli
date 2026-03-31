@@ -24,6 +24,7 @@
 
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Strings.hpp>
+#include <vix/utils/Env.hpp>
 
 namespace vix::cli::cache
 {
@@ -85,18 +86,18 @@ namespace vix::cli::cache
     static std::optional<std::string> user_home_dir()
     {
 #ifdef _WIN32
-      const char *home = std::getenv("USERPROFILE");
+      const char *home = vix::utils::vix_getenv("USERPROFILE");
       if (home && *home)
         return std::string(home);
 
-      const char *drive = std::getenv("HOMEDRIVE");
-      const char *path = std::getenv("HOMEPATH");
+      const char *drive = vix::utils::vix_getenv("HOMEDRIVE");
+      const char *path = vix::utils::vix_getenv("HOMEPATH");
       if (drive && *drive && path && *path)
         return std::string(drive) + std::string(path);
 
       return std::nullopt;
 #else
-      const char *home = std::getenv("HOME");
+      const char *home = vix::utils::vix_getenv("HOME");
       if (home && *home)
         return std::string(home);
 

@@ -150,6 +150,48 @@ namespace vix::commands
       out << j.dump(2) << "\n";
     }
 
+    static std::string join_for_log(
+        const std::vector<std::string> &args)
+    {
+      std::ostringstream out;
+
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        if (i > 0)
+        {
+          out << ' ';
+        }
+
+        const std::string &arg = args[i];
+        const bool needsQuotes =
+            arg.find(' ') != std::string::npos ||
+            arg.find('\t') != std::string::npos ||
+            arg.find('"') != std::string::npos;
+
+        if (!needsQuotes)
+        {
+          out << arg;
+          continue;
+        }
+
+        out << '"';
+        for (char c : arg)
+        {
+          if (c == '"')
+          {
+            out << "\\\"";
+          }
+          else
+          {
+            out << c;
+          }
+        }
+        out << '"';
+      }
+
+      return out.str();
+    }
+
     struct ProcessResult
     {
       int exitCode{127};

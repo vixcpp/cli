@@ -680,6 +680,17 @@ namespace vix::commands::RunCommand::detail
       runtimeLog += err;
     }
 
+    const bool interruptedBySigint =
+        is_sigint_exit_code(runCode) ||
+        (rr.terminatedBySignal && rr.termSignal == SIGINT) ||
+        log_looks_like_interrupt(runtimeLog);
+
+    if (interruptedBySigint)
+    {
+      hint("ℹ Server interrupted by user (SIGINT).");
+      return 0;
+    }
+
     const bool looksSanOrUb =
         !runtimeLog.empty() && log_looks_like_sanitizer_or_ub(runtimeLog);
 

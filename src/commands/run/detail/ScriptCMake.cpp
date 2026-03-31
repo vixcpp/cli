@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <fstream>
 #include <string>
@@ -75,9 +76,9 @@ namespace vix::commands::RunCommand::detail
   static std::optional<std::string> home_dir()
   {
 #ifdef _WIN32
-    const char *home = std::getenv("USERPROFILE");
+    const char *home = vix::utils::vix_getenv("USERPROFILE");
 #else
-    const char *home = std::getenv("HOME");
+    const char *home = vix::utils::vix_getenv("HOME");
 #endif
     if (!home || std::string(home).empty())
       return std::nullopt;

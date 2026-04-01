@@ -1250,14 +1250,16 @@ int main()
   static std::string make_cmakelists_app(const std::string &projectName, const FeaturesSelection &f)
   {
     std::string s;
-    s.reserve(12000);
+    s.reserve(16000);
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + projectName + " LANGUAGES CXX)\n\n";
-    s += "set(CMAKE_CXX_STANDARD 20)\n";
-    s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
 
-    // Options only for selected features (strict)
+    s += "set(CMAKE_CXX_STANDARD 20)\n";
+    s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
+    s += "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
+
+    // Options only for selected features
     if (f.orm)
       s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" ON)\n";
     if (f.sanitizers)
@@ -1269,31 +1271,40 @@ int main()
     if (f.orm || f.sanitizers || f.static_rt || f.full_static)
       s += "\n";
 
+    s += "# ------------------------------------------------------\n";
+    s += "# Core Vix runtime\n";
+    s += "# ------------------------------------------------------\n";
     s += "find_package(vix QUIET CONFIG)\n";
     s += "if (NOT vix_FOUND)\n";
     s += "  find_package(Vix CONFIG REQUIRED)\n";
     s += "endif()\n\n";
 
-    s += "add_executable(" + projectName + " src/main.cpp)\n";
-    s += "target_link_libraries(" + projectName + " PRIVATE vix::vix)\n\n";
-
-    s += "if (MSVC)\n";
-    s += "  target_compile_options(" + projectName + " PRIVATE /W4 /permissive-)\n";
-    s += "else()\n";
-    s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
+    s += "# ------------------------------------------------------\n";
+    s += "# Local registry packages installed with: vix install\n";
+    s += "# ------------------------------------------------------\n";
+    s += "# If you add packages from the Vix registry, they are wired\n";
+    s += "# through .vix/vix_deps.cmake. This file creates the imported\n";
+    s += "# targets for local project dependencies.\n";
+    s += "#\n";
+    s += "# Example:\n";
+    s += "#   vix add @cnerium/app\n";
+    s += "#   vix install\n";
+    s += "#\n";
+    s += "# Then uncomment the links you need below.\n";
+    s += "if (EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/.vix/vix_deps.cmake\")\n";
+    s += "  include(\"${CMAKE_CURRENT_SOURCE_DIR}/.vix/vix_deps.cmake\")\n";
     s += "endif()\n\n";
 
-    if (f.orm)
-    {
-      s += "if (VIX_USE_ORM)\n";
-      s += "  if (TARGET vix::orm)\n";
-      s += "    target_link_libraries(" + projectName + " PRIVATE vix::orm)\n";
-      s += "    target_compile_definitions(" + projectName + " PRIVATE VIX_USE_ORM=1)\n";
-      s += "  else()\n";
-      s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
-      s += "  endif()\n";
-      s += "endif()\n\n";
-    }
+    s += "# ------------------------------------------------------\n";
+    s += "# Helpers\n";
+    s += "# ------------------------------------------------------\n";
+    s += "function(vix_link_optional_targets tgt)\n";
+    s += "  foreach(dep IN LISTS ARGN)\n";
+    s += "    if (TARGET ${dep})\n";
+    s += "      target_link_libraries(${tgt} PRIVATE ${dep})\n";
+    s += "    endif()\n";
+    s += "  endforeach()\n";
+    s += "endfunction()\n\n";
 
     if (f.static_rt || f.full_static)
     {
@@ -1316,8 +1327,45 @@ int main()
         s += "  endif()\n";
       }
       s += "endfunction()\n\n";
-      s += "vix_apply_static_link_flags(" + projectName + ")\n\n";
     }
+
+    s += "# ------------------------------------------------------\n";
+    s += "# Main executable\n";
+    s += "# ------------------------------------------------------\n";
+    s += "add_executable(" + projectName + " src/main.cpp)\n";
+    s += "target_link_libraries(" + projectName + " PRIVATE vix::vix)\n\n";
+
+    s += "# Add local registry libraries here.\n";
+    s += "# Keep them in this block so the build stays stable even if\n";
+    s += "# some packages are not installed yet.\n";
+    s += "#\n";
+    s += "# Example:\n";
+    s += "# vix_link_optional_targets(" + projectName + "\n";
+    s += "#   cnerium::app\n";
+    s += "#   cnerium::http\n";
+    s += "#   cnerium::json\n";
+    s += "# )\n\n";
+
+    s += "if (MSVC)\n";
+    s += "  target_compile_options(" + projectName + " PRIVATE /W4 /permissive-)\n";
+    s += "else()\n";
+    s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
+    s += "endif()\n\n";
+
+    if (f.orm)
+    {
+      s += "if (VIX_USE_ORM)\n";
+      s += "  if (TARGET vix::orm)\n";
+      s += "    target_link_libraries(" + projectName + " PRIVATE vix::orm)\n";
+      s += "    target_compile_definitions(" + projectName + " PRIVATE VIX_USE_ORM=1)\n";
+      s += "  else()\n";
+      s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
+      s += "  endif()\n";
+      s += "endif()\n\n";
+    }
+
+    if (f.static_rt || f.full_static)
+      s += "vix_apply_static_link_flags(" + projectName + ")\n\n";
 
     if (f.sanitizers)
     {
@@ -1328,14 +1376,37 @@ int main()
       s += "endif()\n\n";
     }
 
+    s += "# ------------------------------------------------------\n";
+    s += "# Tests\n";
+    s += "# ------------------------------------------------------\n";
     s += "include(CTest)\n";
     s += "enable_testing()\n\n";
+
     s += "add_executable(" + projectName + "_basic_test tests/test_basic.cpp)\n";
-    s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n";
+    s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n\n";
+
+    s += "# Add the same local registry libraries to tests when needed.\n";
+    s += "# Example:\n";
+    s += "# vix_link_optional_targets(" + projectName + "_basic_test\n";
+    s += "#   cnerium::app\n";
+    s += "#   cnerium::http\n";
+    s += "#   cnerium::json\n";
+    s += "# )\n\n";
+
+    s += "if (MSVC)\n";
+    s += "  target_compile_options(" + projectName + "_basic_test PRIVATE /W4 /permissive-)\n";
+    s += "else()\n";
+    s += "  target_compile_options(" + projectName + "_basic_test PRIVATE -Wall -Wextra -Wpedantic)\n";
+    s += "endif()\n\n";
+
     if (f.static_rt || f.full_static)
-      s += "vix_apply_static_link_flags(" + projectName + "_basic_test)\n";
+      s += "vix_apply_static_link_flags(" + projectName + "_basic_test)\n\n";
+
     s += "add_test(NAME " + projectName + ".basic COMMAND " + projectName + "_basic_test)\n\n";
 
+    s += "# ------------------------------------------------------\n";
+    s += "# Convenience target\n";
+    s += "# ------------------------------------------------------\n";
     s += "add_custom_target(run\n";
     s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
     s += "  DEPENDS " + projectName + "\n";
@@ -1344,7 +1415,6 @@ int main()
 
     return s;
   }
-
   static std::string make_cmakelists_lib(const std::string &name)
   {
     std::string s;

@@ -14,17 +14,19 @@
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 #include <vix/utils/Env.hpp>
 
-#include <fstream>
-#include <string>
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <nlohmann/json.hpp>
+#include <optional>
+#include <queue>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <queue>
-#include <optional>
-#include <filesystem>
-#include <cstdlib>
-#include <cctype>
+#include <vector>
 
 namespace vix::commands::RunCommand::detail
 {
@@ -97,6 +99,66 @@ namespace vix::commands::RunCommand::detail
     return vix_root() / "global" / "installed.json";
   }
 
+  static std::string sanitize_identifier(std::string s)
+  {
+    if (s.empty())
+      return "script";
+
+    for (char &c : s)
+    {
+      const unsigned char uc = static_cast<unsigned char>(c);
+      if (!(std::isalnum(uc) || c == '_'))
+        c = '_';
+    }
+
+    if (!std::isalpha(static_cast<unsigned char>(s.front())) && s.front() != '_')
+      s.insert(s.begin(), '_');
+
+    return s;
+  }
+
+  static unsigned long long fnv1a_64(const std::string &input)
+  {
+    constexpr unsigned long long offset = 14695981039346656037ULL;
+    constexpr unsigned long long prime = 1099511628211ULL;
+
+    unsigned long long hash = offset;
+    for (unsigned char c : input)
+    {
+      hash ^= static_cast<unsigned long long>(c);
+      hash *= prime;
+    }
+    return hash;
+  }
+
+  static std::string hex_u64(unsigned long long value)
+  {
+    static constexpr char digits[] = "0123456789abcdef";
+    std::string out(16, '0');
+
+    for (int i = 15; i >= 0; --i)
+    {
+      out[static_cast<std::size_t>(i)] = digits[value & 0xF];
+      value >>= 4ULL;
+    }
+
+    return out;
+  }
+
+  static std::string make_unique_script_target_name(const std::string &exeName, const fs::path &cppPath)
+  {
+    const std::string safeExe = sanitize_identifier(exeName);
+    const std::string absolutePath = fs::absolute(cppPath).lexically_normal().string();
+    return "vix_run__" + safeExe + "__" + hex_u64(fnv1a_64(absolutePath));
+  }
+
+  static std::string make_unique_project_name(const std::string &exeName, const fs::path &cppPath)
+  {
+    const std::string safeExe = sanitize_identifier(exeName);
+    const std::string absolutePath = fs::absolute(cppPath).lexically_normal().string();
+    return "vix_script_" + safeExe + "_" + hex_u64(fnv1a_64("project:" + absolutePath));
+  }
+
   static std::vector<std::string> load_package_dependencies_from_manifest(const fs::path &pkgPath)
   {
     std::vector<std::string> deps;
@@ -112,35 +174,39 @@ namespace vix::commands::RunCommand::detail
     nlohmann::json j;
     ifs >> j;
 
-    if (!j.contains("dependencies"))
-      return deps;
-
-    const auto &d = j["dependencies"];
-
-    if (d.is_object())
+    auto read_dep_block = [&](const nlohmann::json &d)
     {
-      for (auto it = d.begin(); it != d.end(); ++it)
-        deps.push_back(it.key());
-    }
-    else if (d.is_array())
-    {
-      for (const auto &item : d)
+      if (d.is_object())
       {
-        if (item.is_string())
+        for (auto it = d.begin(); it != d.end(); ++it)
+          deps.push_back(it.key());
+      }
+      else if (d.is_array())
+      {
+        for (const auto &item : d)
         {
-          deps.push_back(item.get<std::string>());
-        }
-        else if (item.is_object())
-        {
-          if (item.contains("id") && item["id"].is_string())
-            deps.push_back(item["id"].get<std::string>());
-          else if (item.contains("name") && item["name"].is_string())
-            deps.push_back(item["name"].get<std::string>());
-          else if (item.contains("package") && item["package"].is_string())
-            deps.push_back(item["package"].get<std::string>());
+          if (item.is_string())
+          {
+            deps.push_back(item.get<std::string>());
+          }
+          else if (item.is_object())
+          {
+            if (item.contains("id") && item["id"].is_string())
+              deps.push_back(item["id"].get<std::string>());
+            else if (item.contains("name") && item["name"].is_string())
+              deps.push_back(item["name"].get<std::string>());
+            else if (item.contains("package") && item["package"].is_string())
+              deps.push_back(item["package"].get<std::string>());
+          }
         }
       }
-    }
+    };
+
+    if (j.contains("dependencies"))
+      read_dep_block(j["dependencies"]);
+
+    if (deps.empty() && j.contains("deps"))
+      read_dep_block(j["deps"]);
 
     return deps;
   }
@@ -177,8 +243,6 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
-    std::queue<std::string> q;
-
     std::vector<std::string> zero;
     for (const auto &[pkgDir, _] : depPackages)
     {
@@ -187,6 +251,7 @@ namespace vix::commands::RunCommand::detail
     }
 
     std::sort(zero.begin(), zero.end());
+    std::queue<std::string> q;
     for (const auto &pkgDir : zero)
       q.push(pkgDir);
 
@@ -261,13 +326,15 @@ namespace vix::commands::RunCommand::detail
         out.libs.push_back(f.substr(2));
         continue;
       }
+
       if (f.rfind("-L", 0) == 0 && f.size() > 2)
       {
         out.libDirs.push_back(f.substr(2));
         continue;
       }
 
-      if (f.rfind("-I", 0) == 0 || f == "-I" || f.rfind("-D", 0) == 0 || f == "-D" ||
+      if (f.rfind("-I", 0) == 0 || f == "-I" ||
+          f.rfind("-D", 0) == 0 || f == "-D" ||
           f.rfind("-isystem", 0) == 0 || f == "-isystem")
       {
         continue;
@@ -290,24 +357,22 @@ namespace vix::commands::RunCommand::detail
     {
       if (line.find("vix::") != std::string::npos ||
           line.find("Vix::") != std::string::npos)
-      {
         return true;
-      }
+
       if (line.find("#include") == std::string::npos)
         continue;
+
       if (line.find("vix") != std::string::npos ||
           line.find("Vix") != std::string::npos)
-      {
         return true;
-      }
     }
+
     return false;
   }
 
   fs::path get_scripts_root()
   {
-    auto cwd = fs::current_path();
-    return cwd / ".vix-scripts";
+    return fs::current_path() / ".vix-scripts";
   }
 
   struct ScriptCompileFlags
@@ -637,6 +702,15 @@ namespace vix::commands::RunCommand::detail
     return selected;
   }
 
+  static void append_unique_string(std::vector<std::string> &items, const std::string &value)
+  {
+    if (value.empty())
+      return;
+
+    if (std::find(items.begin(), items.end(), value) == items.end())
+      items.push_back(value);
+  }
+
   std::string make_script_cmakelists(
       const std::string &exeName,
       const fs::path &cppPath,
@@ -644,7 +718,11 @@ namespace vix::commands::RunCommand::detail
       const std::vector<std::string> &scriptFlags)
   {
     std::string s;
-    s.reserve(10000);
+    s.reserve(32000);
+
+    const std::string targetName = make_unique_script_target_name(exeName, cppPath);
+    const std::string projectName = make_unique_project_name(exeName, cppPath);
+    const std::string outputName = exeName;
 
     auto q = [](const std::string &p)
     {
@@ -668,14 +746,113 @@ namespace vix::commands::RunCommand::detail
     };
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
-    s += "project(" + exeName + " LANGUAGES CXX)\n\n";
+    s += "project(" + projectName + " LANGUAGES CXX)\n\n";
 
-    const fs::path scriptDir = cppPath.parent_path() / ".vix-scripts" / exeName;
-    const fs::path depsFile = scriptDir / "vix_deps.cmake";
+    s += "# ------------------------------------------------------\n";
+    s += "# Internal helpers generated by Vix\n";
+    s += "# ------------------------------------------------------\n\n";
 
-    s += "if (EXISTS " + q(depsFile.string()) + ")\n";
-    s += "  include(" + q(depsFile.string()) + ")\n";
-    s += "endif()\n\n";
+    s += "function(_vix_disable_dep_extras dep_ns dep_name)\n";
+    s += "  string(TOUPPER \"${dep_ns}\" _VIX_NS_UPPER)\n";
+    s += "  string(TOUPPER \"${dep_name}\" _VIX_NAME_UPPER)\n";
+    s += "\n";
+    s += "  set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(ENABLE_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(UNIT_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(BUILD_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(ENABLE_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(BUILD_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(BUILD_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(ENABLE_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "\n";
+    s += "  set(${_VIX_NS_UPPER}_BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_ENABLE_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_UNIT_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_BUILD_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_ENABLE_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_BUILD_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_BUILD_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_ENABLE_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_ENABLE_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_UNIT_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_ENABLE_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_ENABLE_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "endfunction()\n\n";
+
+    s += "function(_vix_bridge_alias canonical actual)\n";
+    s += "  if(TARGET ${canonical})\n";
+    s += "    return()\n";
+    s += "  endif()\n";
+    s += "  if(NOT TARGET ${actual})\n";
+    s += "    return()\n";
+    s += "  endif()\n";
+    s += "  string(REPLACE \"::\" \"__\" _VIX_BRIDGE_SAFE ${canonical})\n";
+    s += "  set(_VIX_BRIDGE_TARGET \"vix_bridge__${_VIX_BRIDGE_SAFE}\")\n";
+    s += "  if(NOT TARGET ${_VIX_BRIDGE_TARGET})\n";
+    s += "    add_library(${_VIX_BRIDGE_TARGET} INTERFACE)\n";
+    s += "    target_link_libraries(${_VIX_BRIDGE_TARGET} INTERFACE ${actual})\n";
+    s += "  endif()\n";
+    s += "  if(NOT TARGET ${canonical})\n";
+    s += "    add_library(${canonical} ALIAS ${_VIX_BRIDGE_TARGET})\n";
+    s += "  endif()\n";
+    s += "endfunction()\n\n";
+
+    s += "function(_vix_try_bridge_for_dep dep_ns dep_name)\n";
+    s += "  set(_VIX_CANONICAL \"${dep_ns}::${dep_name}\")\n";
+    s += "  if(TARGET ${_VIX_CANONICAL})\n";
+    s += "    return()\n";
+    s += "  endif()\n";
+    s += "  set(_VIX_CANDIDATES\n";
+    s += "    \"${dep_name}\"\n";
+    s += "    \"${dep_name}::${dep_name}\"\n";
+    s += "    \"${dep_ns}_${dep_name}\"\n";
+    s += "    \"${dep_ns}-${dep_name}\"\n";
+    s += "    \"${dep_ns}.${dep_name}\"\n";
+    s += "  )\n";
+    s += "  foreach(_VIX_CAND IN LISTS _VIX_CANDIDATES)\n";
+    s += "    if(TARGET ${_VIX_CAND})\n";
+    s += "      _vix_bridge_alias(${_VIX_CANONICAL} ${_VIX_CAND})\n";
+    s += "      return()\n";
+    s += "    endif()\n";
+    s += "  endforeach()\n";
+    s += "endfunction()\n\n";
+
+    const fs::path depsRoot = cppPath.parent_path() / ".vix" / "deps";
+    const fs::path lockPath = cppPath.parent_path() / "vix.lock";
+
+    s += "# Disable dependency-side extras to avoid target name collisions\n";
+    s += "set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(ENABLE_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(UNIT_TESTS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(BUILD_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(ENABLE_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(BUILD_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(BUILD_DOCS OFF CACHE BOOL \"\" FORCE)\n";
+    s += "set(DOCS OFF CACHE BOOL \"\" FORCE)\n\n";
 
     s += "set(CMAKE_VERBOSE_MAKEFILE ON)\n";
     s += "set(CMAKE_RULE_MESSAGES OFF)\n\n";
@@ -689,21 +866,17 @@ namespace vix::commands::RunCommand::detail
     s += "endif()\n\n";
 
     auto feat = detect_script_features(cppPath);
+    auto lf = parse_link_flags(scriptFlags);
+    auto cf = parse_compile_flags(scriptFlags);
 
     s += "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)\n";
     s += "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan or ubsan\")\n";
     s += "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan)\n";
     s += "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)\n";
     s += "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)\n";
-    s += std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")\n";
+    s += std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")\n\n";
 
-    auto lf = parse_link_flags(scriptFlags);
-    auto cf = parse_compile_flags(scriptFlags);
-
-    const fs::path lockPath = cppPath.parent_path() / "vix.lock";
     auto orderedDeps = load_ordered_packages_from_lock(lockPath);
-
-    const fs::path depsRoot = cppPath.parent_path() / ".vix" / "deps";
 
     if (orderedDeps.empty())
     {
@@ -722,8 +895,6 @@ namespace vix::commands::RunCommand::detail
     }
 
     std::vector<std::pair<std::string, fs::path>> cmakeDeps;
-    cmakeDeps.reserve(orderedDeps.size());
-
     for (const auto &depId : orderedDeps)
     {
       std::string pkgDir = depId;
@@ -741,19 +912,20 @@ namespace vix::commands::RunCommand::detail
 
       if (fs::exists(pkgPath / "CMakeLists.txt"))
         cmakeDeps.emplace_back(pkgDir, pkgPath);
+      else
+      {
+        const fs::path includeGuess = pkgPath / "include";
+        if (fs::exists(includeGuess))
+          append_unique_string(cf.includeDirs, includeGuess.string());
+      }
     }
 
     const auto globalPkgs = select_global_packages_for_script(cppPath, orderedDeps);
-
     for (const auto &pkg : globalPkgs)
     {
       const fs::path includePath = pkg.installedPath / pkg.includeDir;
       if (fs::exists(includePath))
-      {
-        const std::string includeStr = includePath.string();
-        if (std::find(cf.includeDirs.begin(), cf.includeDirs.end(), includeStr) == cf.includeDirs.end())
-          cf.includeDirs.push_back(includeStr);
-      }
+        append_unique_string(cf.includeDirs, includePath.string());
 
       if (fs::exists(pkg.installedPath / "CMakeLists.txt"))
         cmakeDeps.emplace_back(pkg.pkgDir, pkg.installedPath);
@@ -767,14 +939,11 @@ namespace vix::commands::RunCommand::detail
     const auto topoSorted = topo_sort_dep_packages(topoInput);
 
     std::vector<std::pair<std::string, fs::path>> cmakeDepsSorted;
-    cmakeDepsSorted.reserve(topoSorted.size());
     for (const auto &[pkgDir, pkgPath] : topoSorted)
       cmakeDepsSorted.emplace_back(pkgDir, fs::path(pkgPath));
 
     std::unordered_set<std::string> seenPkgDirs;
     std::vector<std::pair<std::string, fs::path>> uniqueCmakeDeps;
-    uniqueCmakeDeps.reserve(cmakeDepsSorted.size());
-
     for (const auto &[pkgDir, pkgPath] : cmakeDepsSorted)
     {
       if (seenPkgDirs.insert(pkgDir).second)
@@ -782,65 +951,46 @@ namespace vix::commands::RunCommand::detail
     }
 
     std::vector<std::string> cmakeDepAliases;
-    cmakeDepAliases.reserve(uniqueCmakeDeps.size());
-
     for (const auto &[pkgDir, _pkgPath] : uniqueCmakeDeps)
-      cmakeDepAliases.push_back(dep_id_to_cmake_alias(dep_dir_to_id(pkgDir)));
+      append_unique_string(cmakeDepAliases, dep_id_to_cmake_alias(dep_dir_to_id(pkgDir)));
 
     std::sort(cmakeDepAliases.begin(), cmakeDepAliases.end());
-    cmakeDepAliases.erase(
-        std::unique(cmakeDepAliases.begin(), cmakeDepAliases.end()),
-        cmakeDepAliases.end());
-
-    auto rank_dep = [](const std::string &pkgDir) -> int
-    {
-      if (pkgDir == "softadastra.core")
-        return 0;
-      if (pkgDir == "softadastra.fs")
-        return 1;
-      if (pkgDir == "softadastra.wal")
-        return 2;
-      if (pkgDir == "softadastra.store")
-        return 3;
-      if (pkgDir == "softadastra.sync")
-        return 4;
-      if (pkgDir == "softadastra.transport")
-        return 5;
-      return 100;
-    };
-
-    std::stable_sort(uniqueCmakeDeps.begin(), uniqueCmakeDeps.end(),
-                     [&](const auto &a, const auto &b)
-                     {
-                       return rank_dep(a.first) < rank_dep(b.first);
-                     });
+    cmakeDepAliases.erase(std::unique(cmakeDepAliases.begin(), cmakeDepAliases.end()), cmakeDepAliases.end());
 
     for (const auto &[pkgDir, pkgPath] : uniqueCmakeDeps)
     {
+      const std::string depId = dep_dir_to_id(pkgDir);
+      const auto slash = depId.find('/');
+      const std::string depNs = (slash == std::string::npos) ? depId : depId.substr(0, slash);
+      const std::string depName = (slash == std::string::npos) ? depId : depId.substr(slash + 1);
+
+      s += "_vix_disable_dep_extras(" + depNs + " " + depName + ")\n";
       s += "if (EXISTS " + q((pkgPath / "CMakeLists.txt").string()) + ")\n";
       s += "  add_subdirectory(" + q(pkgPath.string()) + " " +
            q_raw("${CMAKE_BINARY_DIR}/_deps/" + pkgDir) +
            " EXCLUDE_FROM_ALL)\n";
       s += "endif()\n";
+      s += "_vix_try_bridge_for_dep(" + depNs + " " + depName + ")\n";
     }
 
     s += "\n";
-    s += "add_executable(" + exeName + " " + q(cppPath.string()) + ")\n\n";
+    s += "add_executable(" + targetName + " " + q(cppPath.string()) + ")\n";
+    s += "set_target_properties(" + targetName + " PROPERTIES OUTPUT_NAME " + q(outputName) + ")\n\n";
 
-    if (!cf.includeDirs.empty() || !cf.systemDirs.empty())
+    if (!cf.includeDirs.empty())
     {
-      s += "target_include_directories(" + exeName + " PRIVATE\n";
+      s += "target_include_directories(" + targetName + " PRIVATE\n";
       for (const auto &d : cf.includeDirs)
         s += "  " + q(d) + "\n";
       s += ")\n\n";
+    }
 
-      if (!cf.systemDirs.empty())
-      {
-        s += "target_include_directories(" + exeName + " SYSTEM PRIVATE\n";
-        for (const auto &d : cf.systemDirs)
-          s += "  " + q(d) + "\n";
-        s += ")\n\n";
-      }
+    if (!cf.systemDirs.empty())
+    {
+      s += "target_include_directories(" + targetName + " SYSTEM PRIVATE\n";
+      for (const auto &d : cf.systemDirs)
+        s += "  " + q(d) + "\n";
+      s += ")\n\n";
     }
 
     if (!cmakeDepAliases.empty())
@@ -848,7 +998,7 @@ namespace vix::commands::RunCommand::detail
       for (const auto &alias : cmakeDepAliases)
       {
         s += "if (TARGET " + alias + ")\n";
-        s += "  target_link_libraries(" + exeName + " PRIVATE " + alias + ")\n";
+        s += "  target_link_libraries(" + targetName + " PRIVATE " + alias + ")\n";
         s += "endif()\n";
       }
       s += "\n";
@@ -856,7 +1006,7 @@ namespace vix::commands::RunCommand::detail
 
     if (!cf.defines.empty())
     {
-      s += "target_compile_definitions(" + exeName + " PRIVATE\n";
+      s += "target_compile_definitions(" + targetName + " PRIVATE\n";
       for (const auto &d : cf.defines)
         s += "  " + d + "\n";
       s += ")\n\n";
@@ -864,20 +1014,15 @@ namespace vix::commands::RunCommand::detail
 
     if (!cf.compileOpts.empty())
     {
-      s += "target_compile_options(" + exeName + " PRIVATE\n";
+      s += "target_compile_options(" + targetName + " PRIVATE\n";
       for (const auto &o : cf.compileOpts)
         s += "  " + o + "\n";
       s += ")\n\n";
     }
 
-    auto hasLib = [&](const std::string &name) -> bool
-    {
-      return std::find(lf.libs.begin(), lf.libs.end(), name) != lf.libs.end();
-    };
-
     if (!lf.libDirs.empty())
     {
-      s += "target_link_directories(" + exeName + " PRIVATE\n";
+      s += "target_link_directories(" + targetName + " PRIVATE\n";
       for (const auto &d : lf.libDirs)
         s += "  " + q(d) + "\n";
       s += ")\n\n";
@@ -885,7 +1030,7 @@ namespace vix::commands::RunCommand::detail
 
     if (!lf.libs.empty())
     {
-      s += "target_link_libraries(" + exeName + " PRIVATE\n";
+      s += "target_link_libraries(" + targetName + " PRIVATE\n";
       for (const auto &L : lf.libs)
         s += "  " + L + "\n";
       s += ")\n\n";
@@ -893,17 +1038,17 @@ namespace vix::commands::RunCommand::detail
 
     if (!lf.linkOpts.empty())
     {
-      s += "target_link_options(" + exeName + " PRIVATE\n";
+      s += "target_link_options(" + targetName + " PRIVATE\n";
       for (const auto &o : lf.linkOpts)
         s += "  " + o + "\n";
       s += ")\n\n";
     }
 
     s += "if (MSVC)\n";
-    s += "  target_compile_options(" + exeName + " PRIVATE /W4 /permissive- /EHsc)\n";
-    s += "  target_compile_definitions(" + exeName + " PRIVATE _CRT_SECURE_NO_WARNINGS)\n";
+    s += "  target_compile_options(" + targetName + " PRIVATE /W4 /permissive- /EHsc)\n";
+    s += "  target_compile_definitions(" + targetName + " PRIVATE _CRT_SECURE_NO_WARNINGS)\n";
     s += "else()\n";
-    s += "  target_compile_options(" + exeName + " PRIVATE\n";
+    s += "  target_compile_options(" + targetName + " PRIVATE\n";
     s += "    -Wall -Wextra -Wpedantic\n";
     s += "    -Wshadow -Wconversion -Wsign-conversion\n";
     s += "    -Wformat=2 -Wnull-dereference\n";
@@ -911,36 +1056,39 @@ namespace vix::commands::RunCommand::detail
     s += "endif()\n\n";
 
     s += "if (NOT MSVC)\n";
-    s += "  target_compile_options(" + exeName + " PRIVATE -fno-omit-frame-pointer)\n";
+    s += "  target_compile_options(" + targetName + " PRIVATE -fno-omit-frame-pointer)\n";
     s += "  if (UNIX AND NOT APPLE)\n";
-    s += "    target_link_options(" + exeName + " PRIVATE -rdynamic)\n";
+    s += "    target_link_options(" + targetName + " PRIVATE -rdynamic)\n";
     s += "  endif()\n";
     s += "endif()\n\n";
 
     s += "if (VIX_ENABLE_LIBCXX_ASSERTS AND NOT MSVC)\n";
-    s += "  target_compile_definitions(" + exeName + " PRIVATE _GLIBCXX_ASSERTIONS)\n";
+    s += "  target_compile_definitions(" + targetName + " PRIVATE _GLIBCXX_ASSERTIONS)\n";
     s += "endif()\n\n";
 
     s += "if (VIX_ENABLE_HARDENING AND NOT MSVC)\n";
-    s += "  target_compile_options(" + exeName + " PRIVATE -D_FORTIFY_SOURCE=2)\n";
-    s += "  target_link_options(" + exeName + " PRIVATE -Wl,-z,relro -Wl,-z,now)\n";
+    s += "  target_compile_options(" + targetName + " PRIVATE -D_FORTIFY_SOURCE=2)\n";
+    s += "  target_link_options(" + targetName + " PRIVATE -Wl,-z,relro -Wl,-z,now)\n";
     s += "endif()\n\n";
+
+    auto hasLib = [&](const std::string &name) -> bool
+    {
+      return std::find(lf.libs.begin(), lf.libs.end(), name) != lf.libs.end();
+    };
 
     if (!useVixRuntime)
     {
       s += "if (UNIX AND NOT APPLE)\n";
-      s += "  target_link_libraries(" + exeName + " PRIVATE pthread dl)\n";
+      s += "  target_link_libraries(" + targetName + " PRIVATE pthread dl)\n";
       s += "endif()\n\n";
     }
     else
     {
-      s += "# Prefer lowercase package, fallback to legacy Vix\n";
       s += "find_package(vix QUIET CONFIG)\n";
       s += "if (NOT vix_FOUND)\n";
       s += "  find_package(Vix CONFIG REQUIRED)\n";
       s += "endif()\n\n";
 
-      s += "# Pick main target (umbrella preferred)\n";
       s += "set(VIX_MAIN_TARGET \"\")\n";
       s += "if (TARGET vix::vix)\n";
       s += "  set(VIX_MAIN_TARGET vix::vix)\n";
@@ -954,23 +1102,23 @@ namespace vix::commands::RunCommand::detail
       s += "  message(FATAL_ERROR \"No Vix target found (vix::vix/Vix::vix/vix::core/Vix::core)\")\n";
       s += "endif()\n\n";
 
-      s += "target_link_libraries(" + exeName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
+      s += "target_link_libraries(" + targetName + " PRIVATE ${VIX_MAIN_TARGET})\n\n";
 
       s += "if (VIX_USE_ORM)\n";
       s += "  if (TARGET vix::orm)\n";
-      s += "    target_link_libraries(" + exeName + " PRIVATE vix::orm)\n";
-      s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
+      s += "    target_link_libraries(" + targetName + " PRIVATE vix::orm)\n";
+      s += "    target_compile_definitions(" + targetName + " PRIVATE VIX_USE_ORM=1)\n";
       s += "  elseif (TARGET Vix::orm)\n";
-      s += "    target_link_libraries(" + exeName + " PRIVATE Vix::orm)\n";
-      s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_USE_ORM=1)\n";
+      s += "    target_link_libraries(" + targetName + " PRIVATE Vix::orm)\n";
+      s += "    target_compile_definitions(" + targetName + " PRIVATE VIX_USE_ORM=1)\n";
       s += "  else()\n";
       s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but ORM target is not available (vix::orm/Vix::orm)\")\n";
-      s += "  endif()\n";
-      s += "\n";
+      s += "  endif()\n\n";
+
       s += "  if (TARGET vix::db)\n";
-      s += "    target_link_libraries(" + exeName + " PRIVATE vix::db)\n";
+      s += "    target_link_libraries(" + targetName + " PRIVATE vix::db)\n";
       s += "  elseif (TARGET Vix::db)\n";
-      s += "    target_link_libraries(" + exeName + " PRIVATE Vix::db)\n";
+      s += "    target_link_libraries(" + targetName + " PRIVATE Vix::db)\n";
       s += "  else()\n";
       s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but DB target is not available (vix::db/Vix::db)\")\n";
       s += "  endif()\n";
@@ -978,11 +1126,10 @@ namespace vix::commands::RunCommand::detail
 
       if (feat.usesMysql && !hasLib("mysqlcppconn8") && !hasLib("mysqlcppconn"))
       {
-        s += "# Auto-link MySQL connector when script uses MySQL\n";
         s += "if (UNIX)\n";
         s += "  find_library(VIX_MYSQLCPPCONN_LIB NAMES mysqlcppconn8 mysqlcppconn)\n";
         s += "  if (VIX_MYSQLCPPCONN_LIB)\n";
-        s += "    target_link_libraries(" + exeName + " PRIVATE ${VIX_MYSQLCPPCONN_LIB})\n";
+        s += "    target_link_libraries(" + targetName + " PRIVATE ${VIX_MYSQLCPPCONN_LIB})\n";
         s += "  else()\n";
         s += "    message(WARNING \"MySQL connector lib not found (mysqlcppconn8/mysqlcppconn). If you get undefined references, pass: -- -lmysqlcppconn8\")\n";
         s += "  endif()\n";
@@ -993,28 +1140,28 @@ namespace vix::commands::RunCommand::detail
     s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
     s += "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")\n";
     s += "    message(STATUS \"Sanitizers: UBSan enabled\")\n";
-    s += "    target_compile_options(" + exeName + " PRIVATE\n";
+    s += "    target_compile_options(" + targetName + " PRIVATE\n";
     s += "      -O0 -g3\n";
     s += "      -fno-omit-frame-pointer\n";
     s += "      -fsanitize=undefined\n";
     s += "      -fno-sanitize-recover=all\n";
     s += "    )\n";
-    s += "    target_link_options(" + exeName + " PRIVATE -fsanitize=undefined)\n";
+    s += "    target_link_options(" + targetName + " PRIVATE -fsanitize=undefined)\n";
     s += "  else()\n";
     s += "    message(STATUS \"Sanitizers: ASan+UBSan enabled\")\n";
-    s += "    target_compile_options(" + exeName + " PRIVATE\n";
+    s += "    target_compile_options(" + targetName + " PRIVATE\n";
     s += "      -O1 -g3\n";
     s += "      -fno-omit-frame-pointer\n";
     s += "      -fsanitize=address,undefined\n";
     s += "      -fno-sanitize-recover=all\n";
     s += "    )\n";
-    s += "    target_link_options(" + exeName + " PRIVATE -fsanitize=address,undefined)\n";
-    s += "    target_compile_definitions(" + exeName + " PRIVATE VIX_ASAN_QUIET=1)\n";
+    s += "    target_link_options(" + targetName + " PRIVATE -fsanitize=address,undefined)\n";
+    s += "    target_compile_definitions(" + targetName + " PRIVATE VIX_ASAN_QUIET=1)\n";
     s += "  endif()\n";
     s += "endif()\n\n";
 
     s += "if (UNIX AND NOT APPLE)\n";
-    s += "  target_compile_options(" + exeName + " PRIVATE -g)\n";
+    s += "  target_compile_options(" + targetName + " PRIVATE -g)\n";
     s += "endif()\n";
 
     return s;

@@ -56,6 +56,10 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <functional>
+#include <climits>
+#include <functional>
+#include <climits>
 
 namespace vix
 {
@@ -88,6 +92,57 @@ namespace vix
         return Logger::Level::Error;
       if (s == "critical" || s == "fatal")
         return Logger::Level::Critical;
+
+      return std::nullopt;
+    }
+
+    static int levenshtein_distance(const std::string &a, const std::string &b)
+    {
+      const size_t m = a.size();
+      const size_t n = b.size();
+
+      std::vector<int> prev(n + 1), curr(n + 1);
+
+      for (size_t j = 0; j <= n; ++j)
+        prev[j] = j;
+
+      for (size_t i = 1; i <= m; ++i)
+      {
+        curr[0] = i;
+        for (size_t j = 1; j <= n; ++j)
+        {
+          int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+
+          curr[j] = std::min({prev[j] + 1,
+                              curr[j - 1] + 1,
+                              prev[j - 1] + cost});
+        }
+        prev = curr;
+      }
+
+      return prev[n];
+    }
+
+    static std::optional<std::string> find_closest_command(
+        const std::string &input,
+        const std::unordered_map<std::string, vix::cli::dispatch::Entry> &entries)
+    {
+      int bestScore = INT_MAX;
+      std::string best;
+
+      for (const auto &[name, _] : entries)
+      {
+        int d = levenshtein_distance(input, name);
+
+        if (d < bestScore)
+        {
+          bestScore = d;
+          best = name;
+        }
+      }
+
+      if (bestScore <= 3)
+        return best;
 
       return std::nullopt;
     }
@@ -290,8 +345,17 @@ namespace vix
     {
       if (!dispatcher.has(cmd))
       {
-        std::cerr << "vix: unknown command '" << cmd << "'\n\n";
-        return help({});
+        std::cerr << "error: unrecognized subcommand\n\n";
+
+        auto suggestion = find_closest_command(cmd, dispatcher.entries());
+
+        if (suggestion.has_value())
+        {
+          std::cerr << "  tip: a similar command exists: '"
+                    << suggestion.value() << "'\n";
+        }
+
+        return 1;
       }
       return dispatcher.help(cmd);
     }
@@ -307,8 +371,16 @@ namespace vix
 
     if (!dispatcher.has(cmd))
     {
-      std::cerr << "vix: unknown command '" << cmd << "'\n\n";
-      help({});
+      std::cerr << "error: unrecognized subcommand\n\n";
+
+      auto suggestion = find_closest_command(cmd, dispatcher.entries());
+
+      if (suggestion.has_value())
+      {
+        std::cerr << "  tip: a similar command exists: '"
+                  << suggestion.value() << "'\n";
+      }
+
       return 1;
     }
 

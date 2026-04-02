@@ -613,10 +613,18 @@ namespace vix::commands
 
       const json versions = entry.at("versions");
       if (!versions.contains(spec.resolvedVersion))
+      {
         throw std::runtime_error(
             "version not found: " + spec.id() + "@" + spec.resolvedVersion);
+      }
 
       const json v = versions.at(spec.resolvedVersion);
+
+      if (!v.contains("tag") || !v["tag"].is_string())
+        throw std::runtime_error("invalid registry entry: missing version tag for " + spec.id());
+
+      if (!v.contains("commit") || !v["commit"].is_string())
+        throw std::runtime_error("invalid registry entry: missing version commit for " + spec.id());
 
       DepResolved dep;
       dep.id = spec.id();
@@ -638,12 +646,18 @@ namespace vix::commands
       }
 
       json root = read_json_or_throw(global_manifest_path());
+
+      if (!root.is_object())
+      {
+        return json{
+            {"packages", json::array()}};
+      }
+
       if (!root.contains("packages") || !root["packages"].is_array())
         root["packages"] = json::array();
 
       return root;
     }
-
     static void save_global_manifest(const json &root)
     {
       fs::create_directories(global_root_dir());
@@ -983,10 +997,60 @@ namespace vix::commands
       if (ensure_registry_present() != 0)
         return 1;
 
-      std::optional<DepResolved> resolvedOpt;
+      std::unordered_map<std::string, DepResolved> resolvedById;
+      std::queue<std::string> pendingSpecs;
+      pendingSpecs.push(specRaw);
+
       try
       {
-        resolvedOpt = resolve_package_from_registry(specRaw);
+        while (!pendingSpecs.empty())
+        {
+          const std::string currentSpec = pendingSpecs.front();
+          pendingSpecs.pop();
+
+          std::optional<DepResolved> resolvedOpt = resolve_package_from_registry(currentSpec);
+          if (!resolvedOpt)
+          {
+            vix::cli::util::err_line(std::cerr, "invalid package spec or package not found: " + currentSpec);
+            vix::cli::util::warn_line(std::cerr, "Expected: @namespace/name[@version]");
+            vix::cli::util::warn_line(std::cerr, "Example: vix install -g @gk/jwt@1.0.0");
+            return 1;
+          }
+
+          DepResolved dep = *resolvedOpt;
+
+          if (resolvedById.find(dep.id) != resolvedById.end())
+            continue;
+
+          std::string outDir;
+          const int rc = clone_checkout(dep.repo, sanitize_id_dot(dep.id), dep.commit, outDir);
+          if (rc != 0)
+          {
+            vix::cli::util::err_line(std::cerr, "fetch failed: " + dep.id);
+            vix::cli::util::warn_line(std::cerr, "Check git access, network, or registry metadata.");
+            return rc;
+          }
+
+          dep.checkout = fs::path(outDir);
+          dep.hash = vix::cli::util::sha256_directory(dep.checkout).value_or("");
+
+          if (!verify_dependency_hash(dep))
+          {
+            vix::cli::util::warn_line(std::cerr, "The cached checkout appears modified or corrupt.");
+            vix::cli::util::warn_line(std::cerr, "Try: vix store gc");
+            return 1;
+          }
+
+          load_dep_manifest(dep);
+
+          resolvedById[dep.id] = dep;
+
+          for (const auto &childId : dep.dependencies)
+          {
+            if (resolvedById.find(childId) == resolvedById.end())
+              pendingSpecs.push(childId);
+          }
+        }
       }
       catch (const std::exception &ex)
       {
@@ -994,52 +1058,83 @@ namespace vix::commands
         return 1;
       }
 
-      if (!resolvedOpt)
+      std::vector<DepResolved> resolved;
+      resolved.reserve(resolvedById.size());
+
+      for (auto &[_, dep] : resolvedById)
+        resolved.push_back(dep);
+
+      std::vector<DepResolved> ordered;
+      try
       {
-        vix::cli::util::err_line(std::cerr, "invalid package spec or package not found");
-        vix::cli::util::warn_line(std::cerr, "Expected: @namespace/name[@version]");
-        vix::cli::util::warn_line(std::cerr, "Example: vix install -g @gk/jwt@1.0.0");
+        ordered = sort_deps_topologically(resolved);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
         return 1;
       }
-
-      DepResolved dep = *resolvedOpt;
 
       fs::create_directories(global_pkgs_dir());
 
-      const bool checkoutExistedBefore = fs::exists(dep.checkout);
-      if (!checkoutExistedBefore)
-      {
-        vix::cli::util::section(std::cout, "Installing global package");
-        vix::cli::util::one_line_spacer(std::cout);
+      bool printedHeader = false;
+      bool didWork = false;
+      fs::path rootInstalledPath;
 
-        std::string outDir;
-        const int rc = clone_checkout(dep.repo, sanitize_id_dot(dep.id), dep.commit, outDir);
-        if (rc != 0)
+      auto print_header_once = [&]()
+      {
+        if (!printedHeader)
         {
-          vix::cli::util::err_line(std::cerr, "fetch failed: " + dep.id);
-          vix::cli::util::warn_line(std::cerr, "Check git access, network, or registry metadata.");
-          return rc;
+          vix::cli::util::section(std::cout, "Installing global package");
+          vix::cli::util::one_line_spacer(std::cout);
+          printedHeader = true;
+        }
+      };
+
+      for (auto &dep : ordered)
+      {
+        const fs::path dst = global_pkg_dir(dep.id, dep.commit);
+
+        const bool checkoutExistedBefore = fs::exists(dep.checkout);
+        const bool linkExistedBefore = fs::exists(dst);
+
+        try
+        {
+          ensure_symlink_or_copy_dir(dep.checkout, dst);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
+          return 1;
         }
 
-        dep.checkout = fs::path(outDir);
+        dep.linkDir = dst;
+        save_global_install(dep, dst);
+
+        if (!checkoutExistedBefore || !linkExistedBefore)
+        {
+          print_header_once();
+          didWork = true;
+
+          std::cout << "  " << CYAN << "•" << RESET << " "
+                    << CYAN << BOLD << dep.id << RESET
+                    << GRAY << "@" << RESET
+                    << YELLOW << BOLD << dep.version << RESET
+                    << "  "
+                    << GRAY << "installed globally" << RESET
+                    << "\n";
+        }
+
+        if (dep.id == ordered.back().id)
+        {
+          // rien
+        }
       }
 
-      dep.hash = vix::cli::util::sha256_directory(dep.checkout).value_or("");
-      if (!verify_dependency_hash(dep))
-      {
-        vix::cli::util::warn_line(std::cerr, "The cached checkout appears modified or corrupt.");
-        vix::cli::util::warn_line(std::cerr, "Try: vix store gc");
-        return 1;
-      }
-
-      load_dep_manifest(dep);
-
-      const fs::path dst = global_pkg_dir(dep.id, dep.commit);
-      const bool linkExistedBefore = fs::exists(dst);
-
+      std::optional<DepResolved> rootOpt;
       try
       {
-        ensure_symlink_or_copy_dir(dep.checkout, dst);
+        rootOpt = resolve_package_from_registry(specRaw);
       }
       catch (const std::exception &ex)
       {
@@ -1047,34 +1142,28 @@ namespace vix::commands
         return 1;
       }
 
-      dep.linkDir = dst;
-      save_global_install(dep, dst);
-
-      if (!checkoutExistedBefore || !linkExistedBefore)
+      if (!rootOpt)
       {
-        if (checkoutExistedBefore)
-        {
-          vix::cli::util::section(std::cout, "Installing global package");
-          vix::cli::util::one_line_spacer(std::cout);
-        }
-
-        std::cout << "  " << CYAN << "•" << RESET << " "
-                  << CYAN << BOLD << dep.id << RESET
-                  << GRAY << "@" << RESET
-                  << YELLOW << BOLD << dep.version << RESET
-                  << "  "
-                  << GRAY << "installed globally" << RESET
-                  << "\n";
+        vix::cli::util::err_line(std::cerr, "invalid package spec or package not found");
+        return 1;
       }
+
+      const auto rootIt = resolvedById.find(rootOpt->id);
+      if (rootIt != resolvedById.end())
+        rootInstalledPath = global_pkg_dir(rootIt->second.id, rootIt->second.commit);
       else
+        rootInstalledPath = global_pkg_dir(rootOpt->id, rootOpt->commit);
+
+      if (!didWork)
       {
         vix::cli::util::ok_line(std::cout, "Global package already up to date");
       }
 
       vix::cli::util::one_line_spacer(std::cout);
       vix::cli::util::ok_line(std::cout, "Global package ready");
-      vix::cli::util::info(std::cout, "Installed into: " + dst.string());
+      vix::cli::util::info(std::cout, "Installed into: " + rootInstalledPath.string());
       vix::cli::util::info(std::cout, "Manifest updated: " + global_manifest_path().string());
+      vix::cli::util::info(std::cout, std::to_string(ordered.size()) + " package(s) available globally");
 
       return 0;
     }

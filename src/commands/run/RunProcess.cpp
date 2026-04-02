@@ -32,6 +32,12 @@
 #include <sys/wait.h>
 #include <sys/resource.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#include <util.h>
+#else
+#include <pty.h>
+#endif
 #endif
 
 #ifdef _WIN32
@@ -680,9 +686,10 @@ namespace vix::commands::RunCommand::detail
 
     LiveRunResult result;
 
-    int outPipe[2] = {-1, -1};
+    int masterFd = -1;
+    int slaveFd = -1;
 
-    if (::pipe(outPipe) != 0)
+    if (::openpty(&masterFd, &slaveFd, nullptr, nullptr, nullptr) != 0)
     {
       const int st = std::system(cmd.c_str());
       result.rawStatus = st;
@@ -693,8 +700,8 @@ namespace vix::commands::RunCommand::detail
     pid_t pid = ::fork();
     if (pid < 0)
     {
-      close_safe(outPipe[0]);
-      close_safe(outPipe[1]);
+      close_safe(masterFd);
+      close_safe(slaveFd);
 
       const int st = std::system(cmd.c_str());
       result.rawStatus = st;
@@ -710,7 +717,9 @@ namespace vix::commands::RunCommand::detail
       saChild.sa_flags = 0;
       ::sigaction(SIGINT, &saChild, nullptr);
 
-      ::setpgid(0, 0);
+      // Nouvelle session pour détacher le child du terminal parent
+      // et permettre au PTY esclave de jouer le rôle de terminal.
+      ::setsid();
 
       ::setenv("ASAN_OPTIONS",
                "abort_on_error=1:"
@@ -727,12 +736,19 @@ namespace vix::commands::RunCommand::detail
                "halt_on_error=1:print_stacktrace=1:color=never",
                1);
 
-      ::close(outPipe[0]);
+      ::close(masterFd);
 
-      ::dup2(outPipe[1], STDOUT_FILENO);
-      ::dup2(outPipe[1], STDERR_FILENO);
+      ::dup2(slaveFd, STDIN_FILENO);
+      ::dup2(slaveFd, STDOUT_FILENO);
+      ::dup2(slaveFd, STDERR_FILENO);
 
-      ::close(outPipe[1]);
+      if (slaveFd > STDERR_FILENO)
+        ::close(slaveFd);
+
+      // Avec un PTY, beaucoup de programmes passent naturellement
+      // en comportement terminal interactif. On garde quand même ceci.
+      ::setvbuf(stdout, nullptr, _IOLBF, 0);
+      ::setvbuf(stderr, nullptr, _IONBF, 0);
 
       if (::getenv("VIX_MODE") == nullptr)
         ::setenv("VIX_MODE", "run", 1);
@@ -748,7 +764,7 @@ namespace vix::commands::RunCommand::detail
       _exit(127);
     }
 
-    close_safe(outPipe[1]);
+    close_safe(slaveFd);
     ::setpgid(pid, pid);
 
     const bool useSpinner = !spinnerLabel.empty();
@@ -922,7 +938,6 @@ namespace vix::commands::RunCommand::detail
         auto has = [&](std::string_view s) noexcept
         { return line.find(s) != std::string_view::npos; };
 
-        // libstdc++ / libc++ terminate noise
         if (has("terminate called after throwing an instance of"))
           return true;
         if (has("terminating with uncaught exception"))
@@ -931,13 +946,8 @@ namespace vix::commands::RunCommand::detail
           return true;
         if (has("std::terminate"))
           return true;
-
-        // the missing line in your output
-        // libstdc++ prints: "  what():  Weird!"
         if (has("what():"))
           return true;
-
-        // common endings (optional)
         if (has("Aborted (core dumped)"))
           return true;
         if (has("core dumped"))
@@ -952,18 +962,15 @@ namespace vix::commands::RunCommand::detail
       {
         for (char c : s)
         {
-          // ignore line endings
           if (c == '\n' || c == '\r')
             continue;
 
-          // any non-space/tab means it's not whitespace-only
           if (c != ' ' && c != '\t')
             return false;
         }
         return true;
       }
 
-      // Remove noise from what we PRINT, but keep it in result.stdoutText capture.
       std::string filter_for_print(const std::string &chunk)
       {
         std::string data = carry;
@@ -1001,6 +1008,32 @@ namespace vix::commands::RunCommand::detail
 
     SanitizerSuppressor sanitizer;
     UncaughtExceptionSuppressor uncaught;
+
+    auto read_from_pty = [](int fd, std::string &outChunk) -> bool
+    {
+      char buf[4096];
+      const ssize_t n = ::read(fd, buf, sizeof(buf));
+      if (n > 0)
+      {
+        outChunk.assign(buf, static_cast<std::size_t>(n));
+        return true;
+      }
+
+      outChunk.clear();
+
+      // Sur PTY, quand le slave se ferme, read() peut retourner
+      // 0 ou -1 avec errno = EIO. On traite les deux comme EOF.
+      if (n == 0)
+        return false;
+
+      if (n < 0 && errno == EINTR)
+        return true;
+
+      if (n < 0 && errno == EIO)
+        return false;
+
+      return false;
+    };
 
     bool running = true;
     bool printedSomething = false;
@@ -1132,10 +1165,10 @@ namespace vix::commands::RunCommand::detail
       FD_ZERO(&fds);
 
       int maxfd = -1;
-      if (outPipe[0] >= 0)
+      if (masterFd >= 0)
       {
-        FD_SET(outPipe[0], &fds);
-        maxfd = outPipe[0];
+        FD_SET(masterFd, &fds);
+        maxfd = masterFd;
       }
 
       if (maxfd < 0)
@@ -1183,50 +1216,53 @@ namespace vix::commands::RunCommand::detail
           spinnerActive = false;
         }
 
-        if (outPipe[0] >= 0 && FD_ISSET(outPipe[0], &fds))
+        if (masterFd >= 0 && FD_ISSET(masterFd, &fds))
         {
           std::string chunk;
-          if (read_into(outPipe[0], chunk))
+          if (read_from_pty(masterFd, chunk))
           {
-            result.stdoutText += chunk;
-
-            if (!suppress_known_failure_output && is_known_runtime_port_in_use(chunk))
-              suppress_known_failure_output = true;
-
-            if (suppress_known_failure_output)
-              continue;
-
-            if (!should_drop_chunk_default(chunk))
+            if (!chunk.empty())
             {
-              std::string printable = chunk;
+              result.stdoutText += chunk;
 
-              if (cmakeConfigure)
-                printable = cmakeNoise.filter(printable);
+              if (!suppress_known_failure_output && is_known_runtime_port_in_use(chunk))
+                suppress_known_failure_output = true;
 
-              if (!printable.empty())
-                printable = sanitizer.filter_for_print(printable);
+              if (suppress_known_failure_output)
+                continue;
 
-              if (!printable.empty())
-                printable = uncaught.filter_for_print(printable);
-
-              if (!printable.empty())
+              if (!should_drop_chunk_default(chunk))
               {
-                std::string filtered =
-                    passthroughRuntime ? printable : runtimeFilter.process(printable);
+                std::string printable = chunk;
 
-                if (!filtered.empty())
+                if (cmakeConfigure)
+                  printable = cmakeNoise.filter(printable);
+
+                if (!printable.empty())
+                  printable = sanitizer.filter_for_print(printable);
+
+                if (!printable.empty())
+                  printable = uncaught.filter_for_print(printable);
+
+                if (!printable.empty())
                 {
-                  std::string toPrint = drop_vix_error_tip_lines(filtered);
-                  if (!toPrint.empty())
-                    toPrint = drop_sanitizer_abort_banner_lines(toPrint);
+                  std::string filtered =
+                      passthroughRuntime ? printable : runtimeFilter.process(printable);
 
-                  if (!toPrint.empty() && !captureOnly)
+                  if (!filtered.empty())
                   {
-                    write_all(STDOUT_FILENO, toPrint.data(), toPrint.size());
-                    printedSomething = true;
-                    printedRealOutput = true;
-                    result.printed_live = true;
-                    lastPrintedChar = toPrint.back();
+                    std::string toPrint = drop_vix_error_tip_lines(filtered);
+                    if (!toPrint.empty())
+                      toPrint = drop_sanitizer_abort_banner_lines(toPrint);
+
+                    if (!toPrint.empty() && !captureOnly)
+                    {
+                      write_all(STDOUT_FILENO, toPrint.data(), toPrint.size());
+                      printedSomething = true;
+                      printedRealOutput = true;
+                      result.printed_live = true;
+                      lastPrintedChar = toPrint.back();
+                    }
                   }
                 }
               }
@@ -1234,7 +1270,7 @@ namespace vix::commands::RunCommand::detail
           }
           else
           {
-            close_safe(outPipe[0]);
+            close_safe(masterFd);
           }
         }
       }
@@ -1252,7 +1288,7 @@ namespace vix::commands::RunCommand::detail
     if (spinnerActive && !captureOnly)
       spinner_clear(printedSomething, lastPrintedChar);
 
-    close_safe(outPipe[0]);
+    close_safe(masterFd);
 
     if (!haveStatus)
     {
@@ -1277,7 +1313,6 @@ namespace vix::commands::RunCommand::detail
       const int sig = WTERMSIG(finalStatus);
       result.terminatedBySignal = true;
       result.termSignal = sig;
-
       result.exitCode = 128 + sig;
     }
     else

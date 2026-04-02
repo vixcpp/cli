@@ -41,6 +41,7 @@
 #include <vix/cli/commands/OutdatedCommand.hpp>
 #include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/commands/CompletionCommand.hpp>
 
 #include <stdexcept>
 
@@ -61,6 +62,14 @@ namespace vix::cli::dispatch
          { return vix::commands::NewCommand::run(a); },
          []()
          { return vix::commands::NewCommand::help(); }});
+
+    add({"completion",
+         "Info",
+         "Generate shell completion script",
+         [](const Args &a)
+         { return vix::commands::CompletionCommand::run(a); },
+         []()
+         { return vix::commands::CompletionCommand::help(); }});
 
     add({"build",
          "Project",

@@ -42,6 +42,7 @@
 #include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/cli/commands/OutdatedCommand.hpp>
 #include <vix/cli/commands/MakeCommand.hpp>
+#include <vix/cli/commands/CompletionCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -345,14 +346,17 @@ namespace vix
     {
       if (!dispatcher.has(cmd))
       {
-        std::cerr << "error: unrecognized subcommand\n\n";
+        vix::cli::util::err_line(
+            std::cerr,
+            "unrecognized subcommand " + vix::cli::util::quote(cmd));
 
         auto suggestion = find_closest_command(cmd, dispatcher.entries());
 
         if (suggestion.has_value())
         {
-          std::cerr << "  tip: a similar command exists: '"
-                    << suggestion.value() << "'\n";
+          vix::cli::util::tip_line(
+              std::cerr,
+              "A similar command exists: " + vix::cli::util::quote(suggestion.value()));
         }
 
         return 1;
@@ -371,14 +375,17 @@ namespace vix
 
     if (!dispatcher.has(cmd))
     {
-      std::cerr << "error: unrecognized subcommand\n\n";
+      vix::cli::util::err_line(
+          std::cerr,
+          "unrecognized subcommand " + vix::cli::util::quote(cmd));
 
       auto suggestion = find_closest_command(cmd, dispatcher.entries());
 
       if (suggestion.has_value())
       {
-        std::cerr << "  tip: a similar command exists: '"
-                  << suggestion.value() << "'\n";
+        vix::cli::util::tip_line(
+            std::cerr,
+            "A similar command exists: " + vix::cli::util::quote(suggestion.value()));
       }
 
       return 1;
@@ -444,6 +451,8 @@ namespace vix
         return commands::StoreCommand::help();
       if (cmd == "publish")
         return commands::PublishCommand::help();
+      if (cmd == "completion")
+        return commands::CompletionCommand::help();
       if (cmd == "deps")
       {
         vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
@@ -552,6 +561,7 @@ namespace vix
     // Help
     out << indent(2) << "Help:\n";
     out << indent(3) << "help [command]    Show command help\n";
+    out << indent(3) << "completion        Generate shell completion script\n";
     out << indent(3) << "version           Show version\n\n";
 
     out << indent(1) << "Global options:\n";

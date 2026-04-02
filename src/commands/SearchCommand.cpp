@@ -96,6 +96,7 @@ namespace vix::commands
     {
       if (!entry.contains("keywords") || !entry["keywords"].is_array())
         return {};
+
       std::string out;
       for (const auto &k : entry["keywords"])
       {
@@ -135,6 +136,102 @@ namespace vix::commands
       int score{};
     };
 
+    struct SearchOptions
+    {
+      std::string query;
+      std::size_t page = 1;
+      std::size_t limit = 5;
+    };
+
+    bool parse_positive_size(const std::string &s, std::size_t &out)
+    {
+      if (s.empty())
+        return false;
+
+      std::size_t value = 0;
+      for (char c : s)
+      {
+        if (c < '0' || c > '9')
+          return false;
+
+        value = (value * 10u) + static_cast<std::size_t>(c - '0');
+      }
+
+      if (value == 0)
+        return false;
+
+      out = value;
+      return true;
+    }
+
+    bool parse_search_args(const std::vector<std::string> &args, SearchOptions &opt)
+    {
+      bool querySet = false;
+
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        const std::string &arg = args[i];
+
+        if (arg == "--page")
+        {
+          if (i + 1 >= args.size())
+            return false;
+
+          std::size_t page = 0;
+          if (!parse_positive_size(args[++i], page))
+            return false;
+
+          opt.page = page;
+          continue;
+        }
+
+        if (arg == "--limit")
+        {
+          if (i + 1 >= args.size())
+            return false;
+
+          std::size_t limit = 0;
+          if (!parse_positive_size(args[++i], limit))
+            return false;
+
+          opt.limit = std::clamp<std::size_t>(limit, 1, 100);
+          continue;
+        }
+
+        if (arg.rfind("--page=", 0) == 0)
+        {
+          std::size_t page = 0;
+          if (!parse_positive_size(arg.substr(7), page))
+            return false;
+
+          opt.page = page;
+          continue;
+        }
+
+        if (arg.rfind("--limit=", 0) == 0)
+        {
+          std::size_t limit = 0;
+          if (!parse_positive_size(arg.substr(8), limit))
+            return false;
+
+          opt.limit = std::clamp<std::size_t>(limit, 1, 100);
+          continue;
+        }
+
+        if (!querySet)
+        {
+          opt.query = arg;
+          querySet = true;
+          continue;
+        }
+
+        opt.query += " ";
+        opt.query += arg;
+      }
+
+      return !opt.query.empty();
+    }
+
     int score_entry(const json &e, const std::string &qLower)
     {
       const std::string ns = e.value("namespace", "");
@@ -173,8 +270,18 @@ namespace vix::commands
     if (args.empty())
       return help();
 
-    const std::string query = args[0];
-    vix::cli::util::kv(std::cout, "query", vix::cli::util::quote(query));
+    SearchOptions options;
+    if (!parse_search_args(args, options))
+    {
+      error("invalid search arguments");
+      hint("Usage: vix search <query> [--page N] [--limit N]");
+      hint("Example: vix search json --page 2 --limit 5");
+      return 1;
+    }
+
+    vix::cli::util::kv(std::cout, "query", vix::cli::util::quote(options.query));
+    vix::cli::util::kv(std::cout, "page", std::to_string(options.page));
+    vix::cli::util::kv(std::cout, "limit", std::to_string(options.limit));
 
     const fs::path repoDir = registry_repo_dir();
     const fs::path idxDir = registry_index_dir();
@@ -187,7 +294,7 @@ namespace vix::commands
     }
 
     std::vector<Hit> hits;
-    const std::string qLower = to_lower(query);
+    const std::string qLower = to_lower(options.query);
 
     for (const auto &it : fs::directory_iterator(idxDir))
     {
@@ -231,28 +338,58 @@ namespace vix::commands
 
     if (hits.empty())
     {
-      error(std::string("no results for ") + vix::cli::util::quote(query));
+      error(std::string("no results for ") + vix::cli::util::quote(options.query));
       hint("Tip: search by namespace, name, description, or keywords");
       hint("Example: vix search gaspardkirira");
       return 0;
     }
 
+    const std::size_t total = hits.size();
+    const std::size_t totalPages =
+        (total + options.limit - 1) / options.limit;
+
+    if (options.page > totalPages)
+    {
+      error("page out of range");
+      hint("Total pages: " + std::to_string(totalPages));
+      return 1;
+    }
+
+    const std::size_t start = (options.page - 1) * options.limit;
+    const std::size_t end = std::min(start + options.limit, total);
+
     vix::cli::util::one_line_spacer(std::cout);
 
-    const std::size_t limit = 20;
-    const std::size_t n = std::min<std::size_t>(hits.size(), limit);
-
-    for (std::size_t i = 0; i < n; ++i)
+    for (std::size_t i = start; i < end; ++i)
     {
       const auto &h = hits[i];
       vix::cli::util::pkg_line(std::cout, h.id, h.latest, h.desc, h.repo);
       std::cout << "\n";
     }
 
-    if (hits.size() > limit)
-      vix::cli::util::ok_line(std::cout, "Showing " + std::to_string(limit) + " of " + std::to_string(hits.size()) + " result(s).");
-    else
-      vix::cli::util::ok_line(std::cout, "Found " + std::to_string(hits.size()) + " result(s).");
+    vix::cli::util::ok_line(
+        std::cout,
+        "Showing " + std::to_string(start + 1) +
+            "-" + std::to_string(end) +
+            " of " + std::to_string(total) +
+            " result(s).");
+
+    if (totalPages > 1)
+    {
+      std::cout << "  " << GRAY
+                << "Page " << options.page << "/" << totalPages
+                << RESET << "\n";
+
+      if (options.page < totalPages)
+      {
+        std::cout << "  " << GRAY
+                  << "Next: vix search "
+                  << vix::cli::util::quote(options.query)
+                  << " --page " << (options.page + 1)
+                  << " --limit " << options.limit
+                  << RESET << "\n";
+      }
+    }
 
     return 0;
   }
@@ -261,13 +398,14 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix search <query>\n\n"
+        << "  vix search <query> [--page N] [--limit N]\n\n"
         << "Description:\n"
         << "  Search packages in the local registry index (offline).\n\n"
         << "Examples:\n"
         << "  vix registry sync\n"
         << "  vix search tree\n"
-        << "  vix search gaspardkirira\n";
+        << "  vix search json --page 2\n"
+        << "  vix search gaspardkirira --limit 50\n";
     return 0;
   }
 }

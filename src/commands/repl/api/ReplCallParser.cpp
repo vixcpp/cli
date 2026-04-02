@@ -1,6 +1,6 @@
 /**
  *
- *  @file RelpCallParser.cpp
+ *  @file ReplCallParser.cpp
  *  @author Gaspard Kirira
  *
  *  Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -15,8 +15,11 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace vix::cli::repl::api
@@ -32,7 +35,8 @@ namespace vix::cli::repl::api
       RParen,
       Comma,
       Dot,
-      End
+      End,
+      Invalid
     };
 
     struct Tok
@@ -41,6 +45,31 @@ namespace vix::cli::repl::api
       std::string text;
     };
 
+    static bool is_ident_start(char c)
+    {
+      const unsigned char u = static_cast<unsigned char>(c);
+      return std::isalpha(u) || c == '_';
+    }
+
+    static bool is_ident_char(char c)
+    {
+      const unsigned char u = static_cast<unsigned char>(c);
+      return std::isalnum(u) || c == '_';
+    }
+
+    static std::string trim_copy(std::string_view sv)
+    {
+      size_t b = 0;
+      while (b < sv.size() && std::isspace(static_cast<unsigned char>(sv[b])))
+        ++b;
+
+      size_t e = sv.size();
+      while (e > b && std::isspace(static_cast<unsigned char>(sv[e - 1])))
+        --e;
+
+      return std::string(sv.substr(b, e - b));
+    }
+
     struct Lexer
     {
       std::string_view s;
@@ -48,24 +77,16 @@ namespace vix::cli::repl::api
 
       explicit Lexer(std::string_view in) : s(in) {}
 
-      static bool is_ident_start(char c)
-      {
-        return std::isalpha((unsigned char)c) || c == '_';
-      }
-      static bool is_ident_char(char c)
-      {
-        return std::isalnum((unsigned char)c) || c == '_';
-      }
-
       void skip_ws()
       {
-        while (i < s.size() && std::isspace((unsigned char)s[i]))
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])))
           ++i;
       }
 
       Tok next()
       {
         skip_ws();
+
         if (i >= s.size())
           return {TokType::End, ""};
 
@@ -76,16 +97,19 @@ namespace vix::cli::repl::api
           ++i;
           return {TokType::LParen, "("};
         }
+
         if (c == ')')
         {
           ++i;
           return {TokType::RParen, ")"};
         }
+
         if (c == ',')
         {
           ++i;
           return {TokType::Comma, ","};
         }
+
         if (c == '.')
         {
           ++i;
@@ -97,15 +121,27 @@ namespace vix::cli::repl::api
         {
           const char quote = c;
           ++i;
+
           std::string out;
+          bool closed = false;
+
           while (i < s.size())
           {
             char ch = s[i++];
+
             if (ch == quote)
-              break;
-            if (ch == '\\' && i < s.size())
             {
-              char esc = s[i++];
+              closed = true;
+              break;
+            }
+
+            if (ch == '\\')
+            {
+              if (i >= s.size())
+                return {TokType::Invalid, "unterminated escape sequence"};
+
+              const char esc = s[i++];
+
               switch (esc)
               {
               case 'n':
@@ -126,172 +162,126 @@ namespace vix::cli::repl::api
               case '\'':
                 out.push_back('\'');
                 break;
+              case '0':
+                out.push_back('\0');
+                break;
               default:
                 out.push_back(esc);
                 break;
               }
+
               continue;
             }
+
             out.push_back(ch);
           }
+
+          if (!closed)
+            return {TokType::Invalid, "unterminated string literal"};
+
           return {TokType::String, out};
         }
 
-        // number
-        if (std::isdigit((unsigned char)c) || c == '.')
+        // number: optional leading sign, then digits, optional single dot
+        if (std::isdigit(static_cast<unsigned char>(c)) ||
+            ((c == '+' || c == '-') && (i + 1) < s.size() &&
+             (std::isdigit(static_cast<unsigned char>(s[i + 1])) || s[i + 1] == '.')) ||
+            (c == '.' && (i + 1) < s.size() && std::isdigit(static_cast<unsigned char>(s[i + 1]))))
         {
-          size_t start = i;
-          bool dot = (c == '.');
-          ++i;
+          const size_t start = i;
+
+          if (s[i] == '+' || s[i] == '-')
+            ++i;
+
+          bool hasDot = false;
+          bool hasDigit = false;
+
           while (i < s.size())
           {
-            char ch = s[i];
-            if (std::isdigit((unsigned char)ch))
+            const char ch = s[i];
+
+            if (std::isdigit(static_cast<unsigned char>(ch)))
             {
+              hasDigit = true;
               ++i;
               continue;
             }
-            if (ch == '.' && !dot)
+
+            if (ch == '.' && !hasDot)
             {
-              dot = true;
+              hasDot = true;
               ++i;
               continue;
             }
+
             break;
           }
+
+          if (!hasDigit)
+            return {TokType::Invalid, "invalid number"};
+
           return {TokType::Number, std::string(s.substr(start, i - start))};
         }
 
         // identifier
         if (is_ident_start(c))
         {
-          size_t start = i++;
+          const size_t start = i++;
           while (i < s.size() && is_ident_char(s[i]))
             ++i;
+
           return {TokType::Ident, std::string(s.substr(start, i - start))};
         }
 
-        // unknown char
         ++i;
-        return {TokType::End, ""};
+        return {TokType::Invalid, std::string("unexpected character: '") + c + "'"};
       }
     };
 
-    static inline std::string trim_copy(std::string_view sv)
+    static bool parse_int_strict(const std::string &s, long long &out)
     {
-      size_t b = 0;
-      while (b < sv.size() && std::isspace((unsigned char)sv[b]))
-        ++b;
-
-      size_t e = sv.size();
-      while (e > b && std::isspace((unsigned char)sv[e - 1]))
-        --e;
-
-      return std::string(sv.substr(b, e - b));
+      try
+      {
+        size_t idx = 0;
+        const long long v = std::stoll(s, &idx, 10);
+        if (idx != s.size())
+          return false;
+        out = v;
+        return true;
+      }
+      catch (...)
+      {
+        return false;
+      }
     }
 
-    // Read a raw argument slice from the ORIGINAL INPUT, until ',' or ')'
-    // while respecting:
-    //  - quotes ( "..." or '...' ) with escapes
-    //  - nested parentheses: ( ... ) inside the arg
-    // This lets us support print(1+2), println(3*(2+1)), etc.
-    static bool read_raw_arg_slice(std::string_view input, size_t &pos, std::string &out, std::string &err)
+    static bool parse_double_strict(const std::string &s, double &out)
     {
-      // pos is currently at the beginning of the arg (may have whitespace)
-      const auto n = input.size();
-
-      auto skip_ws = [&]()
+      try
       {
-        while (pos < n && std::isspace((unsigned char)input[pos]))
-          ++pos;
-      };
-
-      skip_ws();
-      if (pos >= n)
+        size_t idx = 0;
+        const double v = std::stod(s, &idx);
+        if (idx != s.size())
+          return false;
+        out = v;
+        return true;
+      }
+      catch (...)
       {
-        err = "expected value";
         return false;
       }
-
-      size_t start = pos;
-
-      int parenDepth = 0;
-      bool inQuote = false;
-      char quote = 0;
-
-      while (pos < n)
-      {
-        char c = input[pos];
-
-        if (inQuote)
-        {
-          // handle escapes inside quotes
-          if (c == '\\' && (pos + 1) < n)
-          {
-            pos += 2;
-            continue;
-          }
-          if (c == quote)
-          {
-            inQuote = false;
-            ++pos;
-            continue;
-          }
-          ++pos;
-          continue;
-        }
-
-        // entering quote
-        if (c == '"' || c == '\'')
-        {
-          inQuote = true;
-          quote = c;
-          ++pos;
-          continue;
-        }
-
-        // nested parentheses inside arg
-        if (c == '(')
-        {
-          ++parenDepth;
-          ++pos;
-          continue;
-        }
-        if (c == ')')
-        {
-          if (parenDepth == 0)
-            break; // end of arg list, do not consume ')'
-          --parenDepth;
-          ++pos;
-          continue;
-        }
-
-        // arg separator only if not nested
-        if (c == ',' && parenDepth == 0)
-          break;
-
-        ++pos;
-      }
-
-      size_t end = pos;
-      out = trim_copy(input.substr(start, end - start));
-
-      if (out.empty())
-      {
-        err = "expected value";
-        return false;
-      }
-
-      return true;
     }
 
     static CallValue make_literal_from_ident(const std::string &ident, bool *ok)
     {
       *ok = true;
+
       if (ident == "true")
         return {true};
+
       if (ident == "false")
         return {false};
+
       if (ident == "null")
         return {std::monostate{}};
 
@@ -301,6 +291,12 @@ namespace vix::cli::repl::api
 
     static bool parse_value(Lexer &lx, Tok &cur, CallValue &out, std::string &err)
     {
+      if (cur.type == TokType::Invalid)
+      {
+        err = cur.text.empty() ? "invalid token" : cur.text;
+        return false;
+      }
+
       if (cur.type == TokType::String)
       {
         out.v = cur.text;
@@ -311,19 +307,29 @@ namespace vix::cli::repl::api
       if (cur.type == TokType::Number)
       {
         const std::string &t = cur.text;
-        bool hasDot = (t.find('.') != std::string::npos);
-        try
+        const bool hasDot = (t.find('.') != std::string::npos);
+
+        if (hasDot)
         {
-          if (hasDot)
-            out.v = std::stod(t);
-          else
-            out.v = (long long)std::stoll(t);
+          double v = 0.0;
+          if (!parse_double_strict(t, v))
+          {
+            err = "invalid number";
+            return false;
+          }
+          out.v = v;
         }
-        catch (...)
+        else
         {
-          err = "invalid number";
-          return false;
+          long long v = 0;
+          if (!parse_int_strict(t, v))
+          {
+            err = "invalid integer";
+            return false;
+          }
+          out.v = v;
         }
+
         cur = lx.next();
         return true;
       }
@@ -334,32 +340,325 @@ namespace vix::cli::repl::api
         CallValue lit = make_literal_from_ident(cur.text, &ok);
         if (!ok)
         {
-          err = "unexpected identifier '" + cur.text + "' (only true/false/null allowed as bare identifiers)";
+          err = "unexpected identifier '" + cur.text + "'";
           return false;
         }
-        out = lit;
+
+        out = std::move(lit);
         cur = lx.next();
         return true;
       }
 
-      err = "expected value (string/number/true/false/null)";
+      err = "expected value";
       return false;
     }
 
-  } // namespace
+    static bool read_raw_arg_slice(
+        std::string_view input,
+        size_t &pos,
+        std::string &out,
+        std::string &err)
+    {
+      const size_t n = input.size();
+
+      auto skip_ws = [&]()
+      {
+        while (pos < n && std::isspace(static_cast<unsigned char>(input[pos])))
+          ++pos;
+      };
+
+      skip_ws();
+
+      if (pos >= n)
+      {
+        err = "expected value";
+        return false;
+      }
+
+      const size_t start = pos;
+
+      int parenDepth = 0;
+      bool inQuote = false;
+      char quote = 0;
+
+      while (pos < n)
+      {
+        const char c = input[pos];
+
+        if (inQuote)
+        {
+          if (c == '\\')
+          {
+            if ((pos + 1) < n)
+            {
+              pos += 2;
+              continue;
+            }
+
+            err = "unterminated escape sequence";
+            return false;
+          }
+
+          if (c == quote)
+          {
+            inQuote = false;
+            ++pos;
+            continue;
+          }
+
+          ++pos;
+          continue;
+        }
+
+        if (c == '"' || c == '\'')
+        {
+          inQuote = true;
+          quote = c;
+          ++pos;
+          continue;
+        }
+
+        if (c == '(')
+        {
+          ++parenDepth;
+          ++pos;
+          continue;
+        }
+
+        if (c == ')')
+        {
+          if (parenDepth == 0)
+            break;
+
+          --parenDepth;
+          ++pos;
+          continue;
+        }
+
+        if (c == ',' && parenDepth == 0)
+          break;
+
+        ++pos;
+      }
+
+      if (inQuote)
+      {
+        err = "unterminated string literal";
+        return false;
+      }
+
+      if (parenDepth != 0)
+      {
+        err = "unbalanced parentheses in argument";
+        return false;
+      }
+
+      out = trim_copy(input.substr(start, pos - start));
+
+      if (out.empty())
+      {
+        err = "expected value";
+        return false;
+      }
+
+      return true;
+    }
+
+    static std::optional<std::pair<std::string, std::string>> split_typed_call(std::string_view raw)
+    {
+      raw = std::string_view(raw.data(), raw.size());
+      raw = std::string_view(trim_copy(raw));
+
+      if (raw.empty() || raw.back() != ')')
+        return std::nullopt;
+
+      const size_t lp = raw.find('(');
+      if (lp == std::string_view::npos || lp == 0)
+        return std::nullopt;
+
+      const std::string type = trim_copy(raw.substr(0, lp));
+      const std::string inner = trim_copy(raw.substr(lp + 1, raw.size() - lp - 2));
+
+      if (type.empty() || inner.empty())
+        return std::nullopt;
+
+      return std::make_pair(type, inner);
+    }
+
+    static bool parse_cpp_typed_literal(const std::string &raw, CallValue &out, std::string &err)
+    {
+      const auto typed = split_typed_call(raw);
+      if (!typed)
+        return false;
+
+      const std::string &type = typed->first;
+      const std::string &inner = typed->second;
+
+      auto parse_inner_as_value = [&](CallValue &dst) -> bool
+      {
+        Lexer innerLx(inner);
+        Tok innerCur = innerLx.next();
+
+        if (!parse_value(innerLx, innerCur, dst, err))
+          return false;
+
+        if (innerCur.type != TokType::End)
+        {
+          err = "invalid typed literal";
+          return false;
+        }
+
+        return true;
+      };
+
+      if (type == "int" || type == "long" || type == "long long")
+      {
+        CallValue tmp;
+        if (!parse_inner_as_value(tmp))
+          return false;
+
+        if (tmp.is_int())
+        {
+          out.v = tmp.as_int();
+          return true;
+        }
+
+        if (tmp.is_double())
+        {
+          const double d = tmp.as_double();
+          if (d < static_cast<double>(std::numeric_limits<long long>::min()) ||
+              d > static_cast<double>(std::numeric_limits<long long>::max()))
+          {
+            err = type + " out of range";
+            return false;
+          }
+
+          out.v = static_cast<long long>(d);
+          return true;
+        }
+
+        err = type + " expects a numeric value";
+        return false;
+      }
+
+      if (type == "double" || type == "float")
+      {
+        CallValue tmp;
+        if (!parse_inner_as_value(tmp))
+          return false;
+
+        if (tmp.is_double())
+        {
+          out.v = tmp.as_double();
+          return true;
+        }
+
+        if (tmp.is_int())
+        {
+          out.v = static_cast<double>(tmp.as_int());
+          return true;
+        }
+
+        err = type + " expects a numeric value";
+        return false;
+      }
+
+      if (type == "bool")
+      {
+        CallValue tmp;
+        if (!parse_inner_as_value(tmp))
+          return false;
+
+        if (!tmp.is_bool())
+        {
+          err = "bool expects true or false";
+          return false;
+        }
+
+        out.v = tmp.as_bool();
+        return true;
+      }
+
+      if (type == "string" || type == "std::string")
+      {
+        CallValue tmp;
+        if (!parse_inner_as_value(tmp))
+          return false;
+
+        if (!tmp.is_string())
+        {
+          err = type + " expects a string literal";
+          return false;
+        }
+
+        out.v = tmp.as_string();
+        return true;
+      }
+
+      return false;
+    }
+
+    static bool parse_single_arg_value_from_raw(const std::string &raw, CallValue &out, std::string &err)
+    {
+      Lexer lx(raw);
+      Tok cur = lx.next();
+
+      std::string firstErr;
+      if (parse_value(lx, cur, out, firstErr) && cur.type == TokType::End)
+        return true;
+
+      std::string typedErr;
+      if (parse_cpp_typed_literal(raw, out, typedErr))
+        return true;
+
+      if (!typedErr.empty())
+        err = typedErr;
+      else if (!firstErr.empty())
+        err = firstErr;
+      else
+        err = "invalid value";
+
+      return false;
+    }
+
+    static bool validate_no_trailing_tokens(Lexer &lx, Tok &cur, std::string &err)
+    {
+      if (cur.type == TokType::Invalid)
+      {
+        err = cur.text.empty() ? "invalid token" : cur.text;
+        return false;
+      }
+
+      while (cur.type != TokType::End)
+      {
+        if (cur.type == TokType::Invalid)
+        {
+          err = cur.text.empty() ? "invalid token" : cur.text;
+          return false;
+        }
+
+        err = "unexpected trailing input";
+        return false;
+      }
+
+      return true;
+    }
+  }
 
   bool looks_like_call(std::string_view input)
   {
-    size_t lp = input.find('(');
-    size_t rp = input.rfind(')');
+    const size_t lp = input.find('(');
+    const size_t rp = input.rfind(')');
+
     if (lp == std::string_view::npos || rp == std::string_view::npos || rp < lp)
       return false;
 
     for (size_t i = 0; i < lp; ++i)
     {
-      if (!std::isspace((unsigned char)input[i]))
+      if (!std::isspace(static_cast<unsigned char>(input[i])))
         return true;
     }
+
     return false;
   }
 
@@ -369,6 +668,14 @@ namespace vix::cli::repl::api
     Lexer lx(input);
 
     Tok cur = lx.next();
+
+    if (cur.type == TokType::Invalid)
+    {
+      res.ok = false;
+      res.error = cur.text.empty() ? "invalid token" : cur.text;
+      return res;
+    }
+
     if (cur.type != TokType::Ident)
     {
       res.ok = false;
@@ -376,19 +683,20 @@ namespace vix::cli::repl::api
       return res;
     }
 
-    std::string first = cur.text;
+    const std::string first = cur.text;
     cur = lx.next();
 
-    // Optional: Obj.member(...)
     if (cur.type == TokType::Dot)
     {
       cur = lx.next();
+
       if (cur.type != TokType::Ident)
       {
         res.ok = false;
         res.error = "expected member name after '.'";
         return res;
       }
+
       res.expr.object = first;
       res.expr.member = cur.text;
       cur = lx.next();
@@ -405,34 +713,35 @@ namespace vix::cli::repl::api
       return res;
     }
 
-    // Find the '(' in the original input starting from where we are.
-    // We’ll set rawPos right after '(' and then read slices until ')' / ','.
-    size_t lp = input.find('(');
+    const size_t lp = input.find('(');
     if (lp == std::string_view::npos)
     {
       res.ok = false;
       res.error = "expected '('";
       return res;
     }
-    size_t rawPos = lp + 1;
 
+    size_t rawPos = lp + 1;
     cur = lx.next();
 
-    // Handle empty args: f()
     if (cur.type == TokType::RParen)
     {
       cur = lx.next();
+
+      if (!validate_no_trailing_tokens(lx, cur, res.error))
+      {
+        res.ok = false;
+        return res;
+      }
+
       res.ok = true;
       return res;
     }
 
-    // Parse args in a loop, but we will read raw slices ourselves.
     while (true)
     {
-      // 1) read raw slice for this argument
       std::string raw;
       std::string rawErr;
-      size_t savedPos = rawPos;
 
       if (!read_raw_arg_slice(input, rawPos, raw, rawErr))
       {
@@ -441,34 +750,18 @@ namespace vix::cli::repl::api
         return res;
       }
 
-      // 2) Try parse_value from tokens.
-      // For expressions like "1+2", parse_value will fail because cur sees Number then next token is End.
-      // We'll accept that and store a placeholder. invoke_call will evaluate using args_raw.
-      CallValue v;
+      CallValue value;
       std::string parseErr;
-      size_t before = lx.i;
-      Tok savedTok = cur;
 
-      bool ok = parse_value(lx, cur, v, parseErr);
-
-      // If parse_value failed, restore lexer/token state and use null placeholder.
-      if (!ok)
+      if (!parse_single_arg_value_from_raw(raw, value, parseErr))
       {
-        lx.i = before;
-        cur = savedTok;
-        v.v = std::monostate{};
-        lx.i = savedPos; // reset to start of raw to rescan
-        // Move lexer cursor forward to current rawPos
-        lx.i = rawPos;
-        cur = lx.next(); // re-sync
+        value.v = std::monostate{};
       }
 
-      res.expr.args.push_back(std::move(v));
-      res.expr.args_raw.push_back(raw);
+      res.expr.args.push_back(std::move(value));
+      res.expr.args_raw.push_back(std::move(raw));
 
-      // 3) Now rawPos is at ',' or ')' or end.
-      // Skip whitespace
-      while (rawPos < input.size() && std::isspace((unsigned char)input[rawPos]))
+      while (rawPos < input.size() && std::isspace(static_cast<unsigned char>(input[rawPos])))
         ++rawPos;
 
       if (rawPos >= input.size())
@@ -480,28 +773,33 @@ namespace vix::cli::repl::api
 
       if (input[rawPos] == ',')
       {
-        ++rawPos; // consume ','
-        // Advance token stream if needed
-        if (cur.type == TokType::Comma)
-          cur = lx.next();
-        else
-          cur = lx.next();
+        ++rawPos;
         continue;
       }
 
       if (input[rawPos] == ')')
       {
-        ++rawPos; // consume ')'
-        // Advance token stream if needed
-        if (cur.type == TokType::RParen)
-          cur = lx.next();
-        res.ok = true;
-        return res;
+        ++rawPos;
+        break;
       }
 
       res.ok = false;
       res.error = "expected ',' or ')'";
       return res;
     }
+
+    Lexer tailLx(input.substr(rawPos));
+    Tok tail = tailLx.next();
+    if (tail.type != TokType::End)
+    {
+      res.ok = false;
+      res.error = (tail.type == TokType::Invalid && !tail.text.empty())
+                      ? tail.text
+                      : "unexpected trailing input after call";
+      return res;
+    }
+
+    res.ok = true;
+    return res;
   }
 }

@@ -643,7 +643,7 @@ namespace vix::commands::RunCommand::detail
 
     auto rr = run_cmd_live_filtered_capture(
         cmdRun,
-        runLabel,
+        "",
         /*passthroughRuntime=*/isPlainScript,
         /*timeoutSec=*/effective_timeout_sec(opt));
 

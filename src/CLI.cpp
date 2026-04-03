@@ -43,6 +43,7 @@
 #include <vix/cli/commands/OutdatedCommand.hpp>
 #include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/commands/CompletionCommand.hpp>
+#include <vix/cli/commands/InfoCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -214,6 +215,8 @@ namespace vix
     { return commands::ReplCommand::run(args); };
     commands_["cache"] = [](auto args)
     { return commands::CacheCommand::run(args); };
+    commands_["info"] = [](auto args)
+    { return commands::InfoCommand::run(args); };
 
     commands_["-h"] = [this](auto args)
     { return help(args); };
@@ -467,6 +470,8 @@ namespace vix
         return commands::ModulesCommand::help();
       if (cmd == "p2p")
         return commands::P2PCommand::help();
+      if (cmd == "info")
+        return commands::InfoCommand::help();
       if (cmd == "upgrade")
         return commands::UpgradeCommand::help();
       if (cmd == "doctor")
@@ -554,6 +559,7 @@ namespace vix
 
     // System
     out << indent(2) << "System:\n";
+    out << indent(3) << "info              Show Vix paths and cache locations\n";
     out << indent(3) << "doctor            Check environment\n";
     out << indent(3) << "upgrade           Update Vix\n";
     out << indent(3) << "uninstall         Remove Vix\n\n";

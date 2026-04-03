@@ -42,6 +42,7 @@
 #include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/commands/CompletionCommand.hpp>
+#include <vix/cli/commands/InfoCommand.hpp>
 
 #include <stdexcept>
 
@@ -297,6 +298,14 @@ namespace vix::cli::dispatch
          { return vix::commands::UpgradeCommand::run(a); },
          []()
          { return vix::commands::UpgradeCommand::help(); }});
+
+    add({"info",
+         "Info",
+         "Show Vix environment and cache locations",
+         [](const Args &a)
+         { return vix::commands::InfoCommand::run(a); },
+         []()
+         { return vix::commands::InfoCommand::help(); }});
 
     add({"doctor",
          "Info",

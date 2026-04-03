@@ -44,6 +44,10 @@
 #include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/commands/CompletionCommand.hpp>
 #include <vix/cli/commands/InfoCommand.hpp>
+#include <vix/cli/commands/FmtCommand.hpp>
+#include <vix/cli/commands/CleanCommand.hpp>
+#include <vix/cli/commands/ResetCommand.hpp>
+#include <vix/cli/commands/TaskCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -217,6 +221,14 @@ namespace vix
     { return commands::CacheCommand::run(args); };
     commands_["info"] = [](auto args)
     { return commands::InfoCommand::run(args); };
+    commands_["fmt"] = [](auto args)
+    { return commands::FmtCommand::run(args); };
+    commands_["clean"] = [](auto args)
+    { return commands::CleanCommand::run(args); };
+    commands_["reset"] = [](auto args)
+    { return commands::ResetCommand::run(args); };
+    commands_["task"] = [](auto args)
+    { return commands::TaskCommand::run(args); };
 
     commands_["-h"] = [this](auto args)
     { return help(args); };
@@ -456,6 +468,14 @@ namespace vix
         return commands::PublishCommand::help();
       if (cmd == "completion")
         return commands::CompletionCommand::help();
+      if (cmd == "fmt")
+        return commands::FmtCommand::help();
+      if (cmd == "clean")
+        return commands::CleanCommand::help();
+      if (cmd == "reset")
+        return commands::ResetCommand::help();
+      if (cmd == "task")
+        return commands::TaskCommand::help();
       if (cmd == "deps")
       {
         vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
@@ -526,6 +546,10 @@ namespace vix
     out << indent(3) << "build             Build project\n";
     out << indent(3) << "check             Validate build or file\n";
     out << indent(3) << "tests             Run tests\n";
+    out << indent(3) << "fmt               Format source code\n";
+    out << indent(3) << "clean             Remove project cache\n";
+    out << indent(3) << "reset             Clean and reinstall project\n";
+    out << indent(3) << "task              Run reusable project tasks\n";
     out << indent(3) << "repl              Interactive REPL\n\n";
 
     // Dependencies

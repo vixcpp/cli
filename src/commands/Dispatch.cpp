@@ -43,6 +43,10 @@
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/commands/CompletionCommand.hpp>
 #include <vix/cli/commands/InfoCommand.hpp>
+#include <vix/cli/commands/FmtCommand.hpp>
+#include <vix/cli/commands/CleanCommand.hpp>
+#include <vix/cli/commands/ResetCommand.hpp>
+#include <vix/cli/commands/TaskCommand.hpp>
 
 #include <stdexcept>
 
@@ -143,6 +147,38 @@ namespace vix::cli::dispatch
          { return vix::commands::OrmCommand::run(a); },
          []()
          { return vix::commands::OrmCommand::help(); }});
+
+    add({"fmt",
+         "Project",
+         "Format C++ source files",
+         [](const Args &a)
+         { return vix::commands::FmtCommand::run(a); },
+         []()
+         { return vix::commands::FmtCommand::help(); }});
+
+    add({"clean",
+         "Project",
+         "Remove local cache directories",
+         [](const Args &a)
+         { return vix::commands::CleanCommand::run(a); },
+         []()
+         { return vix::commands::CleanCommand::help(); }});
+
+    add({"reset",
+         "Project",
+         "Clean project cache and reinstall dependencies",
+         [](const Args &a)
+         { return vix::commands::ResetCommand::run(a); },
+         []()
+         { return vix::commands::ResetCommand::help(); }});
+
+    add({"task",
+         "Project",
+         "Run reusable project tasks",
+         [](const Args &a)
+         { return vix::commands::TaskCommand::run(a); },
+         []()
+         { return vix::commands::TaskCommand::help(); }});
 
     // Packaging & security
     add({"pack",

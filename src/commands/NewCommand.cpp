@@ -1067,28 +1067,36 @@ int main()
     readme += "```\n\n";
 
     readme += "## Build\n\n";
-    readme += "Configure only:\n\n";
+
+    readme += "Build project:\n\n";
     readme += "```bash\n";
-    readme += "cmake --preset dev-ninja\n";
+    readme += "vix build\n";
     readme += "```\n\n";
 
-    readme += "Build tests:\n\n";
+    readme += "Build with tests enabled:\n\n";
     readme += "```bash\n";
-    readme += "cmake --preset dev-ninja -D" + name + "_BUILD_TESTS=ON\n";
-    readme += "cmake --build build-ninja\n";
-    readme += "ctest --test-dir build-ninja --output-on-failure\n";
+    readme += "vix build -- -D" + name + "_BUILD_TESTS=ON\n";
     readme += "```\n\n";
 
-    readme += "Build examples:\n\n";
+    readme += "Build with examples enabled:\n\n";
     readme += "```bash\n";
-    readme += "cmake --preset dev-ninja -D" + name + "_BUILD_EXAMPLES=ON\n";
-    readme += "cmake --build build-ninja\n";
+    readme += "vix build -- -D" + name + "_BUILD_EXAMPLES=ON\n";
     readme += "```\n\n";
 
-    readme += "## Vix\n\n";
+    readme += "Build tests + examples:\n\n";
+    readme += "```bash\n";
+    readme += "vix build -- -D" + name + "_BUILD_TESTS=ON -D" + name + "_BUILD_EXAMPLES=ON\n";
+    readme += "```\n\n";
+
+    readme += "## Tests\n\n";
     readme += "```bash\n";
     readme += "vix tests\n";
-    readme += "```\n";
+    readme += "```\n\n";
+
+    readme += "## Notes\n\n";
+    readme += "- Uses embedded Vix CMake presets (dev, dev-ninja, release)\n";
+    readme += "- Automatically configures and builds (no manual cmake needed)\n";
+    readme += "- Pass extra CMake flags after `--`\n";
 
     return readme;
   }

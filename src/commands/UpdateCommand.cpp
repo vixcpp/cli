@@ -39,6 +39,8 @@ namespace vix::commands
       bool jsonOutput{false};
       bool installAfter{false};
       std::vector<std::string> rawTargets;
+      bool globalMode{false};
+      std::string globalSpec;
     };
 
     struct PkgSpec
@@ -169,6 +171,14 @@ namespace vix::commands
         else if (arg == "--install")
         {
           opt.installAfter = true;
+        }
+        else if (arg == "-g" || arg == "--global")
+        {
+          opt.globalMode = true;
+        }
+        else if (opt.globalMode && opt.globalSpec.empty())
+        {
+          opt.globalSpec = arg;
         }
         else if (arg == "-h" || arg == "--help")
         {
@@ -324,6 +334,24 @@ namespace vix::commands
         return parseRc;
       }
 
+      // ============================================
+      // GLOBAL UPDATE MODE
+      // ============================================
+      if (opt.globalMode)
+      {
+        if (opt.globalSpec.empty())
+        {
+          vix::cli::util::err_line(std::cerr, "missing package spec");
+          vix::cli::util::warn_line(std::cerr, "Example: vix update -g @gk/jwt");
+          return 1;
+        }
+
+        vix::cli::util::section(std::cout, "Update global package");
+
+        // reuse install logic
+        return InstallCommand::run({"-g", opt.globalSpec});
+      }
+
       json lock = read_lock_or_throw();
 
       int targetRc = 0;
@@ -471,47 +499,50 @@ namespace vix::commands
   {
     std::cout
         << "vix update (alias: up)\n"
-        << "Update project dependencies to newer versions.\n\n"
+        << "Update project or global packages to newer versions.\n\n"
 
         << "Usage\n"
         << "  vix update\n"
         << "  vix up\n"
         << "  vix update [@]namespace/name[@version]\n"
         << "  vix up [@]namespace/name[@version]\n"
-        << "  vix update [@]namespace/name[@version] [@]namespace/name[@version]\n"
-        << "  vix up [@]namespace/name[@version] [@]namespace/name[@version]\n"
         << "  vix update [options]\n"
-        << "  vix up [options]\n\n"
+        << "  vix up [options]\n"
+        << "  vix update -g [@]namespace/name[@version]\n\n"
 
         << "Options\n"
-        << "  --dry-run    Show what would be updated without changing vix.lock\n"
-        << "  --json       Print machine-readable JSON output\n"
-        << "  --install    Run 'vix install' after update\n"
-        << "  -h, --help   Show this help message\n\n"
+        << "  -g, --global   Update a global package\n"
+        << "  --dry-run      Show what would be updated without changing vix.lock\n"
+        << "  --json         Print machine-readable JSON output\n"
+        << "  --install      Run 'vix install' after update\n"
+        << "  -h, --help     Show this help message\n\n"
 
         << "Examples\n"
         << "  vix update\n"
-        << "  vix up\n"
         << "  vix update gk/jwt\n"
-        << "  vix up gk/jwt\n"
         << "  vix update @gk/jwt\n"
-        << "  vix up @gk/jwt\n"
         << "  vix update gk/jwt@1.0.0\n"
-        << "  vix up @gk/jwt@1.x.x\n"
         << "  vix update gk/jwt gk/pdf --install\n"
-        << "  vix up --dry-run\n"
-        << "  vix up @gk/jwt --json\n\n"
+        << "  vix update --dry-run\n"
+        << "  vix update @gk/jwt --json\n"
+        << "  vix update -g @gk/jwt\n\n"
 
         << "What happens\n"
-        << "  • Reads dependencies from vix.lock\n"
-        << "  • Updates all packages, or only selected targets\n"
-        << "  • Accepts the same package spec syntax as 'vix add'\n"
-        << "  • Reuses the normal add flow to rewrite vix.lock\n"
-        << "  • Optionally runs 'vix install' at the end\n\n"
+        << "  • Project mode:\n"
+        << "    - Reads dependencies from vix.lock\n"
+        << "    - Updates selected or all packages\n"
+        << "    - Rewrites vix.lock using the add flow\n"
+        << "    - Optionally runs 'vix install'\n"
+        << "\n"
+        << "  • Global mode (-g):\n"
+        << "    - Resolves the latest version from the registry\n"
+        << "    - Reinstalls the package globally\n"
+        << "    - Reuses 'vix install -g' logic\n\n"
 
         << "Notes\n"
-        << "  • This may upgrade major versions\n"
-        << "  • A target must already exist in vix.lock\n";
+        << "  • May upgrade major versions\n"
+        << "  • Global update does not use vix.lock\n"
+        << "  • A project dependency must already exist in vix.lock\n";
 
     return 0;
   }

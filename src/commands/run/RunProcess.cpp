@@ -768,7 +768,7 @@ namespace vix::commands::RunCommand::detail
     ::setpgid(pid, pid);
 
     const bool useSpinner = !spinnerLabel.empty();
-    const bool captureOnly = (!passthroughRuntime && spinnerLabel.empty());
+    const bool captureOnly = false;
     bool spinnerActive = useSpinner;
     std::size_t frameIndex = 0;
 

@@ -376,19 +376,10 @@ namespace vix::commands::RunCommand::detail
     static bool should_clear()
     {
       const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
-      if (!mode || !*mode)
-        mode = "auto";
-
-      if (std::strcmp(mode, "never") == 0)
+      if (!mode)
         return false;
 
-      if (std::strcmp(mode, "always") == 0)
-        return true;
-
-      if (std::strcmp(mode, "auto") == 0)
-        return ::isatty(STDOUT_FILENO) != 0;
-
-      return false;
+      return std::strcmp(mode, "1") == 0;
     }
 
     static std::size_t find_first_vix_marker(const std::string &text)
@@ -614,30 +605,16 @@ namespace vix::commands::RunCommand::detail
       bool &printedSomething,
       char &lastPrintedChar)
   {
-    static const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
-    const std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
-
-    std::string line = "\r┃   ";
-    line += frames[frameIndex];
-    line += " ";
-    line += label;
-    line += "   ";
-
-    write_all(STDOUT_FILENO, line.c_str(), line.size());
-
-    printedSomething = true;
-    lastPrintedChar = '\r';
-
-    frameIndex = (frameIndex + 1) % frameCount;
+    (void)label;
+    (void)frameIndex;
+    (void)printedSomething;
+    (void)lastPrintedChar;
   }
 
   static inline void spinner_clear(bool &printedSomething, char &lastPrintedChar)
   {
-    const char *clearLine = "\r\033[2K\r";
-    write_all(STDOUT_FILENO, clearLine, std::strlen(clearLine));
-
-    printedSomething = true;
-    lastPrintedChar = '\r';
+    (void)printedSomething;
+    (void)lastPrintedChar;
   }
 
   static bool is_sanitizer_abort_banner_line(std::string_view line) noexcept
@@ -767,9 +744,9 @@ namespace vix::commands::RunCommand::detail
     close_safe(slaveFd);
     ::setpgid(pid, pid);
 
-    const bool useSpinner = !spinnerLabel.empty();
+    const bool useSpinner = false;
     const bool captureOnly = false;
-    bool spinnerActive = useSpinner;
+    bool spinnerActive = false;
     std::size_t frameIndex = 0;
 
     RuntimeOutputFilter runtimeFilter;

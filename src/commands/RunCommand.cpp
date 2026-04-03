@@ -40,19 +40,7 @@ namespace
 {
   static bool should_clear_terminal_now()
   {
-    const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
-    if (!mode || !*mode)
-      mode = "auto";
-
-    if (std::strcmp(mode, "never") == 0)
-      return false;
-
-#ifndef _WIN32
-    if (std::strcmp(mode, "auto") == 0)
-      return ::isatty(STDOUT_FILENO) != 0;
-#endif
-
-    return true;
+    return false;
   }
 
   static std::string trim_copy_local(std::string s)

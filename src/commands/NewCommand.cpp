@@ -16,9 +16,10 @@
 #endif
 
 #include <vix/cli/commands/NewCommand.hpp>
-#include <vix/cli/Style.hpp>
 #include <vix/cli/Utils.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/cli/Style.hpp>
+#include <vix/cli/util/Ui.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -48,6 +49,7 @@
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
+namespace ui = vix::cli::util;
 
 namespace
 {
@@ -187,6 +189,33 @@ int main()
     s += "  std::cout << \"nodes=\" << nodes.size() << \"\\n\";\n";
     s += "  return nodes.size() == 5 ? 0 : 1;\n";
     s += "}\n";
+
+    return s;
+  }
+
+  static std::string make_basic_example_cpp_lib(const std::string &name)
+  {
+    std::string s;
+    s.reserve(700);
+
+    s += "#include <" + name + "/" + name + ".hpp>\n";
+    s += "#include <iostream>\n\n";
+    s += "int main()\n";
+    s += "{\n";
+    s += "  auto nodes = " + name + "::make_chain(3);\n";
+    s += "  std::cout << \"nodes=\" << nodes.size() << \"\\n\";\n";
+    s += "  return 0;\n";
+    s += "}\n";
+
+    return s;
+  }
+
+  static std::string make_examples_cmakelists_lib(const std::string &name)
+  {
+    std::string s;
+    s.reserve(256);
+
+    s += name + "_add_example(" + name + "_example_basic basic.cpp)\n";
 
     return s;
   }
@@ -844,46 +873,43 @@ int main()
 
     int cursorIndex = 0;
 
+    auto render_item = [&](const Item &item, bool active) -> std::string
+    {
+      const bool on = static_cast<bool>(res.selected[item.index]);
+
+      std::string line = PAD;
+      line += "  ";
+
+      if (active)
+        line += std::string(CYAN) + BOLD + "❯ " + RESET;
+      else
+        line += "  ";
+
+      line += on ? "☑ " : "☐ ";
+
+      if (active)
+        line += std::string(CYAN) + BOLD + item.label + RESET;
+      else
+        line += item.label;
+
+      return line;
+    };
+
     auto build_lines = [&](int activeIdx) -> std::vector<std::string>
     {
       std::vector<std::string> out;
-      out.reserve(1 + 3 + 1 + 1 + 1 + 1);
+      out.reserve(9);
 
-      out.push_back(std::string(PAD) + BOLD + CYAN + "Features" + RESET);
+      out.push_back(std::string(PAD) + BOLD + CYAN + "Core" + RESET);
 
       for (int i = 0; i < 3; ++i)
-      {
-        const bool active = (i == activeIdx);
-        const bool on = (bool)res.selected[(std::size_t)items[(std::size_t)i].index];
-
-        std::string line = PAD;
-        line += "  ";
-        line += active ? std::string(CYAN) + BOLD + "❯ " + RESET : "  ";
-        line += on ? "☑ " : "☐ ";
-        line += active ? std::string(CYAN) + BOLD + items[(std::size_t)i].label + RESET : items[(std::size_t)i].label;
-
-        out.push_back(line);
-      }
+        out.push_back(render_item(items[static_cast<std::size_t>(i)], i == activeIdx));
 
       out.push_back(std::string(PAD));
-
       out.push_back(std::string(PAD) + BOLD + CYAN + "Advanced" + RESET);
+      out.push_back(render_item(items[3], activeIdx == 3));
 
-      {
-        const int advPos = 3;
-        const bool active = (advPos == activeIdx);
-        const bool on = (bool)res.selected[items[3].index];
-
-        std::string line = PAD;
-        line += "  ";
-        line += active ? std::string(CYAN) + BOLD + "❯ " + RESET : "  ";
-        line += on ? "☑ " : "☐ ";
-        line += active ? std::string(CYAN) + BOLD + items[3].label + RESET : items[3].label;
-
-        out.push_back(line);
-      }
-
-      out.push_back(std::string(PAD) + gray_tip(items[(std::size_t)activeIdx].tip));
+      out.push_back(std::string(PAD) + ui::dim("• " + items[static_cast<std::size_t>(activeIdx)].tip));
 
       return out;
     };
@@ -897,7 +923,7 @@ int main()
       if (g_cancelled.load())
       {
         std::cout << "\n";
-        print_cancel_line();
+        ui::warn_line(std::cout, "Selection cancelled.");
         res.cancelled = true;
         return res;
       }
@@ -907,7 +933,7 @@ int main()
       if (k == Key::CtrlC)
       {
         std::cout << "\n";
-        print_cancel_line();
+        ui::warn_line(std::cout, "Selection cancelled.");
         res.cancelled = true;
         return res;
       }
@@ -930,8 +956,8 @@ int main()
 
       if (k == Key::Space)
       {
-        const std::size_t idx = items[(std::size_t)cursorIndex].index;
-        res.selected[idx] = !(bool)res.selected[idx];
+        const std::size_t idx = items[static_cast<std::size_t>(cursorIndex)].index;
+        res.selected[idx] = !static_cast<bool>(res.selected[idx]);
         render_lines(build_lines(cursorIndex), firstDraw);
         continue;
       }
@@ -945,7 +971,6 @@ int main()
 
       if (k == Key::Enter)
       {
-        std::cout << "\n";
         res.cancelled = false;
         return res;
       }
@@ -953,7 +978,7 @@ int main()
       if (k == Key::Escape || k == Key::Quit)
       {
         std::cout << "\n";
-        print_cancel_line();
+        ui::warn_line(std::cout, "Selection cancelled.");
         res.cancelled = true;
         return res;
       }
@@ -1020,10 +1045,47 @@ int main()
   static std::string make_readme_lib(const std::string &name)
   {
     std::string readme;
-    readme.reserve(4000);
+    readme.reserve(5000);
 
     readme += "# " + name + "\n\n";
     readme += "Header-only C++ library scaffold.\n\n";
+
+    readme += "## Principles\n\n";
+    readme += "This scaffold is generated to stay deterministic, composable, and registry-safe.\n\n";
+
+    readme += "Key rules:\n\n";
+    readme += "- tests are OFF by default\n";
+    readme += "- examples are OFF by default\n";
+    readme += "- the library exposes a stable alias target\n";
+    readme += "- example targets are prefixed to avoid collisions\n";
+    readme += "- the package is safe for add_subdirectory(...) and Vix registry integration\n\n";
+
+    readme += "## Targets\n\n";
+    readme += "Canonical target:\n\n";
+    readme += "```cmake\n";
+    readme += name + "::" + name + "\n";
+    readme += "```\n\n";
+
+    readme += "## Build\n\n";
+    readme += "Configure only:\n\n";
+    readme += "```bash\n";
+    readme += "cmake --preset dev-ninja\n";
+    readme += "```\n\n";
+
+    readme += "Build tests:\n\n";
+    readme += "```bash\n";
+    readme += "cmake --preset dev-ninja -D" + name + "_BUILD_TESTS=ON\n";
+    readme += "cmake --build build-ninja\n";
+    readme += "ctest --test-dir build-ninja --output-on-failure\n";
+    readme += "```\n\n";
+
+    readme += "Build examples:\n\n";
+    readme += "```bash\n";
+    readme += "cmake --preset dev-ninja -D" + name + "_BUILD_EXAMPLES=ON\n";
+    readme += "cmake --build build-ninja\n";
+    readme += "```\n\n";
+
+    readme += "## Vix\n\n";
     readme += "```bash\n";
     readme += "vix tests\n";
     readme += "```\n";
@@ -1247,6 +1309,94 @@ int main()
     return s;
   }
 
+  static std::string make_vix_json_app(const std::string &name)
+  {
+    std::string s;
+    s.reserve(4096);
+
+    s += "{\n";
+    s += "  \"name\": \"" + name + "\",\n";
+    s += "  \"vars\": {\n";
+    s += "    \"preset\": \"dev-ninja\",\n";
+    s += "    \"release_preset\": \"release\",\n";
+    s += "    \"log_level\": \"info\"\n";
+    s += "  },\n";
+    s += "  \"tasks\": {\n";
+    s += "    \"fmt\": \"vix fmt\",\n";
+    s += "    \"check\": {\n";
+    s += "      \"description\": \"Validate project health\",\n";
+    s += "      \"command\": \"vix check --preset ${preset} --tests\",\n";
+    s += "      \"env\": {\n";
+    s += "        \"VIX_LOG_LEVEL\": \"${log_level}\"\n";
+    s += "      }\n";
+    s += "    },\n";
+    s += "    \"test\": {\n";
+    s += "      \"description\": \"Run CTest suite\",\n";
+    s += "      \"command\": \"vix tests --preset ${preset} --fail-fast\"\n";
+    s += "    },\n";
+    s += "    \"dev\": {\n";
+    s += "      \"description\": \"Start dev mode\",\n";
+    s += "      \"command\": \"vix dev\"\n";
+    s += "    },\n";
+    s += "    \"ci\": {\n";
+    s += "      \"description\": \"Local CI pipeline\",\n";
+    s += "      \"deps\": [\n";
+    s += "        \"fmt\"\n";
+    s += "      ],\n";
+    s += "      \"commands\": [\n";
+    s += "        \"vix check --preset ${preset} --tests\",\n";
+    s += "        \"vix tests --preset ${preset} --fail-fast\"\n";
+    s += "      ]\n";
+    s += "    },\n";
+    s += "    \"release\": {\n";
+    s += "      \"description\": \"Release pipeline\",\n";
+    s += "      \"deps\": [\n";
+    s += "        \"fmt\",\n";
+    s += "        \"test\"\n";
+    s += "      ],\n";
+    s += "      \"vars\": {\n";
+    s += "        \"preset\": \"${release_preset}\"\n";
+    s += "      },\n";
+    s += "      \"env\": {\n";
+    s += "        \"VIX_LOG_LEVEL\": \"warn\"\n";
+    s += "      },\n";
+    s += "      \"cwd\": \"${project_dir}\",\n";
+    s += "      \"commands\": [\n";
+    s += "        \"vix build --preset ${preset}\",\n";
+    s += "        \"vix check --preset ${preset} --tests\"\n";
+    s += "      ],\n";
+    s += "      \"linux\": {\n";
+    s += "        \"commands\": [\n";
+    s += "          \"vix build --preset ${preset}\",\n";
+    s += "          \"vix check --preset ${preset} --tests --run\"\n";
+    s += "        ]\n";
+    s += "      },\n";
+    s += "      \"windows\": {\n";
+    s += "        \"command\": \"vix build --preset dev-msvc\"\n";
+    s += "      },\n";
+    s += "      \"macos\": {\n";
+    s += "        \"commands\": [\n";
+    s += "          \"vix build --preset ${preset}\",\n";
+    s += "          \"vix tests --preset ${preset}\"\n";
+    s += "        ]\n";
+    s += "      }\n";
+    s += "    },\n";
+    s += "    \"package\": {\n";
+    s += "      \"description\": \"Build package artifacts\",\n";
+    s += "      \"deps\": [\n";
+    s += "        \"release\"\n";
+    s += "      ],\n";
+    s += "      \"commands\": [\n";
+    s += "        \"echo Packaging project from ${project_dir}\",\n";
+    s += "        \"vix build --preset ${release_preset}\"\n";
+    s += "      ]\n";
+    s += "    }\n";
+    s += "  }\n";
+    s += "}\n";
+
+    return s;
+  }
+
   static std::string make_cmakelists_app(const std::string &projectName, const FeaturesSelection &f)
   {
     std::string s;
@@ -1415,16 +1565,28 @@ int main()
 
     return s;
   }
+
   static std::string make_cmakelists_lib(const std::string &name)
   {
     std::string s;
-    s.reserve(9000);
+    s.reserve(16000);
 
     s += "cmake_minimum_required(VERSION 3.20)\n";
     s += "project(" + name + " LANGUAGES CXX)\n\n";
-    s += "set(CMAKE_CXX_STANDARD 20)\n";
-    s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n\n";
 
+    s += "set(CMAKE_CXX_STANDARD 20)\n";
+    s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
+    s += "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
+
+    s += "# ------------------------------------------------------\n";
+    s += "# Options\n";
+    s += "# ------------------------------------------------------\n";
+    s += "option(" + name + "_BUILD_TESTS \"Build tests\" OFF)\n";
+    s += "option(" + name + "_BUILD_EXAMPLES \"Build examples\" OFF)\n\n";
+
+    s += "# ------------------------------------------------------\n";
+    s += "# Library\n";
+    s += "# ------------------------------------------------------\n";
     s += "add_library(" + name + " INTERFACE)\n";
     s += "add_library(" + name + "::" + name + " ALIAS " + name + ")\n\n";
 
@@ -1439,12 +1601,46 @@ int main()
     s += "  target_compile_options(" + name + " INTERFACE -Wall -Wextra -Wpedantic)\n";
     s += "endif()\n\n";
 
-    s += "include(CTest)\n";
-    s += "enable_testing()\n\n";
+    s += "# ------------------------------------------------------\n";
+    s += "# Helpers\n";
+    s += "# ------------------------------------------------------\n";
+    s += "function(" + name + "_add_example target file)\n";
+    s += "  add_executable(${target} ${file})\n";
+    s += "  target_link_libraries(${target} PRIVATE " + name + "::" + name + ")\n\n";
+    s += "  if (MSVC)\n";
+    s += "    target_compile_options(${target} PRIVATE /W4 /permissive-)\n";
+    s += "  else()\n";
+    s += "    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)\n";
+    s += "  endif()\n";
+    s += "endfunction()\n\n";
 
-    s += "add_executable(" + name + "_basic_test tests/test_basic.cpp)\n";
-    s += "target_link_libraries(" + name + "_basic_test PRIVATE " + name + "::" + name + ")\n";
-    s += "add_test(NAME " + name + ".basic COMMAND " + name + "_basic_test)\n";
+    s += "# ------------------------------------------------------\n";
+    s += "# Examples\n";
+    s += "# ------------------------------------------------------\n";
+    s += "if (" + name + "_BUILD_EXAMPLES)\n";
+    s += "  if (EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt\")\n";
+    s += "    add_subdirectory(examples)\n";
+    s += "  endif()\n";
+    s += "endif()\n\n";
+
+    s += "# ------------------------------------------------------\n";
+    s += "# Tests\n";
+    s += "# ------------------------------------------------------\n";
+    s += "if (" + name + "_BUILD_TESTS)\n";
+    s += "  include(CTest)\n";
+    s += "  enable_testing()\n\n";
+
+    s += "  add_executable(" + name + "_test_basic tests/test_basic.cpp)\n";
+    s += "  target_link_libraries(" + name + "_test_basic PRIVATE " + name + "::" + name + ")\n\n";
+
+    s += "  if (MSVC)\n";
+    s += "    target_compile_options(" + name + "_test_basic PRIVATE /W4 /permissive-)\n";
+    s += "  else()\n";
+    s += "    target_compile_options(" + name + "_test_basic PRIVATE -Wall -Wextra -Wpedantic)\n";
+    s += "  endif()\n\n";
+
+    s += "  add_test(NAME " + name + ".basic COMMAND " + name + "_test_basic)\n";
+    s += "endif()\n";
 
     return s;
   }
@@ -1533,12 +1729,13 @@ int main()
       return false;
     if (!write_text_file(projectDir / "CMakePresets.json", make_cmake_presets_json_app(features), err))
       return false;
+    if (!write_text_file(projectDir / "vix.json", make_vix_json_app(projName), err))
+      return false;
     if (!write_text_file(projectDir / (projName + ".vix"), make_project_manifest_app(projName, features), err))
       return false;
 
     return true;
   }
-
   static bool generate_lib_project(
       const fs::path &projectDir,
       const std::string &projName,
@@ -1546,15 +1743,25 @@ int main()
   {
     const fs::path includeDir = projectDir / "include" / projName;
     const fs::path testsDir = projectDir / "tests";
+    const fs::path examplesDir = projectDir / "examples";
 
     if (!ensure_dir(includeDir, err))
       return false;
     if (!ensure_dir(testsDir, err))
       return false;
+    if (!ensure_dir(examplesDir, err))
+      return false;
 
     if (!write_text_file(includeDir / (projName + ".hpp"), make_lib_header(projName), err))
       return false;
+
     if (!write_text_file(testsDir / "test_basic.cpp", make_basic_test_cpp_lib(projName), err))
+      return false;
+
+    if (!write_text_file(examplesDir / "basic.cpp", make_basic_example_cpp_lib(projName), err))
+      return false;
+
+    if (!write_text_file(examplesDir / "CMakeLists.txt", make_examples_cmakelists_lib(projName), err))
       return false;
 
     if (!write_text_file(projectDir / "CMakeLists.txt", make_cmakelists_lib(projName), err))
@@ -1576,25 +1783,25 @@ int main()
     const std::string manifest = projName + ".vix";
 
     std::cout << "\n";
-    info("Next steps:");
+    info("Next steps");
     step("cd " + projName + "/");
     step("vix build");
     step("vix run");
     std::cout << "\n";
-    hint("Tip: vix dev");
-    hint("Tip: vix dev " + manifest);
+    hint("vix task dev");
+    hint("vix dev " + manifest);
   }
 
   static void print_next_steps_lib(const fs::path &, const std::string &projName)
   {
-    std::cout << "\n";
-    info("Next steps:");
-    step("cd " + projName + "/");
-    step("vix tests");
-    std::cout << "\n";
-    hint("Tip: tag + publish when ready");
-  }
+    namespace ui = vix::cli::util;
 
+    ui::info_line(std::cout, "Next steps");
+    std::cout << "    " << ui::dim("cd " + projName + "/") << "\n";
+    std::cout << "    " << ui::dim("vix build") << "\n";
+    std::cout << "    " << ui::dim("vix tests") << "\n";
+    ui::tip_line(std::cout, "tag + publish when ready");
+  }
 } // namespace
 
 namespace vix::commands::NewCommand

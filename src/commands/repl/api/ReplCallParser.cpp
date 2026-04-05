@@ -621,7 +621,10 @@ namespace vix::cli::repl::api
       return false;
     }
 
-    static bool validate_no_trailing_tokens(Lexer &lx, Tok &cur, std::string &err)
+    static bool validate_no_trailing_tokens(
+        [[maybe_unused]] Lexer &lx,
+        Tok &cur,
+        std::string &err)
     {
       if (cur.type == TokType::Invalid)
       {

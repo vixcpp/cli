@@ -70,6 +70,7 @@ namespace vix::commands
     static std::string iso_utc_now_compact()
     {
       using namespace std::chrono;
+
       const auto now = system_clock::now();
       const std::time_t t = system_clock::to_time_t(now);
 
@@ -80,11 +81,18 @@ namespace vix::commands
       gmtime_r(&t, &tm);
 #endif
 
-      char buf[32]{0};
-      std::snprintf(buf, sizeof(buf), "%04d%02d%02dT%02d%02d%02dZ",
-                    tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-                    tm.tm_hour, tm.tm_min, tm.tm_sec);
-      return std::string(buf);
+      std::ostringstream oss;
+
+      oss << std::setw(4) << std::setfill('0') << (tm.tm_year + 1900)
+          << std::setw(2) << std::setfill('0') << (tm.tm_mon + 1)
+          << std::setw(2) << std::setfill('0') << tm.tm_mday
+          << "T"
+          << std::setw(2) << std::setfill('0') << tm.tm_hour
+          << std::setw(2) << std::setfill('0') << tm.tm_min
+          << std::setw(2) << std::setfill('0') << tm.tm_sec
+          << "Z";
+
+      return oss.str();
     }
 
     static std::string home_dir()
@@ -123,17 +131,20 @@ namespace vix::commands
       return fs::exists(dir / ".git", ec);
     }
 
-    std::string join_for_log(const std::vector<std::string> &args)
+#if defined(_WIN32)
+    static std::string join_for_log(
+        const std::vector<std::string> &args)
     {
       std::ostringstream out;
 
       for (std::size_t i = 0; i < args.size(); ++i)
       {
         if (i > 0)
+        {
           out << ' ';
+        }
 
         const std::string &arg = args[i];
-
         const bool needsQuotes =
             arg.find(' ') != std::string::npos ||
             arg.find('\t') != std::string::npos ||
@@ -149,15 +160,20 @@ namespace vix::commands
         for (char c : arg)
         {
           if (c == '"')
+          {
             out << "\\\"";
+          }
           else
+          {
             out << c;
+          }
         }
         out << '"';
       }
 
       return out.str();
     }
+#endif
 
     /* =========================
        Process runner (no system)
@@ -403,7 +419,12 @@ namespace vix::commands
       if (pid == 0)
       {
         if (cwd)
-          (void)chdir(cwd->c_str());
+        {
+          if (chdir(cwd->c_str()) != 0)
+          {
+            _exit(127);
+          }
+        }
 
         dup2(outPipe[1], STDOUT_FILENO);
         dup2(errPipe[1], STDERR_FILENO);

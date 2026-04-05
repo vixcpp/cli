@@ -834,11 +834,6 @@ int main()
     std::cout.flush();
   }
 
-  static std::string gray_tip(const std::string &s)
-  {
-    return std::string(GRAY) + s + RESET;
-  }
-
   static MultiSelectResult menu_multiselect_features()
   {
     MultiSelectResult res{};

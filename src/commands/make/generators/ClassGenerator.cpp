@@ -62,17 +62,6 @@ namespace vix::cli::make::generators
       return trim(std::move(s));
     }
 
-    [[nodiscard]] std::string capitalize_first(std::string s)
-    {
-      if (!s.empty())
-      {
-        s.front() = static_cast<char>(
-            std::toupper(static_cast<unsigned char>(s.front())));
-      }
-
-      return s;
-    }
-
     [[nodiscard]] std::string member_name(const std::string &field_name)
     {
       return field_name + "_";

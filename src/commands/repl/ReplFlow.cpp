@@ -770,23 +770,6 @@ namespace
       return true;
     };
 
-    auto get_double_arg = [&](size_t i, double &out, std::string &err) -> bool
-    {
-      err.clear();
-
-      nlohmann::json j;
-      if (!resolve_arg_json(call, i, vars, j, err))
-        return false;
-
-      if (!json_number_to_double(j, out))
-      {
-        err = "expected float";
-        return false;
-      }
-
-      return true;
-    };
-
     // GLOBAL: print / println / eprint / eprintln / builtins
     if (call.object.empty())
     {

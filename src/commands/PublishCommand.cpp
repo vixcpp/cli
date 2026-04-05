@@ -150,6 +150,7 @@ namespace vix::commands
       out << j.dump(2) << "\n";
     }
 
+#if defined(_WIN32)
     static std::string join_for_log(
         const std::vector<std::string> &args)
     {
@@ -191,6 +192,7 @@ namespace vix::commands
 
       return out.str();
     }
+#endif
 
     struct ProcessResult
     {
@@ -433,11 +435,10 @@ namespace vix::commands
       if (pid == 0)
       {
         // child
-        if (cwd)
+        if (chdir(cwd->c_str()) != 0)
         {
-          (void)chdir(cwd->c_str());
+          _exit(127);
         }
-
         dup2(outPipe[1], STDOUT_FILENO);
         dup2(errPipe[1], STDERR_FILENO);
 

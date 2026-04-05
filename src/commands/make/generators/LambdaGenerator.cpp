@@ -81,19 +81,6 @@ namespace vix::cli::make::generators
       out << header_postamble();
       return out.str();
     }
-
-    [[nodiscard]] std::string build_preview(const MakeContext &ctx,
-                                            const fs::path &header_path)
-    {
-      std::ostringstream out;
-      out << "kind: lambda\n";
-      out << "name: " << ctx.name << "\n";
-      out << "namespace: "
-          << (ctx.name_space.empty() ? "(none)" : ctx.name_space) << "\n";
-      out << "header: " << header_path.string() << "\n";
-      out << "mode: header-only\n";
-      return out.str();
-    }
   } // namespace
 
   MakeResult generate_lambda(const MakeContext &ctx)

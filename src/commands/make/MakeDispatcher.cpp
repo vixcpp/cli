@@ -36,21 +36,6 @@ namespace vix::cli::make
       return result;
     }
 
-    [[nodiscard]] MakeResult make_not_implemented_result(
-        const MakeContext &ctx,
-        const std::string &what)
-    {
-      MakeResult result;
-      result.ok = false;
-      result.error = what + " generator is not implemented yet.";
-      result.notes.push_back("kind: " + std::string(to_string(ctx.kind)));
-      result.notes.push_back("name: " + ctx.name);
-      result.notes.push_back("namespace: " +
-                             (ctx.name_space.empty() ? std::string("(none)")
-                                                     : ctx.name_space));
-      return result;
-    }
-
     [[nodiscard]] bool requires_name(MakeKind kind) noexcept
     {
       switch (kind)

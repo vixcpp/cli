@@ -33,6 +33,8 @@
 #include <system_error>
 #include <vector>
 #include <ctime>
+#include <iomanip>
+#include <sstream>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -224,19 +226,21 @@ namespace vix::commands
       gmtime_r(&t, &tm);
 #endif
 
-      char buf[32];
-      std::snprintf(
-          buf,
-          sizeof(buf),
-          "%04d-%02d-%02dT%02d:%02d:%02dZ",
-          tm.tm_year + 1900,
-          tm.tm_mon + 1,
-          tm.tm_mday,
-          tm.tm_hour,
-          tm.tm_min,
-          tm.tm_sec);
+      std::ostringstream oss;
+      oss << std::setw(4) << std::setfill('0') << (tm.tm_year + 1900)
+          << "-"
+          << std::setw(2) << std::setfill('0') << (tm.tm_mon + 1)
+          << "-"
+          << std::setw(2) << std::setfill('0') << tm.tm_mday
+          << "T"
+          << std::setw(2) << std::setfill('0') << tm.tm_hour
+          << ":"
+          << std::setw(2) << std::setfill('0') << tm.tm_min
+          << ":"
+          << std::setw(2) << std::setfill('0') << tm.tm_sec
+          << "Z";
 
-      return std::string(buf);
+      return oss.str();
     }
 
     std::string home_dir()

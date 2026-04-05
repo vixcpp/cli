@@ -123,9 +123,10 @@ namespace vix::commands::RunCommand::detail
     constexpr unsigned long long prime = 1099511628211ULL;
 
     unsigned long long hash = offset;
-    for (unsigned char c : input)
+    for (char c : input)
     {
-      hash ^= static_cast<unsigned long long>(c);
+      const unsigned char uc = static_cast<unsigned char>(c);
+      hash ^= static_cast<unsigned long long>(uc);
       hash *= prime;
     }
     return hash;

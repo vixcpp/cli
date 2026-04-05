@@ -1190,7 +1190,10 @@ namespace vix::commands
       return 0;
     }
 
-    ExecuteContext ctx{registry};
+    ExecuteContext ctx{
+        .registry = registry,
+        .done = {},
+        .visiting = {}};
 
     if (args.empty())
     {

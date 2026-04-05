@@ -54,10 +54,11 @@ namespace vix::cli::make::generators
       return out;
     }
 
-    [[nodiscard]] std::string build_test_content(const MakeContext &ctx,
-                                                 const std::string &suite_name,
-                                                 const std::string &test_name,
-                                                 const fs::path &file_path)
+    [[nodiscard]] std::string build_test_content(
+        [[maybe_unused]] const MakeContext &ctx,
+        const std::string &suite_name,
+        const std::string &test_name,
+        const fs::path &file_path)
     {
       std::ostringstream out;
       out << doxygen_file_header(file_path.filename().string());

@@ -102,25 +102,25 @@ namespace vix
       return std::nullopt;
     }
 
-    static int levenshtein_distance(const std::string &a, const std::string &b)
+    static std::size_t levenshtein_distance(const std::string &a, const std::string &b)
     {
-      const size_t m = a.size();
-      const size_t n = b.size();
+      const std::size_t m = a.size();
+      const std::size_t n = b.size();
 
-      std::vector<int> prev(n + 1), curr(n + 1);
+      std::vector<std::size_t> prev(n + 1), curr(n + 1);
 
-      for (size_t j = 0; j <= n; ++j)
+      for (std::size_t j = 0; j <= n; ++j)
         prev[j] = j;
 
-      for (size_t i = 1; i <= m; ++i)
+      for (std::size_t i = 1; i <= m; ++i)
       {
         curr[0] = i;
-        for (size_t j = 1; j <= n; ++j)
+        for (std::size_t j = 1; j <= n; ++j)
         {
-          int cost = (a[i - 1] == b[j - 1]) ? 0 : 1;
+          const std::size_t cost = (a[i - 1] == b[j - 1]) ? 0u : 1u;
 
-          curr[j] = std::min({prev[j] + 1,
-                              curr[j - 1] + 1,
+          curr[j] = std::min({prev[j] + 1u,
+                              curr[j - 1] + 1u,
                               prev[j - 1] + cost});
         }
         prev = curr;
@@ -133,12 +133,12 @@ namespace vix
         const std::string &input,
         const std::unordered_map<std::string, vix::cli::dispatch::Entry> &entries)
     {
-      int bestScore = INT_MAX;
+      std::size_t bestScore = std::numeric_limits<std::size_t>::max();
       std::string best;
 
       for (const auto &[name, _] : entries)
       {
-        int d = levenshtein_distance(input, name);
+        const std::size_t d = levenshtein_distance(input, name);
 
         if (d < bestScore)
         {

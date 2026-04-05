@@ -744,7 +744,6 @@ namespace vix::commands::RunCommand::detail
     close_safe(slaveFd);
     ::setpgid(pid, pid);
 
-    const bool useSpinner = false;
     const bool captureOnly = false;
     bool spinnerActive = false;
     std::size_t frameIndex = 0;

@@ -319,6 +319,20 @@ set_target_properties(vix_cli PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}"
 )
 
+if(APPLE)
+  set_target_properties(vix_cli PROPERTIES
+    BUILD_RPATH "@loader_path/../${CMAKE_INSTALL_LIBDIR}"
+    INSTALL_RPATH "@loader_path/../${CMAKE_INSTALL_LIBDIR}"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+  )
+elseif(UNIX)
+  set_target_properties(vix_cli PROPERTIES
+    BUILD_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+    INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}"
+    INSTALL_RPATH_USE_LINK_PATH TRUE
+  )
+endif()
+
 # ----------------------------------------------------
 # Install (standalone only)
 # - Umbrella handles install itself

@@ -435,10 +435,12 @@ namespace vix::commands
       if (pid == 0)
       {
         // child
-        if (chdir(cwd->c_str()) != 0)
+        if (cwd)
         {
-          _exit(127);
+          if (chdir(cwd->c_str()) != 0)
+            _exit(127);
         }
+
         dup2(outPipe[1], STDOUT_FILENO);
         dup2(errPipe[1], STDERR_FILENO);
 
@@ -456,7 +458,6 @@ namespace vix::commands
         execvp(argv[0], argv.data());
         _exit(127);
       }
-
       // parent
       close(outPipe[1]);
       close(errPipe[1]);
@@ -725,8 +726,11 @@ namespace vix::commands
 
     static bool is_git_repo(const fs::path &dir)
     {
-      std::error_code ec;
-      return fs::exists(dir / ".git", ec);
+      const auto r = run_process_capture(
+          {"git", "rev-parse", "--is-inside-work-tree"},
+          dir);
+
+      return r.exitCode == 0 && trim_copy(r.out) == "true";
     }
 
     static bool command_exists_on_path(const std::string &exe)

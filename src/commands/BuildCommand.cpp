@@ -647,6 +647,43 @@ namespace vix::commands::BuildCommand
       return util::file_exists(buildDir / "CMakeCache.txt");
     }
 
+    static void clean_local_build_dirs(
+        const fs::path &projectDir,
+        const std::string &targetTriple,
+        bool quiet)
+    {
+      std::vector<fs::path> dirs = {
+          projectDir / "build-dev",
+          projectDir / "build-ninja",
+          projectDir / "build-release"};
+
+      if (!targetTriple.empty())
+      {
+        dirs.push_back(projectDir / ("build-dev-" + targetTriple));
+        dirs.push_back(projectDir / ("build-ninja-" + targetTriple));
+        dirs.push_back(projectDir / ("build-release-" + targetTriple));
+      }
+
+      for (const auto &dir : dirs)
+      {
+        if (!fs::exists(dir))
+          continue;
+
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+
+        if (ec)
+        {
+          error("Failed to remove build directory: " + dir.string());
+          hint(ec.message());
+          throw std::runtime_error("clean failed");
+        }
+
+        if (!quiet)
+          step("removed " + dir.string());
+      }
+    }
+
     static std::vector<std::pair<std::string, std::string>>
     build_cmake_vars(
         const process::Preset &p,
@@ -834,6 +871,18 @@ namespace vix::commands::BuildCommand
 
         plan_ = *planOpt;
         const fs::path globalPackagesFile = plan_.buildDir / "vix-global-packages.cmake";
+
+        if (opt_.clean)
+        {
+          try
+          {
+            clean_local_build_dirs(plan_.projectDir, opt_.targetTriple, opt_.quiet);
+          }
+          catch (const std::exception &)
+          {
+            return 1;
+          }
+        }
 
         const bool verboseMode = opt_.verbose || opt_.cmakeVerbose;
         const bool defer = (!opt_.quiet && verboseMode);
@@ -1195,7 +1244,7 @@ namespace vix::commands::BuildCommand
     out << "  --sysroot <path>      Sysroot for cross toolchain (optional)\n";
     out << "  --static              Request static linking (VIX_LINK_STATIC=ON)\n";
     out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, clamped)\n";
-    out << "  --clean               Force reconfigure (ignore cache/signature)\n";
+    out << "  --clean               Remove local build directories and reconfigure from scratch\n";
     out << "  --no-cache            Disable signature cache shortcut\n";
     out << "  --fast                Fast loop: if Ninja says up-to-date, exit immediately\n";
     out << "  --linker <mode>       auto|default|mold|lld (auto prefers mold then lld)\n";

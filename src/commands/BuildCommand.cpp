@@ -993,12 +993,12 @@ namespace vix::commands::BuildCommand
             out.discard();
 
             const std::string log = util::read_text_file_or_empty(plan_.configureLog);
-            vix::cli::ErrorHandler::printBuildErrors(
+            const bool handled = vix::cli::ErrorHandler::printBuildErrors(
                 log,
                 plan_.projectDir / "CMakeLists.txt",
                 "CMake configure failed");
 
-            if (!opt_.quiet)
+            if (!opt_.quiet && !handled)
             {
               util::log_hint_if(opt_.quiet, "Command:");
               step(r.displayCommand);
@@ -1089,12 +1089,12 @@ namespace vix::commands::BuildCommand
             out.discard();
 
             const std::string log = util::read_text_file_or_empty(plan_.buildLog);
-            vix::cli::ErrorHandler::printBuildErrors(
+            const bool handled = vix::cli::ErrorHandler::printBuildErrors(
                 log,
                 plan_.projectDir / "CMakeLists.txt",
                 "Build failed");
 
-            if (!opt_.quiet)
+            if (!opt_.quiet && !handled)
             {
               util::log_hint_if(opt_.quiet, "Command:");
               step(r.displayCommand);

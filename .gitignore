@@ -39,7 +39,7 @@
 
 # debug information files
 *.dwo
-build/
+build-*/
 .vscode/
 vix.log
 cmd.md

@@ -11,15 +11,17 @@
  *  Vix.cpp
  *
  */
-#include "vix/cli/ErrorHandler.hpp"
+#include <vix/cli/ErrorHandler.hpp>
 
-#include "vix/cli/errors/ClangGccParser.hpp"
-#include "vix/cli/errors/CompilerError.hpp"
-#include "vix/cli/errors/ErrorContext.hpp"
-#include "vix/cli/errors/ErrorPipeline.hpp"
-#include "vix/cli/errors/RawLogDetectors.hpp"
-#include "vix/cli/errors/CodeFrame.hpp"
+#include <vix/cli/errors/ClangGccParser.hpp>
+#include <vix/cli/errors/CompilerError.hpp>
+#include <vix/cli/errors/ErrorContext.hpp>
+#include <vix/cli/errors/ErrorPipeline.hpp>
+#include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/cli/errors/CodeFrame.hpp>
+#include <vix/cli/errors/build/BuildErrorDetectors.hpp>
 #include <vix/utils/Env.hpp>
+
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
@@ -216,6 +218,9 @@ namespace vix::cli
       }
 
       if (RawLogDetectors::handleLinkerOrSanitizer(cleanedLog, sourceFile, contextMessage))
+        return;
+
+      if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
         return;
 
       error(contextMessage + " (see compiler output below):");

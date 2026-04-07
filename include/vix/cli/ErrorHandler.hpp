@@ -23,7 +23,7 @@ namespace vix::cli
   class ErrorHandler
   {
   public:
-    static void printBuildErrors(
+    static bool printBuildErrors(
         const std::string &buildLog,
         const fs::path &sourceFile,
         const std::string &contextMessage = "Script build failed");

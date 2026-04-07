@@ -651,9 +651,11 @@ namespace vix::commands::RunCommand
 
           if (buildExit != 0)
           {
+            bool handled = false;
+
             if (!log.empty())
             {
-              vix::cli::ErrorHandler::printBuildErrors(
+              handled = vix::cli::ErrorHandler::printBuildErrors(
                   log,
                   projectDir,
                   "Build failed (preset '" + buildPreset + "')");
@@ -664,9 +666,12 @@ namespace vix::commands::RunCommand
                     std::to_string(buildExit) + ").");
             }
 
-            hint("Run the same command manually:");
-            step("cd " + projectDir.string());
-            step("cmake --build --preset " + buildPreset);
+            if (!handled)
+            {
+              hint("Run the same command manually:");
+              step("cd " + projectDir.string());
+              step("cmake --build --preset " + buildPreset);
+            }
 
             return buildExit != 0 ? buildExit : 2;
           }
@@ -965,9 +970,11 @@ namespace vix::commands::RunCommand
           (void)captureCode;
         }
 
+        bool handled = false;
+
         if (!buildLog.empty())
         {
-          vix::cli::ErrorHandler::printBuildErrors(
+          handled = vix::cli::ErrorHandler::printBuildErrors(
               buildLog,
               buildDir,
               "Build failed (fallback build/)");
@@ -975,6 +982,10 @@ namespace vix::commands::RunCommand
         else
         {
           error("Build failed (fallback build/, code " + std::to_string(code) + ").");
+        }
+
+        if (!handled)
+        {
           hint("Check the build command manually in your terminal.");
         }
 

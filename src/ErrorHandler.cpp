@@ -196,7 +196,7 @@ namespace
 
 namespace vix::cli
 {
-  void ErrorHandler::printBuildErrors(
+  bool ErrorHandler::printBuildErrors(
       const std::string &buildLog,
       const fs::path &sourceFile,
       const std::string &contextMessage)
@@ -214,27 +214,25 @@ namespace vix::cli
                   << GRAY << "compiler output:\n"
                   << RESET;
         std::cerr << cleanedLog << "\n";
-        return;
+        return true;
       }
 
       if (RawLogDetectors::handleLinkerOrSanitizer(cleanedLog, sourceFile, contextMessage))
-        return;
+        return true;
 
       if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
-        return;
+        return true;
 
       error(contextMessage + " (see compiler output below):");
       std::cerr << cleanedLog << "\n";
-      return;
+      return false;
     }
 
     ErrorContext ctx{sourceFile, contextMessage, cleanedLog};
     ErrorPipeline pipeline;
 
     if (pipeline.tryHandle(errors, ctx))
-    {
-      return;
-    }
+      return true;
 
     std::unordered_map<std::string, int> counts;
     for (const auto &e : errors)
@@ -251,19 +249,16 @@ namespace vix::cli
     {
       std::string key = e.file + "|" + e.message;
       if (seen.insert(key).second)
-      {
         unique.push_back(e);
-      }
     }
 
     if (unique.empty())
     {
       error(contextMessage + " (no unique errors found, see compiler output below):");
       std::cerr << buildLog << "\n";
-      return;
+      return false;
     }
 
-    // Generic build error header
     error(contextMessage + ":");
 
     CodeFrameOptions cf;
@@ -278,19 +273,15 @@ namespace vix::cli
       const auto &err = unique[i];
 
       std::cerr << "\n";
-
       ::printSingleError(err);
-
       ::printHints(err);
 
-      {
-        ErrorContext frameCtx{
-            err.file,
-            contextMessage,
-            cleanedLog};
+      ErrorContext frameCtx{
+          err.file,
+          contextMessage,
+          cleanedLog};
 
-        printCodeFrame(err, frameCtx, cf);
-      }
+      printCodeFrame(err, frameCtx, cf);
 
       const std::string key = err.file + "|" + err.message;
       auto it = counts.find(key);
@@ -310,5 +301,6 @@ namespace vix::cli
     }
 
     std::cerr << "\nSource file: " << sourceFile << "\n";
+    return true;
   }
 } // namespace vix::cli

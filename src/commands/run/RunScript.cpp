@@ -565,11 +565,10 @@ namespace vix::commands::RunCommand::detail
 
         if (!logContent.empty())
         {
-          vix::cli::ErrorHandler::printBuildErrors(
+          handled = vix::cli::ErrorHandler::printBuildErrors(
               logContent,
               script,
               "Script build failed");
-          handled = true;
         }
         else
         {
@@ -923,11 +922,11 @@ namespace vix::commands::RunCommand::detail
         {
           print_script_runtime_args_hint();
         }
-        vix::cli::ErrorHandler::printBuildErrors(
+
+        handled = vix::cli::ErrorHandler::printBuildErrors(
             logContent,
             script,
             "Script build failed");
-        handled = true; // error already printed
       }
       else
       {
@@ -1387,7 +1386,7 @@ namespace vix::commands::RunCommand::detail
         {
           if (!buildLog.empty())
           {
-            vix::cli::ErrorHandler::printBuildErrors(
+            (void)vix::cli::ErrorHandler::printBuildErrors(
                 buildLog,
                 buildDir,
                 "Build failed in dev mode (build-dev/)");

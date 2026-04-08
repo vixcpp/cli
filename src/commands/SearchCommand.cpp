@@ -14,6 +14,7 @@
 #include <vix/cli/commands/SearchCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/util/Semver.hpp>
 #include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
 
@@ -109,7 +110,7 @@ namespace vix::commands
       return out;
     }
 
-    std::string latest_version(const json &entry)
+    static std::string latest_version(const json &entry)
     {
       if (entry.contains("latest") && entry["latest"].is_string())
         return entry["latest"].get<std::string>();
@@ -117,14 +118,13 @@ namespace vix::commands
       if (!entry.contains("versions") || !entry["versions"].is_object())
         return {};
 
-      std::string best;
+      std::vector<std::string> versions;
+      versions.reserve(entry["versions"].size());
+
       for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
-      {
-        const std::string v = it.key();
-        if (best.empty() || v > best)
-          best = v;
-      }
-      return best;
+        versions.push_back(it.key());
+
+      return vix::cli::util::semver::findLatest(versions);
     }
 
     struct Hit

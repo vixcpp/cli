@@ -17,6 +17,7 @@
 #include <vix/cli/util/Hash.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/cli/util/Semver.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -276,39 +277,62 @@ namespace vix::commands
       if (entry.contains("latest") && entry["latest"].is_string())
         return entry["latest"].get<std::string>();
 
-      if (entry.contains("versions") && entry["versions"].is_object())
-      {
-        std::string best;
-        for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
-        {
-          const std::string v = it.key();
-          if (best.empty() || v > best)
-            best = v;
-        }
-        return best;
-      }
+      if (!entry.contains("versions") || !entry["versions"].is_object())
+        return {};
 
-      return {};
+      std::vector<std::string> versions;
+      versions.reserve(entry["versions"].size());
+
+      for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
+        versions.push_back(it.key());
+
+      return vix::cli::util::semver::findLatest(versions);
     }
 
     static int resolve_version_v1(const json &entry, PkgSpec &spec)
     {
-      if (!spec.requestedVersion.empty())
-      {
-        spec.resolvedVersion = spec.requestedVersion;
-        return 0;
-      }
-
-      const std::string latest = find_latest_version(entry);
-      if (latest.empty())
+      if (!entry.contains("versions") || !entry["versions"].is_object())
       {
         vix::cli::util::err_line(
             std::cerr,
-            "no versions available for: " + spec.ns + "/" + spec.name);
+            "invalid registry entry: missing versions for " + spec.id());
         return 1;
       }
 
-      spec.resolvedVersion = latest;
+      std::vector<std::string> versions;
+      versions.reserve(entry["versions"].size());
+
+      for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
+        versions.push_back(it.key());
+
+      if (versions.empty())
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            "no versions available for: " + spec.id());
+        return 1;
+      }
+
+      if (spec.requestedVersion.empty())
+      {
+        spec.resolvedVersion = vix::cli::util::semver::findLatest(versions);
+        return 0;
+      }
+
+      const auto resolved =
+          vix::cli::util::semver::resolveMaxSatisfying(
+              versions,
+              spec.requestedVersion);
+
+      if (!resolved.has_value())
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            "no version matches range: " + spec.id() + "@" + spec.requestedVersion);
+        return 1;
+      }
+
+      spec.resolvedVersion = *resolved;
       return 0;
     }
 

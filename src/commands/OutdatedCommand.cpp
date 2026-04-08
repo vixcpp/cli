@@ -13,6 +13,7 @@
  */
 #include <vix/cli/commands/OutdatedCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/util/Semver.hpp>
 #include <vix/utils/Env.hpp>
 #include <nlohmann/json.hpp>
 
@@ -248,28 +249,27 @@ namespace vix::commands
       return registry_index_dir() / (ns + "." + name + ".json");
     }
 
-    std::string find_latest_version(const json &entry)
+    static std::string find_latest_version(const json &entry)
     {
       if (entry.contains("latest") && entry["latest"].is_string())
       {
         return entry["latest"].get<std::string>();
       }
 
-      if (entry.contains("versions") && entry["versions"].is_object())
+      if (!entry.contains("versions") || !entry["versions"].is_object())
       {
-        std::string best;
-        for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
-        {
-          const std::string v = it.key();
-          if (best.empty() || v > best)
-          {
-            best = v;
-          }
-        }
-        return best;
+        return {};
       }
 
-      return {};
+      std::vector<std::string> versions;
+      versions.reserve(entry["versions"].size());
+
+      for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
+      {
+        versions.push_back(it.key());
+      }
+
+      return vix::cli::util::semver::findLatest(versions);
     }
 
     bool lock_contains_dependency_id(const json &lock, const std::string &wantedId)

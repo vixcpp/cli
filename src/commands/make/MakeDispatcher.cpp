@@ -21,6 +21,7 @@
 #include <vix/cli/commands/make/generators/ConceptGenerator.hpp>
 #include <vix/cli/commands/make/generators/ExceptionGenerator.hpp>
 #include <vix/cli/commands/make/generators/TestGenerator.hpp>
+#include <vix/cli/commands/make/generators/ConfigGenerator.hpp>
 
 #include <utility>
 
@@ -187,6 +188,11 @@ namespace vix::cli::make
       return generators::generate_test(ctx);
     }
 
+    [[nodiscard]] MakeResult dispatch_config(const MakeContext &ctx)
+    {
+      return generators::generate_config(ctx);
+    }
+
     [[nodiscard]] MakeResult dispatch_module(const MakeContext &ctx)
     {
       MakeResult result;
@@ -219,6 +225,8 @@ namespace vix::cli::make
       return MakeKind::Test;
     if (k == "module")
       return MakeKind::Module;
+    if (k == "config")
+      return MakeKind::Config;
 
     return MakeKind::Unknown;
   }
@@ -266,6 +274,9 @@ namespace vix::cli::make
 
     case MakeKind::Module:
       return dispatch_module(ctx);
+
+    case MakeKind::Config:
+      return dispatch_config(ctx);
 
     case MakeKind::Unknown:
     default:

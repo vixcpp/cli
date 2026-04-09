@@ -201,22 +201,37 @@ namespace vix::cli::errors::build
 
     bool handleMissingCMakeLists(std::string_view log)
     {
-      if (!contains(log, "CMakeLists.txt") ||
-          (!contains(log, "does not exist") &&
-           !contains(log, "not found") &&
-           !contains(log, "Cannot find")))
+      const bool missingSourceDirCMakeLists =
+          contains(log, "The source directory") &&
+          contains(log, "does not appear to contain CMakeLists.txt");
+
+      const bool missingExplicitCMakeLists =
+          contains(log, "CMake Error: The source directory") &&
+          contains(log, "CMakeLists.txt");
+
+      const bool missingPathCMakeLists =
+          contains(log, "Source directory") &&
+          contains(log, "does not exist") &&
+          contains(log, "CMakeLists.txt");
+
+      if (!missingSourceDirCMakeLists &&
+          !missingExplicitCMakeLists &&
+          !missingPathCMakeLists)
       {
         return false;
       }
 
       const std::string path = extract(
           log,
-          std::regex(R"re(source directory\s+"([^"]+)")re"));
+          std::regex(R"re((?:The source directory|Source directory)\s+"([^"]+)")re"));
 
       error("CMake configure failed: CMakeLists.txt not found.");
-      printField("directory: ", path);
-      hint("Make sure you are running cmake from the correct directory.");
-      hint("Expected a CMakeLists.txt at the root of the project.");
+
+      if (!path.empty())
+        printField("directory: ", path);
+
+      hint("Check the source directory passed to CMake.");
+      hint("Run with --verbose to inspect the full configure command.");
       return true;
     }
 

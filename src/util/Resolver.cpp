@@ -88,7 +88,9 @@ namespace vix::cli::util::resolver
     std::string trim_copy(std::string s)
     {
       auto isws = [](unsigned char c)
-      { return std::isspace(c) != 0; };
+      {
+        return std::isspace(c) != 0;
+      };
 
       while (!s.empty() && isws(static_cast<unsigned char>(s.front())))
       {
@@ -238,6 +240,46 @@ namespace vix::cli::util::resolver
       return 0;
     }
 
+    std::optional<PkgSpec> parse_dep_string_v1(const std::string &raw)
+    {
+      const std::string s = trim_copy(raw);
+      if (s.empty())
+      {
+        return std::nullopt;
+      }
+
+      const auto slash = s.find('/');
+      if (slash == std::string::npos)
+      {
+        return std::nullopt;
+      }
+
+      const auto at = s.find('@', slash + 1);
+
+      PkgSpec spec;
+      spec.ns = trim_copy(s.substr(0, slash));
+
+      if (at == std::string::npos)
+      {
+        spec.name = trim_copy(s.substr(slash + 1));
+        spec.requestedVersion.clear();
+      }
+      else
+      {
+        spec.name = trim_copy(s.substr(slash + 1, at - (slash + 1)));
+        spec.requestedVersion = trim_copy(s.substr(at + 1));
+      }
+
+      spec.resolvedVersion.clear();
+
+      if (spec.ns.empty() || spec.name.empty())
+      {
+        return std::nullopt;
+      }
+
+      return spec;
+    }
+
     std::optional<PkgSpec> parse_dep_obj_v1(const json &dependency)
     {
       if (!dependency.is_object())
@@ -245,8 +287,21 @@ namespace vix::cli::util::resolver
         return std::nullopt;
       }
 
-      const std::string id = dependency.value("id", "");
-      const std::string version = dependency.value("version", "");
+      const std::string id = trim_copy(dependency.value("id", ""));
+      if (id.empty())
+      {
+        return std::nullopt;
+      }
+
+      std::string requested = trim_copy(dependency.value("version", ""));
+      if (requested.empty())
+      {
+        requested = trim_copy(dependency.value("requested", ""));
+      }
+      if (requested.empty())
+      {
+        requested = trim_copy(dependency.value("range", ""));
+      }
 
       const auto slash = id.find('/');
       if (slash == std::string::npos)
@@ -257,10 +312,10 @@ namespace vix::cli::util::resolver
       PkgSpec spec;
       spec.ns = trim_copy(id.substr(0, slash));
       spec.name = trim_copy(id.substr(slash + 1));
-      spec.requestedVersion = trim_copy(version);
+      spec.requestedVersion = requested;
       spec.resolvedVersion.clear();
 
-      if (spec.ns.empty() || spec.name.empty() || spec.requestedVersion.empty())
+      if (spec.ns.empty() || spec.name.empty())
       {
         return std::nullopt;
       }
@@ -288,6 +343,11 @@ namespace vix::cli::util::resolver
         return out;
       }
 
+      if (!root.is_object())
+      {
+        return out;
+      }
+
       if (!root.contains("deps") || !root["deps"].is_array())
       {
         return out;
@@ -295,10 +355,23 @@ namespace vix::cli::util::resolver
 
       for (const auto &dependency : root["deps"])
       {
-        auto spec = parse_dep_obj_v1(dependency);
-        if (spec.has_value())
+        if (dependency.is_object())
         {
-          out.push_back(*spec);
+          auto spec = parse_dep_obj_v1(dependency);
+          if (spec.has_value())
+          {
+            out.push_back(*spec);
+          }
+          continue;
+        }
+
+        if (dependency.is_string())
+        {
+          auto spec = parse_dep_string_v1(dependency.get<std::string>());
+          if (spec.has_value())
+          {
+            out.push_back(*spec);
+          }
         }
       }
 

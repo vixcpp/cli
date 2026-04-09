@@ -792,18 +792,30 @@ namespace vix::commands::BuildCommand
     {
       fs::path base = cwd;
       if (!opt.dir.empty())
-        base = fs::path(opt.dir);
+        base = fs::absolute(fs::path(opt.dir));
 
+      fs::path projectDir;
       const auto root = util::find_project_root(base);
-      if (!root)
+
+      if (root)
+      {
+        projectDir = *root;
+      }
+      else if (util::file_exists(base / "CMakeLists.txt"))
+      {
+        projectDir = base;
+      }
+      else
+      {
         return std::nullopt;
+      }
 
       const auto presetOpt = resolve_preset(opt.preset);
       if (!presetOpt)
         return std::nullopt;
 
       process::Plan plan;
-      plan.projectDir = *root;
+      plan.projectDir = fs::absolute(projectDir);
       plan.preset = *presetOpt;
 
       plan.launcher = detect_launcher(opt);
@@ -824,8 +836,10 @@ namespace vix::commands::BuildCommand
 
       std::string toolchainContent;
       if (!opt.targetTriple.empty())
+      {
         toolchainContent =
             build::toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
+      }
 
       plan.cmakeVars = build_cmake_vars(
           plan.preset,

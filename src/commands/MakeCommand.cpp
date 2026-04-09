@@ -123,6 +123,46 @@ namespace vix::commands
         {
           opt.header_only = true;
         }
+        else if (a == "--server")
+        {
+          opt.config_options.with_server = true;
+        }
+        else if (a == "--no-server")
+        {
+          opt.config_options.with_server = false;
+        }
+        else if (a == "--logging")
+        {
+          opt.config_options.with_logging = true;
+        }
+        else if (a == "--no-logging")
+        {
+          opt.config_options.with_logging = false;
+        }
+        else if (a == "--waf")
+        {
+          opt.config_options.with_waf = true;
+        }
+        else if (a == "--no-waf")
+        {
+          opt.config_options.with_waf = false;
+        }
+        else if (a == "--websocket")
+        {
+          opt.config_options.with_websocket = true;
+        }
+        else if (a == "--no-websocket")
+        {
+          opt.config_options.with_websocket = false;
+        }
+        else if (a == "--database")
+        {
+          opt.config_options.with_database = true;
+        }
+        else if (a == "--no-database")
+        {
+          opt.config_options.with_database = false;
+        }
         else if (a == "-d" || a == "--dir")
         {
           if (i + 1 < args.size() && !is_option_token(args[i + 1]))
@@ -458,6 +498,59 @@ namespace vix::commands
       return run_direct(opt);
     }
 
+    int run_config_prompt(mk::MakeOptions opt)
+    {
+      if (opt.name.empty())
+      {
+        while (true)
+        {
+          opt.name = prompt_line("Config name: ");
+
+          if (opt.name.empty())
+          {
+            ui::warn_line(std::cout, "Config name is required.");
+            continue;
+          }
+
+          if (!mk::is_valid_cpp_identifier(opt.name))
+          {
+            ui::warn_line(std::cout, "Invalid config name.");
+            continue;
+          }
+
+          if (mk::is_reserved_cpp_keyword(opt.name))
+          {
+            ui::warn_line(std::cout, "Reserved C++ keyword is not allowed.");
+            continue;
+          }
+
+          break;
+        }
+      }
+
+      opt.config_options.with_server =
+          prompt_yes_no("Include server section?", opt.config_options.with_server);
+
+      opt.config_options.with_logging =
+          prompt_yes_no("Include logging section?", opt.config_options.with_logging);
+
+      opt.config_options.with_waf =
+          prompt_yes_no("Include waf section?", opt.config_options.with_waf);
+
+      opt.config_options.with_websocket =
+          prompt_yes_no("Include websocket section?", opt.config_options.with_websocket);
+
+      opt.config_options.with_database =
+          prompt_yes_no("Include database section?", opt.config_options.with_database);
+
+      if (opt.in.empty())
+      {
+        opt.in = prompt_line("Target folder (optional): ");
+      }
+
+      return run_direct(opt);
+    }
+
     int run_interactive(mk::MakeOptions opt)
     {
       const mk::MakeKind kind = mk::parse_make_kind(opt.kind);
@@ -466,6 +559,9 @@ namespace vix::commands
       {
       case mk::MakeKind::Class:
         return run_class_prompt(opt);
+
+      case mk::MakeKind::Config:
+        return run_config_prompt(opt);
 
       case mk::MakeKind::Struct:
       case mk::MakeKind::Enum:
@@ -534,7 +630,8 @@ namespace vix::commands
     out << "  concept     Generate a C++20 concept (.hpp)\n";
     out << "  exception   Generate a std::exception derived type\n";
     out << "  test        Generate a GoogleTest skeleton\n";
-    out << "  module      Redirects to the modules workflow\n\n";
+    out << "  module      Redirects to the modules workflow\n";
+    out << "  config      Generate a JSON runtime configuration file\n\n";
 
     out << "Options:\n";
     out << "  -d, --dir <path>          Project root (default: current directory)\n";
@@ -544,6 +641,16 @@ namespace vix::commands
     out << "  --print                   Print preview/snippet without writing files\n";
     out << "  --dry-run                 Show what would be generated without writing files\n";
     out << "  --force                   Overwrite existing files\n";
+    out << "  --server                  Enable server section for config generation\n";
+    out << "  --no-server               Disable server section for config generation\n";
+    out << "  --logging                 Enable logging section for config generation\n";
+    out << "  --no-logging              Disable logging section for config generation\n";
+    out << "  --waf                     Enable waf section for config generation\n";
+    out << "  --no-waf                  Disable waf section for config generation\n";
+    out << "  --websocket               Enable websocket section for config generation\n";
+    out << "  --no-websocket            Disable websocket section for config generation\n";
+    out << "  --database                Enable database section for config generation\n";
+    out << "  --no-database             Disable database section for config generation\n";
     out << "  -h, --help                Show help\n\n";
 
     out << "Examples:\n";
@@ -556,7 +663,10 @@ namespace vix::commands
     out << "  vix make lambda visit_all --print\n";
     out << "  vix make concept EqualityComparable\n";
     out << "  vix make exception InvalidToken --in src/auth\n";
-    out << "  vix make test AuthService\n\n";
+    out << "  vix make test AuthService\n";
+    out << "  vix make config app\n";
+    out << "  vix make config app --websocket --database\n";
+    out << "  vix make:config\n\n";
 
     out << "Behavior:\n";
     out << "  - By default, files are generated in the current directory.\n";

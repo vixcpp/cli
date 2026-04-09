@@ -37,6 +37,15 @@ namespace vix::cli::make
     bool with_virtual_destructor = true;
   };
 
+  struct MakeConfigOptions
+  {
+    bool with_server = true;
+    bool with_logging = true;
+    bool with_waf = true;
+    bool with_websocket = false;
+    bool with_database = false;
+  };
+
   struct MakeOptions
   {
     std::string kind;
@@ -52,6 +61,7 @@ namespace vix::cli::make
     bool show_help = false;
 
     MakeClassOptions class_options;
+    MakeConfigOptions config_options;
   };
 } // namespace vix::cli::make
 

@@ -29,7 +29,8 @@ namespace vix::cli::make
     Concept,
     Exception,
     Test,
-    Module
+    Module,
+    Config
   };
 
   [[nodiscard]] constexpr std::string_view to_string(const MakeKind kind) noexcept
@@ -54,6 +55,8 @@ namespace vix::cli::make
       return "test";
     case MakeKind::Module:
       return "module";
+    case MakeKind::Config:
+      return "config"; // ✅ AJOUT ICI
     case MakeKind::Unknown:
     default:
       return "unknown";

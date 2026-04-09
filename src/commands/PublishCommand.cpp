@@ -949,25 +949,97 @@ namespace vix::commands
       const std::string commit = *commitOpt;
       vix::cli::util::kv(std::cout, "commit", commit);
 
-      std::optional<std::string> ns = read_vix_json_namespace(repoRoot);
-      std::optional<std::string> name = read_vix_json_name(repoRoot);
+      auto is_valid_package_atom = [](const std::string &value) -> bool
+      {
+        if (value.empty())
+          return false;
+
+        for (char c : value)
+        {
+          const unsigned char uc = static_cast<unsigned char>(c);
+          if (!(std::isalnum(uc) || c == '-' || c == '_' || c == '.'))
+            return false;
+        }
+
+        return true;
+      };
+
+      json vixManifest = json::object();
+      std::optional<std::string> ns;
+      std::optional<std::string> name;
+
+      const fs::path manifestPath = repoRoot / "vix.json";
+      const bool hasManifest = file_exists_nonempty(manifestPath);
+
+      if (hasManifest)
+      {
+        try
+        {
+          vixManifest = read_json_or_throw(manifestPath);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("invalid vix.json: ") + ex.what());
+          return 1;
+        }
+
+        if (!vixManifest.is_object())
+        {
+          vix::cli::util::err_line(std::cerr, "invalid vix.json: root must be an object");
+          return 1;
+        }
+
+        if (!vixManifest.contains("namespace") || !vixManifest["namespace"].is_string())
+        {
+          vix::cli::util::err_line(std::cerr, "invalid vix.json: missing string field `namespace`");
+          return 1;
+        }
+
+        if (!vixManifest.contains("name") || !vixManifest["name"].is_string())
+        {
+          vix::cli::util::err_line(std::cerr, "invalid vix.json: missing string field `name`");
+          return 1;
+        }
+
+        const std::string manifestNs =
+            lower_copy(trim_copy(vixManifest["namespace"].get<std::string>()));
+        const std::string manifestName =
+            lower_copy(trim_copy(vixManifest["name"].get<std::string>()));
+
+        if (!is_valid_package_atom(manifestNs))
+        {
+          vix::cli::util::err_line(std::cerr,
+                                   "invalid vix.json: `namespace` contains unsupported characters");
+          return 1;
+        }
+
+        if (!is_valid_package_atom(manifestName))
+        {
+          vix::cli::util::err_line(std::cerr,
+                                   "invalid vix.json: `name` contains unsupported characters");
+          return 1;
+        }
+
+        ns = manifestNs;
+        name = manifestName;
+      }
 
       if (!ns || !name)
       {
         const auto inferred = infer_from_git_remote();
         if (inferred)
         {
-          if (!ns)
-            ns = inferred->first;
-          if (!name)
-            name = inferred->second;
+          ns = inferred->first;
+          name = inferred->second;
         }
       }
 
       if (!ns || !name || ns->empty() || name->empty())
       {
         vix::cli::util::err_line(std::cerr, "cannot infer package namespace/name");
-        vix::cli::util::warn_line(std::cerr, "Fix: add { \"namespace\": \"...\", \"name\": \"...\" } in vix.json or ensure git remote origin is set.");
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Fix: add { \"namespace\": \"...\", \"name\": \"...\" } in vix.json or ensure git remote origin is set.");
         return 1;
       }
 
@@ -991,73 +1063,17 @@ namespace vix::commands
 
       const bool entryExists = fs::exists(entryPath);
 
-      if (entryExists)
+      if (!git_remote_tag_exists(tag))
       {
-        if (!git_remote_tag_exists(tag))
-        {
-          vix::cli::util::err_line(std::cerr, "tag not found on remote origin: " + tag);
-          vix::cli::util::warn_line(std::cerr, "Fix: git push origin " + tag);
-          vix::cli::util::warn_line(std::cerr, "Or:  git push --tags");
-          return 1;
-        }
-
-        vix::cli::util::ok_line(std::cout, "tag pushed: " + tag);
-        vix::cli::util::ok_line(std::cout, "package already registered: " + pkgId);
-
-        const std::string registryRepo = "vixcpp/registry";
-        const std::string workflowFile = "registry_index_from_tags.yml";
-
-        if (!command_exists_on_path("gh"))
-        {
-          vix::cli::util::warn_line(std::cout, "gh not found. Registry will update on the next scheduled index run.");
-          vix::cli::util::warn_line(std::cout, "Trigger manually: gh workflow run " + workflowFile + " --repo " + registryRepo + " --ref main");
-          return 0;
-        }
-
-        if (!gh_is_authed())
-        {
-          vix::cli::util::warn_line(std::cout, "gh is not authenticated. Run: gh auth login");
-          vix::cli::util::warn_line(std::cout, "Then: gh workflow run " + workflowFile + " --repo " + registryRepo + " --ref main");
-          return 0;
-        }
-
-        {
-          const auto r = run_process_retry_debug({
-              "gh",
-              "workflow",
-              "run",
-              workflowFile,
-              "--repo",
-              registryRepo,
-              "--ref",
-              "main",
-          });
-
-          if (r.exitCode == 0)
-          {
-            vix::cli::util::ok_line(std::cout, "registry index triggered");
-            vix::cli::util::ok_line(std::cout, "registry will reflect this version after the index workflow merges");
-            return 0;
-          }
-
-          vix::cli::util::warn_line(std::cout, "could not trigger registry index automatically");
-
-          const std::string out = trim_copy(r.out);
-          const std::string err = trim_copy(r.err);
-
-          if (!out.empty())
-            vix::cli::util::warn_line(std::cout, out);
-          if (!err.empty())
-            vix::cli::util::warn_line(std::cout, err);
-
-          vix::cli::util::warn_line(std::cout, "Run: gh workflow run " + workflowFile + " --repo " + registryRepo + " --ref main");
-          return 0;
-        }
+        vix::cli::util::err_line(std::cerr, "tag not found on remote origin: " + tag);
+        vix::cli::util::warn_line(std::cerr, "Fix: git push origin " + tag);
+        vix::cli::util::warn_line(std::cerr, "Or:  git push --tags");
+        return 1;
       }
 
-      json entry;
+      json entry = json::object();
 
-      if (fs::exists(entryPath))
+      if (entryExists)
       {
         try
         {
@@ -1065,7 +1081,30 @@ namespace vix::commands
         }
         catch (const std::exception &ex)
         {
-          vix::cli::util::err_line(std::cerr, std::string("failed to read registry entry: ") + ex.what());
+          vix::cli::util::err_line(std::cerr,
+                                   std::string("failed to read registry entry: ") + ex.what());
+          return 1;
+        }
+
+        if (!entry.is_object())
+        {
+          vix::cli::util::err_line(std::cerr, "invalid registry entry format");
+          return 1;
+        }
+
+        if (!entry.contains("versions") || !entry["versions"].is_object())
+        {
+          vix::cli::util::err_line(std::cerr,
+                                   "invalid registry entry: missing versions object");
+          return 1;
+        }
+
+        if (entry["versions"].contains(resolvedVersion))
+        {
+          vix::cli::util::err_line(std::cerr,
+                                   "version already registered: " + pkgId + "@" + resolvedVersion);
+          vix::cli::util::warn_line(std::cerr,
+                                    "This tag/version is already present in the registry.");
           return 1;
         }
       }
@@ -1080,7 +1119,8 @@ namespace vix::commands
         const std::string httpsUrl = https_repo_from_remote(remoteUrl);
         const std::string defaultBranch = guess_default_branch();
 
-        const json vixManifest = read_vix_json_object(repoRoot);
+        if (vixManifest.empty())
+          vixManifest = read_vix_json_object(repoRoot);
 
         const std::string desc =
             (vixManifest.contains("description") && vixManifest["description"].is_string())
@@ -1171,7 +1211,9 @@ namespace vix::commands
         quality["ci"] = json::array();
         quality["hasDocs"] = !documentation.empty();
         quality["hasExamples"] = fs::exists(repoRoot / "examples");
-        quality["hasTests"] = fs::exists(repoRoot / "tests") || fs::exists(repoRoot / "test") || fs::exists(repoRoot / "unittests");
+        quality["hasTests"] = fs::exists(repoRoot / "tests") ||
+                              fs::exists(repoRoot / "test") ||
+                              fs::exists(repoRoot / "unittests");
 
         json api = json::object();
         api["format"] = "vix-api-1";
@@ -1246,7 +1288,8 @@ namespace vix::commands
       }
       catch (const std::exception &ex)
       {
-        vix::cli::util::err_line(std::cerr, std::string("failed to write registry entry: ") + ex.what());
+        vix::cli::util::err_line(std::cerr,
+                                 std::string("failed to write registry entry: ") + ex.what());
         return 1;
       }
 
@@ -1254,22 +1297,26 @@ namespace vix::commands
       vix::cli::util::kv(std::cout, "branch", branch);
 
       {
-        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "pull", "-q", "--ff-only"});
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "pull", "-q", "--ff-only"});
         if (r.exitCode != 0)
         {
-          vix::cli::util::err_line(std::cerr, "failed to update local registry repo (pull --ff-only)");
+          vix::cli::util::err_line(std::cerr,
+                                   "failed to update local registry repo (pull --ff-only)");
 
           if (!r.err.empty())
             vix::cli::util::warn_line(std::cerr, r.err);
 
-          vix::cli::util::tip_line(std::cerr, "Run 'vix registry sync' to reset the local registry.");
+          vix::cli::util::tip_line(std::cerr,
+                                   "Run 'vix registry sync' to reset the local registry.");
 
           return r.exitCode;
         }
       }
 
       {
-        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "checkout", "-B", branch, "-q"});
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "checkout", "-B", branch, "-q"});
         if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to create branch: " + branch);
@@ -1280,8 +1327,10 @@ namespace vix::commands
       }
 
       {
-        const std::string relEntry = (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
-        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "add", relEntry});
+        const std::string relEntry =
+            (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "add", relEntry});
         if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to add registry entry");
@@ -1293,7 +1342,8 @@ namespace vix::commands
 
       {
         const std::string msg = "registry: " + pkgId + " v" + resolvedVersion;
-        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "commit", "-q", "-m", msg});
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "commit", "-q", "-m", msg});
         if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to commit registry update");
@@ -1304,7 +1354,8 @@ namespace vix::commands
       }
 
       {
-        const auto r = run_process_retry_debug({"git", "-C", regRepo.string(), "push", "-u", "origin", branch});
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "push", "-u", "origin", branch});
         if (r.exitCode != 0)
         {
           vix::cli::util::err_line(std::cerr, "failed to push branch to origin");
@@ -1316,47 +1367,42 @@ namespace vix::commands
 
       if (opt.cleanup)
       {
-        const auto r = run_process_capture({"git", "-C", regRepo.string(), "branch", "--format=%(refname:short)"});
+        const auto r = run_process_capture(
+            {"git", "-C", regRepo.string(), "branch", "--format=%(refname:short)"});
         if (r.exitCode == 0 && !r.out.empty())
         {
           std::istringstream iss(r.out);
           std::string line;
           const std::string prefix = "publish-" + *ns + "-" + *name + "-";
+
           while (std::getline(iss, line))
           {
             line = trim_copy(line);
-            if (line.empty())
+            if (line.empty() || line == branch)
               continue;
-            if (line == branch)
-              continue;
+
             if (line.rfind(prefix, 0) != 0)
               continue;
 
-            (void)run_process_capture({"git", "-C", regRepo.string(), "branch", "-D", line});
+            run_process_capture({"git", "-C", regRepo.string(), "branch", "-D", line});
           }
         }
       }
 
       bool prCreated = false;
 
-      if (!command_exists_on_path("gh"))
+      if (command_exists_on_path("gh") && gh_is_authed())
       {
-        vix::cli::util::warn_line(std::cout, "gh not found, skipping PR creation.");
-      }
-      else if (!gh_is_authed())
-      {
-        vix::cli::util::warn_line(std::cout, "gh is installed but not authenticated, skipping PR creation.");
-        vix::cli::util::warn_line(std::cout, "Run: gh auth login");
-      }
-      else
-      {
-        const std::string title = "registry: " + pkgId + " v" + resolvedVersion;
+        const std::string title = "registry: add " + pkgId + " v" + resolvedVersion;
 
-        std::string body;
-        body += "Adds " + pkgId + " v" + resolvedVersion + " to the Vix registry.\n\n";
-        body += "- tag: " + tag + "\n";
-        body += "- commit: " + commit + "\n";
-        body += "- time: " + iso_utc_now() + "\n";
+        std::ostringstream body;
+        body << "Publish package `" << pkgId << "` version `" << resolvedVersion << "`.\n\n";
+        body << "- tag: `" << tag << "`\n";
+        body << "- commit: `" << commit << "`\n";
+
+        if (!trim_copy(opt.notes).empty())
+          body << "\nNotes:\n"
+               << opt.notes << "\n";
 
         const auto r = run_process_retry_debug({
             "gh",
@@ -1371,14 +1417,15 @@ namespace vix::commands
             "--title",
             title,
             "--body",
-            body,
+            body.str(),
         });
 
         if (r.exitCode == 0)
           prCreated = true;
         else
         {
-          vix::cli::util::warn_line(std::cout, "gh pr create failed, continuing without failing publish.");
+          vix::cli::util::warn_line(std::cout,
+                                    "gh pr create failed, continuing without failing publish.");
           if (!r.err.empty())
             vix::cli::util::warn_line(std::cout, r.err);
         }
@@ -1387,13 +1434,16 @@ namespace vix::commands
       if (prCreated)
       {
         vix::cli::util::ok_line(std::cout, "PR created for: " + pkgId + " v" + resolvedVersion);
-        vix::cli::util::ok_line(std::cout, "registry will reflect this version after the index workflow merges");
+        vix::cli::util::ok_line(std::cout,
+                                "registry will reflect this version after the PR merges");
         return 0;
       }
 
       vix::cli::util::ok_line(std::cout, "branch pushed: " + branch);
-      vix::cli::util::warn_line(std::cout, "Create a PR on GitHub: vixcpp/registry ← " + branch);
-      vix::cli::util::warn_line(std::cout, "Tip: install/auth gh to auto-create PR next time.");
+      vix::cli::util::warn_line(std::cout,
+                                "Create a PR on GitHub: vixcpp/registry <- " + branch);
+      vix::cli::util::warn_line(std::cout,
+                                "Tip: install/auth gh to auto-create PR next time.");
       return 0;
     }
   } // namespace

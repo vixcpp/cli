@@ -984,7 +984,7 @@ int main()
   static std::string make_readme_app(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(3500);
+    readme.reserve(6200);
 
     readme += "# " + projectName + "\n\n";
     readme += "Minimal Vix.cpp application.\n\n";
@@ -995,9 +995,52 @@ int main()
     readme += "vix run\n";
     readme += "```\n\n";
 
+    readme += "## Dependencies\n\n";
+    readme += "This project includes a `vix.json` manifest.\n\n";
+    readme += "Dependency workflow:\n\n";
+    readme += "- `vix.json` stores declared dependency requirements\n";
+    readme += "- `vix.lock` stores exact resolved versions for reproducible installs\n";
+    readme += "- `vix add` updates both `vix.json` and `vix.lock`\n";
+    readme += "- `vix install` installs dependencies from `vix.lock`\n\n";
+
+    readme += "Example:\n\n";
+    readme += "```bash\n";
+    readme += "vix add gk/json@^1.0.0\n";
+    readme += "vix install\n";
+    readme += "```\n\n";
+
+    readme += "If `.vix/vix_deps.cmake` exists, local registry dependencies can be included from CMake automatically.\n\n";
+
+    readme += "## Tasks\n\n";
+    readme += "This template also defines default tasks in `vix.json`.\n\n";
+    readme += "Run them with:\n\n";
+    readme += "```bash\n";
+    readme += "vix task <name>\n";
+    readme += "```\n\n";
+
+    readme += "Examples:\n\n";
+    readme += "```bash\n";
+    readme += "vix task fmt\n";
+    readme += "vix task check\n";
+    readme += "vix task test\n";
+    readme += "vix task dev\n";
+    readme += "vix task ci\n";
+    readme += "```\n\n";
+
+    readme += "The generated app manifest includes tasks such as:\n\n";
+    readme += "- `fmt`\n";
+    readme += "- `check`\n";
+    readme += "- `test`\n";
+    readme += "- `dev`\n";
+    readme += "- `ci`\n";
+    readme += "- `release`\n";
+    readme += "- `package`\n\n";
+
+    readme += "You can edit `vix.json` to customize commands, variables, environments, and task pipelines.\n\n";
+
     readme += "## Configuration\n\n";
-    readme += "Vix applications **do not auto-load project configuration by default**.\n";
-    readme += "If you want to use a project-level configuration (for example to configure the server port),\n";
+    readme += "Vix applications do not auto-load project configuration by default.\n";
+    readme += "If you want to use a project-level configuration, for example to configure the server port,\n";
     readme += "you must explicitly initialize and read it in your application.\n\n";
 
     readme += "### Project config file\n\n";
@@ -1036,11 +1079,10 @@ int main()
 
     return readme;
   }
-
   static std::string make_readme_lib(const std::string &name)
   {
     std::string readme;
-    readme.reserve(5000);
+    readme.reserve(6500);
 
     readme += "# " + name + "\n\n";
     readme += "Header-only C++ library scaffold.\n\n";
@@ -1059,6 +1101,21 @@ int main()
     readme += "Canonical target:\n\n";
     readme += "```cmake\n";
     readme += name + "::" + name + "\n";
+    readme += "```\n\n";
+
+    readme += "## Manifest\n\n";
+    readme += "This project includes a `vix.json` manifest.\n\n";
+    readme += "For libraries, `vix.json` is used to describe package metadata and declared dependencies.\n\n";
+    readme += "Important:\n\n";
+    readme += "- `vix.json` stores declared dependency requirements\n";
+    readme += "- `vix.lock` stores exact resolved versions for reproducible installs\n";
+    readme += "- `vix add` updates both `vix.json` and `vix.lock`\n";
+    readme += "- `vix install` installs dependencies from `vix.lock`\n\n";
+
+    readme += "Example:\n\n";
+    readme += "```bash\n";
+    readme += "vix add gk/json@^1.0.0\n";
+    readme += "vix install\n";
     readme += "```\n\n";
 
     readme += "## Build\n\n";
@@ -1092,6 +1149,7 @@ int main()
     readme += "- Uses embedded Vix CMake presets (dev, dev-ninja, release)\n";
     readme += "- Automatically configures and builds (no manual cmake needed)\n";
     readme += "- Pass extra CMake flags after `--`\n";
+    readme += "- Edit `vix.json` metadata before publishing the package\n";
 
     return readme;
   }
@@ -1285,14 +1343,15 @@ int main()
   static std::string make_vix_json_lib(const std::string &name)
   {
     std::string s;
-    s.reserve(1400);
+    s.reserve(1600);
 
     s += "{\n";
     s += "  \"name\": \"" + name + "\",\n";
-    s += "  \"namespace\": \"gaspardkirira\",\n";
+    s += "  \"namespace\": \"your-namespace\",\n";
     s += "  \"version\": \"0.1.0\",\n";
     s += "  \"type\": \"header-only\",\n";
     s += "  \"include\": \"include\",\n";
+    s += "  \"deps\": [],\n";
     s += "  \"license\": \"MIT\",\n";
     s += "  \"description\": \"A tiny header-only C++ library.\",\n";
     s += "  \"keywords\": [\n";
@@ -1300,11 +1359,11 @@ int main()
     s += "    \"header-only\",\n";
     s += "    \"vix\"\n";
     s += "  ],\n";
-    s += "  \"repository\": \"https://github.com/Gaspardkirira/" + name + "\",\n";
+    s += "  \"repository\": \"https://github.com/your-username/" + name + "\",\n";
     s += "  \"authors\": [\n";
     s += "    {\n";
-    s += "      \"name\": \"Gaspard Kirira\",\n";
-    s += "      \"github\": \"Gaspardkirira\"\n";
+    s += "      \"name\": \"Your Name\",\n";
+    s += "      \"github\": \"your-username\"\n";
     s += "    }\n";
     s += "  ]\n";
     s += "}\n";
@@ -1315,10 +1374,11 @@ int main()
   static std::string make_vix_json_app(const std::string &name)
   {
     std::string s;
-    s.reserve(4096);
+    s.reserve(4200);
 
     s += "{\n";
     s += "  \"name\": \"" + name + "\",\n";
+    s += "  \"deps\": [],\n";
     s += "  \"vars\": {\n";
     s += "    \"preset\": \"dev-ninja\",\n";
     s += "    \"release_preset\": \"release\",\n";
@@ -2094,6 +2154,9 @@ namespace vix::commands::NewCommand
         << "What happens\n"
         << "  • Generates a ready-to-run Vix project\n"
         << "  • Sets up CMake, source structure, and config files\n"
+        << "  • Creates a vix.json manifest\n"
+        << "  • For apps, includes default tasks and an empty deps list\n"
+        << "  • For libraries, includes package metadata and an empty deps list\n"
         << "  • Applies the selected template (app or library)\n\n"
 
         << "Options\n"
@@ -2108,6 +2171,9 @@ namespace vix::commands::NewCommand
 
         << "Notes\n"
         << "  • Use '.' to initialize in the current directory\n"
+        << "  • Use 'vix add <pkg>' to add dependencies\n"
+        << "  • Use 'vix install' to install from vix.lock\n"
+        << "  • Use 'vix task <name>' to run generated tasks\n"
         << "  • Designed for fast start with zero setup\n";
 
     return 0;

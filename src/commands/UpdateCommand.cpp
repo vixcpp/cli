@@ -15,6 +15,7 @@
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/util/Manifest.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -81,6 +82,45 @@ namespace vix::commands
       json j;
       in >> j;
       return j;
+    }
+
+    fs::path manifest_path()
+    {
+      return fs::current_path() / "vix.json";
+    }
+
+    std::string make_raw_spec(const std::string &id, const std::string &requested)
+    {
+      if (requested.empty())
+        return id;
+
+      return id + "@" + requested;
+    }
+
+    bool manifest_contains_dependency_id(
+        const std::vector<vix::cli::util::manifest::Dependency> &deps,
+        const std::string &wantedId)
+    {
+      for (const auto &dep : deps)
+      {
+        if (dep.id == wantedId)
+          return true;
+      }
+
+      return false;
+    }
+
+    std::string read_manifest_requested(
+        const std::vector<vix::cli::util::manifest::Dependency> &deps,
+        const std::string &wantedId)
+    {
+      for (const auto &dep : deps)
+      {
+        if (dep.id == wantedId)
+          return dep.requested;
+      }
+
+      return {};
     }
 
     json read_lock_or_throw()
@@ -234,31 +274,24 @@ namespace vix::commands
       return {};
     }
 
-    std::vector<UpdateItem> collect_targets(const json &lock, const Options &opt, int &rc)
+    std::vector<UpdateItem> collect_targets(
+        const std::vector<vix::cli::util::manifest::Dependency> &manifestDeps,
+        const json &lock,
+        const Options &opt,
+        int &rc)
     {
       rc = 0;
       std::vector<UpdateItem> items;
 
-      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
-      {
-        return items;
-      }
-
       if (opt.rawTargets.empty())
       {
-        for (const auto &d : lock["dependencies"])
+        for (const auto &dep : manifestDeps)
         {
-          const std::string id = d.value("id", "");
-          const std::string version = d.value("version", "");
-
-          if (!id.empty())
-          {
-            UpdateItem item;
-            item.rawSpec = id;
-            item.id = id;
-            item.beforeVersion = version;
-            items.push_back(item);
-          }
+          UpdateItem item;
+          item.id = dep.id;
+          item.rawSpec = make_raw_spec(dep.id, dep.requested);
+          item.beforeVersion = read_locked_version(lock, dep.id);
+          items.push_back(item);
         }
 
         return items;
@@ -274,24 +307,34 @@ namespace vix::commands
           vix::cli::util::err_line(std::cerr, "invalid package spec");
           vix::cli::util::warn_line(std::cerr, "Expected: <namespace>/<name>[@<version>]");
           vix::cli::util::warn_line(std::cerr, "Example:  vix update gk/jwt");
-          vix::cli::util::warn_line(std::cerr, "Example:  vix update @gk/jwt@1.0.0");
+          vix::cli::util::warn_line(std::cerr, "Example:  vix update @gk/jwt@^1.2.0");
           rc = 1;
           return {};
         }
 
         const std::string id = spec.id();
 
-        if (!lock_contains_dependency_id(lock, id))
+        if (!manifest_contains_dependency_id(manifestDeps, id))
         {
-          vix::cli::util::err_line(std::cerr, "dependency not found in vix.lock: " + id);
+          vix::cli::util::err_line(std::cerr, "dependency not found in vix.json: " + id);
           rc = 1;
           return {};
         }
 
         UpdateItem item;
-        item.rawSpec = raw;
         item.id = id;
         item.beforeVersion = read_locked_version(lock, id);
+
+        if (!spec.requestedVersion.empty())
+        {
+          item.rawSpec = id + "@" + spec.requestedVersion;
+        }
+        else
+        {
+          const std::string requested = read_manifest_requested(manifestDeps, id);
+          item.rawSpec = make_raw_spec(id, requested);
+        }
+
         items.push_back(item);
       }
 
@@ -352,10 +395,13 @@ namespace vix::commands
         return InstallCommand::run({"-g", opt.globalSpec});
       }
 
+      const auto manifestDeps =
+          vix::cli::util::manifest::read_manifest_dependencies_or_throw(manifest_path());
+
       json lock = read_lock_or_throw();
 
       int targetRc = 0;
-      auto items = collect_targets(lock, opt, targetRc);
+      auto items = collect_targets(manifestDeps, lock, opt, targetRc);
       if (targetRc != 0)
       {
         return targetRc;
@@ -395,6 +441,22 @@ namespace vix::commands
 
         if (!opt.dryRun)
         {
+          PkgSpec requestedSpec;
+          if (!parse_pkg_spec(item.rawSpec, requestedSpec))
+          {
+            vix::cli::util::err_line(std::cerr, "invalid package spec");
+            return 1;
+          }
+
+          if (!requestedSpec.requestedVersion.empty())
+          {
+            vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
+                manifest_path(),
+                vix::cli::util::manifest::Dependency{
+                    requestedSpec.id(),
+                    requestedSpec.requestedVersion});
+          }
+
           const int rc = AddCommand::run({item.rawSpec});
           if (rc != 0)
           {
@@ -521,7 +583,7 @@ namespace vix::commands
         << "  vix update\n"
         << "  vix update gk/jwt\n"
         << "  vix update @gk/jwt\n"
-        << "  vix update gk/jwt@1.0.0\n"
+        << "  vix update gk/jwt@^1.2.0\n"
         << "  vix update gk/jwt gk/pdf --install\n"
         << "  vix update --dry-run\n"
         << "  vix update @gk/jwt --json\n"
@@ -529,9 +591,9 @@ namespace vix::commands
 
         << "What happens\n"
         << "  • Project mode:\n"
-        << "    - Reads dependencies from vix.lock\n"
-        << "    - Updates selected or all packages\n"
-        << "    - Rewrites vix.lock using the add flow\n"
+        << "    - Reads dependency ranges from vix.json\n"
+        << "    - Resolves newer matching versions from the registry\n"
+        << "    - Rewrites vix.lock with exact pinned versions\n"
         << "    - Optionally runs 'vix install'\n"
         << "\n"
         << "  • Global mode (-g):\n"
@@ -540,9 +602,10 @@ namespace vix::commands
         << "    - Reuses 'vix install -g' logic\n\n"
 
         << "Notes\n"
-        << "  • May upgrade major versions\n"
+        << "  • Version ranges are stored in vix.json\n"
+        << "  • Exact resolved versions are stored in vix.lock\n"
         << "  • Global update does not use vix.lock\n"
-        << "  • A project dependency must already exist in vix.lock\n";
+        << "  • A project dependency must already exist in vix.json\n";
 
     return 0;
   }

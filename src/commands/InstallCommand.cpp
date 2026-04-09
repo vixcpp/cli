@@ -1370,7 +1370,7 @@ namespace vix::commands
   {
     std::cout
         << "vix install\n"
-        << "Install project dependencies or one global package.\n\n"
+        << "Install project dependencies from vix.lock or install one global package.\n\n"
 
         << "Usage\n"
         << "  vix install\n"
@@ -1379,15 +1379,21 @@ namespace vix::commands
         << "Examples\n"
         << "  vix install\n"
         << "  vix install -g gk/jwt\n"
-        << "  vix install -g gk/jwt@1.0.0\n"
+        << "  vix install -g gk/jwt@^1.0.0\n"
         << "  vix install -g @gk/jwt\n"
-        << "  vix install -g @gk/jwt@1.0.0\n\n"
+        << "  vix install -g @gk/jwt@~1.2.0\n\n"
 
         << "What happens\n"
-        << "  • Installs dependencies pinned in vix.lock\n"
-        << "  • Reuses cached packages when available\n"
-        << "  • Generates ./.vix/vix_deps.cmake for CMake projects\n"
-        << "  • Supports global installs with -g\n\n"
+        << "  • Project mode:\n"
+        << "    - Reads exact resolved dependencies from vix.lock\n"
+        << "    - Reuses cached packages when available\n"
+        << "    - Installs dependencies into ./.vix/deps/\n"
+        << "    - Generates ./.vix/vix_deps.cmake for CMake projects\n"
+        << "\n"
+        << "  • Global mode (-g):\n"
+        << "    - Resolves a package from the registry\n"
+        << "    - Installs it into the global Vix store\n"
+        << "    - Updates ~/.vix/global/installed.json\n\n"
 
         << "Project outputs\n"
         << "  ./.vix/deps/\n"
@@ -1398,9 +1404,11 @@ namespace vix::commands
         << "  ~/.vix/global/installed.json\n\n"
 
         << "Notes\n"
+        << "  • Project install is strict and reproducible\n"
+        << "  • Project install does not resolve dependency ranges from vix.json\n"
+        << "  • Use 'vix add' or 'vix update' to change resolved versions\n"
         << "  • Use 'vix registry sync' if a package is not found\n"
-        << "  • '@namespace/name' is supported\n"
-        << "  • 'vix deps' may remain as a compatibility alias internally\n";
+        << "  • '@namespace/name' is supported\n";
 
     return 0;
   }

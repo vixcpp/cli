@@ -606,12 +606,12 @@ namespace vix::commands
   {
     std::cout
         << "vix outdated\n"
-        << "Check whether project dependencies are behind the latest registry versions.\n\n"
+        << "Check if project dependencies are behind the latest registry versions.\n\n"
 
         << "Usage\n"
         << "  vix outdated\n"
-        << "  vix outdated [@]namespace/name[@version]\n"
-        << "  vix outdated [@]namespace/name[@version] [@]namespace/name[@version]\n"
+        << "  vix outdated [@]namespace/name\n"
+        << "  vix outdated [@]namespace/name [@]namespace/name\n"
         << "  vix outdated [options]\n\n"
 
         << "Options\n"
@@ -628,14 +628,17 @@ namespace vix::commands
         << "  vix outdated --strict\n\n"
 
         << "What happens\n"
-        << "  • Reads dependencies from vix.lock\n"
+        << "  • Reads installed dependencies from vix.lock\n"
         << "  • Looks up the latest version in the local registry index\n"
         << "  • Compares locked versions with registry latest versions\n"
-        << "  • Supports the same package spec syntax as add and update\n\n"
+        << "  • Reports outdated or missing packages\n\n"
 
         << "Notes\n"
+        << "  • Comparison is based on vix.lock (installed state), not vix.json\n"
+        << "  • Does not resolve dependency ranges\n"
+        << "  • Use 'vix update' to upgrade dependencies\n"
         << "  • Run 'vix registry sync' to refresh the local registry index\n"
-        << "  • A target must already exist in vix.lock\n";
+        << "  • A dependency must exist in vix.lock\n";
 
     return 0;
   }

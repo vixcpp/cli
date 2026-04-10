@@ -92,6 +92,10 @@ namespace vix::commands::RunCommand::detail
     std::vector<std::string> doubleDashArgs;
     std::vector<std::string> runArgsAfterRun;
     bool hasRunSeparator = false;
+
+    bool withSqlite = false;
+    bool withMySql = false;
+    bool clean = false;
   };
 
   struct ScriptRunResult
@@ -157,7 +161,9 @@ namespace vix::commands::RunCommand::detail
       const std::string &exeName,
       const fs::path &cppPath,
       bool useVixRuntime,
-      const std::vector<std::string> &scriptFlags);
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql);
 
   int run_single_cpp(const Options &opt);
   int run_single_cpp_watch(const Options &opt);

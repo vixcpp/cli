@@ -26,7 +26,9 @@ namespace vix::commands::RunCommand::detail
       const std::string &exeName,
       const fs::path &cppPath,
       bool useVixRuntime,
-      const std::vector<std::string> &scriptFlags);
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql);
 }
 
 #endif

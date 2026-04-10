@@ -427,7 +427,13 @@ namespace vix::commands::RunCommand::detail
 
     {
       ofstream ofs(cmakeLists);
-      ofs << make_script_cmakelists(exeName, script, useVixRuntime, o.scriptFlags);
+      ofs << make_script_cmakelists(
+          exeName,
+          script,
+          useVixRuntime,
+          o.scriptFlags,
+          o.withSqlite,
+          o.withMySql);
     }
 
     fs::path buildDir = projectDir / "build-ninja";
@@ -786,11 +792,20 @@ namespace vix::commands::RunCommand::detail
           exeName,
           script,
           useVixRuntime,
-          o.scriptFlags);
+          o.scriptFlags,
+          o.withSqlite,
+          o.withMySql);
     }
 
     fs::path buildDir = projectDir / "build-ninja";
     const fs::path sigFile = projectDir / ".vix-config.sig";
+
+    if (o.clean)
+    {
+      std::error_code ec;
+      fs::remove_all(buildDir, ec);
+      fs::remove(sigFile, ec);
+    }
 
     const std::string sig = make_script_config_signature(
         useVixRuntime,

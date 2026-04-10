@@ -373,6 +373,18 @@ namespace vix::commands::RunCommand::detail
         else
           hint("Invalid value for --docs. Use 0|1|true|false.");
       }
+      else if (a == "--with-sqlite")
+      {
+        o.withSqlite = true;
+      }
+      else if (a == "--with-mysql")
+      {
+        o.withMySql = true;
+      }
+      else if (a == "--clean")
+      {
+        o.clean = true;
+      }
       else if (a == "--cwd")
       {
         std::filesystem::path p = take_value(i, "--cwd");

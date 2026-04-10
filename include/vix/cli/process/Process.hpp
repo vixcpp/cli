@@ -151,6 +151,9 @@ namespace vix::cli::process
      * @brief Extra arguments forwarded directly to CMake.
      */
     std::vector<std::string> cmakeArgs;
+
+    bool withSqlite = false;
+    bool withMySql = false;
   };
 
   /**

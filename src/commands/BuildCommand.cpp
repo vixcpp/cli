@@ -321,6 +321,14 @@ namespace vix::commands::BuildCommand
           }
           o.preset = std::string(*v);
         }
+        else if (a == "--with-sqlite")
+        {
+          o.withSqlite = true;
+        }
+        else if (a == "--with-mysql")
+        {
+          o.withMySql = true;
+        }
         else if (a.rfind("--preset=", 0) == 0)
         {
           o.preset = a.substr(std::string("--preset=").size());
@@ -722,6 +730,20 @@ namespace vix::commands::BuildCommand
         vars.emplace_back("CMAKE_EXE_LINKER_FLAGS", *fastLinkerFlag);
         vars.emplace_back("CMAKE_SHARED_LINKER_FLAGS", *fastLinkerFlag);
         vars.emplace_back("CMAKE_MODULE_LINKER_FLAGS", *fastLinkerFlag);
+      }
+
+      if (opt.withSqlite)
+      {
+        vars.emplace_back("VIX_ENABLE_DB", "ON");
+        vars.emplace_back("VIX_DB_USE_SQLITE", "ON");
+        vars.emplace_back("VIX_DB_REQUIRE_SQLITE", "ON");
+      }
+
+      if (opt.withMySql)
+      {
+        vars.emplace_back("VIX_ENABLE_DB", "ON");
+        vars.emplace_back("VIX_DB_USE_MYSQL", "ON");
+        vars.emplace_back("VIX_DB_REQUIRE_MYSQL", "ON");
       }
 
       std::sort(
@@ -1257,6 +1279,8 @@ namespace vix::commands::BuildCommand
     out << "  --target <triple>     Cross-compilation target triple (auto toolchain)\n";
     out << "  --sysroot <path>      Sysroot for cross toolchain (optional)\n";
     out << "  --static              Request static linking (VIX_LINK_STATIC=ON)\n";
+    out << "  --with-sqlite         Enable SQLite support (VIX_DB_USE_SQLITE=ON)\n";
+    out << "  --with-mysql          Enable MySQL support (VIX_DB_USE_MYSQL=ON)\n";
     out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, clamped)\n";
     out << "  --clean               Remove local build directories and reconfigure from scratch\n";
     out << "  --no-cache            Disable signature cache shortcut\n";
@@ -1279,6 +1303,10 @@ namespace vix::commands::BuildCommand
 
     out << "Examples:\n";
     out << "  vix build\n";
+    out << "  vix build --with-sqlite\n";
+    out << "  vix build --with-mysql\n";
+    out << "  vix build --preset release --with-sqlite\n";
+    out << "  vix build --preset dev-ninja --with-mysql\n";
     out << "  vix build --verbose\n";
     out << "  vix build --fast\n";
     out << "  vix build --preset release\n";

@@ -211,7 +211,13 @@ namespace vix::commands::CheckCommand::detail
 
     if (!write_file_or_report(
             cmakeLists,
-            run::make_script_cmakelists(exeName, script, useVixRuntime, /*scriptFlags=*/{})))
+            run::make_script_cmakelists(
+                exeName,
+                script,
+                useVixRuntime,
+                /*scriptFlags=*/{},
+                false,
+                false)))
     {
       return 1;
     }

@@ -716,7 +716,9 @@ namespace vix::commands::RunCommand::detail
       const std::string &exeName,
       const fs::path &cppPath,
       bool useVixRuntime,
-      const std::vector<std::string> &scriptFlags)
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql)
   {
     std::string s;
     s.reserve(32000);
@@ -1085,6 +1087,28 @@ namespace vix::commands::RunCommand::detail
     }
     else
     {
+      if (withSqlite || withMySql)
+      {
+        s += "set(VIX_ENABLE_DB ON CACHE BOOL \"\" FORCE)\n";
+      }
+
+      if (withSqlite)
+      {
+        s += "set(VIX_DB_USE_SQLITE ON CACHE BOOL \"\" FORCE)\n";
+        s += "set(VIX_DB_REQUIRE_SQLITE ON CACHE BOOL \"\" FORCE)\n";
+      }
+
+      if (withMySql)
+      {
+        s += "set(VIX_DB_USE_MYSQL ON CACHE BOOL \"\" FORCE)\n";
+        s += "set(VIX_DB_REQUIRE_MYSQL ON CACHE BOOL \"\" FORCE)\n";
+      }
+
+      if (withSqlite || withMySql)
+      {
+        s += "\n";
+      }
+
       s += "find_package(vix QUIET CONFIG)\n";
       s += "if (NOT vix_FOUND)\n";
       s += "  find_package(Vix CONFIG REQUIRED)\n";

@@ -27,10 +27,10 @@
 #ifndef _WIN32
 #include <errno.h>
 #include <signal.h>
+#include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/resource.h>
 #include <unistd.h>
 
 #if defined(__APPLE__)
@@ -48,34 +48,43 @@ using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
 {
-
 #ifdef _WIN32
 
-  static inline std::string win_last_error_message(DWORD err)
+  namespace
   {
-    LPWSTR buf = nullptr;
-    const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
-                        FORMAT_MESSAGE_FROM_SYSTEM |
-                        FORMAT_MESSAGE_IGNORE_INSERTS;
-
-    const DWORD len = FormatMessageW(
-        flags, nullptr, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-        (LPWSTR)&buf, 0, nullptr);
-
-    std::string out;
-    if (len && buf)
+    std::string win_last_error_message(DWORD err)
     {
-      // naive utf16->utf8 (good enough for error text)
-      int n = WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, nullptr, 0, nullptr, nullptr);
-      out.resize(n > 0 ? (size_t)n : 0);
-      if (n > 0)
-        WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, out.data(), n, nullptr, nullptr);
-      LocalFree(buf);
+      LPWSTR buf = nullptr;
+      const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER |
+                          FORMAT_MESSAGE_FROM_SYSTEM |
+                          FORMAT_MESSAGE_IGNORE_INSERTS;
+
+      const DWORD len = FormatMessageW(
+          flags,
+          nullptr,
+          err,
+          MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+          (LPWSTR)&buf,
+          0,
+          nullptr);
+
+      std::string out;
+      if (len && buf)
+      {
+        const int n = WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, nullptr, 0, nullptr, nullptr);
+        out.resize(n > 0 ? (size_t)n : 0);
+        if (n > 0)
+          WideCharToMultiByte(CP_UTF8, 0, buf, (int)len, out.data(), n, nullptr, nullptr);
+
+        LocalFree(buf);
+      }
+
+      if (out.empty())
+        out = "unknown Windows error";
+
+      return out;
     }
-    if (out.empty())
-      out = "unknown Windows error";
-    return out;
-  }
+  } // namespace
 
   LiveRunResult run_cmd_live_filtered_capture(
       const std::string &cmd,
@@ -87,22 +96,22 @@ namespace vix::commands::RunCommand::detail
     (void)passthroughRuntime;
     (void)timeoutSec;
 
-    LiveRunResult r;
+    LiveRunResult result;
 
     SECURITY_ATTRIBUTES sa{};
     sa.nLength = sizeof(sa);
     sa.bInheritHandle = TRUE;
 
-    HANDLE outRead = nullptr, outWrite = nullptr;
+    HANDLE outRead = nullptr;
+    HANDLE outWrite = nullptr;
 
     if (!CreatePipe(&outRead, &outWrite, &sa, 0))
     {
-      r.exitCode = 1;
-      r.stderrText = "CreatePipe failed: " + win_last_error_message(GetLastError());
-      return r;
+      result.exitCode = 1;
+      result.stderrText = "CreatePipe failed: " + win_last_error_message(GetLastError());
+      return result;
     }
 
-    // child must inherit write end, but parent must NOT be inheritable
     SetHandleInformation(outRead, HANDLE_FLAG_INHERIT, 0);
 
     STARTUPINFOA si{};
@@ -113,7 +122,7 @@ namespace vix::commands::RunCommand::detail
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 
     PROCESS_INFORMATION pi{};
-    std::string cmdline = "cmd /C " + cmd; // reuse your existing cmd string
+    std::string cmdline = "cmd /C " + cmd;
 
     if (!CreateProcessA(
             nullptr,
@@ -130,15 +139,13 @@ namespace vix::commands::RunCommand::detail
       CloseHandle(outRead);
       CloseHandle(outWrite);
 
-      r.exitCode = 1;
-      r.stderrText = "CreateProcess failed: " + win_last_error_message(GetLastError());
-      return r;
+      result.exitCode = 1;
+      result.stderrText = "CreateProcess failed: " + win_last_error_message(GetLastError());
+      return result;
     }
 
-    // parent doesn't need write end
     CloseHandle(outWrite);
 
-    // read all output
     char buffer[4096];
     DWORD n = 0;
     while (true)
@@ -147,12 +154,11 @@ namespace vix::commands::RunCommand::detail
       if (!ok || n == 0)
         break;
 
-      r.stdoutText.append(buffer, buffer + n);
+      result.stdoutText.append(buffer, buffer + n);
     }
 
     CloseHandle(outRead);
 
-    // wait for process and get exit code
     WaitForSingleObject(pi.hProcess, INFINITE);
 
     DWORD code = 0;
@@ -161,167 +167,313 @@ namespace vix::commands::RunCommand::detail
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
 
-    r.rawStatus = (int)code;
-    r.exitCode = normalize_exit_code((int)code);
-    return r;
+    result.rawStatus = (int)code;
+    result.exitCode = normalize_exit_code((int)code);
+    return result;
   }
 
-#endif // _WIN32
+#else
 
-#ifndef _WIN32
-
-  static volatile sig_atomic_t g_sigint_requested = 0;
-
-  static void on_sigint(int) { g_sigint_requested = 1; }
-
-  struct SigintGuard
+  namespace
   {
-    struct sigaction oldAction{};
-    bool installed = false;
+    static volatile sig_atomic_t g_sigint_requested = 0;
 
-    SigintGuard()
+    void on_sigint(int)
     {
-      g_sigint_requested = 0;
-
-      struct sigaction sa{};
-      sa.sa_handler = on_sigint;
-      sigemptyset(&sa.sa_mask);
-      sa.sa_flags = 0;
-
-      if (sigaction(SIGINT, &sa, &oldAction) == 0)
-        installed = true;
+      g_sigint_requested = 1;
     }
 
-    ~SigintGuard()
+    struct SigintGuard
     {
-      if (installed)
-        sigaction(SIGINT, &oldAction, nullptr);
-    }
-  };
+      struct sigaction oldAction{};
+      bool installed = false;
 
-  static inline void write_all(int fd, const char *buf, std::size_t n)
-  {
-    while (n > 0)
-    {
-      const ssize_t r = ::write(fd, buf, n);
-      if (r > 0)
+      SigintGuard()
       {
-        buf += static_cast<std::size_t>(r);
-        n -= static_cast<std::size_t>(r);
-        continue;
+        g_sigint_requested = 0;
+
+        struct sigaction sa{};
+        sa.sa_handler = on_sigint;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = 0;
+
+        if (sigaction(SIGINT, &sa, &oldAction) == 0)
+          installed = true;
       }
 
-      if (r < 0 && errno == EINTR)
-        continue;
-
-      break;
-    }
-  }
-
-  static inline bool is_vix_error_tip_line(std::string_view line) noexcept
-  {
-    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-      line.remove_prefix(1);
-
-    return (line.rfind("error:", 0) == 0) || (line.rfind("tip:", 0) == 0);
-  }
-
-  static inline std::string drop_vix_error_tip_lines(const std::string &chunk)
-  {
-    std::string out;
-    out.reserve(chunk.size());
-
-    std::size_t start = 0;
-    while (start < chunk.size())
-    {
-      const std::size_t nl = chunk.find('\n', start);
-      const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
-
-      std::string_view line(&chunk[start], end - start);
-
-      if (!is_vix_error_tip_line(line))
-        out.append(line.data(), line.size());
-
-      start = end;
-    }
-
-    return out;
-  }
-
-  static inline std::size_t utf8_safe_prefix_len(const std::string &s, std::size_t want)
-  {
-    if (want >= s.size())
-      return s.size();
-    if (want == 0)
-      return 0;
-
-    std::size_t cut = want;
-
-    while (cut > 0 && (static_cast<unsigned char>(s[cut - 1]) & 0xC0) == 0x80)
-      --cut;
-
-    if (cut == 0)
-      return 0;
-
-    const unsigned char lead = static_cast<unsigned char>(s[cut - 1]);
-    std::size_t need = 1;
-
-    if ((lead & 0x80) == 0x00)
-      need = 1;
-    else if ((lead & 0xE0) == 0xC0)
-      need = 2;
-    else if ((lead & 0xF0) == 0xE0)
-      need = 3;
-    else if ((lead & 0xF8) == 0xF0)
-      need = 4;
-
-    if ((cut - 1) + need > want)
-      return cut - 1;
-
-    return want;
-  }
-
-  static inline void close_safe(int &fd)
-  {
-    if (fd >= 0)
-    {
-      ::close(fd);
-      fd = -1;
-    }
-  }
-
-  class RuntimeOutputFilter
-  {
-  public:
-    RuntimeOutputFilter()
-        : startTime_(std::chrono::steady_clock::now())
-    {
-    }
-
-    std::string process(const std::string &chunk)
-    {
-      static const bool debugMode = []()
+      ~SigintGuard()
       {
-        const char *env = vix::utils::vix_getenv("VIX_DEBUG_FILTER");
-        return env && std::strcmp(env, "1") == 0;
-      }();
+        if (installed)
+          sigaction(SIGINT, &oldAction, nullptr);
+      }
+    };
 
-      if (debugMode)
-        return chunk;
-
-      if (passthrough_)
-        return chunk;
-
-      buffer_ += chunk;
-
-      const auto now = std::chrono::steady_clock::now();
-      const auto elapsed =
-          std::chrono::duration_cast<std::chrono::seconds>(now - startTime_).count();
-
-      if (elapsed >= FORCE_PASSTHROUGH_TIMEOUT_SEC)
+    void write_all(int fd, const char *buf, std::size_t n)
+    {
+      while (n > 0)
       {
-        std::string out = flush_all_buffer_as_is();
+        const ssize_t r = ::write(fd, buf, n);
+        if (r > 0)
+        {
+          buf += static_cast<std::size_t>(r);
+          n -= static_cast<std::size_t>(r);
+          continue;
+        }
+
+        if (r < 0 && errno == EINTR)
+          continue;
+
+        break;
+      }
+    }
+
+    std::size_t utf8_safe_prefix_len(const std::string &s, std::size_t want)
+    {
+      if (want >= s.size())
+        return s.size();
+      if (want == 0)
+        return 0;
+
+      std::size_t cut = want;
+      while (cut > 0 && (static_cast<unsigned char>(s[cut - 1]) & 0xC0) == 0x80)
+        --cut;
+
+      if (cut == 0)
+        return 0;
+
+      const unsigned char lead = static_cast<unsigned char>(s[cut - 1]);
+      std::size_t need = 1;
+
+      if ((lead & 0x80) == 0x00)
+        need = 1;
+      else if ((lead & 0xE0) == 0xC0)
+        need = 2;
+      else if ((lead & 0xF0) == 0xE0)
+        need = 3;
+      else if ((lead & 0xF8) == 0xF0)
+        need = 4;
+
+      if ((cut - 1) + need > want)
+        return cut - 1;
+
+      return want;
+    }
+
+    void close_safe(int &fd)
+    {
+      if (fd >= 0)
+      {
+        ::close(fd);
+        fd = -1;
+      }
+    }
+
+    bool is_vix_error_tip_line(std::string_view line) noexcept
+    {
+      while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+        line.remove_prefix(1);
+
+      return (line.rfind("error:", 0) == 0) || (line.rfind("tip:", 0) == 0);
+    }
+
+    std::string drop_vix_error_tip_lines(const std::string &chunk)
+    {
+      std::string out;
+      out.reserve(chunk.size());
+
+      std::size_t start = 0;
+      while (start < chunk.size())
+      {
+        const std::size_t nl = chunk.find('\n', start);
+        const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
+
+        std::string_view line(&chunk[start], end - start);
+        if (!is_vix_error_tip_line(line))
+          out.append(line.data(), line.size());
+
+        start = end;
+      }
+
+      return out;
+    }
+
+    bool is_sanitizer_abort_banner_line(std::string_view line) noexcept
+    {
+      while (!line.empty() && (line.front() == ' ' || line.front() == '\t' || line.front() == '\r'))
+        line.remove_prefix(1);
+
+      if (line.size() >= 4 &&
+          line.rfind("==", 0) == 0 &&
+          line.find("==ABORTING") != std::string_view::npos)
+      {
+        return true;
+      }
+
+      return false;
+    }
+
+    std::string drop_sanitizer_abort_banner_lines(const std::string &chunk)
+    {
+      std::string out;
+      out.reserve(chunk.size());
+
+      std::size_t start = 0;
+      while (start < chunk.size())
+      {
+        const std::size_t nl = chunk.find('\n', start);
+        const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
+
+        std::string_view line(&chunk[start], end - start);
+        if (!is_sanitizer_abort_banner_line(line))
+          out.append(line.data(), line.size());
+
+        start = end;
+      }
+
+      return out;
+    }
+
+    bool is_cmake_configure_cmd(const std::string &cmd) noexcept
+    {
+      const bool isCmake = (cmd.find("cmake") != std::string::npos);
+      const bool isBuild = (cmd.find("--build") != std::string::npos);
+      const bool isPreset = (cmd.find("--preset") != std::string::npos);
+      const bool isDotDot = (cmd.find("cmake ..") != std::string::npos) ||
+                            (cmd.find("cmake  ..") != std::string::npos);
+
+      return isCmake && !isBuild && (isPreset || isDotDot);
+    }
+
+    bool looks_like_error_or_warning(std::string_view line) noexcept
+    {
+      auto has = [&](std::string_view s)
+      { return line.find(s) != std::string_view::npos; };
+
+      if (has("CMake Error") || has("CMake Warning"))
+        return true;
+      if (has("error:") || has("Error:") || has("ERROR:"))
+        return true;
+      if (has("warning:") || has("Warning:") || has("WARNING:"))
+        return true;
+
+      return false;
+    }
+
+    bool should_drop_chunk_default(const std::string &chunk)
+    {
+      static const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
+      if (chunk.find(ninjaStop) != std::string::npos)
+        return true;
+
+      static const std::string ninjaNoWork = "ninja: no work to do.";
+      if (chunk.find(ninjaNoWork) != std::string::npos)
+        return true;
+
+      if (!chunk.empty() && chunk[0] == '[')
+      {
+        const auto rb = chunk.find(']');
+        if (rb != std::string::npos)
+        {
+          bool ok = true;
+          for (std::size_t i = 1; i < rb; ++i)
+          {
+            const char c = chunk[i];
+            if (!(c >= '0' && c <= '9') && c != '/')
+            {
+              ok = false;
+              break;
+            }
+          }
+
+          if (ok)
+            return true;
+        }
+      }
+
+      const bool hasInterrupt = (chunk.find("Interrupt") != std::string::npos);
+      if (hasInterrupt &&
+          (chunk.find("gmake") != std::string::npos ||
+           chunk.find("make: ***") != std::string::npos ||
+           chunk.find("gmake: ***") != std::string::npos))
+      {
+        return true;
+      }
+
+      return false;
+    }
+
+    void spinner_draw(
+        const std::string &label,
+        std::size_t &frameIndex,
+        bool &printedSomething,
+        char &lastPrintedChar)
+    {
+      (void)label;
+      (void)frameIndex;
+      (void)printedSomething;
+      (void)lastPrintedChar;
+    }
+
+    void spinner_clear(bool &printedSomething, char &lastPrintedChar)
+    {
+      (void)printedSomething;
+      (void)lastPrintedChar;
+    }
+
+    class RuntimeOutputFilter
+    {
+    public:
+      RuntimeOutputFilter()
+          : startTime_(std::chrono::steady_clock::now())
+      {
+      }
+
+      std::string process(const std::string &chunk)
+      {
+        static const bool debugMode = []()
+        {
+          const char *env = vix::utils::vix_getenv("VIX_DEBUG_FILTER");
+          return env && std::strcmp(env, "1") == 0;
+        }();
+
+        if (debugMode)
+          return chunk;
+
+        if (passthrough_)
+          return chunk;
+
+        buffer_ += chunk;
+
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed =
+            std::chrono::duration_cast<std::chrono::seconds>(now - startTime_).count();
+
+        if (elapsed >= FORCE_PASSTHROUGH_TIMEOUT_SEC)
+        {
+          std::string out = flush_all_buffer_as_is();
+          passthrough_ = true;
+
+          if (should_clear() && !emittedAnything_)
+            out = std::string("\033[2J\033[H") + out;
+
+          emittedAnything_ = true;
+          return out;
+        }
+
+        const std::size_t first = find_first_vix_marker(buffer_);
+        if (first == std::string::npos)
+        {
+          std::string out = flush_lines_keep_tail();
+          if (!out.empty())
+            emittedAnything_ = true;
+          return out;
+        }
+
+        runtimeDetected_ = true;
         passthrough_ = true;
+
+        std::string out = buffer_.substr(first);
+        buffer_.clear();
 
         if (should_clear() && !emittedAnything_)
           out = std::string("\033[2J\033[H") + out;
@@ -330,428 +482,156 @@ namespace vix::commands::RunCommand::detail
         return out;
       }
 
-      const std::size_t first = find_first_vix_marker(buffer_);
-      if (first == std::string::npos)
+    private:
+      static constexpr std::size_t TAIL_BUFFER_SIZE = 1024;
+      static constexpr int FORCE_PASSTHROUGH_TIMEOUT_SEC = 10;
+
+      bool runtimeDetected_ = false;
+      bool passthrough_ = false;
+      bool emittedAnything_ = false;
+      std::string buffer_;
+      std::chrono::steady_clock::time_point startTime_;
+
+      static bool should_clear()
       {
-        std::string out = flush_lines_keep_tail();
-        if (!out.empty())
-          emittedAnything_ = true;
-        return out;
+        const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
+        if (!mode)
+          return false;
+
+        return std::strcmp(mode, "1") == 0;
       }
 
-      runtimeDetected_ = true;
-      passthrough_ = true;
-
-      std::string out = buffer_.substr(first);
-      buffer_.clear();
-
-      if (should_clear() && !emittedAnything_)
-        out = std::string("\033[2J\033[H") + out;
-
-      emittedAnything_ = true;
-      return out;
-    }
-
-    void reset()
-    {
-      buffer_.clear();
-      emittedAnything_ = false;
-      runtimeDetected_ = false;
-      passthrough_ = false;
-      startTime_ = std::chrono::steady_clock::now();
-    }
-
-    bool isRuntimeMode() const { return runtimeDetected_; }
-
-  private:
-    static constexpr std::size_t TAIL_BUFFER_SIZE = 1024;
-    static constexpr int FORCE_PASSTHROUGH_TIMEOUT_SEC = 10;
-
-    bool runtimeDetected_ = false;
-    bool passthrough_ = false;
-    bool emittedAnything_ = false;
-    std::string buffer_;
-    std::chrono::steady_clock::time_point startTime_;
-
-    static bool should_clear()
-    {
-      const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
-      if (!mode)
-        return false;
-
-      return std::strcmp(mode, "1") == 0;
-    }
-
-    static std::size_t find_first_vix_marker(const std::string &text)
-    {
-      static const char *priority[] = {
-          "● Vix.cpp   READY",
-          "Vix.cpp   READY",
-          "● VIX.cpp   READY",
-          "VIX.cpp   READY",
-          "● VIX   READY",
-          "VIX   READY",
-          nullptr};
-
-      for (int i = 0; priority[i] != nullptr; ++i)
+      static std::size_t find_first_vix_marker(const std::string &text)
       {
-        const std::size_t pos = text.find(priority[i]);
-        if (pos != std::string::npos)
-          return pos;
-      }
+        static const char *priority[] = {
+            "● Vix.cpp   READY",
+            "Vix.cpp   READY",
+            "● VIX.cpp   READY",
+            "VIX.cpp   READY",
+            "● VIX   READY",
+            "VIX   READY",
+            nullptr};
 
-      static const char *fallback[] = {
-          "› HTTP:",
-          "› WS:",
-          "i Threads:",
-          "i Mode:",
-          "i Status:",
-          "i Hint:",
-          "Using configuration file:",
-          "Vix.cpp runtime",
-          "Vix.cpp v",
-          "● Vix.cpp",
-          "● VIX.cpp",
-          "● VIX",
-          nullptr};
-
-      std::size_t firstPos = std::string::npos;
-
-      for (int i = 0; fallback[i] != nullptr; ++i)
-      {
-        const std::size_t pos = text.find(fallback[i]);
-        if (pos != std::string::npos)
+        for (int i = 0; priority[i] != nullptr; ++i)
         {
-          if (firstPos == std::string::npos || pos < firstPos)
-            firstPos = pos;
-        }
-      }
-
-      return firstPos;
-    }
-
-    std::string flush_lines_keep_tail()
-    {
-      const std::size_t lastNl = buffer_.rfind('\n');
-      if (lastNl == std::string::npos)
-      {
-        if (buffer_.size() > TAIL_BUFFER_SIZE)
-        {
-          const std::size_t flushLen = buffer_.size() - TAIL_BUFFER_SIZE;
-          const std::size_t safeLen = utf8_safe_prefix_len(buffer_, flushLen);
-          std::string out = buffer_.substr(0, safeLen);
-          buffer_.erase(0, safeLen);
-          return out;
-        }
-        return {};
-      }
-
-      std::string out = buffer_.substr(0, lastNl + 1);
-      buffer_.erase(0, lastNl + 1);
-
-      if (buffer_.size() > TAIL_BUFFER_SIZE)
-      {
-        const std::size_t trimLen = buffer_.size() - TAIL_BUFFER_SIZE;
-        const std::size_t safeTrim = utf8_safe_prefix_len(buffer_, trimLen);
-        buffer_.erase(0, safeTrim);
-      }
-
-      return out;
-    }
-
-    std::string flush_all_buffer_as_is()
-    {
-      std::string out = buffer_;
-      buffer_.clear();
-      return out;
-    }
-  };
-
-  static inline bool is_cmake_configure_cmd(const std::string &cmd) noexcept
-  {
-    const bool isCmake = (cmd.find("cmake") != std::string::npos);
-    const bool isBuild = (cmd.find("--build") != std::string::npos);
-    const bool isPreset = (cmd.find("--preset") != std::string::npos);
-    const bool isDotDot = (cmd.find("cmake ..") != std::string::npos) ||
-                          (cmd.find("cmake  ..") != std::string::npos);
-
-    return isCmake && !isBuild && (isPreset || isDotDot);
-  }
-
-  static inline bool looks_like_error_or_warning(std::string_view line) noexcept
-  {
-    auto has = [&](std::string_view s)
-    { return line.find(s) != std::string_view::npos; };
-
-    if (has("CMake Error") || has("CMake Warning"))
-      return true;
-    if (has("error:") || has("Error:") || has("ERROR:"))
-      return true;
-    if (has("warning:") || has("Warning:") || has("WARNING:"))
-      return true;
-
-    return false;
-  }
-
-  struct CMakeNoiseFilter
-  {
-    std::string carry;
-
-    std::string filter(const std::string &chunk)
-    {
-      std::string data = carry;
-      data += chunk;
-      carry.clear();
-
-      std::string out;
-      out.reserve(data.size());
-
-      std::size_t start = 0;
-      while (true)
-      {
-        const std::size_t nl = data.find('\n', start);
-        if (nl == std::string::npos)
-        {
-          carry = data.substr(start);
-          break;
+          const std::size_t pos = text.find(priority[i]);
+          if (pos != std::string::npos)
+            return pos;
         }
 
-        std::string_view line(&data[start], (nl - start) + 1);
-        start = nl + 1;
+        static const char *fallback[] = {
+            "› HTTP:",
+            "› WS:",
+            "i Threads:",
+            "i Mode:",
+            "i Status:",
+            "i Hint:",
+            "Using configuration file:",
+            "Vix.cpp runtime",
+            "Vix.cpp v",
+            "● Vix.cpp",
+            "● VIX.cpp",
+            "● VIX",
+            nullptr};
 
-        if (looks_like_error_or_warning(line))
+        std::size_t firstPos = std::string::npos;
+        for (int i = 0; fallback[i] != nullptr; ++i)
         {
-          out.append(line.data(), line.size());
-          continue;
-        }
-
-        if (line.rfind("-- ", 0) == 0)
-        {
-          continue;
-        }
-
-        if (line.find("Preset CMake variables:") != std::string_view::npos)
-          continue;
-
-        if (line.rfind("  CMAKE_", 0) == 0)
-          continue;
-
-        out.append(line.data(), line.size());
-      }
-
-      return out;
-    }
-  };
-
-  static inline bool read_into(int fd, std::string &outChunk)
-  {
-    char buf[4096];
-    const ssize_t n = ::read(fd, buf, sizeof(buf));
-    if (n > 0)
-    {
-      outChunk.assign(buf, static_cast<std::size_t>(n));
-      return true;
-    }
-    outChunk.clear();
-    return false;
-  }
-
-  static inline bool should_drop_chunk_default(const std::string &chunk)
-  {
-    static const std::string ninjaStop = "ninja: build stopped: interrupted by user.";
-    if (chunk.find(ninjaStop) != std::string::npos)
-      return true;
-
-    static const std::string ninjaNoWork = "ninja: no work to do.";
-    if (chunk.find(ninjaNoWork) != std::string::npos)
-      return true;
-
-    if (!chunk.empty() && chunk[0] == '[')
-    {
-      const auto rb = chunk.find(']');
-      if (rb != std::string::npos)
-      {
-        bool ok = true;
-        for (std::size_t i = 1; i < rb; ++i)
-        {
-          const char c = chunk[i];
-          if (!(c >= '0' && c <= '9') && c != '/')
+          const std::size_t pos = text.find(fallback[i]);
+          if (pos != std::string::npos)
           {
-            ok = false;
-            break;
+            if (firstPos == std::string::npos || pos < firstPos)
+              firstPos = pos;
           }
         }
 
-        if (ok)
-          return true;
+        return firstPos;
       }
-    }
 
-    const bool hasInterrupt = (chunk.find("Interrupt") != std::string::npos);
-    if (hasInterrupt &&
-        (chunk.find("gmake") != std::string::npos ||
-         chunk.find("make: ***") != std::string::npos ||
-         chunk.find("gmake: ***") != std::string::npos))
+      std::string flush_lines_keep_tail()
+      {
+        const std::size_t lastNl = buffer_.rfind('\n');
+        if (lastNl == std::string::npos)
+        {
+          if (buffer_.size() > TAIL_BUFFER_SIZE)
+          {
+            const std::size_t flushLen = buffer_.size() - TAIL_BUFFER_SIZE;
+            const std::size_t safeLen = utf8_safe_prefix_len(buffer_, flushLen);
+            std::string out = buffer_.substr(0, safeLen);
+            buffer_.erase(0, safeLen);
+            return out;
+          }
+          return {};
+        }
+
+        std::string out = buffer_.substr(0, lastNl + 1);
+        buffer_.erase(0, lastNl + 1);
+
+        if (buffer_.size() > TAIL_BUFFER_SIZE)
+        {
+          const std::size_t trimLen = buffer_.size() - TAIL_BUFFER_SIZE;
+          const std::size_t safeTrim = utf8_safe_prefix_len(buffer_, trimLen);
+          buffer_.erase(0, safeTrim);
+        }
+
+        return out;
+      }
+
+      std::string flush_all_buffer_as_is()
+      {
+        std::string out = buffer_;
+        buffer_.clear();
+        return out;
+      }
+    };
+
+    struct CMakeNoiseFilter
     {
-      return true;
-    }
+      std::string carry;
 
-    return false;
-  }
+      std::string filter(const std::string &chunk)
+      {
+        std::string data = carry;
+        data += chunk;
+        carry.clear();
 
-  static inline void spinner_draw(
-      const std::string &label,
-      std::size_t &frameIndex,
-      bool &printedSomething,
-      char &lastPrintedChar)
-  {
-    (void)label;
-    (void)frameIndex;
-    (void)printedSomething;
-    (void)lastPrintedChar;
-  }
+        std::string out;
+        out.reserve(data.size());
 
-  static inline void spinner_clear(bool &printedSomething, char &lastPrintedChar)
-  {
-    (void)printedSomething;
-    (void)lastPrintedChar;
-  }
+        std::size_t start = 0;
+        while (true)
+        {
+          const std::size_t nl = data.find('\n', start);
+          if (nl == std::string::npos)
+          {
+            carry = data.substr(start);
+            break;
+          }
 
-  static bool is_sanitizer_abort_banner_line(std::string_view line) noexcept
-  {
-    // Trim left
-    while (!line.empty() && (line.front() == ' ' || line.front() == '\t' || line.front() == '\r'))
-      line.remove_prefix(1);
+          std::string_view line(&data[start], (nl - start) + 1);
+          start = nl + 1;
 
-    // ==12345==ABORTING
-    if (line.size() >= 4 && line.rfind("==", 0) == 0 &&
-        line.find("==ABORTING") != std::string_view::npos)
-      return true;
+          if (looks_like_error_or_warning(line))
+          {
+            out.append(line.data(), line.size());
+            continue;
+          }
 
-    return false;
-  }
+          if (line.rfind("-- ", 0) == 0)
+            continue;
 
-  static inline std::string drop_sanitizer_abort_banner_lines(const std::string &chunk)
-  {
-    std::string out;
-    out.reserve(chunk.size());
+          if (line.find("Preset CMake variables:") != std::string_view::npos)
+            continue;
 
-    std::size_t start = 0;
-    while (start < chunk.size())
-    {
-      const std::size_t nl = chunk.find('\n', start);
-      const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
+          if (line.rfind("  CMAKE_", 0) == 0)
+            continue;
 
-      std::string_view line(&chunk[start], end - start);
+          out.append(line.data(), line.size());
+        }
 
-      if (!is_sanitizer_abort_banner_line(line))
-        out.append(line.data(), line.size());
-
-      start = end;
-    }
-
-    return out;
-  }
-
-  LiveRunResult run_cmd_live_filtered_capture(
-      const std::string &cmd,
-      const std::string &spinnerLabel,
-      bool passthroughRuntime,
-      int timeoutSec)
-  {
-    SigintGuard sigGuard;
-
-    LiveRunResult result;
-
-    int masterFd = -1;
-    int slaveFd = -1;
-
-    if (::openpty(&masterFd, &slaveFd, nullptr, nullptr, nullptr) != 0)
-    {
-      const int st = std::system(cmd.c_str());
-      result.rawStatus = st;
-      result.exitCode = normalize_exit_code(st);
-      return result;
-    }
-
-    pid_t pid = ::fork();
-    if (pid < 0)
-    {
-      close_safe(masterFd);
-      close_safe(slaveFd);
-
-      const int st = std::system(cmd.c_str());
-      result.rawStatus = st;
-      result.exitCode = normalize_exit_code(st);
-      return result;
-    }
-
-    if (pid == 0)
-    {
-      struct sigaction saChild{};
-      saChild.sa_handler = SIG_DFL;
-      sigemptyset(&saChild.sa_mask);
-      saChild.sa_flags = 0;
-      ::sigaction(SIGINT, &saChild, nullptr);
-
-      // Nouvelle session pour détacher le child du terminal parent
-      // et permettre au PTY esclave de jouer le rôle de terminal.
-      ::setsid();
-
-      ::setenv("ASAN_OPTIONS",
-               "abort_on_error=1:"
-               "detect_leaks=1:"
-               "symbolize=1:"
-               "allocator_may_return_null=1:"
-               "fast_unwind_on_malloc=0:"
-               "strict_init_order=1:"
-               "check_initialization_order=1:"
-               "color=never",
-               1);
-
-      ::setenv("UBSAN_OPTIONS",
-               "halt_on_error=1:print_stacktrace=1:color=never",
-               1);
-
-      ::close(masterFd);
-
-      ::dup2(slaveFd, STDIN_FILENO);
-      ::dup2(slaveFd, STDOUT_FILENO);
-      ::dup2(slaveFd, STDERR_FILENO);
-
-      if (slaveFd > STDERR_FILENO)
-        ::close(slaveFd);
-
-      // Avec un PTY, beaucoup de programmes passent naturellement
-      // en comportement terminal interactif. On garde quand même ceci.
-      ::setvbuf(stdout, nullptr, _IOLBF, 0);
-      ::setvbuf(stderr, nullptr, _IONBF, 0);
-
-      if (::getenv("VIX_MODE") == nullptr)
-        ::setenv("VIX_MODE", "run", 1);
-
-#ifdef RLIMIT_CORE
-      struct rlimit rl;
-      rl.rlim_cur = 0;
-      rl.rlim_max = 0;
-      ::setrlimit(RLIMIT_CORE, &rl);
-#endif
-
-      ::execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
-      _exit(127);
-    }
-
-    close_safe(slaveFd);
-    ::setpgid(pid, pid);
-
-    const bool captureOnly = false;
-    bool spinnerActive = false;
-    std::size_t frameIndex = 0;
-
-    RuntimeOutputFilter runtimeFilter;
-
-    const bool cmakeConfigure = is_cmake_configure_cmd(cmd);
-    CMakeNoiseFilter cmakeNoise;
+        return out;
+      }
+    };
 
     struct SanitizerSuppressor
     {
@@ -889,6 +769,7 @@ namespace vix::commands::RunCommand::detail
               inReport = true;
               continue;
             }
+
             out.append(line.data(), line.size());
           }
           else
@@ -944,6 +825,7 @@ namespace vix::commands::RunCommand::detail
           if (c != ' ' && c != '\t')
             return false;
         }
+
         return true;
       }
 
@@ -971,7 +853,6 @@ namespace vix::commands::RunCommand::detail
 
           if (is_noise_line(line))
             continue;
-
           if (is_whitespace_only(line))
             continue;
 
@@ -982,10 +863,24 @@ namespace vix::commands::RunCommand::detail
       }
     };
 
-    SanitizerSuppressor sanitizer;
-    UncaughtExceptionSuppressor uncaught;
+    struct PtySession
+    {
+      int masterFd = -1;
+      int slaveFd = -1;
 
-    auto read_from_pty = [](int fd, std::string &outChunk) -> bool
+      bool open()
+      {
+        return ::openpty(&masterFd, &slaveFd, nullptr, nullptr, nullptr) == 0;
+      }
+
+      ~PtySession()
+      {
+        close_safe(masterFd);
+        close_safe(slaveFd);
+      }
+    };
+
+    bool read_from_pty(int fd, std::string &outChunk)
     {
       char buf[4096];
       const ssize_t n = ::read(fd, buf, sizeof(buf));
@@ -997,19 +892,209 @@ namespace vix::commands::RunCommand::detail
 
       outChunk.clear();
 
-      // Sur PTY, quand le slave se ferme, read() peut retourner
-      // 0 ou -1 avec errno = EIO. On traite les deux comme EOF.
       if (n == 0)
         return false;
-
       if (n < 0 && errno == EINTR)
         return true;
-
       if (n < 0 && errno == EIO)
         return false;
 
       return false;
-    };
+    }
+
+    bool icontains_sv(std::string_view hay, std::string_view needle)
+    {
+      if (needle.empty())
+        return true;
+      if (hay.size() < needle.size())
+        return false;
+
+      for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i)
+      {
+        bool ok = true;
+        for (std::size_t j = 0; j < needle.size(); ++j)
+        {
+          unsigned char a = static_cast<unsigned char>(hay[i + j]);
+          unsigned char b = static_cast<unsigned char>(needle[j]);
+          a = static_cast<unsigned char>(std::tolower(a));
+          b = static_cast<unsigned char>(std::tolower(b));
+          if (a != b)
+          {
+            ok = false;
+            break;
+          }
+        }
+        if (ok)
+          return true;
+      }
+
+      return false;
+    }
+
+    bool is_known_runtime_port_in_use(std::string_view s)
+    {
+      return icontains_sv(s, "address already in use") ||
+             icontains_sv(s, "eaddrinuse") ||
+             (icontains_sv(s, "bind") &&
+              icontains_sv(s, "acceptor") &&
+              icontains_sv(s, "address already in use"));
+    }
+
+    void kill_group_or_pid(pid_t pid, int sig)
+    {
+      if (::kill(-pid, sig) != 0)
+        ::kill(pid, sig);
+    }
+
+    void child_exec_shell(const std::string &cmd, int masterFd, int slaveFd)
+    {
+      struct sigaction saChild{};
+      saChild.sa_handler = SIG_DFL;
+      sigemptyset(&saChild.sa_mask);
+      saChild.sa_flags = 0;
+      ::sigaction(SIGINT, &saChild, nullptr);
+
+      ::setsid();
+
+      ::setenv("ASAN_OPTIONS",
+               "abort_on_error=1:"
+               "detect_leaks=1:"
+               "symbolize=1:"
+               "allocator_may_return_null=1:"
+               "fast_unwind_on_malloc=0:"
+               "strict_init_order=1:"
+               "check_initialization_order=1:"
+               "color=never",
+               1);
+
+      ::setenv("UBSAN_OPTIONS",
+               "halt_on_error=1:print_stacktrace=1:color=never",
+               1);
+
+      ::close(masterFd);
+
+      ::dup2(slaveFd, STDIN_FILENO);
+      ::dup2(slaveFd, STDOUT_FILENO);
+      ::dup2(slaveFd, STDERR_FILENO);
+
+      if (slaveFd > STDERR_FILENO)
+        ::close(slaveFd);
+
+      ::setvbuf(stdout, nullptr, _IOLBF, 0);
+      ::setvbuf(stderr, nullptr, _IONBF, 0);
+
+      if (::getenv("VIX_MODE") == nullptr)
+        ::setenv("VIX_MODE", "run", 1);
+
+#ifdef RLIMIT_CORE
+      struct rlimit rl;
+      rl.rlim_cur = 0;
+      rl.rlim_max = 0;
+      ::setrlimit(RLIMIT_CORE, &rl);
+#endif
+
+      ::execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
+      _exit(127);
+    }
+
+    void process_printable_chunk(
+        const std::string &chunk,
+        bool cmakeConfigure,
+        bool passthroughRuntime,
+        bool captureOnly,
+        RuntimeOutputFilter &runtimeFilter,
+        CMakeNoiseFilter &cmakeNoise,
+        SanitizerSuppressor &sanitizer,
+        UncaughtExceptionSuppressor &uncaught,
+        LiveRunResult &result,
+        bool &printedSomething,
+        bool &printedRealOutput,
+        char &lastPrintedChar)
+    {
+      if (chunk.empty())
+        return;
+
+      if (should_drop_chunk_default(chunk))
+        return;
+
+      std::string printable = chunk;
+
+      if (cmakeConfigure)
+        printable = cmakeNoise.filter(printable);
+
+      if (!printable.empty())
+        printable = sanitizer.filter_for_print(printable);
+
+      if (!printable.empty())
+        printable = uncaught.filter_for_print(printable);
+
+      if (printable.empty())
+        return;
+
+      std::string filtered =
+          passthroughRuntime ? printable : runtimeFilter.process(printable);
+
+      if (filtered.empty())
+        return;
+
+      std::string toPrint = drop_vix_error_tip_lines(filtered);
+      if (!toPrint.empty())
+        toPrint = drop_sanitizer_abort_banner_lines(toPrint);
+
+      if (toPrint.empty() || captureOnly)
+        return;
+
+      write_all(STDOUT_FILENO, toPrint.data(), toPrint.size());
+      printedSomething = true;
+      printedRealOutput = true;
+      result.printed_live = true;
+      lastPrintedChar = toPrint.back();
+    }
+
+  } // namespace
+
+  LiveRunResult run_cmd_live_filtered_capture(
+      const std::string &cmd,
+      const std::string &spinnerLabel,
+      bool passthroughRuntime,
+      int timeoutSec)
+  {
+    SigintGuard sigGuard;
+    LiveRunResult result;
+
+    PtySession pty;
+    if (!pty.open())
+    {
+      const int st = std::system(cmd.c_str());
+      result.rawStatus = st;
+      result.exitCode = normalize_exit_code(st);
+      return result;
+    }
+
+    pid_t pid = ::fork();
+    if (pid < 0)
+    {
+      const int st = std::system(cmd.c_str());
+      result.rawStatus = st;
+      result.exitCode = normalize_exit_code(st);
+      return result;
+    }
+
+    if (pid == 0)
+      child_exec_shell(cmd, pty.masterFd, pty.slaveFd);
+
+    close_safe(pty.slaveFd);
+    ::setpgid(pid, pid);
+
+    const bool captureOnly = false;
+    bool spinnerActive = false;
+    std::size_t frameIndex = 0;
+
+    RuntimeOutputFilter runtimeFilter;
+    const bool cmakeConfigure = is_cmake_configure_cmd(cmd);
+    CMakeNoiseFilter cmakeNoise;
+    SanitizerSuppressor sanitizer;
+    UncaughtExceptionSuppressor uncaught;
 
     bool running = true;
     bool printedSomething = false;
@@ -1048,70 +1133,24 @@ namespace vix::commands::RunCommand::detail
       return duration_cast<seconds>(steady_clock::now() - startTime).count();
     };
 
-    auto icontains_sv = [](std::string_view hay, std::string_view needle) -> bool
-    {
-      if (needle.empty())
-        return true;
-      if (hay.size() < needle.size())
-        return false;
-
-      for (std::size_t i = 0; i + needle.size() <= hay.size(); ++i)
-      {
-        bool ok = true;
-        for (std::size_t j = 0; j < needle.size(); ++j)
-        {
-          unsigned char a = static_cast<unsigned char>(hay[i + j]);
-          unsigned char b = static_cast<unsigned char>(needle[j]);
-          a = static_cast<unsigned char>(std::tolower(a));
-          b = static_cast<unsigned char>(std::tolower(b));
-          if (a != b)
-          {
-            ok = false;
-            break;
-          }
-        }
-        if (ok)
-          return true;
-      }
-      return false;
-    };
-
     bool suppress_known_failure_output = false;
     bool userInterrupted = false;
-
-    auto is_known_runtime_port_in_use = [&](std::string_view s) -> bool
-    {
-      return icontains_sv(s, "address already in use") ||
-             icontains_sv(s, "eaddrinuse") ||
-             (icontains_sv(s, "bind") && icontains_sv(s, "acceptor") && icontains_sv(s, "address already in use"));
-    };
-
-    auto kill_group_or_pid = [&](int sig)
-    {
-      if (::kill(-pid, sig) != 0)
-      {
-        ::kill(pid, sig);
-      }
-    };
 
     while (running)
     {
       if (!sentInt && g_sigint_requested)
       {
         userInterrupted = true;
-        kill_group_or_pid(SIGINT);
+        kill_group_or_pid(pid, SIGINT);
         sentInt = true;
         intTime = std::chrono::steady_clock::now();
       }
 
-      if (sentInt && !sentTerm)
+      if (sentInt && !sentTerm && int_elapsed_ms() >= 300)
       {
-        if (int_elapsed_ms() >= 300)
-        {
-          ::kill(-pid, SIGTERM);
-          sentTerm = true;
-          termTime = std::chrono::steady_clock::now();
-        }
+        ::kill(-pid, SIGTERM);
+        sentTerm = true;
+        termTime = std::chrono::steady_clock::now();
       }
 
       if ((sentTerm || sentInt) && !sentKill)
@@ -1127,10 +1166,7 @@ namespace vix::commands::RunCommand::detail
       if (!didTimeout && enableTimeout && elapsed_sec() >= timeoutSec)
       {
         didTimeout = true;
-
-        const std::string msg =
-            "\n[vix] runtime timeout (" + std::to_string(timeoutSec) + "s)\n";
-        result.stderrText += msg;
+        result.stderrText += "\n[vix] runtime timeout (" + std::to_string(timeoutSec) + "s)\n";
 
         ::kill(-pid, SIGTERM);
         sentTerm = true;
@@ -1141,16 +1177,16 @@ namespace vix::commands::RunCommand::detail
       FD_ZERO(&fds);
 
       int maxfd = -1;
-      if (masterFd >= 0)
+      if (pty.masterFd >= 0)
       {
-        FD_SET(masterFd, &fds);
-        maxfd = masterFd;
+        FD_SET(pty.masterFd, &fds);
+        maxfd = pty.masterFd;
       }
 
       if (maxfd < 0)
       {
         int status = 0;
-        pid_t r = ::waitpid(pid, &status, 0);
+        const pid_t r = ::waitpid(pid, &status, 0);
         if (r == pid)
         {
           finalStatus = status;
@@ -1192,10 +1228,10 @@ namespace vix::commands::RunCommand::detail
           spinnerActive = false;
         }
 
-        if (masterFd >= 0 && FD_ISSET(masterFd, &fds))
+        if (pty.masterFd >= 0 && FD_ISSET(pty.masterFd, &fds))
         {
           std::string chunk;
-          if (read_from_pty(masterFd, chunk))
+          if (read_from_pty(pty.masterFd, chunk))
           {
             if (!chunk.empty())
             {
@@ -1204,55 +1240,33 @@ namespace vix::commands::RunCommand::detail
               if (!suppress_known_failure_output && is_known_runtime_port_in_use(chunk))
                 suppress_known_failure_output = true;
 
-              if (suppress_known_failure_output)
-                continue;
-
-              if (!should_drop_chunk_default(chunk))
+              if (!suppress_known_failure_output)
               {
-                std::string printable = chunk;
-
-                if (cmakeConfigure)
-                  printable = cmakeNoise.filter(printable);
-
-                if (!printable.empty())
-                  printable = sanitizer.filter_for_print(printable);
-
-                if (!printable.empty())
-                  printable = uncaught.filter_for_print(printable);
-
-                if (!printable.empty())
-                {
-                  std::string filtered =
-                      passthroughRuntime ? printable : runtimeFilter.process(printable);
-
-                  if (!filtered.empty())
-                  {
-                    std::string toPrint = drop_vix_error_tip_lines(filtered);
-                    if (!toPrint.empty())
-                      toPrint = drop_sanitizer_abort_banner_lines(toPrint);
-
-                    if (!toPrint.empty() && !captureOnly)
-                    {
-                      write_all(STDOUT_FILENO, toPrint.data(), toPrint.size());
-                      printedSomething = true;
-                      printedRealOutput = true;
-                      result.printed_live = true;
-                      lastPrintedChar = toPrint.back();
-                    }
-                  }
-                }
+                process_printable_chunk(
+                    chunk,
+                    cmakeConfigure,
+                    passthroughRuntime,
+                    captureOnly,
+                    runtimeFilter,
+                    cmakeNoise,
+                    sanitizer,
+                    uncaught,
+                    result,
+                    printedSomething,
+                    printedRealOutput,
+                    lastPrintedChar);
               }
             }
           }
           else
           {
-            close_safe(masterFd);
+            close_safe(pty.masterFd);
           }
         }
       }
 
       int status = 0;
-      pid_t r = ::waitpid(pid, &status, WNOHANG);
+      const pid_t r = ::waitpid(pid, &status, WNOHANG);
       if (r == pid)
       {
         finalStatus = status;
@@ -1264,7 +1278,7 @@ namespace vix::commands::RunCommand::detail
     if (spinnerActive && !captureOnly)
       spinner_clear(printedSomething, lastPrintedChar);
 
-    close_safe(masterFd);
+    close_safe(pty.masterFd);
 
     if (!haveStatus)
     {
@@ -1306,23 +1320,26 @@ namespace vix::commands::RunCommand::detail
     }
 
     if (userInterrupted)
-    {
       result.exitCode = 130;
-    }
 
     return result;
   }
 
 #endif
 
-  int run_cmd_live_filtered(const std::string &cmd,
-                            const std::string &spinnerLabel)
+  int run_cmd_live_filtered(
+      const std::string &cmd,
+      const std::string &spinnerLabel)
   {
 #ifdef _WIN32
     (void)spinnerLabel;
     return std::system(cmd.c_str());
 #else
-    LiveRunResult r = run_cmd_live_filtered_capture(cmd, spinnerLabel, false, /*timeoutSec=*/0);
+    LiveRunResult r = run_cmd_live_filtered_capture(
+        cmd,
+        spinnerLabel,
+        false,
+        0);
     return r.exitCode;
 #endif
   }

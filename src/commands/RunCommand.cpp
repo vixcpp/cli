@@ -137,6 +137,122 @@ namespace
     return out;
   }
 
+  static std::optional<fs::path> resolve_runnable_executable(
+      const fs::path &buildDir,
+      const std::string &projectName)
+  {
+    auto executable_name = [](const std::string &name) -> std::string
+    {
+#ifdef _WIN32
+      return name + ".exe";
+#else
+      return name;
+#endif
+    };
+
+    auto is_executable_candidate = [](const fs::path &p) -> bool
+    {
+      std::error_code ec{};
+
+      if (!fs::is_regular_file(p, ec) || ec)
+        return false;
+
+#ifdef _WIN32
+      return p.extension() == ".exe";
+#else
+      const auto perms = fs::status(p, ec).permissions();
+      if (ec)
+        return false;
+
+      using pr = fs::perms;
+      return (perms & pr::owner_exec) != pr::none ||
+             (perms & pr::group_exec) != pr::none ||
+             (perms & pr::others_exec) != pr::none;
+#endif
+    };
+
+    auto looks_like_test_binary = [](const fs::path &p) -> bool
+    {
+      const std::string n = p.filename().string();
+      return n.find("_test") != std::string::npos ||
+             n.find("_tests") != std::string::npos ||
+             n.rfind("test_", 0) == 0;
+    };
+
+    const std::string exeFileName = executable_name(projectName);
+
+    // 1) Exact common locations
+    const std::vector<fs::path> preferred = {
+        buildDir / exeFileName,
+        buildDir / "bin" / exeFileName,
+        buildDir / "src" / exeFileName};
+
+    for (const auto &p : preferred)
+    {
+      if (is_executable_candidate(p))
+        return p;
+    }
+
+    // 2) Recursive scan
+    std::vector<fs::path> exactNameCandidates;
+    std::vector<fs::path> otherCandidates;
+
+    std::error_code ec{};
+    for (auto it = fs::recursive_directory_iterator(
+             buildDir,
+             fs::directory_options::skip_permission_denied,
+             ec);
+         !ec && it != fs::recursive_directory_iterator();
+         ++it)
+    {
+      const fs::path p = it->path();
+
+      if (p.string().find("CMakeFiles") != std::string::npos)
+        continue;
+
+      if (!is_executable_candidate(p))
+        continue;
+
+      if (looks_like_test_binary(p))
+        continue;
+
+#ifdef _WIN32
+      const std::string baseName = p.stem().string();
+#else
+      const std::string baseName = p.filename().string();
+#endif
+
+      if (baseName == projectName)
+        exactNameCandidates.push_back(p);
+      else
+        otherCandidates.push_back(p);
+    }
+
+    auto prefer_bin_path = [](const fs::path &a, const fs::path &b) -> bool
+    {
+      const bool aBin = a.string().find("/bin/") != std::string::npos ||
+                        a.string().find("\\bin\\") != std::string::npos;
+      const bool bBin = b.string().find("/bin/") != std::string::npos ||
+                        b.string().find("\\bin\\") != std::string::npos;
+
+      if (aBin != bBin)
+        return aBin;
+
+      return a.string().size() < b.string().size();
+    };
+
+    if (!exactNameCandidates.empty())
+    {
+      std::sort(exactNameCandidates.begin(), exactNameCandidates.end(), prefer_bin_path);
+      return exactNameCandidates.front();
+    }
+
+    if (otherCandidates.size() == 1)
+      return otherCandidates.front();
+
+    return std::nullopt;
+  }
+
   void apply_manifest_auto_deps_includes(Options &opt, const fs::path &manifestFile)
   {
     const fs::path manifestDir = manifestFile.parent_path();
@@ -797,10 +913,18 @@ namespace
     progress.phase_start("Run application");
 
     const std::string exeName = projectDir.filename().string();
-    fs::path exePath = buildDir / exeName;
-#ifdef _WIN32
-    exePath += ".exe";
-#endif
+    auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
+
+    if (!exePathOpt)
+    {
+      error("Built executable not found for project: " + exeName);
+      hint("Resolved build directory: " + buildDir.string());
+      hint("No runnable application target could be resolved automatically.");
+      hint("If your executable uses a custom output path or custom target name, add a manifest field to specify it.");
+      return 1;
+    }
+
+    fs::path exePath = *exePathOpt;
 
     if (!fs::exists(exePath))
     {
@@ -960,10 +1084,18 @@ namespace
     std::cout << "\n";
 
     const std::string exeName = projectDir.filename().string();
-    fs::path exePath = buildDir / exeName;
-#ifdef _WIN32
-    exePath += ".exe";
-#endif
+    auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
+
+    if (!exePathOpt)
+    {
+      error("Built executable not found for project: " + exeName);
+      hint("Resolved build directory: " + buildDir.string());
+      hint("No runnable application target could be resolved automatically.");
+      hint("If your executable uses a custom output path or custom target name, add a manifest field to specify it.");
+      return 1;
+    }
+
+    fs::path exePath = *exePathOpt;
 
     if (exeName == "vix")
     {
@@ -1161,7 +1293,9 @@ namespace vix::commands::RunCommand
     out << "  --auto-deps=local             Same as --auto-deps\n";
     out << "  --auto-deps=up                Also search deps in parent folders (future/optional)\n";
     out << "  --san                         Enable ASan and UBSan\n";
-    out << "  --ubsan                       Enable UBSan only\n\n";
+    out << "  --ubsan                       Enable UBSan only\n";
+    out << "  --with-sqlite                 Enable SQLite support for script mode\n";
+    out << "  --with-mysql                  Enable MySQL support for script mode\n\n";
 
     out << "Documentation:\n";
     out << "  --docs                        Enable auto docs (sets VIX_DOCS=1)\n";
@@ -1200,6 +1334,8 @@ namespace vix::commands::RunCommand
     out << "  # Script mode (.cpp)\n";
     out << "  vix run main.cpp --cwd ./data --args --config --args config.json\n";
     out << "  vix run main.cpp --run hello 123 test\n";
+    out << "  vix run main.cpp --with-sqlite\n";
+    out << "  vix run main.cpp --with-mysql\n";
     out << "  vix run main.cpp -- -O2 -DNDEBUG --run hello 123\n";
     out << "  vix run main.cpp -- -lssl -lcrypto\n\n";
 

@@ -456,7 +456,7 @@ namespace vix::commands::RunCommand::detail
       ScriptProjectState state;
       state.script = fs::absolute(opt.cppFile).lexically_normal();
       state.exeName = state.script.stem().string();
-      state.scriptsRoot = get_scripts_root();
+      state.scriptsRoot = get_scripts_root(opt.localCache);
 
       const std::string scriptCacheKey = hex_u64(
           fnv1a_64("script-cache:" + state.script.string()));

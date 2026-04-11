@@ -439,6 +439,10 @@ namespace vix::commands::RunCommand::detail
       {
         opt.verbose = true;
       }
+      else if (a == "--local-cache")
+      {
+        opt.localCache = true;
+      }
       else if (a == "--log-level" || a == "--loglevel")
       {
         opt.logLevel = take_value(args, i, a, opt);

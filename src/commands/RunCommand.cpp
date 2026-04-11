@@ -1296,6 +1296,7 @@ namespace vix::commands::RunCommand
     out << "  --ubsan                       Enable UBSan only\n";
     out << "  --with-sqlite                 Enable SQLite support for script mode\n";
     out << "  --with-mysql                  Enable MySQL support for script mode\n\n";
+    out << "  --local-cache                 Use local .vix-scripts instead of global cache\n";
 
     out << "Documentation:\n";
     out << "  --docs                        Enable auto docs (sets VIX_DOCS=1)\n";

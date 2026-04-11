@@ -12,25 +12,25 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
-#include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/utils/Env.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <cctype>
-#include <fstream>
-#include <cstring>
 
 #ifndef _WIN32
 #include <sys/wait.h>
-#include <chrono>
 #endif
 
 using namespace vix::cli::style;
@@ -39,45 +39,231 @@ namespace vix::commands::RunCommand::detail
 {
   namespace fs = std::filesystem;
 
-  std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
+  namespace
   {
-    auto is_opt = [](std::string_view s)
-    { return !s.empty() && s.front() == '-'; };
-
-    for (size_t i = 0; i < args.size(); ++i)
+    enum class Zone
     {
-      const auto &a = args[i];
+      Vix,
+      Script,
+      Run
+    };
 
-      if (a == "-d" || a == "--dir")
+    bool is_option_token(std::string_view s)
+    {
+      return !s.empty() && s.front() == '-';
+    }
+
+    std::string lower_copy(std::string s)
+    {
+      for (char &c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return s;
+    }
+
+    std::string take_eq_value(const std::string &arg, const std::string &prefix)
+    {
+      return arg.substr(prefix.size());
+    }
+
+    std::optional<std::string> pick_dir_opt_local(const std::vector<std::string> &args)
+    {
+      for (std::size_t i = 0; i < args.size(); ++i)
       {
-        if (i + 1 < args.size() && !is_opt(args[i + 1]))
-          return args[i + 1];
-        return std::nullopt;
+        const std::string &a = args[i];
+
+        if (a == "-d" || a == "--dir")
+        {
+          if (i + 1 < args.size() && !is_option_token(args[i + 1]))
+            return args[i + 1];
+
+          return std::nullopt;
+        }
+
+        constexpr const char pfx[] = "--dir=";
+        if (a.rfind(pfx, 0) == 0)
+        {
+          std::string v = a.substr(sizeof(pfx) - 1);
+          if (v.empty())
+            return std::nullopt;
+
+          return v;
+        }
       }
 
-      constexpr const char pfx[] = "--dir=";
-      if (a.rfind(pfx, 0) == 0)
+      return std::nullopt;
+    }
+
+    bool is_known_vix_flag(const std::string &v)
+    {
+      return v == "--verbose" || v == "--quiet" || v == "-q" ||
+             v == "--watch" || v == "--reload" ||
+             v == "--force-server" || v == "--force-script" ||
+             v == "--san" || v == "--ubsan" ||
+             v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
+             v == "--no-color" ||
+             v == "--preset" || v.rfind("--preset=", 0) == 0 ||
+             v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
+             v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
+             v == "--env" || v.rfind("--env=", 0) == 0 ||
+             v == "--args" || v.rfind("--args=", 0) == 0 ||
+             v == "--log-level" || v == "--loglevel" || v.rfind("--log-level=", 0) == 0 ||
+             v == "--log-format" || v.rfind("--log-format=", 0) == 0 ||
+             v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
+             v == "--clear" || v.rfind("--clear=", 0) == 0 ||
+             v == "--no-clear" ||
+             v == "--auto-deps" || v.rfind("--auto-deps=", 0) == 0 ||
+             v == "--with-sqlite" ||
+             v == "--with-mysql" ||
+             v == "--clean" ||
+             v == "-j" || v == "--jobs";
+    }
+
+    void warn_if_vix_flag_in_script(Options &opt, const std::string &value)
+    {
+      if (!opt.warnedVixFlagAfterDoubleDash && is_known_vix_flag(value))
       {
-        std::string v = a.substr(sizeof(pfx) - 1);
-        if (v.empty())
-          return std::nullopt;
-        return v;
+        opt.warnedVixFlagAfterDoubleDash = true;
+        opt.warnedArg = value;
       }
     }
-    return std::nullopt;
-  }
 
-  static std::string lower(std::string s)
+    std::string take_value(
+        const std::vector<std::string> &args,
+        std::size_t &i,
+        const std::string &flag,
+        Options &opt)
+    {
+      if (i + 1 >= args.size())
+      {
+        error("Missing value for " + flag);
+        opt.parseFailed = true;
+        opt.parseExitCode = 2;
+        return {};
+      }
+
+      return args[++i];
+    }
+
+    void set_absolute_cwd(std::string &out, const fs::path &p)
+    {
+      fs::path value = p;
+      if (value.is_relative())
+        value = fs::absolute(value);
+
+      out = value.string();
+    }
+
+    void normalize_clear_mode(Options &opt)
+    {
+      opt.clearMode = lower_copy(opt.clearMode);
+
+      if (opt.clearMode != "auto" &&
+          opt.clearMode != "always" &&
+          opt.clearMode != "never")
+      {
+        hint("Invalid value for --clear. Using 'auto'. Valid: auto|always|never.");
+        opt.clearMode = "auto";
+      }
+    }
+
+    void finalize_parse_options(Options &opt, const std::vector<std::string> &args)
+    {
+      if (auto d = pick_dir_opt_local(args))
+        opt.dir = *d;
+
+      if (opt.forceServerLike && opt.forceScriptLike)
+      {
+        hint("Both --force-server and --force-script were provided; preferring --force-server.");
+        opt.forceScriptLike = false;
+      }
+
+      if (opt.singleCpp)
+      {
+        if (opt.autoDeps != AutoDepsMode::Up)
+          opt.autoDeps = AutoDepsMode::Local;
+      }
+
+      normalize_clear_mode(opt);
+    }
+
+    void handle_positional_argument(Options &opt, const std::string &arg)
+    {
+      if (opt.appName.empty())
+      {
+        opt.appName = arg;
+
+        const fs::path p{arg};
+        if (p.extension() == ".cpp")
+        {
+          opt.singleCpp = true;
+          opt.cppFile = fs::absolute(p);
+        }
+      }
+      else if (opt.appName == "example" && opt.exampleName.empty())
+      {
+        opt.exampleName = arg;
+      }
+
+      const fs::path p{arg};
+      if (p.extension() == ".vix")
+      {
+        opt.manifestMode = true;
+        opt.manifestFile = fs::absolute(p);
+      }
+      else if (p.extension() == ".cpp")
+      {
+        opt.singleCpp = true;
+        opt.cppFile = fs::absolute(p);
+      }
+    }
+
+#ifndef _WIN32
+    bool ends_with_2to1(const std::string &s)
+    {
+      const std::size_t end = s.find_last_not_of(" \t\r\n");
+      if (end == std::string::npos)
+        return false;
+
+      const std::string needle = "2>&1";
+      if (end + 1 < needle.size())
+        return false;
+
+      const std::size_t start = end + 1 - needle.size();
+      return s.compare(start, needle.size(), needle) == 0;
+    }
+
+    int normalize_exit_status(int status)
+    {
+      if (status == -1)
+        return -1;
+
+      if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+
+      if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+
+      return status;
+    }
+
+    std::optional<std::chrono::file_clock::time_point> mtime_if_exists(const fs::path &p)
+    {
+      std::error_code ec;
+      if (!fs::exists(p, ec) || ec)
+        return std::nullopt;
+
+      auto t = fs::last_write_time(p, ec);
+      if (ec)
+        return std::nullopt;
+
+      return t;
+    }
+#endif
+  } // namespace
+
+  fs::path manifest_entry_cpp(const fs::path &manifestFile)
   {
-    for (auto &c : s)
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return s;
-  }
-
-  std::filesystem::path manifest_entry_cpp(const std::filesystem::path &manifestFile)
-  {
-    namespace fs = std::filesystem;
-
     const fs::path root = manifestFile.parent_path();
 
     auto abs_if_exists = [&](fs::path p) -> std::optional<fs::path>
@@ -85,6 +271,7 @@ namespace vix::commands::RunCommand::detail
       std::error_code ec;
       if (p.is_relative())
         p = root / p;
+
       p = fs::weakly_canonical(p, ec);
       if (ec)
         p = fs::absolute(p);
@@ -100,10 +287,12 @@ namespace vix::commands::RunCommand::detail
       auto is_space = [](unsigned char c)
       { return std::isspace(c) != 0; };
 
-      while (!s.empty() && is_space((unsigned char)s.front()))
+      while (!s.empty() && is_space(static_cast<unsigned char>(s.front())))
         s.erase(s.begin());
-      while (!s.empty() && is_space((unsigned char)s.back()))
+
+      while (!s.empty() && is_space(static_cast<unsigned char>(s.back())))
         s.pop_back();
+
       return s;
     };
 
@@ -112,27 +301,26 @@ namespace vix::commands::RunCommand::detail
       s = trim(std::move(s));
       if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
         return s.substr(1, s.size() - 2);
+
       return s;
     };
 
-    // Better fallbacks for typical layouts
-    const fs::path fallback1 = root / "main.cpp";
-    const fs::path fallback2 = root / "src" / "main.cpp";
+    const fs::path fallbackMain = root / "main.cpp";
+    const fs::path fallbackSrcMain = root / "src" / "main.cpp";
 
-    // If manifest missing, best-effort fallback
     {
       std::error_code ec;
       if (!fs::exists(manifestFile, ec) || ec)
       {
-        if (auto p = abs_if_exists(fallback2))
+        if (auto p = abs_if_exists(fallbackSrcMain))
           return *p;
-        if (auto p = abs_if_exists(fallback1))
+        if (auto p = abs_if_exists(fallbackMain))
           return *p;
-        return fs::absolute(fallback2); // last resort (even if missing)
+
+        return fs::absolute(fallbackSrcMain);
       }
     }
 
-    // Parse minimal: find `entry = "..."` anywhere (ignore comments, spaces)
     std::ifstream in(manifestFile.string());
     std::string line;
 
@@ -142,18 +330,15 @@ namespace vix::commands::RunCommand::detail
       if (line.empty() || line[0] == '#')
         continue;
 
-      // drop inline comment: foo = "bar" # comment
-      if (auto hash = line.find('#'); hash != std::string::npos)
+      if (const auto hash = line.find('#'); hash != std::string::npos)
         line = trim(line.substr(0, hash));
 
-      // accept: entry = "main.cpp" or entry=main.cpp
-      // also accept: entry : "main.cpp" (nice-to-have)
       if (line.rfind("entry", 0) != 0)
         continue;
 
-      auto pos_eq = line.find('=');
-      auto pos_cl = line.find(':');
-      auto pos = (pos_eq == std::string::npos) ? pos_cl : pos_eq;
+      const auto posEq = line.find('=');
+      const auto posCl = line.find(':');
+      const auto pos = (posEq == std::string::npos) ? posCl : posEq;
       if (pos == std::string::npos)
         continue;
 
@@ -165,377 +350,263 @@ namespace vix::commands::RunCommand::detail
         return *p;
     }
 
-    // Default fallbacks
-    if (auto p = abs_if_exists(fallback2))
+    if (auto p = abs_if_exists(fallbackSrcMain))
       return *p;
-    if (auto p = abs_if_exists(fallback1))
+    if (auto p = abs_if_exists(fallbackMain))
       return *p;
 
-    // last resort: keep consistent output
-    return fs::absolute(fallback2);
+    return fs::absolute(fallbackSrcMain);
   }
 
   Options parse(const std::vector<std::string> &args)
   {
-    Options o;
-
-    enum class Zone
-    {
-      Vix,    // parse flags Vix et appName / manifest / cpp
-      Script, // compiler flags for script mode
-      Run     // runtime args
-    };
-
+    Options opt;
     Zone zone = Zone::Vix;
 
-    auto is_known_vix_flag = [&](const std::string &v) -> bool
-    {
-      return v == "--verbose" || v == "--quiet" || v == "-q" ||
-             v == "--watch" || v == "--reload" ||
-             v == "--force-server" || v == "--force-script" ||
-             v == "--san" || v == "--ubsan" ||
-             v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
-             v == "--no-color" ||
-             v == "--preset" || v.rfind("--preset=", 0) == 0 ||
-             v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
-             v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
-             v == "--env" || v.rfind("--env=", 0) == 0 ||
-             v == "--args" || v.rfind("--args=", 0) == 0 ||
-             v == "--log-level" || v.rfind("--log-level=", 0) == 0 ||
-             v == "--log-format" || v.rfind("--log-format=", 0) == 0 ||
-             v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
-             v == "--clear" || v.rfind("--clear=", 0) == 0 ||
-             v == "--no-clear" ||
-             v == "--auto-deps" || v.rfind("--auto-deps=", 0) == 0 ||
-             v == "-j" || v == "--jobs";
-    };
-
-    auto warn_if_vix_flag_in_script = [&](const std::string &v)
-    {
-      if (!o.warnedVixFlagAfterDoubleDash && is_known_vix_flag(v))
-      {
-        o.warnedVixFlagAfterDoubleDash = true;
-        o.warnedArg = v;
-      }
-    };
-
-    auto take_value = [&](size_t &i, const std::string &flag) -> std::string
-    {
-      if (i + 1 >= args.size())
-      {
-        error("Missing value for " + flag);
-        o.parseFailed = true;
-        o.parseExitCode = 2;
-        return {};
-      }
-      return args[++i];
-    };
-
-    auto take_eq_value = [&](const std::string &a, const std::string &prefix) -> std::string
-    {
-      return a.substr(prefix.size());
-    };
-
-    for (size_t i = 0; i < args.size(); ++i)
+    for (std::size_t i = 0; i < args.size(); ++i)
     {
       const std::string &a = args[i];
 
-      // Zone switches (allowed anywhere)
       if (a == "--run")
       {
-        o.hasRunSeparator = true;
+        opt.hasRunSeparator = true;
         zone = Zone::Run;
         continue;
       }
+
       if (a == "--")
       {
+        opt.hasDoubleDash = true;
         zone = Zone::Script;
         continue;
       }
 
-      // Consume by zone (Run / Script are "raw capture")
       if (zone == Zone::Run)
       {
-        o.runArgs.push_back(a);
-        continue;
-      }
-      if (zone == Zone::Script)
-      {
-        warn_if_vix_flag_in_script(a);
-        o.scriptFlags.push_back(a);
+        opt.runArgs.push_back(a);
+        opt.runArgsAfterRun.push_back(a);
         continue;
       }
 
-      // zone == Vix : normal option parsing
+      if (zone == Zone::Script)
+      {
+        warn_if_vix_flag_in_script(opt, a);
+        opt.scriptFlags.push_back(a);
+        opt.doubleDashArgs.push_back(a);
+        continue;
+      }
+
       if (a == "--preset")
       {
-        o.preset = take_value(i, "--preset");
-        if (o.parseFailed)
-          return o;
+        opt.preset = take_value(args, i, "--preset", opt);
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--preset=", 0) == 0)
       {
-        o.preset = take_eq_value(a, "--preset=");
+        opt.preset = take_eq_value(a, "--preset=");
       }
       else if (a == "--run-preset")
       {
-        o.runPreset = take_value(i, "--run-preset");
-        if (o.parseFailed)
-          return o;
+        opt.runPreset = take_value(args, i, "--run-preset", opt);
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--run-preset=", 0) == 0)
       {
-        o.runPreset = take_eq_value(a, "--run-preset=");
+        opt.runPreset = take_eq_value(a, "--run-preset=");
       }
       else if (a == "-j" || a == "--jobs")
       {
-        std::string v = take_value(i, a);
-        if (o.parseFailed)
-          return o;
+        const std::string v = take_value(args, i, a, opt);
+        if (opt.parseFailed)
+          return opt;
+
         try
         {
-          o.jobs = std::stoi(v);
+          opt.jobs = std::stoi(v);
         }
         catch (...)
         {
-          o.jobs = 0;
+          opt.jobs = 0;
         }
       }
       else if (a == "--quiet" || a == "-q")
       {
-        o.quiet = true;
+        opt.quiet = true;
       }
       else if (a == "--verbose")
       {
-        o.verbose = true;
+        opt.verbose = true;
       }
       else if (a == "--log-level" || a == "--loglevel")
       {
-        o.logLevel = take_value(i, a);
-        if (o.parseFailed)
-          return o;
+        opt.logLevel = take_value(args, i, a, opt);
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--log-level=", 0) == 0)
       {
-        o.logLevel = take_eq_value(a, "--log-level=");
+        opt.logLevel = take_eq_value(a, "--log-level=");
       }
       else if (a == "--log-format")
       {
-        o.logFormat = take_value(i, "--log-format");
-        if (o.parseFailed)
-          return o;
+        opt.logFormat = take_value(args, i, "--log-format", opt);
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--log-format=", 0) == 0)
       {
-        o.logFormat = take_eq_value(a, "--log-format=");
+        opt.logFormat = take_eq_value(a, "--log-format=");
       }
       else if (a == "--log-color")
       {
-        o.logColor = take_value(i, "--log-color");
-        if (o.parseFailed)
-          return o;
+        opt.logColor = take_value(args, i, "--log-color", opt);
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--log-color=", 0) == 0)
       {
-        o.logColor = take_eq_value(a, "--log-color=");
+        opt.logColor = take_eq_value(a, "--log-color=");
       }
       else if (a == "--no-color")
       {
-        o.noColor = true;
+        opt.noColor = true;
       }
       else if (a == "--watch" || a == "--reload")
       {
-        o.watch = true;
+        opt.watch = true;
       }
       else if (a == "--force-server")
       {
-        o.forceServerLike = true;
+        opt.forceServerLike = true;
       }
       else if (a == "--force-script")
       {
-        o.forceScriptLike = true;
+        opt.forceScriptLike = true;
       }
       else if (a == "--docs")
       {
-        o.docs = true;
+        opt.docs = true;
       }
       else if (a == "--no-docs")
       {
-        o.docs = false;
+        opt.docs = false;
       }
       else if (a.rfind("--docs=", 0) == 0)
       {
-        std::string v = lower(a.substr(std::string("--docs=").size()));
+        const std::string v = lower_copy(take_eq_value(a, "--docs="));
         if (v == "1" || v == "true" || v == "yes" || v == "on")
-          o.docs = true;
+          opt.docs = true;
         else if (v == "0" || v == "false" || v == "no" || v == "off")
-          o.docs = false;
+          opt.docs = false;
         else
           hint("Invalid value for --docs. Use 0|1|true|false.");
       }
       else if (a == "--with-sqlite")
       {
-        o.withSqlite = true;
+        opt.withSqlite = true;
       }
       else if (a == "--with-mysql")
       {
-        o.withMySql = true;
+        opt.withMySql = true;
       }
       else if (a == "--clean")
       {
-        o.clean = true;
+        opt.clean = true;
       }
       else if (a == "--cwd")
       {
-        std::filesystem::path p = take_value(i, "--cwd");
-        if (o.parseFailed)
-          return o;
-        if (p.is_relative())
-          p = std::filesystem::absolute(p);
-        o.cwd = p.string();
+        const fs::path p = take_value(args, i, "--cwd", opt);
+        if (opt.parseFailed)
+          return opt;
+
+        set_absolute_cwd(opt.cwd, p);
       }
       else if (a.rfind("--cwd=", 0) == 0)
       {
-        std::filesystem::path p = a.substr(std::string("--cwd=").size());
-        if (p.is_relative())
-          p = std::filesystem::absolute(p);
-        o.cwd = p.string();
+        set_absolute_cwd(opt.cwd, fs::path(take_eq_value(a, "--cwd=")));
       }
       else if (a == "--env")
       {
-        o.runEnv.push_back(take_value(i, "--env"));
-        if (o.parseFailed)
-          return o;
+        opt.runEnv.push_back(take_value(args, i, "--env", opt));
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--env=", 0) == 0)
       {
-        o.runEnv.push_back(take_eq_value(a, "--env="));
+        opt.runEnv.push_back(take_eq_value(a, "--env="));
       }
-      // --args value (repeatable). This is runtime args even without --run.
       else if (a == "--args")
       {
-        o.runArgs.push_back(take_value(i, "--args"));
-        if (o.parseFailed)
-          return o;
+        opt.runArgs.push_back(take_value(args, i, "--args", opt));
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--args=", 0) == 0)
       {
-        o.runArgs.push_back(take_eq_value(a, "--args="));
+        opt.runArgs.push_back(take_eq_value(a, "--args="));
       }
       else if (a == "--san")
       {
-        o.enableSanitizers = true;
-        o.enableUbsanOnly = false;
+        opt.enableSanitizers = true;
+        opt.enableUbsanOnly = false;
       }
       else if (a == "--ubsan")
       {
-        o.enableUbsanOnly = true;
-        o.enableSanitizers = false;
+        opt.enableUbsanOnly = true;
+        opt.enableSanitizers = false;
       }
       else if (a == "--auto-deps")
       {
-        o.autoDeps = AutoDepsMode::Local;
+        opt.autoDeps = AutoDepsMode::Local;
       }
       else if (a.rfind("--auto-deps=", 0) == 0)
       {
-        const std::string v = a.substr(std::string("--auto-deps=").size());
+        const std::string v = lower_copy(take_eq_value(a, "--auto-deps="));
         if (v == "up")
-          o.autoDeps = AutoDepsMode::Up;
+          opt.autoDeps = AutoDepsMode::Up;
         else if (v == "local")
-          o.autoDeps = AutoDepsMode::Local;
+          opt.autoDeps = AutoDepsMode::Local;
         else
         {
           error("Invalid value for --auto-deps: " + v);
           hint("Valid values: local, up");
-          o.parseFailed = true;
-          o.parseExitCode = 2;
-          return o;
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
         }
       }
       else if (a == "--clear")
       {
-        o.clearMode = take_value(i, "--clear");
-        if (o.parseFailed)
-          return o;
+        opt.clearMode = take_value(args, i, "--clear", opt);
+        if (opt.parseFailed)
+          return opt;
       }
       else if (a.rfind("--clear=", 0) == 0)
       {
-        o.clearMode = take_eq_value(a, "--clear=");
+        opt.clearMode = take_eq_value(a, "--clear=");
       }
       else if (a == "--no-clear")
       {
-        o.clearMode = "never";
+        opt.clearMode = "never";
       }
       else if (!a.empty() && a[0] != '-')
       {
-        // positional: app / example / manifest / cpp
-        if (o.appName.empty())
-        {
-          o.appName = a;
-
-          std::filesystem::path p{a};
-          if (p.extension() == ".cpp")
-          {
-            o.singleCpp = true;
-            o.cppFile = std::filesystem::absolute(p);
-          }
-        }
-        else if (o.appName == "example" && o.exampleName.empty())
-        {
-          o.exampleName = a;
-        }
-
-        std::filesystem::path p{a};
-        if (p.extension() == ".vix")
-        {
-          o.manifestMode = true;
-          o.manifestFile = std::filesystem::absolute(p);
-        }
-        else if (p.extension() == ".cpp")
-        {
-          o.singleCpp = true;
-          o.cppFile = std::filesystem::absolute(p);
-        }
+        handle_positional_argument(opt, a);
       }
       else if (!a.empty() && a[0] == '-')
       {
         error("Unknown option: " + a);
         hint("Use: vix run --help");
-        o.parseFailed = true;
-        o.parseExitCode = 2;
-        return o;
+        opt.parseFailed = true;
+        opt.parseExitCode = 2;
+        return opt;
       }
     }
 
-    if (auto d = pick_dir_opt_local(args))
-      o.dir = *d;
-
-    if (o.forceServerLike && o.forceScriptLike)
-    {
-      hint("Both --force-server and --force-script were provided; preferring --force-server.");
-      o.forceScriptLike = false;
-    }
-
-    // Auto-enable deps for single-file C++ scripts so that:
-    //   vix run main.cpp
-    // also resolves local/global packages without requiring --auto-deps.
-    if (o.singleCpp)
-    {
-      if (o.autoDeps != AutoDepsMode::Up)
-        o.autoDeps = AutoDepsMode::Local;
-    }
-
-    // normalize clearMode
-    for (auto &c : o.clearMode)
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-    if (o.clearMode != "auto" && o.clearMode != "always" && o.clearMode != "never")
-    {
-      hint("Invalid value for --clear. Using 'auto'. Valid: auto|always|never.");
-      o.clearMode = "auto";
-    }
-
-    return o;
+    finalize_parse_options(opt, args);
+    return opt;
   }
 
   void handle_runtime_exit_code(
@@ -565,11 +636,11 @@ namespace vix::commands::RunCommand::detail
 #else
     if (s.find_first_of(" \t\"'\\$`") != std::string::npos)
       return "'" + s + "'";
+
     return s;
 #endif
   }
 
-  // Build log analysis
 #ifndef _WIN32
   bool has_real_build_work(const std::string &log)
   {
@@ -585,64 +656,21 @@ namespace vix::commands::RunCommand::detail
     if (log.find("no work to do") != std::string::npos)
       return false;
 
-    bool hasBuiltTarget = log.find("Built target") != std::string::npos;
-    if (hasBuiltTarget)
-    {
+    if (log.find("Built target") != std::string::npos)
       return false;
-    }
 
     return true;
-  }
-
-  static bool ends_with_2to1(const std::string &s)
-  {
-    // Simple check: ignore trailing spaces
-    std::size_t end = s.find_last_not_of(" \t\r\n");
-    if (end == std::string::npos)
-      return false;
-
-    // Look for "2>&1" at end
-    const std::string needle = "2>&1";
-    if (end + 1 < needle.size())
-      return false;
-
-    std::size_t start = end + 1 - needle.size();
-    return s.compare(start, needle.size(), needle) == 0;
-  }
-
-  static int normalize_exit_status(int status)
-  {
-#if defined(_WIN32)
-    // On Windows, _pclose typically returns the process exit code.
-    return status;
-#else
-    if (status == -1)
-      return -1;
-
-    if (WIFEXITED(status))
-      return WEXITSTATUS(status);
-
-    if (WIFSIGNALED(status))
-      return 128 + WTERMSIG(status); // common convention
-
-    return status;
-#endif
   }
 
   std::string run_and_capture_with_code(const std::string &cmd, int &exitCode)
   {
     std::string out;
-
     std::string captureCmd = cmd;
+
     if (!ends_with_2to1(captureCmd))
       captureCmd += " 2>&1";
 
-#if defined(_WIN32)
-    FILE *p = _popen(captureCmd.c_str(), "r");
-#else
     FILE *p = popen(captureCmd.c_str(), "r");
-#endif
-
     if (!p)
     {
       exitCode = -1;
@@ -653,12 +681,7 @@ namespace vix::commands::RunCommand::detail
     while (fgets(buf, sizeof(buf), p))
       out.append(buf);
 
-#if defined(_WIN32)
-    int status = _pclose(p);
-#else
-    int status = pclose(p);
-#endif
-
+    const int status = pclose(p);
     exitCode = normalize_exit_status(status);
     return out;
   }
@@ -673,12 +696,14 @@ namespace vix::commands::RunCommand::detail
   {
     return true;
   }
+
   std::string run_and_capture_with_code(const std::string &cmd, int &exitCode)
   {
     (void)cmd;
     exitCode = 0;
     return {};
   }
+
   std::string run_and_capture(const std::string &)
   {
     return {};
@@ -692,8 +717,9 @@ namespace vix::commands::RunCommand::detail
            fs::exists(projectDir / "CMakeUserPresets.json", ec);
   }
 
-  std::optional<fs::path> preset_binary_dir(const fs::path &projectDir,
-                                            const std::string &configurePreset)
+  std::optional<fs::path> preset_binary_dir(
+      const fs::path &projectDir,
+      const std::string &configurePreset)
   {
 #ifdef _WIN32
     (void)projectDir;
@@ -701,7 +727,6 @@ namespace vix::commands::RunCommand::detail
     return std::nullopt;
 #else
     std::error_code ec;
-
     const fs::path presetsPath = projectDir / "CMakePresets.json";
     if (!fs::exists(presetsPath, ec) || ec)
       return std::nullopt;
@@ -737,20 +762,19 @@ namespace vix::commands::RunCommand::detail
       }
 
       const std::string obj = json.substr(objStart, objEnd - objStart + 1);
-
       const std::size_t b = obj.find(binKey);
       if (b == std::string::npos)
         return std::nullopt;
 
-      std::size_t colon = obj.find(':', b + binKey.size());
+      const std::size_t colon = obj.find(':', b + binKey.size());
       if (colon == std::string::npos)
         return std::nullopt;
 
-      std::size_t q1 = obj.find('"', colon);
+      const std::size_t q1 = obj.find('"', colon);
       if (q1 == std::string::npos)
         return std::nullopt;
 
-      std::size_t q2 = obj.find('"', q1 + 1);
+      const std::size_t q2 = obj.find('"', q1 + 1);
       if (q2 == std::string::npos || q2 <= q1 + 1)
         return std::nullopt;
 
@@ -773,11 +797,10 @@ namespace vix::commands::RunCommand::detail
 #endif
   }
 
-  fs::path resolve_build_dir_smart(const fs::path &projectDir,
-                                   const std::string &configurePreset)
+  fs::path resolve_build_dir_smart(
+      const fs::path &projectDir,
+      const std::string &configurePreset)
   {
-    fs::path buildDir = projectDir / "build";
-
     if (auto binDir = preset_binary_dir(projectDir, configurePreset))
       return *binDir;
 
@@ -787,12 +810,12 @@ namespace vix::commands::RunCommand::detail
 
     if (configurePreset.rfind("dev-", 0) == 0)
     {
-      fs::path p2 = projectDir / ("build-" + configurePreset.substr(4));
-      if (fs::exists(p2))
-        return p2;
+      fs::path alt = projectDir / ("build-" + configurePreset.substr(4));
+      if (fs::exists(alt))
+        return alt;
     }
 
-    return buildDir;
+    return projectDir / "build";
   }
 
   static std::vector<std::string> list_presets(const fs::path &dir, const std::string &kind)
@@ -804,17 +827,20 @@ namespace vix::commands::RunCommand::detail
 #else
     std::ostringstream oss;
     oss << "cd " << quote(dir.string()) << " && cmake --list-presets=" << kind;
-    auto out = run_and_capture(oss.str());
+
+    const std::string out = run_and_capture(oss.str());
     std::vector<std::string> names;
+
     std::istringstream is(out);
     std::string line;
     while (std::getline(is, line))
     {
-      auto q1 = line.find('\"');
-      auto q2 = line.find('\"', q1 == std::string::npos ? q1 : q1 + 1);
+      const auto q1 = line.find('"');
+      const auto q2 = line.find('"', q1 == std::string::npos ? q1 : q1 + 1);
       if (q1 != std::string::npos && q2 != std::string::npos && q2 > q1 + 1)
         names.emplace_back(line.substr(q1 + 1, q2 - (q1 + 1)));
     }
+
     return names;
 #endif
   }
@@ -824,7 +850,8 @@ namespace vix::commands::RunCommand::detail
       const std::string &configurePreset,
       const std::string &userRunPreset)
   {
-    auto runs = list_presets(dir, "build");
+    const auto runs = list_presets(dir, "build");
+
     auto has = [&](const std::string &n)
     {
       return std::find(runs.begin(), runs.end(), n) != runs.end();
@@ -840,7 +867,7 @@ namespace vix::commands::RunCommand::detail
 
       if (configurePreset.rfind("dev-", 0) == 0)
       {
-        std::string mapped = "run-" + configurePreset.substr(4);
+        const std::string mapped = "run-" + configurePreset.substr(4);
         if (has(mapped))
           return mapped;
       }
@@ -855,7 +882,8 @@ namespace vix::commands::RunCommand::detail
     }
 
     if (configurePreset.rfind("dev-", 0) == 0)
-      return std::string("run-") + configurePreset.substr(4);
+      return "run-" + configurePreset.substr(4);
+
     return "run-ninja";
   }
 
@@ -866,28 +894,14 @@ namespace vix::commands::RunCommand::detail
   }
 
 #ifndef _WIN32
-  static std::optional<std::chrono::file_clock::time_point>
-  mtime_if_exists(const fs::path &p)
-  {
-    std::error_code ec;
-    if (!fs::exists(p, ec) || ec)
-      return std::nullopt;
-    auto t = fs::last_write_time(p, ec);
-    if (ec)
-      return std::nullopt;
-    return t;
-  }
-
   std::string choose_configure_preset_smart(
       const fs::path &projectDir,
       const std::string &userPreset)
   {
-
-    // Respect user choice always
     if (!userPreset.empty())
       return userPreset;
 
-    auto cfgs = list_presets(projectDir, "configure");
+    const auto cfgs = list_presets(projectDir, "configure");
     if (cfgs.empty())
       return "dev-ninja";
 
@@ -902,18 +916,16 @@ namespace vix::commands::RunCommand::detail
 
     for (const auto &preset : cfgs)
     {
-      // IMPORTANT: do NOT rely on parsing binaryDir from presets json
       const fs::path buildDir = resolve_build_dir_smart(projectDir, preset);
 
       if (!has_cmake_cache(buildDir))
         continue;
 
-      auto t = mtime_if_exists(buildDir / "CMakeCache.txt");
+      const auto t = mtime_if_exists(buildDir / "CMakeCache.txt");
       if (!t)
         continue;
 
       Candidate c{preset, buildDir, *t};
-
       if (!best || c.stamp > best->stamp)
         best = c;
     }
@@ -929,19 +941,18 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
-    // If we found an existing configured preset, prefer it.
     if (best)
       return best->preset;
 
-    // Otherwise keep a stable default:
     if (std::find(cfgs.begin(), cfgs.end(), "dev-ninja") != cfgs.end())
       return "dev-ninja";
 
     return cfgs.front();
   }
-
 #else
-  std::string choose_configure_preset_smart(const fs::path &, const std::string &userPreset)
+  std::string choose_configure_preset_smart(
+      const fs::path &,
+      const std::string &userPreset)
   {
     return userPreset.empty() ? std::string("dev-ninja") : userPreset;
   }
@@ -978,7 +989,7 @@ namespace vix::commands::RunCommand::detail
     std::string level;
 
     if (!opt.logLevel.empty())
-      level = lower(opt.logLevel);
+      level = lower_copy(opt.logLevel);
     else if (opt.quiet)
       level = "warn";
     else if (opt.verbose)
@@ -1006,8 +1017,12 @@ namespace vix::commands::RunCommand::detail
     if (level == "on")
       level = "info";
 
-    if (level != "trace" && level != "debug" && level != "info" &&
-        level != "warn" && level != "error" && level != "critical" &&
+    if (level != "trace" &&
+        level != "debug" &&
+        level != "info" &&
+        level != "warn" &&
+        level != "error" &&
+        level != "critical" &&
         level != "off")
     {
       hint("Invalid value for --log-level. Using 'info'. Valid: trace|debug|info|warn|error|critical|off.");
@@ -1026,9 +1041,8 @@ namespace vix::commands::RunCommand::detail
     if (opt.logFormat.empty())
       return;
 
-    std::string fmt = lower(opt.logFormat);
+    std::string fmt = lower_copy(opt.logFormat);
 
-    // aliases
     if (fmt == "pretty" || fmt == "pretty-json" || fmt == "pretty_json")
       fmt = "json-pretty";
 
@@ -1047,7 +1061,6 @@ namespace vix::commands::RunCommand::detail
 
   void apply_log_color_env(const Options &opt)
   {
-    // --no-color gagne sur tout
     if (opt.noColor)
     {
 #if defined(_WIN32)
@@ -1061,7 +1074,7 @@ namespace vix::commands::RunCommand::detail
     if (opt.logColor.empty())
       return;
 
-    std::string v = lower(opt.logColor);
+    std::string v = lower_copy(opt.logColor);
     if (v != "auto" && v != "always" && v != "never")
     {
       hint("Invalid value for --log-color. Using 'auto'. Valid: auto|always|never.");

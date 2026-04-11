@@ -12,34 +12,34 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
-#include <vix/cli/errors/RawLogDetectors.hpp>
-#include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
+#include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
-
+#include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
-#include <vix/cli/Style.hpp>
+#include <algorithm>
+#include <cerrno>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
-#include <cerrno>
-#include <cstring>
-#include <iostream>
-#include <chrono>
-#include <optional>
 #include <unordered_set>
-#include <cstdlib>
-#include <algorithm>
-#include <nlohmann/json.hpp>
+#include <vector>
 
 #ifndef _WIN32
-#include <unistd.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <signal.h>
+#include <unistd.h>
 #endif
 
 using namespace vix::cli::style;
@@ -49,789 +49,446 @@ namespace vix::commands::RunCommand::detail
   namespace fs = std::filesystem;
   namespace text = vix::cli::commands::helpers;
 
-  static inline bool is_sigint_exit_code(int code) noexcept
+  namespace
   {
-    return code == 130; // standard: 128 + SIGINT(2)
-  }
-
-  static void apply_auto_deps_includes_from_deps_folder(
-      vix::commands::RunCommand::detail::Options &opt,
-      const std::filesystem::path &startDir)
-  {
-    namespace fs = std::filesystem;
-
-    auto already_has_I = [&](const std::string &inc) -> bool
+    struct ScriptProjectState
     {
-      const std::string flag = "-I" + inc;
-      for (const auto &f : opt.scriptFlags)
-      {
-        if (f == flag)
-          return true;
-        if (f.rfind("-I", 0) == 0 && f.substr(2) == inc)
-          return true;
-      }
-      return false;
+      fs::path script;
+      std::string exeName;
+      fs::path scriptsRoot;
+      fs::path projectDir;
+      fs::path cmakeLists;
+      fs::path buildDir;
+      fs::path exePath;
+      fs::path sigFile;
+      fs::path configureLogPath;
+      fs::path buildLogPath;
+
+      bool useVixRuntime = false;
+      bool needConfigure = true;
+      bool skipBuild = false;
+
+      std::string configSignature;
     };
 
-    auto home_dir = []() -> std::optional<std::string>
+    inline bool is_sigint_exit_code(int code) noexcept
     {
-#ifdef _WIN32
-      const char *home = vix::utils::vix_getenv("USERPROFILE");
-#else
-      const char *home = vix::utils::vix_getenv("HOME");
-#endif
-      if (!home || std::string(home).empty())
-        return std::nullopt;
-      return std::string(home);
-    };
-
-    auto vix_root = [&]() -> fs::path
-    {
-      if (const auto home = home_dir(); home)
-        return fs::path(*home) / ".vix";
-      return fs::path(".vix");
-    };
-
-    auto global_manifest_path = [&]() -> fs::path
-    {
-      return vix_root() / "global" / "installed.json";
-    };
-
-    auto dep_id_to_dir = [](std::string depId) -> std::string
-    {
-      depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
-      std::replace(depId.begin(), depId.end(), '/', '.');
-      return depId;
-    };
-
-    std::unordered_set<std::string> localPkgDirs;
-
-    auto scan_one = [&](const fs::path &baseDir)
-    {
-      const fs::path depsRoot = baseDir / ".vix" / "deps";
-      std::error_code ec;
-
-      if (!fs::exists(depsRoot, ec) || ec)
-        return;
-
-      for (auto it = fs::directory_iterator(depsRoot, ec);
-           !ec && it != fs::directory_iterator(); ++it)
-      {
-        if (!it->is_directory())
-          continue;
-
-        const std::string pkgDir = it->path().filename().string();
-        if (!pkgDir.empty())
-          localPkgDirs.insert(pkgDir);
-
-        const fs::path inc = it->path() / "include";
-        if (!fs::exists(inc, ec) || ec)
-          continue;
-
-        const std::string incStr = inc.string();
-        if (!already_has_I(incStr))
-          opt.scriptFlags.push_back("-I" + incStr);
-      }
-    };
-
-    auto scan_global = [&]()
-    {
-      const fs::path manifestPath = global_manifest_path();
-      if (!fs::exists(manifestPath))
-        return;
-
-      std::ifstream ifs(manifestPath);
-      if (!ifs)
-        return;
-
-      nlohmann::json root;
-      ifs >> root;
-
-      if (!root.is_object() || !root.contains("packages") || !root["packages"].is_array())
-        return;
-
-      for (const auto &item : root["packages"])
-      {
-        if (!item.is_object())
-          continue;
-
-        if (!item.contains("id") || !item["id"].is_string())
-          continue;
-
-        if (!item.contains("installed_path") || !item["installed_path"].is_string())
-          continue;
-
-        const std::string id = item["id"].get<std::string>();
-        const std::string pkgDir = dep_id_to_dir(id);
-
-        // priorité au local
-        if (localPkgDirs.contains(pkgDir))
-          continue;
-
-        std::string includeDir = "include";
-        if (item.contains("include") && item["include"].is_string())
-          includeDir = item["include"].get<std::string>();
-
-        const fs::path installedPath = fs::path(item["installed_path"].get<std::string>());
-        const fs::path inc = installedPath / includeDir;
-
-        std::error_code ec;
-        if (!fs::exists(inc, ec) || ec)
-          continue;
-
-        const std::string incStr = inc.string();
-        if (!already_has_I(incStr))
-          opt.scriptFlags.push_back("-I" + incStr);
-      }
-    };
-
-    // Local: scan startDir only, then globals
-    if (opt.autoDeps == AutoDepsMode::Local)
-    {
-      scan_one(startDir);
-      scan_global();
-      return;
+      return code == 130;
     }
 
-    // Up: scan startDir and all parents up to filesystem root, then globals
-    if (opt.autoDeps == AutoDepsMode::Up)
+    std::string trim_copy(std::string s)
     {
-      fs::path cur = startDir;
-      for (;;)
+      while (!s.empty() &&
+             (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
       {
-        scan_one(cur);
-
-        std::error_code ec;
-        fs::path parent = cur.parent_path();
-        if (parent.empty() || parent == cur)
-          break;
-
-        if (fs::equivalent(parent, cur, ec) && !ec)
-          break;
-
-        cur = parent;
+        s.pop_back();
       }
 
-      scan_global();
-      return;
-    }
-  }
+      std::size_t i = 0;
+      while (i < s.size() &&
+             (s[i] == '\n' || s[i] == '\r' || s[i] == ' ' || s[i] == '\t'))
+      {
+        ++i;
+      }
 
-#ifndef _WIN32
-  static bool dev_verbose_ui(const Options &opt)
-  {
-    if (opt.verbose)
-      return true;
-
-    const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
-    if (!lvl || !*lvl)
-      return false;
-
-    std::string s(lvl);
-    for (auto &c : s)
-      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-
-    return (s == "debug" || s == "trace");
-  }
-#endif
-
-  static bool has_ccache()
-  {
-#ifdef _WIN32
-    // On Windows, keep it simple: ccache is rare in default setups
-    return false;
-#else
-    int code = std::system("ccache --version >/dev/null 2>&1");
-    code = normalize_exit_code(code);
-    return code == 0;
-#endif
-  }
-
-  static inline bool log_looks_like_interrupt(const std::string &log)
-  {
-    const bool isMakeInterrupt =
-        (log.find("gmake") != std::string::npos ||
-         log.find("make") != std::string::npos) &&
-        log.find("Interrupt") != std::string::npos;
-
-    return log.find(" Interrupt") != std::string::npos ||
-           isMakeInterrupt ||
-           log.find("ninja: interrupted") != std::string::npos ||
-           log.find("interrupted by user") != std::string::npos;
-  }
-
-  static inline std::string trim_copy(std::string s)
-  {
-    while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
-      s.pop_back();
-
-    size_t i = 0;
-    while (i < s.size() && (s[i] == '\n' || s[i] == '\r' || s[i] == ' ' || s[i] == '\t'))
-      ++i;
-
-    s.erase(0, i);
-    return s;
-  }
-
-  static bool log_looks_like_linker_missing_file_due_to_runtime_args(const std::string &log)
-  {
-    // Typical patterns:
-    //  /usr/bin/ld: cannot find 123: No such file or directory
-    //  ld: cannot find hello
-    //  collect2: error: ld returned 1 exit status
-    if (log.empty())
-      return false;
-
-    const bool hasLd =
-        (log.find("/usr/bin/ld:") != std::string::npos) ||
-        (log.find(" ld:") != std::string::npos) ||
-        (log.find("collect2: error: ld returned") != std::string::npos);
-
-    if (!hasLd)
-      return false;
-
-    if (log.find("cannot find ") != std::string::npos &&
-        log.find("No such file or directory") != std::string::npos)
-      return true;
-
-    // Sometimes ld says "cannot find X" without the trailing message
-    if (log.find("cannot find ") != std::string::npos)
-      return true;
-
-    return false;
-  }
-
-  static void print_script_runtime_args_hint()
-  {
-    hint("It looks like you passed runtime args after `--`.");
-    hint("In script mode, `--` forwards compiler/linker flags.");
-    hint("Use `--run` for runtime arguments:");
-    step("vix run file.cpp --run arg1 arg2 arg3");
-    hint("Or use repeatable --args:");
-    step("vix run file.cpp --args arg1 --args arg2 --args arg3");
-  }
-
-  static bool cache_is_ninja_build(const fs::path &buildDir)
-  {
-    std::error_code ec;
-    const fs::path cache = buildDir / "CMakeCache.txt";
-    if (!fs::exists(cache, ec) || ec)
-      return false;
-
-    std::ifstream ifs(cache);
-    if (!ifs)
-      return false;
-
-    std::string line;
-    while (std::getline(ifs, line))
-    {
-      if (line.rfind("CMAKE_GENERATOR:INTERNAL=", 0) == 0)
-        return line.find("Ninja") != std::string::npos;
-    }
-    return false;
-  }
-
-#ifndef _WIN32
-  static bool log_looks_like_sanitizer_or_ub(const std::string &log)
-  {
-    return log.find("runtime error:") != std::string::npos ||
-           log.find("UndefinedBehaviorSanitizer") != std::string::npos ||
-           log.find("AddressSanitizer") != std::string::npos ||
-           log.find("LeakSanitizer") != std::string::npos ||
-           log.find("ThreadSanitizer") != std::string::npos ||
-           log.find("MemorySanitizer") != std::string::npos;
-  }
-
-  static bool handle_error_tip_block_vix(const std::string &log)
-  {
-    const auto epos = log.find("error:");
-    if (epos == std::string::npos)
-      return false;
-
-    auto line_end = [&](size_t p) -> size_t
-    {
-      size_t n = log.find('\n', p);
-      return (n == std::string::npos) ? log.size() : n;
-    };
-
-    auto strip_prefix = [](std::string s, const char *pref) -> std::string
-    {
-      if (s.rfind(pref, 0) == 0)
-        s.erase(0, std::strlen(pref));
-      while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
-        s.erase(0, 1);
+      s.erase(0, i);
       return s;
-    };
-
-    const size_t eend = line_end(epos);
-    std::string eLine = log.substr(epos, eend - epos);
-
-    std::string tipLine;
-    const auto tpos = log.find("tip:", eend);
-    if (tpos != std::string::npos)
-    {
-      const size_t tend = line_end(tpos);
-      tipLine = log.substr(tpos, tend - tpos);
     }
 
-    const std::string msg = strip_prefix(eLine, "error:");
-    const std::string tip = tipLine.empty() ? "" : strip_prefix(tipLine, "tip:");
+    bool log_looks_like_interrupt(const std::string &log)
+    {
+      const bool isMakeInterrupt =
+          (log.find("gmake") != std::string::npos ||
+           log.find("make") != std::string::npos) &&
+          log.find("Interrupt") != std::string::npos;
 
-    std::cerr << "  " << RED << "✖" << RESET << " " << msg << "\n";
-    if (!tip.empty())
-      std::cerr << "  " << GRAY << "➜" << RESET << " " << tip << "\n";
+      return log.find(" Interrupt") != std::string::npos ||
+             isMakeInterrupt ||
+             log.find("ninja: interrupted") != std::string::npos ||
+             log.find("interrupted by user") != std::string::npos;
+    }
 
-    return true;
-  }
+    bool log_looks_like_linker_missing_file_due_to_runtime_args(const std::string &log)
+    {
+      if (log.empty())
+        return false;
+
+      const bool hasLd =
+          (log.find("/usr/bin/ld:") != std::string::npos) ||
+          (log.find(" ld:") != std::string::npos) ||
+          (log.find("collect2: error: ld returned") != std::string::npos);
+
+      if (!hasLd)
+        return false;
+
+      if (log.find("cannot find ") != std::string::npos &&
+          log.find("No such file or directory") != std::string::npos)
+      {
+        return true;
+      }
+
+      if (log.find("cannot find ") != std::string::npos)
+        return true;
+
+      return false;
+    }
+
+#ifndef _WIN32
+    bool log_looks_like_sanitizer_or_ub(const std::string &log)
+    {
+      return log.find("runtime error:") != std::string::npos ||
+             log.find("UndefinedBehaviorSanitizer") != std::string::npos ||
+             log.find("AddressSanitizer") != std::string::npos ||
+             log.find("LeakSanitizer") != std::string::npos ||
+             log.find("ThreadSanitizer") != std::string::npos ||
+             log.find("MemorySanitizer") != std::string::npos;
+    }
+
+    bool handle_error_tip_block_vix(const std::string &log)
+    {
+      const auto epos = log.find("error:");
+      if (epos == std::string::npos)
+        return false;
+
+      auto line_end = [&](std::size_t p) -> std::size_t
+      {
+        const std::size_t n = log.find('\n', p);
+        return (n == std::string::npos) ? log.size() : n;
+      };
+
+      auto strip_prefix = [](std::string s, const char *pref) -> std::string
+      {
+        if (s.rfind(pref, 0) == 0)
+          s.erase(0, std::strlen(pref));
+
+        while (!s.empty() && (s.front() == ' ' || s.front() == '\t'))
+          s.erase(0, 1);
+
+        return s;
+      };
+
+      const std::size_t eend = line_end(epos);
+      std::string eLine = log.substr(epos, eend - epos);
+
+      std::string tipLine;
+      const auto tpos = log.find("tip:", eend);
+      if (tpos != std::string::npos)
+      {
+        const std::size_t tend = line_end(tpos);
+        tipLine = log.substr(tpos, tend - tpos);
+      }
+
+      const std::string msg = strip_prefix(eLine, "error:");
+      const std::string tip = tipLine.empty() ? "" : strip_prefix(tipLine, "tip:");
+
+      std::cerr << "  " << RED << "✖" << RESET << " " << msg << "\n";
+      if (!tip.empty())
+        std::cerr << "  " << GRAY << "➜" << RESET << " " << tip << "\n";
+
+      return true;
+    }
+
+    bool dev_verbose_ui(const Options &opt)
+    {
+      if (opt.verbose)
+        return true;
+
+      const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
+      if (!lvl || !*lvl)
+        return false;
+
+      std::string s(lvl);
+      for (auto &c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return (s == "debug" || s == "trace");
+    }
 #endif
 
-  int run_single_cpp(const Options &opt)
-  {
-    using namespace std;
-    namespace fs = std::filesystem;
-
-    Options o = opt; // copie modifiable
-
-    if (o.warnedVixFlagAfterDoubleDash)
+    bool has_ccache()
     {
-      hint("Note: '" + o.warnedArg + "' was passed after `--` so it will be treated as a compiler/linker flag.");
+#ifdef _WIN32
+      return false;
+#else
+      int code = std::system("ccache --version >/dev/null 2>&1");
+      code = normalize_exit_code(code);
+      return code == 0;
+#endif
+    }
+
+    void print_script_runtime_args_hint()
+    {
+      hint("It looks like you passed runtime args after `--`.");
+      hint("In script mode, `--` forwards compiler/linker flags.");
+      hint("Use `--run` for runtime arguments:");
+      step("vix run file.cpp --run arg1 arg2 arg3");
+      hint("Or use repeatable --args:");
+      step("vix run file.cpp --args arg1 --args arg2 --args arg3");
+    }
+
+    bool cache_is_ninja_build(const fs::path &buildDir)
+    {
+      std::error_code ec;
+      const fs::path cache = buildDir / "CMakeCache.txt";
+      if (!fs::exists(cache, ec) || ec)
+        return false;
+
+      std::ifstream ifs(cache);
+      if (!ifs)
+        return false;
+
+      std::string line;
+      while (std::getline(ifs, line))
+      {
+        if (line.rfind("CMAKE_GENERATOR:INTERNAL=", 0) == 0)
+          return line.find("Ninja") != std::string::npos;
+      }
+
+      return false;
+    }
+
+    void apply_auto_deps_includes_from_deps_folder(Options &opt, const fs::path &startDir)
+    {
+      auto already_has_I = [&](const std::string &inc) -> bool
+      {
+        const std::string flag = "-I" + inc;
+        for (const auto &f : opt.scriptFlags)
+        {
+          if (f == flag)
+            return true;
+          if (f.rfind("-I", 0) == 0 && f.substr(2) == inc)
+            return true;
+        }
+        return false;
+      };
+
+      auto home_dir = []() -> std::optional<std::string>
+      {
+#ifdef _WIN32
+        const char *home = vix::utils::vix_getenv("USERPROFILE");
+#else
+        const char *home = vix::utils::vix_getenv("HOME");
+#endif
+        if (!home || std::string(home).empty())
+          return std::nullopt;
+        return std::string(home);
+      };
+
+      auto vix_root = [&]() -> fs::path
+      {
+        if (const auto home = home_dir(); home)
+          return fs::path(*home) / ".vix";
+        return fs::path(".vix");
+      };
+
+      auto global_manifest_path = [&]() -> fs::path
+      {
+        return vix_root() / "global" / "installed.json";
+      };
+
+      auto dep_id_to_dir_local = [](std::string depId) -> std::string
+      {
+        depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
+        std::replace(depId.begin(), depId.end(), '/', '.');
+        return depId;
+      };
+
+      std::unordered_set<std::string> localPkgDirs;
+
+      auto scan_one = [&](const fs::path &baseDir)
+      {
+        const fs::path depsRoot = baseDir / ".vix" / "deps";
+        std::error_code ec;
+
+        if (!fs::exists(depsRoot, ec) || ec)
+          return;
+
+        for (auto it = fs::directory_iterator(depsRoot, ec);
+             !ec && it != fs::directory_iterator(); ++it)
+        {
+          if (!it->is_directory())
+            continue;
+
+          const std::string pkgDir = it->path().filename().string();
+          if (!pkgDir.empty())
+            localPkgDirs.insert(pkgDir);
+
+          const fs::path inc = it->path() / "include";
+          if (!fs::exists(inc, ec) || ec)
+            continue;
+
+          const std::string incStr = inc.string();
+          if (!already_has_I(incStr))
+            opt.scriptFlags.push_back("-I" + incStr);
+        }
+      };
+
+      auto scan_global = [&]()
+      {
+        const fs::path manifestPath = global_manifest_path();
+        if (!fs::exists(manifestPath))
+          return;
+
+        std::ifstream ifs(manifestPath);
+        if (!ifs)
+          return;
+
+        nlohmann::json root;
+        ifs >> root;
+
+        if (!root.is_object() || !root.contains("packages") || !root["packages"].is_array())
+          return;
+
+        for (const auto &item : root["packages"])
+        {
+          if (!item.is_object())
+            continue;
+
+          if (!item.contains("id") || !item["id"].is_string())
+            continue;
+
+          if (!item.contains("installed_path") || !item["installed_path"].is_string())
+            continue;
+
+          const std::string id = item["id"].get<std::string>();
+          const std::string pkgDir = dep_id_to_dir_local(id);
+
+          if (localPkgDirs.contains(pkgDir))
+            continue;
+
+          std::string includeDir = "include";
+          if (item.contains("include") && item["include"].is_string())
+            includeDir = item["include"].get<std::string>();
+
+          const fs::path installedPath = fs::path(item["installed_path"].get<std::string>());
+          const fs::path inc = installedPath / includeDir;
+
+          std::error_code ec;
+          if (!fs::exists(inc, ec) || ec)
+            continue;
+
+          const std::string incStr = inc.string();
+          if (!already_has_I(incStr))
+            opt.scriptFlags.push_back("-I" + incStr);
+        }
+      };
+
+      if (opt.autoDeps == AutoDepsMode::Local)
+      {
+        scan_one(startDir);
+        scan_global();
+        return;
+      }
+
+      if (opt.autoDeps == AutoDepsMode::Up)
+      {
+        fs::path cur = startDir;
+        for (;;)
+        {
+          scan_one(cur);
+
+          std::error_code ec;
+          fs::path parent = cur.parent_path();
+          if (parent.empty() || parent == cur)
+            break;
+
+          if (fs::equivalent(parent, cur, ec) && !ec)
+            break;
+
+          cur = parent;
+        }
+
+        scan_global();
+      }
+    }
+
+    bool ensure_script_exists(const fs::path &script)
+    {
+      if (fs::exists(script))
+        return true;
+
+      error("C++ file not found: " + script.string());
+      return false;
+    }
+
+    void print_double_dash_warning_if_needed(const Options &opt)
+    {
+      if (!opt.warnedVixFlagAfterDoubleDash)
+        return;
+
+      hint("Note: '" + opt.warnedArg + "' was passed after `--` so it will be treated as a compiler/linker flag.");
       hint("If you meant a Vix option, move it before `--`.");
       hint("If you meant a runtime arg, use `--run` (or repeatable --args).");
     }
 
-    const fs::path script = o.cppFile;
-
-    if (!fs::exists(script))
+    ScriptProjectState prepare_script_project_state(Options &opt)
     {
-      error("C++ file not found: " + script.string());
-      return 1;
-    }
-
-    // auto deps (single .cpp)
-    if (o.autoDeps != AutoDepsMode::None)
-    {
-      apply_auto_deps_includes_from_deps_folder(o, script.parent_path());
-    }
-
-    const string exeName = script.stem().string();
-
-    fs::path scriptsRoot = get_scripts_root();
-    fs::create_directories(scriptsRoot);
-
-    fs::path projectDir = scriptsRoot / exeName;
-    fs::create_directories(projectDir);
-
-    fs::path cmakeLists = projectDir / "CMakeLists.txt";
-
-    const bool useVixRuntime = script_uses_vix(script);
-
-    {
-      ofstream ofs(cmakeLists);
-      ofs << make_script_cmakelists(
-          exeName,
-          script,
-          useVixRuntime,
-          o.scriptFlags,
-          o.withSqlite,
-          o.withMySql);
-    }
-
-    fs::path buildDir = projectDir / "build-ninja";
-    const fs::path sigFile = projectDir / ".vix-config.sig";
-
-    const std::string sig = make_script_config_signature(
-        useVixRuntime, o.enableSanitizers, o.enableUbsanOnly, o.scriptFlags);
-
-    bool needConfigure = true;
-    {
-      std::error_code ec{};
-      if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
-      {
-        const std::string oldSig = text::read_text_file_or_empty(sigFile);
-        if (!oldSig.empty() && oldSig == sig)
-          needConfigure = false;
-      }
-    }
-
-    // Ensure generator is Ninja (build dir name alone is not enough)
-    if (!cache_is_ninja_build(buildDir))
-    {
-      std::error_code ec;
-      fs::remove_all(buildDir, ec); // ignore errors
-      needConfigure = true;
-    }
-
-    if (needConfigure)
-    {
-      std::ostringstream oss;
-
-      oss << "cd " << quote(projectDir.string())
-          << " && cmake -S . -B build-ninja -G Ninja";
-
-      if (has_ccache())
-      {
-        oss << " -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
-            << " -DCMAKE_C_COMPILER_LAUNCHER=ccache";
-      }
-
-      if (want_sanitizers(o.enableSanitizers, o.enableUbsanOnly))
-      {
-        oss << " -DVIX_ENABLE_SANITIZERS=ON"
-            << " -DVIX_SANITIZER_MODE="
-            << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
-      }
-      else
-      {
-        oss << " -DVIX_ENABLE_SANITIZERS=OFF";
-      }
-
-      fs::path cfgLogPath = projectDir / "configure.log";
-      oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
-
-      const std::string cmd = oss.str();
-      int code = std::system(cmd.c_str());
-      code = normalize_exit_code(code);
-
-      if (code != 0)
-      {
-        std::ifstream ifs(cfgLogPath);
-        if (ifs)
-        {
-          std::ostringstream ss;
-          ss << ifs.rdbuf();
-          std::cout << ss.str() << "\n";
-        }
-
-        error("Script configure failed.");
-        handle_runtime_exit_code(code, "Script configure failed", /*alreadyHandled=*/true);
-        return code;
-      }
-
-      (void)text::write_text_file(sigFile, sig);
-    }
-
-    // Compute exe path early (needed for smart rebuild)
-    fs::path exePath = buildDir / exeName;
+      ScriptProjectState state;
+      state.script = opt.cppFile;
+      state.exeName = state.script.stem().string();
+      state.scriptsRoot = get_scripts_root();
+      state.projectDir = state.scriptsRoot / state.exeName;
+      state.cmakeLists = state.projectDir / "CMakeLists.txt";
+      state.buildDir = state.projectDir / "build-ninja";
+      state.sigFile = state.projectDir / ".vix-config.sig";
+      state.configureLogPath = state.projectDir / "configure.log";
+      state.buildLogPath = state.projectDir / "build.log";
+      state.useVixRuntime = script_uses_vix(state.script);
+      state.exePath = state.buildDir / state.exeName;
 #ifdef _WIN32
-    exePath += ".exe";
+      state.exePath += ".exe";
 #endif
 
-    bool skipBuild = false;
+      fs::create_directories(state.scriptsRoot);
+      fs::create_directories(state.projectDir);
 
-#ifndef _WIN32
-    // Only safe to skip build when we did not reconfigure
-    if (!needConfigure)
-    {
-      // Robust intelligent rebuild cache (depfiles + stamp)
-      if (!needs_rebuild_from_depfiles_cached(exePath, buildDir, exeName))
-        skipBuild = true;
-      if (skipBuild && !opt.quiet)
-        hint("Up to date (skip build).");
-    }
-#endif
-
-    // Build
-    if (!skipBuild)
-    {
-      fs::path logPath = projectDir / "build.log";
-
-      std::ostringstream oss;
-      oss << "cd " << quote(projectDir.string())
-          << " && cmake --build build-ninja --target " << exeName;
-
-      if (opt.jobs > 0)
-        oss << " -- -j " << opt.jobs;
-
-      oss << " >" << quote(logPath.string()) << " 2>&1";
-
-      const std::string buildCmd = oss.str();
-      int code = std::system(buildCmd.c_str());
-      code = normalize_exit_code(code);
-
-      if (code != 0)
       {
-        std::ifstream ifs(logPath);
-        std::string logContent;
-
-        if (ifs)
-        {
-          std::ostringstream logStream;
-          logStream << ifs.rdbuf();
-          logContent = logStream.str();
-        }
-
-        if (is_sigint_exit_code(code) || log_looks_like_interrupt(logContent))
-        {
-          error("Build interrupted by user (SIGINT).");
-          hint("Nothing is wrong: you stopped the build.");
-          return code;
-        }
-
-        bool handled = false;
-
-        if (!logContent.empty())
-        {
-          handled = vix::cli::ErrorHandler::printBuildErrors(
-              logContent,
-              script,
-              "Script build failed");
-        }
-        else
-        {
-          error("Script build failed (no compiler log captured).");
-        }
-
-        handle_runtime_exit_code(code, "Script build failed", /*alreadyHandled=*/handled);
-        return code;
-      }
-    }
-
-    if (!fs::exists(exePath))
-    {
-      error("Script binary not found: " + exePath.string());
-      return 1;
-    }
-
-    int runCode = 0;
-
-#ifdef _WIN32
-    std::string cmdRun =
-        "cmd /C \"set VIX_STDOUT_MODE=line && \"" + exePath.string() + "\"";
-    cmdRun += join_quoted_args_local(opt.runArgs);
-    cmdRun += "\"";
-
-    cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
-
-    const LiveRunResult rr = run_cmd_live_filtered_capture(
-        cmdRun,
-        /*spinnerLabel=*/"",
-        /*passthroughRuntime=*/true,
-        /*timeoutSec=*/effective_timeout_sec(opt));
-
-    runCode = normalize_exit_code(rr.exitCode);
-
-    if (runCode != 0)
-    {
-      std::string log = rr.stderrText;
-      if (!rr.stdoutText.empty())
-        log += rr.stdoutText;
-
-      bool handled = false;
-
-      if (!log.empty())
-      {
-        handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-            log, script, "Script execution failed");
-
-        if (!handled && vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, script))
-          handled = true;
-
-        if (!handled && !rr.printed_live)
-          std::cerr << log << "\n";
+        std::ofstream ofs(state.cmakeLists);
+        ofs << make_script_cmakelists(
+            state.exeName,
+            state.script,
+            state.useVixRuntime,
+            opt.scriptFlags,
+            opt.withSqlite,
+            opt.withMySql);
       }
 
-      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/handled);
-      return runCode;
+      state.configSignature = make_script_config_signature(
+          state.useVixRuntime,
+          opt.enableSanitizers,
+          opt.enableUbsanOnly,
+          opt.scriptFlags);
+
+      return state;
     }
 
-    return 0;
-
-#else
-    apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
-
-    const bool isPlainScript = !useVixRuntime;
-    const std::string runLabel = isPlainScript ? "" : "Running script";
-
-    std::string cmdRun = "VIX_STDOUT_MODE=line " + quote(exePath.string());
-    cmdRun += join_quoted_args_local(opt.runArgs);
-    cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
-
-    auto rr = run_cmd_live_filtered_capture(
-        cmdRun,
-        "",
-        /*passthroughRuntime=*/isPlainScript,
-        /*timeoutSec=*/effective_timeout_sec(opt));
-
-    runCode = normalize_exit_code(rr.exitCode);
-
-    std::string out = rr.stdoutText;
-    std::string err = rr.stderrText;
-
-    const std::string outT = trim_copy(out);
-    const std::string errT = trim_copy(err);
-
-    if (!outT.empty() && outT == errT)
+    void compute_need_configure(ScriptProjectState &state)
     {
-      err.clear();
-    }
-    else if (!outT.empty() && !errT.empty())
-    {
-      if (outT.find(errT) != std::string::npos)
-        err.clear();
-      else if (errT.find(outT) != std::string::npos)
-        out.clear();
-    }
+      state.needConfigure = true;
 
-    std::string runtimeLog;
-    runtimeLog.reserve(out.size() + err.size() + 1);
-
-    if (!out.empty())
-      runtimeLog += out;
-
-    if (!err.empty())
-    {
-      if (!runtimeLog.empty() && runtimeLog.back() != '\n')
-        runtimeLog.push_back('\n');
-      runtimeLog += err;
-    }
-
-    const bool interruptedBySigint =
-        is_sigint_exit_code(runCode) ||
-        (rr.terminatedBySignal && rr.termSignal == SIGINT) ||
-        log_looks_like_interrupt(runtimeLog);
-
-    if (interruptedBySigint)
-    {
-      hint("ℹ Server interrupted by user (SIGINT).");
-      return 0;
-    }
-
-    const bool looksSanOrUb =
-        !runtimeLog.empty() && log_looks_like_sanitizer_or_ub(runtimeLog);
-
-    const bool noOutput =
-        trim_copy(rr.stdoutText).empty() && trim_copy(rr.stderrText).empty();
-
-    if (runCode == 0 && !looksSanOrUb && noOutput)
-    {
-      if (!opt.quiet || ::isatty(STDOUT_FILENO) != 0)
-        vix::cli::style::hint("Program exited successfully (code 0) but produced no output.");
-
-      return 0;
-    }
-
-    if (runCode != 0 || looksSanOrUb)
-    {
-      if (runCode == 0 && looksSanOrUb)
-        runCode = 1;
-
-      bool handled = false;
-
-      if (!runtimeLog.empty())
-      {
-        handled = handle_error_tip_block_vix(runtimeLog);
-
-        if (!handled)
-        {
-          handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-              runtimeLog, script, "Script execution failed");
-        }
-
-        if (!handled &&
-            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))
-        {
-          handled = true;
-        }
-
-        if (!handled)
-        {
-          if (!rr.printed_live)
-            std::cerr << runtimeLog << "\n";
-        }
-      }
-
-      const bool already = handled || rr.printed_live;
-
-      handle_runtime_exit_code(runCode, "Script execution failed", /*alreadyHandled=*/already);
-
-      if (already && runCode > 0 && runCode != 130)
-        return -runCode;
-
-      return runCode;
-    }
-
-    return 0;
-#endif
-  }
-
-  int build_script_executable(const Options &opt, std::filesystem::path &exePath)
-  {
-    using namespace std;
-    namespace fs = std::filesystem;
-
-    Options o = opt;
-
-    const fs::path script = o.cppFile;
-    if (!fs::exists(script))
-    {
-      error("C++ file not found: " + script.string());
-      return 1;
-    }
-
-    // auto deps (single .cpp)
-    if (o.autoDeps != AutoDepsMode::None)
-    {
-      apply_auto_deps_includes_from_deps_folder(o, script.parent_path());
-    }
-
-    const string exeName = script.stem().string();
-
-    fs::path scriptsRoot = get_scripts_root();
-    fs::create_directories(scriptsRoot);
-
-    fs::path projectDir = scriptsRoot / exeName;
-    fs::create_directories(projectDir);
-
-    fs::path cmakeLists = projectDir / "CMakeLists.txt";
-
-    const bool useVixRuntime = script_uses_vix(script);
-
-    {
-      ofstream ofs(cmakeLists);
-      ofs << make_script_cmakelists(
-          exeName,
-          script,
-          useVixRuntime,
-          o.scriptFlags,
-          o.withSqlite,
-          o.withMySql);
-    }
-
-    fs::path buildDir = projectDir / "build-ninja";
-    const fs::path sigFile = projectDir / ".vix-config.sig";
-
-    if (o.clean)
-    {
-      std::error_code ec;
-      fs::remove_all(buildDir, ec);
-      fs::remove(sigFile, ec);
-    }
-
-    const std::string sig = make_script_config_signature(
-        useVixRuntime,
-        o.enableSanitizers,
-        o.enableUbsanOnly,
-        o.scriptFlags);
-
-    bool needConfigure = true;
-    {
       std::error_code ec{};
-      if (fs::exists(buildDir / "CMakeCache.txt", ec) && !ec)
+      if (fs::exists(state.buildDir / "CMakeCache.txt", ec) && !ec)
       {
-        const std::string oldSig =
-            text::read_text_file_or_empty(sigFile);
+        const std::string oldSig = text::read_text_file_or_empty(state.sigFile);
+        if (!oldSig.empty() && oldSig == state.configSignature)
+          state.needConfigure = false;
+      }
 
-        if (!oldSig.empty() && oldSig == sig)
-          needConfigure = false;
+      if (!cache_is_ninja_build(state.buildDir))
+      {
+        std::error_code rmEc;
+        fs::remove_all(state.buildDir, rmEc);
+        state.needConfigure = true;
       }
     }
 
-    // Configure (if needed)
-    if (needConfigure)
+    int configure_script_project(const Options &opt, const ScriptProjectState &state)
     {
-      std::ostringstream oss;
+      if (!state.needConfigure)
+        return 0;
 
-      oss << "cd " << quote(projectDir.string())
+      std::ostringstream oss;
+      oss << "cd " << quote(state.projectDir.string())
           << " && cmake -S . -B build-ninja -G Ninja";
 
       if (has_ccache())
@@ -844,82 +501,101 @@ namespace vix::commands::RunCommand::detail
       {
         oss << " -DVIX_ENABLE_SANITIZERS=ON"
             << " -DVIX_SANITIZER_MODE="
-            << sanitizer_mode_string(
-                   opt.enableSanitizers,
-                   opt.enableUbsanOnly);
+            << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
       }
       else
       {
         oss << " -DVIX_ENABLE_SANITIZERS=OFF";
       }
 
-      fs::path cfgLogPath = projectDir / "configure.log";
-      oss << " >" << quote(cfgLogPath.string()) << " 2>&1";
+      oss << " >" << quote(state.configureLogPath.string()) << " 2>&1";
 
       const std::string cmd = oss.str();
       int code = std::system(cmd.c_str());
       code = normalize_exit_code(code);
 
-      if (code != 0)
+      if (code == 0)
       {
-        std::ifstream ifs(cfgLogPath);
-        std::string logContent;
+        (void)text::write_text_file(state.sigFile, state.configSignature);
+        return 0;
+      }
 
-        if (ifs)
-        {
-          std::ostringstream ss;
-          ss << ifs.rdbuf();
-          logContent = ss.str();
-        }
+      std::ifstream ifs(state.configureLogPath);
+      std::string logContent;
 
-        if (is_sigint_exit_code(code) || log_looks_like_interrupt(logContent))
-        {
-          error("Configure interrupted by user (SIGINT).");
-          hint("Nothing is wrong: you stopped the configure step.");
-          return code;
-        }
+      if (ifs)
+      {
+        std::ostringstream ss;
+        ss << ifs.rdbuf();
+        logContent = ss.str();
+      }
 
-        bool handled = false;
-
-        if (!logContent.empty())
-        {
-          std::cout << logContent << "\n";
-          handled = true; // log already printed
-        }
-
-        error("Script configure failed.");
-        handle_runtime_exit_code(code, "Script configure failed", /*alreadyHandled=*/handled);
+      if (is_sigint_exit_code(code) || log_looks_like_interrupt(logContent))
+      {
+        error("Configure interrupted by user (SIGINT).");
+        hint("Nothing is wrong: you stopped the configure step.");
         return code;
       }
 
-      (void)text::write_text_file(sigFile, sig);
+      bool handled = false;
+      if (!logContent.empty())
+      {
+        std::cout << logContent << "\n";
+        handled = true;
+      }
+
+      error("Script configure failed.");
+      handle_runtime_exit_code(code, "Script configure failed", handled);
+      return code;
     }
 
-    // Build
-    fs::path logPath = projectDir / "build.log";
-
-    std::ostringstream oss;
-#ifndef _WIN32
-    oss << "cd " << quote(projectDir.string())
-        << " && cmake --build build-ninja --target " << exeName;
-    if (opt.jobs > 0)
-      oss << " -- -j " << opt.jobs;
-    oss << " >" << quote(logPath.string()) << " 2>&1";
+    bool can_skip_build(const Options &opt, const ScriptProjectState &state)
+    {
+#ifdef _WIN32
+      (void)opt;
+      (void)state;
+      return false;
 #else
-    oss << "cd " << quote(projectDir.string())
-        << " && cmake --build build-ninja --target " << exeName;
-    if (opt.jobs > 0)
-      oss << " -- /m:" << opt.jobs;
-    oss << " >" << quote(logPath.string()) << " 2>&1";
+      if (state.needConfigure)
+        return false;
+
+      if (needs_rebuild_from_depfiles_cached(state.exePath, state.buildDir, state.exeName))
+        return false;
+
+      if (!opt.quiet)
+        hint("Up to date (skip build).");
+
+      return true;
+#endif
+    }
+
+    int build_script_project(const Options &opt, const ScriptProjectState &state)
+    {
+      if (state.skipBuild)
+        return 0;
+
+      std::ostringstream oss;
+      oss << "cd " << quote(state.projectDir.string())
+          << " && cmake --build build-ninja --target " << state.exeName;
+
+#ifdef _WIN32
+      if (opt.jobs > 0)
+        oss << " -- /m:" << opt.jobs;
+#else
+      if (opt.jobs > 0)
+        oss << " -- -j " << opt.jobs;
 #endif
 
-    const std::string buildCmd = oss.str();
-    int code = std::system(buildCmd.c_str());
-    code = normalize_exit_code(code);
+      oss << " >" << quote(state.buildLogPath.string()) << " 2>&1";
 
-    if (code != 0)
-    {
-      std::ifstream ifs(logPath);
+      const std::string buildCmd = oss.str();
+      int code = std::system(buildCmd.c_str());
+      code = normalize_exit_code(code);
+
+      if (code == 0)
+        return 0;
+
+      std::ifstream ifs(state.buildLogPath);
       std::string logContent;
 
       if (ifs)
@@ -929,18 +605,23 @@ namespace vix::commands::RunCommand::detail
         logContent = logStream.str();
       }
 
+      if (is_sigint_exit_code(code) || log_looks_like_interrupt(logContent))
+      {
+        error("Build interrupted by user (SIGINT).");
+        hint("Nothing is wrong: you stopped the build.");
+        return code;
+      }
+
       bool handled = false;
 
       if (!logContent.empty())
       {
         if (log_looks_like_linker_missing_file_due_to_runtime_args(logContent))
-        {
           print_script_runtime_args_hint();
-        }
 
         handled = vix::cli::ErrorHandler::printBuildErrors(
             logContent,
-            script,
+            state.script,
             "Script build failed");
       }
       else
@@ -948,29 +629,275 @@ namespace vix::commands::RunCommand::detail
         error("Script build failed (no compiler log captured).");
       }
 
-      handle_runtime_exit_code(code, "Script build failed", /*alreadyHandled=*/handled);
+      handle_runtime_exit_code(code, "Script build failed", handled);
       return code;
     }
 
-    exePath = buildDir / exeName;
-#ifdef _WIN32
-    exePath += ".exe";
-#endif
-
-    if (!fs::exists(exePath))
+    int ensure_script_executable_exists(const ScriptProjectState &state)
     {
-      error("Script binary not found: " + exePath.string());
+      if (fs::exists(state.exePath))
+        return 0;
+
+      error("Script binary not found: " + state.exePath.string());
       return 1;
     }
 
-    return 0;
+#ifndef _WIN32
+    int run_script_binary_posix(const Options &opt, const ScriptProjectState &state)
+    {
+      apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
+
+      const bool isPlainScript = !state.useVixRuntime;
+      std::string cmdRun = "VIX_STDOUT_MODE=line " + quote(state.exePath.string());
+      cmdRun += join_quoted_args_local(opt.runArgs);
+      cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
+
+      LiveRunResult rr = run_cmd_live_filtered_capture(
+          cmdRun,
+          "",
+          isPlainScript,
+          effective_timeout_sec(opt));
+
+      int runCode = normalize_exit_code(rr.exitCode);
+
+      std::string out = rr.stdoutText;
+      std::string err = rr.stderrText;
+
+      const std::string outT = trim_copy(out);
+      const std::string errT = trim_copy(err);
+
+      if (!outT.empty() && outT == errT)
+      {
+        err.clear();
+      }
+      else if (!outT.empty() && !errT.empty())
+      {
+        if (outT.find(errT) != std::string::npos)
+          err.clear();
+        else if (errT.find(outT) != std::string::npos)
+          out.clear();
+      }
+
+      std::string runtimeLog;
+      runtimeLog.reserve(out.size() + err.size() + 1);
+
+      if (!out.empty())
+        runtimeLog += out;
+
+      if (!err.empty())
+      {
+        if (!runtimeLog.empty() && runtimeLog.back() != '\n')
+          runtimeLog.push_back('\n');
+        runtimeLog += err;
+      }
+
+      const bool interruptedBySigint =
+          is_sigint_exit_code(runCode) ||
+          (rr.terminatedBySignal && rr.termSignal == SIGINT) ||
+          log_looks_like_interrupt(runtimeLog);
+
+      if (interruptedBySigint)
+      {
+        hint("ℹ Server interrupted by user (SIGINT).");
+        return 0;
+      }
+
+      const bool looksSanOrUb =
+          !runtimeLog.empty() && log_looks_like_sanitizer_or_ub(runtimeLog);
+
+      const bool noOutput =
+          trim_copy(rr.stdoutText).empty() &&
+          trim_copy(rr.stderrText).empty();
+
+      if (runCode == 0 && !looksSanOrUb && noOutput)
+      {
+        if (!opt.quiet || ::isatty(STDOUT_FILENO) != 0)
+          vix::cli::style::hint("Program exited successfully (code 0) but produced no output.");
+
+        return 0;
+      }
+
+      if (runCode != 0 || looksSanOrUb)
+      {
+        if (runCode == 0 && looksSanOrUb)
+          runCode = 1;
+
+        bool handled = false;
+
+        if (!runtimeLog.empty())
+        {
+          handled = handle_error_tip_block_vix(runtimeLog);
+
+          if (!handled)
+          {
+            handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                runtimeLog,
+                state.script,
+                "Script execution failed");
+          }
+
+          if (!handled &&
+              vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, state.script))
+          {
+            handled = true;
+          }
+
+          if (!handled && !rr.printed_live)
+            std::cerr << runtimeLog << "\n";
+        }
+
+        const bool already = handled || rr.printed_live;
+        handle_runtime_exit_code(runCode, "Script execution failed", already);
+
+        if (already && runCode > 0 && runCode != 130)
+          return -runCode;
+
+        return runCode;
+      }
+
+      return 0;
+    }
+#else
+    int run_script_binary_windows(const Options &opt, const ScriptProjectState &state)
+    {
+      std::string cmdRun =
+          "cmd /C \"set VIX_STDOUT_MODE=line && \"" + state.exePath.string() + "\"";
+      cmdRun += join_quoted_args_local(opt.runArgs);
+      cmdRun += "\"";
+
+      cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
+
+      const LiveRunResult rr = run_cmd_live_filtered_capture(
+          cmdRun,
+          "",
+          true,
+          effective_timeout_sec(opt));
+
+      int runCode = normalize_exit_code(rr.exitCode);
+
+      if (runCode != 0)
+      {
+        std::string log = rr.stderrText;
+        if (!rr.stdoutText.empty())
+          log += rr.stdoutText;
+
+        bool handled = false;
+
+        if (!log.empty())
+        {
+          handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+              log,
+              state.script,
+              "Script execution failed");
+
+          if (!handled &&
+              vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, state.script))
+          {
+            handled = true;
+          }
+
+          if (!handled && !rr.printed_live)
+            std::cerr << log << "\n";
+        }
+
+        handle_runtime_exit_code(runCode, "Script execution failed", handled);
+        return runCode;
+      }
+
+      return 0;
+    }
+#endif
+
+    int configure_and_build_script(Options &o, ScriptProjectState &state)
+    {
+      const int cfgCode = configure_script_project(o, state);
+      if (cfgCode != 0)
+        return cfgCode;
+
+      state.skipBuild = can_skip_build(o, state);
+
+      const int buildCode = build_script_project(o, state);
+      if (buildCode != 0)
+        return buildCode;
+
+      return ensure_script_executable_exists(state);
+    }
+
+    int prepare_script_state_from_options(Options &o, ScriptProjectState &state)
+    {
+      print_double_dash_warning_if_needed(o);
+
+      if (!ensure_script_exists(o.cppFile))
+        return 1;
+
+      if (o.autoDeps != AutoDepsMode::None)
+        apply_auto_deps_includes_from_deps_folder(o, o.cppFile.parent_path());
+
+      state = prepare_script_project_state(o);
+      compute_need_configure(state);
+      return 0;
+    }
+
+    int build_script_executable_internal(const Options &opt, fs::path &exePath)
+    {
+      Options o = opt;
+      ScriptProjectState state;
+
+      const int prepCode = prepare_script_state_from_options(o, state);
+      if (prepCode != 0)
+        return prepCode;
+
+      if (o.clean)
+      {
+        std::error_code ec;
+        fs::remove_all(state.buildDir, ec);
+        fs::remove(state.sigFile, ec);
+        state.needConfigure = true;
+      }
+
+      const int code = configure_and_build_script(o, state);
+      if (code != 0)
+        return code;
+
+      exePath = state.exePath;
+      return 0;
+    }
+
+  } // namespace
+
+  int run_single_cpp(const Options &opt)
+  {
+    Options o = opt;
+    ScriptProjectState state;
+
+    const int prepCode = prepare_script_state_from_options(o, state);
+    if (prepCode != 0)
+      return prepCode;
+
+    const int code = configure_and_build_script(o, state);
+    if (code != 0)
+      return code;
+
+#ifdef _WIN32
+    return run_script_binary_windows(o, state);
+#else
+    return run_script_binary_posix(o, state);
+#endif
+  }
+
+  int build_script_executable(const Options &opt, std::filesystem::path &exePath)
+  {
+    return build_script_executable_internal(opt, exePath);
   }
 
   int run_single_cpp_watch(const Options &opt)
   {
     using namespace std::chrono_literals;
     namespace fs = std::filesystem;
+
+#ifndef _WIN32
     using Clock = std::chrono::steady_clock;
+#endif
 
     const fs::path script = opt.cppFile;
     if (!fs::exists(script))
@@ -995,9 +922,7 @@ namespace vix::commands::RunCommand::detail
     auto final_is_server = [&](bool runtimeGuess) -> bool
     {
       if (hasForceServer && hasForceScript)
-      {
         return true;
-      }
       if (hasForceServer)
         return true;
       if (hasForceScript)
@@ -1015,9 +940,9 @@ namespace vix::commands::RunCommand::detail
 #ifdef _WIN32
     while (true)
     {
-      const auto start = Clock::now();
+      const auto start = std::chrono::steady_clock::now();
       int code = run_single_cpp(opt);
-      const auto end = Clock::now();
+      const auto end = std::chrono::steady_clock::now();
       const auto ms =
           std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
@@ -1037,8 +962,7 @@ namespace vix::commands::RunCommand::detail
       if (code != 0)
       {
         const std::string label = kind_label(dynamicServerLike);
-        error("Last " + label + " run failed (exit code " +
-              std::to_string(code) + ").");
+        error("Last " + label + " run failed (exit code " + std::to_string(code) + ").");
         hint("Fix the errors, save the file, and Vix will rebuild automatically.");
       }
 
@@ -1063,20 +987,17 @@ namespace vix::commands::RunCommand::detail
     }
 
     return 0;
-
 #else
     while (true)
     {
-      // 1) Build
       fs::path exePath;
       int buildCode = build_script_executable(opt, exePath);
       if (buildCode != 0)
       {
         watch_spinner_stop();
-        const std::string label = kind_label(dynamicServerLike);
 
-        error("Last " + label + " build failed (exit code " +
-              std::to_string(buildCode) + ").");
+        const std::string label = kind_label(dynamicServerLike);
+        error("Last " + label + " build failed (exit code " + std::to_string(buildCode) + ").");
         hint("Fix the errors, save the file, and Vix will rebuild automatically.");
 
         for (;;)
@@ -1120,7 +1041,6 @@ namespace vix::commands::RunCommand::detail
 
       if (pid == 0)
       {
-        // ===== ENFANT =====
         ::close(gate[1]);
 
         char b = 0;
@@ -1163,7 +1083,6 @@ namespace vix::commands::RunCommand::detail
         _exit(127);
       }
 
-      // ===== PARENT =====
       ::close(gate[0]);
 
       bool needRestart = false;
@@ -1174,16 +1093,13 @@ namespace vix::commands::RunCommand::detail
       {
         const bool isServer = final_is_server(dynamicServerLike);
         const std::string kind = isServer ? "Dev server" : "Script";
-
-        info(std::string("🏃 ") + kind +
-             " started (pid=" + std::to_string(pid) + ")");
+        info(std::string("🏃 ") + kind + " started (pid=" + std::to_string(pid) + ")");
       }
 
       const ssize_t w = ::write(gate[1], "1", 1);
       if (w < 0)
-      {
         error(std::string("restart gate write failed: ") + std::strerror(errno));
-      }
+
       ::close(gate[1]);
 
       while (running)
@@ -1210,9 +1126,7 @@ namespace vix::commands::RunCommand::detail
 
           const auto childEnd = Clock::now();
           const auto ms =
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  childEnd - childStart)
-                  .count();
+              std::chrono::duration_cast<std::chrono::milliseconds>(childEnd - childStart).count();
 
           int exitCode = 0;
           if (WIFEXITED(status))
@@ -1237,9 +1151,7 @@ namespace vix::commands::RunCommand::detail
           const std::string label = isServer ? "dev server" : "script";
 
           if (needRestart)
-          {
-            break; // rebuild + relaunch
-          }
+            break;
 
           if (exitCode != 0)
           {
@@ -1281,7 +1193,6 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
     using Clock = std::chrono::steady_clock;
     namespace fs = std::filesystem;
-    using namespace vix::cli::style;
 
     const fs::path buildDir = projectDir / "build-dev";
 
@@ -1334,9 +1245,7 @@ namespace vix::commands::RunCommand::detail
     std::error_code tsEc;
     auto lastStamp = compute_timestamp(tsEc);
     if (tsEc)
-    {
       hint("Unable to compute initial timestamp for dev watch: " + tsEc.message());
-    }
 
     info("Watcher Process started (project hot reload).");
     hint("Watching project: " + projectDir.string());
@@ -1344,7 +1253,6 @@ namespace vix::commands::RunCommand::detail
 
     while (true)
     {
-      // 1) Configure si pas de cache
       if (!has_cmake_cache(buildDir))
       {
         info("Configuring project for dev mode (build-dev/).");
@@ -1356,8 +1264,7 @@ namespace vix::commands::RunCommand::detail
         const int code = run_cmd_live_filtered(cmd, "Configuring project (dev mode)");
         if (code != 0)
         {
-          error("CMake configure failed for dev mode (build-dev/, code " +
-                std::to_string(code) + ").");
+          error("CMake configure failed for dev mode (build-dev/, code " + std::to_string(code) + ").");
           hint("Check your CMakeLists.txt or run the command manually:");
           step("  cd " + buildDir.string());
           step("  cmake ..");
@@ -1368,7 +1275,6 @@ namespace vix::commands::RunCommand::detail
           success("Dev configure completed (build-dev/).");
       }
 
-      // 2) Build
       {
         watch_spinner_start("Rebuilding project...");
 
@@ -1391,7 +1297,6 @@ namespace vix::commands::RunCommand::detail
         const std::string cmd = oss.str();
 
         int code = 0;
-
         std::string buildLog = run_and_capture_with_code(cmd + " 2>&1", code);
         code = normalize_exit_code(code);
 
@@ -1408,8 +1313,7 @@ namespace vix::commands::RunCommand::detail
           }
           else
           {
-            error("Build failed in dev mode (build-dev/, code " +
-                  std::to_string(code) + ").");
+            error("Build failed in dev mode (build-dev/, code " + std::to_string(code) + ").");
           }
 
           hint("Fix the errors, save your files, and Vix will rebuild automatically.");
@@ -1441,8 +1345,7 @@ namespace vix::commands::RunCommand::detail
       if (!fs::exists(exePath))
       {
         error("Dev executable not found in build-dev/: " + exePath.string());
-        hint("Make sure your CMakeLists.txt defines an executable named '" +
-             exeName + "'.");
+        hint("Make sure your CMakeLists.txt defines an executable named '" + exeName + "'.");
         return 1;
       }
 
@@ -1457,14 +1360,12 @@ namespace vix::commands::RunCommand::detail
 
       if (pid == 0)
       {
-        // chdir
         if (::chdir(buildDir.string().c_str()) != 0)
         {
           std::cerr << "[vix][run] chdir failed: " << std::strerror(errno) << "\n";
           _exit(127);
         }
 
-        // setenv
         if (::setenv("VIX_STDOUT_MODE", "line", 1) != 0)
         {
           std::cerr << "[vix][run] setenv failed: " << std::strerror(errno) << "\n";
@@ -1491,7 +1392,6 @@ namespace vix::commands::RunCommand::detail
       {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-        // Watch files
         std::error_code loopEc;
         auto nowStamp = compute_timestamp(loopEc);
         if (!loopEc && nowStamp != lastStamp)
@@ -1513,9 +1413,7 @@ namespace vix::commands::RunCommand::detail
 
           const auto childEnd = Clock::now();
           const auto ms =
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  childEnd - childStart)
-                  .count();
+              std::chrono::duration_cast<std::chrono::milliseconds>(childEnd - childStart).count();
 
           int exitCode = 0;
           if (WIFEXITED(status))

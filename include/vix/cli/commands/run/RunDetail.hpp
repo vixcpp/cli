@@ -13,15 +13,17 @@
 #ifndef VIX_RUN_DETAIL_HPP
 #define VIX_RUN_DETAIL_HPP
 
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <system_error>
-#include <fstream>
-#include <sstream>
-#include <algorithm>
+#include <vector>
 
 #include <vix/cli/ErrorHandler.hpp>
 
@@ -33,6 +35,9 @@ namespace vix::commands::RunCommand::detail
 {
   namespace fs = std::filesystem;
 
+  /**
+   * @brief Automatic dependency discovery strategy for script mode.
+   */
   enum class AutoDepsMode
   {
     None,
@@ -40,77 +45,252 @@ namespace vix::commands::RunCommand::detail
     Up
   };
 
+  /**
+   * @brief High-level kind of input handled by `vix run`.
+   */
+  enum class RunInputKind
+  {
+    None,
+    Project,
+    SingleCpp,
+    Manifest
+  };
+
+  /**
+   * @brief Parsing state and user-facing options for `vix run`.
+   *
+   * This structure intentionally stays close to the current CLI behavior.
+   * It stores raw parse results and feature toggles before execution planning.
+   */
   struct Options
   {
+    // -------------------------------------------------------------------------
+    // Input selection
+    // -------------------------------------------------------------------------
     std::string appName;
+    std::string exampleName;
+
+    bool singleCpp = false;
+    fs::path cppFile;
+
+    bool manifestMode = false;
+    fs::path manifestFile;
+
+    // Project/build selection
     std::string preset = "dev-ninja";
     std::string runPreset;
     std::string dir;
     int jobs = 0;
+    bool clean = false;
 
+    // Output / UI
     bool quiet = false;
     bool verbose = false;
     std::string logLevel;
     std::string logFormat;
-    std::string logColor; // --log-color (auto|always|never)
-    bool noColor = false; // --no-color
+    std::string logColor; // auto|always|never
+    bool noColor = false;
+    std::string clearMode = "auto";
 
-    std::string exampleName;
-
-    // Single .cpp mode
-    bool singleCpp = false;
-    std::filesystem::path cppFile;
+    // Behavior switches
     bool watch = false;
     AutoDepsMode autoDeps = AutoDepsMode::None;
 
-    bool forceServerLike = false;  // --force-server
-    bool forceScriptLike = false;  // --force-script
-    bool enableSanitizers = false; // --san  (ASan+UBSan)
-    bool enableUbsanOnly = false;  // --ubsan (UBSan only)
+    bool forceServerLike = false;
+    bool forceScriptLike = false;
 
-    std::string clearMode = "auto";
-    std::vector<std::string> scriptFlags;
+    bool enableSanitizers = false; // ASan + UBSan
+    bool enableUbsanOnly = false;  // UBSan only
 
-    // .vix manifest mode (vix run app.vix)
-    bool manifestMode = false;
-    std::filesystem::path manifestFile;
+    bool withSqlite = false;
+    bool withMySql = false;
 
-    // Run extras from manifest (V1)
-    std::vector<std::string> runArgs; // [run] args = ["--port","8080"]
-    std::vector<std::string> runEnv;  // [run] env  = ["K=V","X=1"]
-    int timeoutSec = 0;               // [run] timeout_sec = 15
-    std::string cwd;
-    bool badDoubleDashRuntimeArgs = false;
-    std::string badDoubleDashArg;
     std::optional<bool> docs;
-    bool warnedVixFlagAfterDoubleDash = false;
-    std::string warnedArg;
+
+    // Script / runtime forwarding
+    std::vector<std::string> scriptFlags;
+    std::vector<std::string> runArgs;
+    std::vector<std::string> runEnv;
+
+    int timeoutSec = 0;
+    std::string cwd;
+
+    // Parse diagnostics / separators
     bool parseFailed = false;
     int parseExitCode = 0;
 
     bool hasDoubleDash = false;
     std::vector<std::string> doubleDashArgs;
-    std::vector<std::string> runArgsAfterRun;
-    bool hasRunSeparator = false;
 
-    bool withSqlite = false;
-    bool withMySql = false;
-    bool clean = false;
+    bool hasRunSeparator = false;
+    std::vector<std::string> runArgsAfterRun;
+
+    bool badDoubleDashRuntimeArgs = false;
+    std::string badDoubleDashArg;
+
+    bool warnedVixFlagAfterDoubleDash = false;
+    std::string warnedArg;
   };
 
+  /**
+   * @brief Resolved execution context derived from parsed options and filesystem inspection.
+   *
+   * This is the first step toward a cleaner `vix run` architecture:
+   * parse first, resolve context second, execute third.
+   */
+  struct RunContext
+  {
+    RunInputKind inputKind = RunInputKind::None;
+
+    fs::path cwd;
+    fs::path projectDir;
+    fs::path buildDir;
+
+    fs::path cppFile;
+    fs::path manifestFile;
+
+    std::string configurePreset;
+    std::string resolvedRunPreset;
+    std::string targetName;
+
+    bool hasCMakeLists = false;
+    bool hasPresets = false;
+    bool hasBuildCache = false;
+    bool useAutoDeps = false;
+  };
+
+  /**
+   * @brief Concrete execution plan for a `vix run` invocation.
+   */
+  struct RunPlan
+  {
+    RunContext context;
+
+    bool shouldConfigure = true;
+    bool shouldBuild = true;
+    bool shouldRun = true;
+
+    bool passthroughRuntime = false;
+    int effectiveTimeoutSec = 0;
+
+    std::string configureCmd;
+    std::string buildCmd;
+    std::string runCmd;
+  };
+
+  /**
+   * @brief Result returned by script-mode execution helpers.
+   */
   struct ScriptRunResult
   {
     int code = 0;
     bool handled = false;
   };
 
-  // Process / IO
-  int run_cmd_live_filtered(
-      const std::string &cmd,
-      const std::string &spinnerLabel = {});
+  /**
+   * @brief Result of a captured live process execution.
+   */
+  struct LiveRunResult
+  {
+    int rawStatus = 0;
+    int exitCode = 0;
 
-  std::filesystem::path manifest_entry_cpp(const std::filesystem::path &manifestFile);
+    std::string stdoutText;
+    std::string stderrText;
 
+    bool failureHandled = false;
+    bool printed_live = false;
+
+    bool terminatedBySignal = false;
+    int termSignal = 0;
+  };
+
+  /**
+   * @brief Small cache stamp used to avoid unnecessary rebuilds.
+   */
+  struct RebuildCacheStamp
+  {
+    std::uint64_t exe_mtime_ns = 0;
+    std::uint64_t depfiles_fingerprint = 0;
+    std::uint64_t max_dep_mtime_ns = 0;
+  };
+
+  // ===========================================================================
+  // Parsing / context resolution
+  // ===========================================================================
+
+  /**
+   * @brief Parse CLI arguments for `vix run`.
+   */
+  Options parse(const std::vector<std::string> &args);
+
+  /**
+   * @brief Resolve the main input kind from parsed options.
+   */
+  inline RunInputKind detect_input_kind(const Options &opt) noexcept
+  {
+    if (opt.singleCpp)
+      return RunInputKind::SingleCpp;
+
+    if (opt.manifestMode)
+      return RunInputKind::Manifest;
+
+    if (!opt.appName.empty() || !opt.dir.empty())
+      return RunInputKind::Project;
+
+    return RunInputKind::Project;
+  }
+
+  /**
+   * @brief Compute the effective timeout for the current run.
+   */
+  inline int effective_timeout_sec(const Options &opt) noexcept
+  {
+    if (opt.forceServerLike || opt.watch)
+      return 0;
+
+    return opt.timeoutSec;
+  }
+
+  /**
+   * @brief Normalize a cwd string to an absolute path when possible.
+   */
+  inline std::string normalize_cwd_if_needed(const std::string &cwd)
+  {
+    if (cwd.empty())
+      return {};
+
+    std::error_code ec{};
+    fs::path p(cwd);
+
+    if (p.is_relative())
+      p = fs::absolute(p, ec);
+
+    if (ec)
+      return cwd;
+
+    return p.string();
+  }
+
+  /**
+   * @brief Resolve the entry C++ file referenced by a .vix manifest.
+   */
+  fs::path manifest_entry_cpp(const fs::path &manifestFile);
+
+  /**
+   * @brief Select the project directory from parsed options and current directory.
+   */
+  std::optional<fs::path> choose_project_dir(
+      const Options &opt,
+      const fs::path &cwd);
+
+  // ===========================================================================
+  // Process / command execution
+  // ===========================================================================
+
+  /**
+   * @brief Normalize a platform-specific process exit status to a simple exit code.
+   */
   inline int normalize_exit_code(int code) noexcept
   {
 #ifdef _WIN32
@@ -132,31 +312,57 @@ namespace vix::commands::RunCommand::detail
 #endif
   }
 
-  struct LiveRunResult
-  {
-    int rawStatus = 0;
-    int exitCode = 0;
-    std::string stdoutText;
-    std::string stderrText;
-    bool failureHandled = false;
-    bool printed_live = false;
+  /**
+   * @brief Run a command live with filtering.
+   */
+  int run_cmd_live_filtered(
+      const std::string &cmd,
+      const std::string &spinnerLabel = {});
 
-    bool terminatedBySignal = false;
-    int termSignal = 0;
-  };
-
+  /**
+   * @brief Run a command live, capture its output, and optionally passthrough runtime output.
+   */
   LiveRunResult run_cmd_live_filtered_capture(
       const std::string &cmd,
       const std::string &spinnerLabel,
       bool passthroughRuntime,
       int timeoutSec = 0);
 
-  // Script mode (vix run foo.cpp)
-  std::filesystem::path get_scripts_root();
+  /**
+   * @brief Run a command and capture its output plus exit code.
+   */
+  std::string run_and_capture_with_code(const std::string &cmd, int &exitCode);
 
-  /// Detect whether a .cpp script depends on Vix runtime
-  bool script_uses_vix(const std::filesystem::path &cppPath);
+  /**
+   * @brief Run a command and capture its output.
+   */
+  std::string run_and_capture(const std::string &cmd);
 
+  /**
+   * @brief Handle final runtime exit reporting.
+   */
+  void handle_runtime_exit_code(
+      int code,
+      const std::string &context,
+      bool alreadyHandled);
+
+  // ===========================================================================
+  // Script mode
+  // ===========================================================================
+
+  /**
+   * @brief Return the root directory used for generated script projects.
+   */
+  fs::path get_scripts_root();
+
+  /**
+   * @brief Detect whether a .cpp script uses the Vix runtime.
+   */
+  bool script_uses_vix(const fs::path &cppPath);
+
+  /**
+   * @brief Generate the CMakeLists.txt content used by script mode.
+   */
   std::string make_script_cmakelists(
       const std::string &exeName,
       const fs::path &cppPath,
@@ -165,23 +371,39 @@ namespace vix::commands::RunCommand::detail
       bool withSqlite,
       bool withMySql);
 
+  /**
+   * @brief Execute a single C++ file with the script pipeline.
+   */
   int run_single_cpp(const Options &opt);
+
+  /**
+   * @brief Execute a single C++ file in watch mode.
+   */
   int run_single_cpp_watch(const Options &opt);
+
+  /**
+   * @brief Execute a project in watch mode.
+   */
   int run_project_watch(const Options &opt, const fs::path &projectDir);
 
-  // CLI parsing
-  Options parse(const std::vector<std::string> &args);
+  // ===========================================================================
+  // Build / preset helpers
+  // ===========================================================================
 
-  // Build / run flow helpers
+  /**
+   * @brief Quote a shell argument.
+   */
   std::string quote(const std::string &s);
 
+  /**
+   * @brief Build a configure command for CMake.
+   */
   inline std::string cmake_configure_cmd(
       const fs::path &projectDir,
       const std::string &configurePreset,
       const fs::path &buildDir)
   {
 #ifdef _WIN32
-    // Windows: ne pas utiliser "cd" en shell POSIX, on retourne une commande cmd
     if (!configurePreset.empty())
     {
       return "cmd /C \"cd /D " + quote(projectDir.string()) +
@@ -202,43 +424,67 @@ namespace vix::commands::RunCommand::detail
 #endif
   }
 
-  void handle_runtime_exit_code(
-      int code,
-      const std::string &context,
-      bool alreadyHandled);
-
+  /**
+   * @brief Return whether the project defines CMake presets.
+   */
   bool has_presets(const fs::path &projectDir);
 
+  /**
+   * @brief Choose the run preset associated with a configure preset.
+   */
   std::string choose_run_preset(
       const fs::path &dir,
       const std::string &configurePreset,
       const std::string &userRunPreset);
 
+  /**
+   * @brief Return whether a CMake cache exists in the given build directory.
+   */
   bool has_cmake_cache(const fs::path &buildDir);
 
-  std::optional<fs::path> choose_project_dir(
-      const Options &opt,
-      const fs::path &cwd);
-
-  void apply_log_level_env(const Options &opt);
-
+  /**
+   * @brief Resolve the binary directory from a CMake preset, if any.
+   */
   std::optional<fs::path> preset_binary_dir(
       const fs::path &projectDir,
       const std::string &configurePreset);
 
-  // Execution helpers (capturing output)
-  std::string run_and_capture_with_code(const std::string &cmd, int &exitCode);
-  std::string run_and_capture(const std::string &cmd);
+  /**
+   * @brief Choose a configure preset using the current smart preset logic.
+   */
+  std::string choose_configure_preset_smart(
+      const fs::path &projectDir,
+      const std::string &userPreset);
 
-  // Build log analysis
-  bool has_real_build_work(const std::string &log);
+  /**
+   * @brief Resolve the build directory using the current smart logic.
+   */
+  fs::path resolve_build_dir_smart(
+      const fs::path &projectDir,
+      const std::string &configurePreset);
 
+  // ===========================================================================
+  // Logging / environment helpers
+  // ===========================================================================
+
+  /**
+   * @brief Apply the log level environment expected by the runtime.
+   */
+  void apply_log_level_env(const Options &opt);
+
+  /**
+   * @brief Apply the log format environment expected by the runtime.
+   */
   void apply_log_format_env(const Options &opt);
+
+  /**
+   * @brief Apply the log color environment expected by the runtime.
+   */
   void apply_log_color_env(const Options &opt);
 
-  std::string join_quoted_args_local(const std::vector<std::string> &a);
-  std::string wrap_with_cwd_if_needed(const Options &opt, const std::string &cmd);
-
+  /**
+   * @brief Apply all runtime logging environment variables.
+   */
   inline void apply_log_env(const Options &opt)
   {
     apply_log_level_env(opt);
@@ -246,46 +492,32 @@ namespace vix::commands::RunCommand::detail
     apply_log_color_env(opt);
   }
 
-  std::string choose_configure_preset_smart(
-      const std::filesystem::path &projectDir,
-      const std::string &userPreset);
+  /**
+   * @brief Join arguments as shell-quoted tokens.
+   */
+  std::string join_quoted_args_local(const std::vector<std::string> &a);
 
-  std::filesystem::path resolve_build_dir_smart(
-      const std::filesystem::path &projectDir,
-      const std::string &configurePreset);
+  /**
+   * @brief Wrap a command with cwd switching if needed.
+   */
+  std::string wrap_with_cwd_if_needed(const Options &opt, const std::string &cmd);
 
-  inline int effective_timeout_sec(const Options &opt)
-  {
-    if (opt.forceServerLike || opt.watch)
-      return 0;
+  // ===========================================================================
+  // Build log analysis
+  // ===========================================================================
 
-    return opt.timeoutSec;
-  }
+  /**
+   * @brief Return true when the build log indicates real compilation work.
+   */
+  bool has_real_build_work(const std::string &log);
 
-  inline std::string normalize_cwd_if_needed(const std::string &cwd)
-  {
-    if (cwd.empty())
-      return {};
+  // ===========================================================================
+  // Rebuild cache helpers
+  // ===========================================================================
 
-    std::error_code ec{};
-    fs::path p(cwd);
-
-    if (p.is_relative())
-      p = fs::absolute(p, ec);
-
-    if (ec)
-      return cwd; // fallback
-
-    return p.string();
-  }
-
-  struct RebuildCacheStamp
-  {
-    std::uint64_t exe_mtime_ns = 0;
-    std::uint64_t depfiles_fingerprint = 0; // changes if any .d changes
-    std::uint64_t max_dep_mtime_ns = 0;     // max mtime among resolved deps
-  };
-
+  /**
+   * @brief Return the file modification time in nanoseconds, or 0 on failure.
+   */
   inline std::uint64_t file_mtime_ns(const fs::path &p, std::error_code &ec)
   {
     ec.clear();
@@ -293,21 +525,27 @@ namespace vix::commands::RunCommand::detail
     if (ec)
       return 0;
 
-    // Convert to nanoseconds in a portable-ish way
     using namespace std::chrono;
     const auto ns = duration_cast<nanoseconds>(ft.time_since_epoch()).count();
     return (ns < 0) ? 0ull : static_cast<std::uint64_t>(ns);
   }
 
+  /**
+   * @brief Return the file size as u64, or 0 on failure.
+   */
   inline std::uint64_t file_size_u64(const fs::path &p, std::error_code &ec)
   {
     ec.clear();
     const auto sz = fs::file_size(p, ec);
     if (ec)
       return 0;
+
     return static_cast<std::uint64_t>(sz);
   }
 
+  /**
+   * @brief Load a rebuild cache stamp from disk.
+   */
   inline std::optional<RebuildCacheStamp> load_rebuild_cache_stamp(const fs::path &stampFile)
   {
     std::ifstream ifs(stampFile);
@@ -325,6 +563,7 @@ namespace vix::commands::RunCommand::detail
         unsigned long long x = std::stoull(v, &idx, 10);
         if (idx != v.size())
           return std::nullopt;
+
         return static_cast<std::uint64_t>(x);
       }
       catch (...)
@@ -354,12 +593,19 @@ namespace vix::commands::RunCommand::detail
         s.max_dep_mtime_ns = *u;
     }
 
-    if (s.depfiles_fingerprint == 0 && s.max_dep_mtime_ns == 0 && s.exe_mtime_ns == 0)
+    if (s.depfiles_fingerprint == 0 &&
+        s.max_dep_mtime_ns == 0 &&
+        s.exe_mtime_ns == 0)
+    {
       return std::nullopt;
+    }
 
     return s;
   }
 
+  /**
+   * @brief Save a rebuild cache stamp to disk.
+   */
   inline void save_rebuild_cache_stamp(const fs::path &stampFile, const RebuildCacheStamp &s)
   {
     std::ofstream ofs(stampFile, std::ios::trunc);
@@ -371,9 +617,13 @@ namespace vix::commands::RunCommand::detail
     ofs << "max_dep_mtime_ns=" << s.max_dep_mtime_ns << "\n";
   }
 
+  /**
+   * @brief Compute a fast fingerprint from a list of depfiles.
+   */
   inline std::uint64_t depfiles_fingerprint_fast(const std::vector<fs::path> &depfiles)
   {
     std::uint64_t h = 1469598103934665603ull;
+
     auto fnv1a = [&](std::uint64_t v)
     {
       h ^= v;
@@ -384,15 +634,16 @@ namespace vix::commands::RunCommand::detail
     for (const auto &d : depfiles)
     {
       fnv1a(std::hash<std::string>{}(d.string()));
-
-      // mtime + size
       fnv1a(file_mtime_ns(d, ec));
       fnv1a(file_size_u64(d, ec));
     }
+
     return h;
   }
 
-  // CMake usually: buildDir/CMakeFiles/<target>.dir/*.d
+  /**
+   * @brief List depfiles generated by CMake for a target.
+   */
   inline std::vector<fs::path> list_depfiles_for_target(
       const fs::path &buildDir,
       const std::string &targetName)
@@ -400,28 +651,37 @@ namespace vix::commands::RunCommand::detail
     std::vector<fs::path> out;
     std::error_code ec;
 
-    fs::path dir = buildDir / "CMakeFiles" / (targetName + ".dir");
+    const fs::path dir = buildDir / "CMakeFiles" / (targetName + ".dir");
     if (!fs::exists(dir, ec) || ec)
       return out;
 
     for (auto it = fs::recursive_directory_iterator(
-             dir, fs::directory_options::skip_permission_denied, ec);
+             dir,
+             fs::directory_options::skip_permission_denied,
+             ec);
          !ec && it != fs::recursive_directory_iterator();
          ++it)
     {
       if (!it->is_regular_file())
         continue;
+
       const auto p = it->path();
       if (p.extension() == ".d")
         out.push_back(p);
     }
 
-    std::sort(out.begin(), out.end(), [](const fs::path &a, const fs::path &b)
-              { return a.string() < b.string(); });
+    std::sort(out.begin(), out.end(),
+              [](const fs::path &a, const fs::path &b)
+              {
+                return a.string() < b.string();
+              });
 
     return out;
   }
 
+  /**
+   * @brief Parse dependency paths from a Make/Ninja depfile content buffer.
+   */
   inline void depfile_parse_paths(const std::string &content, std::vector<fs::path> &paths)
   {
     const auto pos = content.find(':');
@@ -485,16 +745,19 @@ namespace vix::commands::RunCommand::detail
 
     for (const auto &t : toks)
     {
-      if (t.empty())
-        continue;
-      paths.push_back(fs::path(t));
+      if (!t.empty())
+        paths.push_back(fs::path(t));
     }
   }
 
+  /**
+   * @brief Normalize a relative dep path against the build directory when possible.
+   */
   inline fs::path normalize_dep_path(const fs::path &buildDir, const fs::path &p)
   {
     if (p.empty())
       return p;
+
     if (p.is_absolute())
       return p;
 
@@ -506,13 +769,14 @@ namespace vix::commands::RunCommand::detail
     return p;
   }
 
+  /**
+   * @brief Compute the maximum dependency mtime referenced by a list of depfiles.
+   */
   inline std::optional<std::uint64_t> compute_max_dep_mtime_ns(
       const fs::path &buildDir,
       const std::vector<fs::path> &depfiles)
   {
-    std::error_code ec;
     std::uint64_t maxNs = 0;
-
     std::vector<fs::path> deps;
     deps.reserve(512);
 
@@ -524,6 +788,7 @@ namespace vix::commands::RunCommand::detail
 
       std::ostringstream ss;
       ss << ifs.rdbuf();
+
       deps.clear();
       depfile_parse_paths(ss.str(), deps);
 
@@ -531,14 +796,12 @@ namespace vix::commands::RunCommand::detail
       {
         const fs::path dep = normalize_dep_path(buildDir, p);
 
-        std::error_code e2;
-        if (!fs::exists(dep, e2) || e2)
-        {
+        std::error_code ec;
+        if (!fs::exists(dep, ec) || ec)
           continue;
-        }
 
-        const auto t = file_mtime_ns(dep, e2);
-        if (!e2 && t > maxNs)
+        const auto t = file_mtime_ns(dep, ec);
+        if (!ec && t > maxNs)
           maxNs = t;
       }
     }
@@ -546,6 +809,9 @@ namespace vix::commands::RunCommand::detail
     return maxNs;
   }
 
+  /**
+   * @brief Return whether the executable must be rebuilt according to depfiles and cache.
+   */
   inline bool needs_rebuild_from_depfiles_cached(
       const fs::path &exePath,
       const fs::path &buildDir,
@@ -589,10 +855,7 @@ namespace vix::commands::RunCommand::detail
 
     save_rebuild_cache_stamp(stampFile, out);
 
-    if (exeMtime < *maxDep)
-      return true;
-
-    return false;
+    return exeMtime < *maxDep;
   }
 
 } // namespace vix::commands::RunCommand::detail

@@ -421,13 +421,47 @@ namespace vix::commands::RunCommand::detail
       hint("If you meant a runtime arg, use `--run` (or repeatable --args).");
     }
 
+    unsigned long long fnv1a_64(const std::string &input)
+    {
+      constexpr unsigned long long offset = 14695981039346656037ULL;
+      constexpr unsigned long long prime = 1099511628211ULL;
+
+      unsigned long long hash = offset;
+      for (char c : input)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        hash ^= static_cast<unsigned long long>(uc);
+        hash *= prime;
+      }
+
+      return hash;
+    }
+
+    std::string hex_u64(unsigned long long value)
+    {
+      static constexpr char digits[] = "0123456789abcdef";
+      std::string out(16, '0');
+
+      for (int i = 15; i >= 0; --i)
+      {
+        out[static_cast<std::size_t>(i)] = digits[value & 0xF];
+        value >>= 4ULL;
+      }
+
+      return out;
+    }
+
     ScriptProjectState prepare_script_project_state(Options &opt)
     {
       ScriptProjectState state;
-      state.script = opt.cppFile;
+      state.script = fs::absolute(opt.cppFile).lexically_normal();
       state.exeName = state.script.stem().string();
-      state.scriptsRoot = get_scripts_root();
-      state.projectDir = state.scriptsRoot / state.exeName;
+      state.scriptsRoot = get_scripts_root(opt.localCache);
+
+      const std::string scriptCacheKey = hex_u64(
+          fnv1a_64("script-cache:" + state.script.string()));
+
+      state.projectDir = state.scriptsRoot / scriptCacheKey;
       state.cmakeLists = state.projectDir / "CMakeLists.txt";
       state.buildDir = state.projectDir / "build-ninja";
       state.sigFile = state.projectDir / ".vix-config.sig";
@@ -873,6 +907,14 @@ namespace vix::commands::RunCommand::detail
     const int prepCode = prepare_script_state_from_options(o, state);
     if (prepCode != 0)
       return prepCode;
+
+    if (o.clean)
+    {
+      std::error_code ec;
+      fs::remove_all(state.buildDir, ec);
+      fs::remove(state.sigFile, ec);
+      state.needConfigure = true;
+    }
 
     const int code = configure_and_build_script(o, state);
     if (code != 0)

@@ -78,6 +78,9 @@ namespace vix::commands::CheckCommand::detail
     /// Absolute path of the .cpp file to validate.
     fs::path cppFile;
 
+    /// Use local .vix-scripts instead of global ~/.vix/cache/scripts.
+    bool localCache = false;
+
     /// Enable AddressSanitizer + UBSan.
     bool enableSanitizers = false;
 

@@ -182,7 +182,7 @@ namespace vix::commands::CheckCommand::detail
     const bool enableUbsanOnly = opt.enableUbsanOnly;
     const std::string exeName = script.stem().string();
 
-    fs::path scriptsRoot = run::get_scripts_root();
+    fs::path scriptsRoot = run::get_scripts_root(opt.localCache);
     std::error_code ec;
     fs::create_directories(scriptsRoot, ec);
     if (ec)

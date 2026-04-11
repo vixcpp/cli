@@ -1290,9 +1290,15 @@ namespace vix::commands::RunCommand::detail
     return false;
   }
 
-  fs::path get_scripts_root()
+  fs::path get_scripts_root(bool localCache)
   {
-    return fs::current_path() / ".vix-scripts";
+    if (localCache)
+      return fs::current_path() / ".vix-scripts";
+
+    if (const auto home = home_dir(); home)
+      return fs::path(*home) / ".vix" / "cache" / "scripts";
+
+    return fs::temp_directory_path() / "vix" / "cache" / "scripts";
   }
 
   std::string make_script_cmakelists(

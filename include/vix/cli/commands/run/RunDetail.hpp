@@ -130,6 +130,8 @@ namespace vix::commands::RunCommand::detail
 
     bool warnedVixFlagAfterDoubleDash = false;
     std::string warnedArg;
+
+    bool localCache = false;
   };
 
   /**
@@ -353,7 +355,7 @@ namespace vix::commands::RunCommand::detail
   /**
    * @brief Return the root directory used for generated script projects.
    */
-  fs::path get_scripts_root();
+  fs::path get_scripts_root(bool localCache);
 
   /**
    * @brief Detect whether a .cpp script uses the Vix runtime.

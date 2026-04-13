@@ -345,8 +345,17 @@ namespace vix::commands::RunCommand::detail
       auto has = [&](const char *s)
       { return line.find(s) != std::string::npos; };
 
-      if (has("vix::") || has("Vix::") || has("#include <vix/") || has("#include \"vix/"))
+      if (has("vix::") ||
+          has("Vix::") ||
+          has("using namespace vix") ||
+          has("using namespace Vix") ||
+          has("using vix::") ||
+          has("using Vix::") ||
+          has("#include <vix/") ||
+          has("#include \"vix/"))
+      {
         f.usesVix = true;
+      }
 
       if (has("#include <vix/orm/") || has("#include \"vix/orm/") ||
           has("vix::orm") || has("using namespace vix::orm"))

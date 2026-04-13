@@ -982,12 +982,19 @@ namespace vix::commands::RunCommand::detail
     plan.configureLogPath = plan.projectDir / "configure.log";
     plan.buildLogPath = plan.projectDir / "build.log";
     plan.targetName = plan.exeName;
-    plan.useVixRuntime = probe.usesVixRuntime;
+
+    plan.useVixRuntime = probe.usesVixRuntime || script_uses_vix(plan.scriptPath);
 
     plan.exePath = plan.buildDir / plan.exeName;
 #ifdef _WIN32
     plan.exePath += ".exe";
 #endif
+
+    plan.configSignature = make_script_config_signature(
+        plan.useVixRuntime,
+        opt.enableSanitizers,
+        opt.enableUbsanOnly,
+        opt.scriptFlags);
 
     plan.shouldConfigure = true;
     plan.shouldBuild = true;

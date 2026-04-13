@@ -1027,10 +1027,7 @@ namespace vix::commands::RunCommand::detail
       if (withSqlite || withMySql)
         append_line(s);
 
-      append_line(s, "find_package(vix QUIET CONFIG)");
-      append_line(s, "if (NOT vix_FOUND)");
-      append_line(s, "  find_package(Vix CONFIG REQUIRED)");
-      append_line(s, "endif()");
+      append_line(s, "find_package(Vix CONFIG REQUIRED)");
       append_line(s);
 
       append_line(s, "set(VIX_MAIN_TARGET \"\")");
@@ -1038,12 +1035,8 @@ namespace vix::commands::RunCommand::detail
       append_line(s, "  set(VIX_MAIN_TARGET vix::vix)");
       append_line(s, "elseif (TARGET Vix::vix)");
       append_line(s, "  set(VIX_MAIN_TARGET Vix::vix)");
-      append_line(s, "elseif (TARGET vix::core)");
-      append_line(s, "  set(VIX_MAIN_TARGET vix::core)");
-      append_line(s, "elseif (TARGET Vix::core)");
-      append_line(s, "  set(VIX_MAIN_TARGET Vix::core)");
       append_line(s, "else()");
-      append_line(s, "  message(FATAL_ERROR \"No Vix target found (vix::vix/Vix::vix/vix::core/Vix::core)\")");
+      append_line(s, "  message(FATAL_ERROR \"No umbrella Vix target found (vix::vix or Vix::vix). Runtime scripts require the full Vix package.\")");
       append_line(s, "endif()");
       append_line(s);
 
@@ -1147,6 +1140,8 @@ namespace vix::commands::RunCommand::detail
     append_global_cmake_defaults(s);
 
     const ScriptFeatures feat = detect_script_features(cppPath);
+    const bool effectiveUseVixRuntime = useVixRuntime || feat.usesVix;
+
     ScriptLinkFlags lf = parse_link_flags(scriptFlags);
     ScriptCompileFlags cf = parse_compile_flags(scriptFlags);
 
@@ -1169,7 +1164,7 @@ namespace vix::commands::RunCommand::detail
     append_target_link_options(s, targetName, lf.linkOpts);
     append_base_warning_and_platform_flags(s, targetName);
 
-    if (!useVixRuntime)
+    if (!effectiveUseVixRuntime)
     {
       append_non_vix_runtime_links(s, targetName);
     }

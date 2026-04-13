@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
+#include <vix/cli/commands/run/detail/ScriptProbe.hpp>
 #include <vix/utils/Env.hpp>
 
 #include <algorithm>
@@ -32,14 +33,6 @@ namespace vix::commands::RunCommand::detail
 {
   namespace
   {
-    struct ScriptFeatures
-    {
-      bool usesVix = false;
-      bool usesOrm = false;
-      bool usesDb = false;
-      bool usesMysql = false;
-    };
-
     struct GlobalPackage
     {
       std::string id;
@@ -47,14 +40,6 @@ namespace vix::commands::RunCommand::detail
       std::string includeDir{"include"};
       std::string type{"header-only"};
       fs::path installedPath;
-    };
-
-    struct ScriptCompileFlags
-    {
-      std::vector<std::string> includeDirs;
-      std::vector<std::string> systemDirs;
-      std::vector<std::string> defines;
-      std::vector<std::string> compileOpts;
     };
 
     struct ResolvedScriptDeps
@@ -311,95 +296,6 @@ namespace vix::commands::RunCommand::detail
         return depPackages;
 
       return ordered;
-    }
-
-    ScriptFeatures detect_script_features(const fs::path &cppPath)
-    {
-      ScriptFeatures f;
-
-      std::ifstream ifs(cppPath);
-      if (!ifs)
-        return f;
-
-      std::string line;
-      while (std::getline(ifs, line))
-      {
-        auto has = [&](const char *s)
-        { return line.find(s) != std::string::npos; };
-
-        if (has("vix::") || has("Vix::") || has("#include <vix/") || has("#include \"vix/"))
-          f.usesVix = true;
-
-        if (has("#include <vix/orm/") || has("vix::orm") || has("using namespace vix::orm"))
-          f.usesOrm = true;
-
-        if (has("#include <vix/db/") || has("vix::db") || has("using namespace vix::db"))
-          f.usesDb = true;
-
-        if (has("make_mysql_factory") || has("Engine::MySQL") || has("mysqlcppconn"))
-          f.usesMysql = true;
-
-        if (!f.usesMysql && (has("tcp://") || has("3306") || has("MySQL")))
-          f.usesMysql = true;
-      }
-
-      if (f.usesOrm)
-        f.usesDb = true;
-
-      return f;
-    }
-
-    bool starts_with(const std::string &s, const char *p)
-    {
-      return s.rfind(p, 0) == 0;
-    }
-
-    ScriptCompileFlags parse_compile_flags(const std::vector<std::string> &flags)
-    {
-      ScriptCompileFlags out;
-
-      for (std::size_t i = 0; i < flags.size(); ++i)
-      {
-        const std::string &f = flags[i];
-
-        if (starts_with(f, "-I") && f.size() > 2)
-        {
-          out.includeDirs.push_back(f.substr(2));
-          continue;
-        }
-        if (f == "-I" && i + 1 < flags.size())
-        {
-          out.includeDirs.push_back(flags[++i]);
-          continue;
-        }
-
-        if (starts_with(f, "-isystem") && f.size() > 8)
-        {
-          out.systemDirs.push_back(f.substr(8));
-          continue;
-        }
-        if (f == "-isystem" && i + 1 < flags.size())
-        {
-          out.systemDirs.push_back(flags[++i]);
-          continue;
-        }
-
-        if (starts_with(f, "-D") && f.size() > 2)
-        {
-          out.defines.push_back(f.substr(2));
-          continue;
-        }
-        if (f == "-D" && i + 1 < flags.size())
-        {
-          out.defines.push_back(flags[++i]);
-          continue;
-        }
-
-        if (!f.empty() && f[0] == '-')
-          out.compileOpts.push_back(f);
-      }
-
-      return out;
     }
 
     std::string dep_id_to_cmake_alias(const std::string &id)
@@ -1111,8 +1007,7 @@ namespace vix::commands::RunCommand::detail
         const std::string &targetName,
         bool withSqlite,
         bool withMySql,
-        bool wantsOrm,
-        bool wantsMysqlConnectorHint)
+        bool wantsOrm)
     {
       if (withSqlite || withMySql)
         append_line(s, "set(VIX_ENABLE_DB ON CACHE BOOL \"\" FORCE)");
@@ -1132,10 +1027,7 @@ namespace vix::commands::RunCommand::detail
       if (withSqlite || withMySql)
         append_line(s);
 
-      append_line(s, "find_package(vix QUIET CONFIG)");
-      append_line(s, "if (NOT vix_FOUND)");
-      append_line(s, "  find_package(Vix CONFIG REQUIRED)");
-      append_line(s, "endif()");
+      append_line(s, "find_package(Vix CONFIG REQUIRED)");
       append_line(s);
 
       append_line(s, "set(VIX_MAIN_TARGET \"\")");
@@ -1143,12 +1035,8 @@ namespace vix::commands::RunCommand::detail
       append_line(s, "  set(VIX_MAIN_TARGET vix::vix)");
       append_line(s, "elseif (TARGET Vix::vix)");
       append_line(s, "  set(VIX_MAIN_TARGET Vix::vix)");
-      append_line(s, "elseif (TARGET vix::core)");
-      append_line(s, "  set(VIX_MAIN_TARGET vix::core)");
-      append_line(s, "elseif (TARGET Vix::core)");
-      append_line(s, "  set(VIX_MAIN_TARGET Vix::core)");
       append_line(s, "else()");
-      append_line(s, "  message(FATAL_ERROR \"No Vix target found (vix::vix/Vix::vix/vix::core/Vix::core)\")");
+      append_line(s, "  message(FATAL_ERROR \"No umbrella Vix target found (vix::vix or Vix::vix). Runtime scripts require the full Vix package.\")");
       append_line(s, "endif()");
       append_line(s);
 
@@ -1179,18 +1067,10 @@ namespace vix::commands::RunCommand::detail
         append_line(s);
       }
 
-      if (wantsMysqlConnectorHint)
-      {
-        append_line(s, "if (UNIX)");
-        append_line(s, "  find_library(VIX_MYSQLCPPCONN_LIB NAMES mysqlcppconn8 mysqlcppconn)");
-        append_line(s, "  if (VIX_MYSQLCPPCONN_LIB)");
-        append_line(s, "    target_link_libraries(" + targetName + " PRIVATE ${VIX_MYSQLCPPCONN_LIB})");
-        append_line(s, "  else()");
-        append_line(s, "    message(WARNING \"MySQL connector lib not found (mysqlcppconn8/mysqlcppconn). If you get undefined references, pass: -- -lmysqlcppconn8\")");
-        append_line(s, "  endif()");
-        append_line(s, "endif()");
-        append_line(s);
-      }
+      append_line(s, "if (VIX_DB_USE_MYSQL)");
+      append_line(s, "  message(STATUS \"MySQL requested. If your connector is external, pass explicit link flags such as: -- -lmysqlcppconn8\")");
+      append_line(s, "endif()");
+      append_line(s);
     }
 
     void append_sanitizer_runtime_block(std::string &s, const std::string &targetName)
@@ -1224,71 +1104,7 @@ namespace vix::commands::RunCommand::detail
       append_line(s, "endif()");
     }
 
-    bool has_link_library(const ScriptLinkFlags &lf, const std::string &name)
-    {
-      return std::find(lf.libs.begin(), lf.libs.end(), name) != lf.libs.end();
-    }
-
   } // namespace
-
-  ScriptLinkFlags parse_link_flags(const std::vector<std::string> &flags)
-  {
-    ScriptLinkFlags out;
-
-    for (const auto &f : flags)
-    {
-      if (f.rfind("-l", 0) == 0 && f.size() > 2)
-      {
-        out.libs.push_back(f.substr(2));
-        continue;
-      }
-
-      if (f.rfind("-L", 0) == 0 && f.size() > 2)
-      {
-        out.libDirs.push_back(f.substr(2));
-        continue;
-      }
-
-      if (f.rfind("-I", 0) == 0 || f == "-I" ||
-          f.rfind("-D", 0) == 0 || f == "-D" ||
-          f.rfind("-isystem", 0) == 0 || f == "-isystem")
-      {
-        continue;
-      }
-
-      out.linkOpts.push_back(f);
-    }
-
-    return out;
-  }
-
-  bool script_uses_vix(const fs::path &cppPath)
-  {
-    std::ifstream ifs(cppPath);
-    if (!ifs)
-      return false;
-
-    std::string line;
-    while (std::getline(ifs, line))
-    {
-      if (line.find("vix::") != std::string::npos ||
-          line.find("Vix::") != std::string::npos)
-      {
-        return true;
-      }
-
-      if (line.find("#include") == std::string::npos)
-        continue;
-
-      if (line.find("vix") != std::string::npos ||
-          line.find("Vix") != std::string::npos)
-      {
-        return true;
-      }
-    }
-
-    return false;
-  }
 
   fs::path get_scripts_root(bool localCache)
   {
@@ -1324,6 +1140,8 @@ namespace vix::commands::RunCommand::detail
     append_global_cmake_defaults(s);
 
     const ScriptFeatures feat = detect_script_features(cppPath);
+    const bool effectiveUseVixRuntime = useVixRuntime || feat.usesVix;
+
     ScriptLinkFlags lf = parse_link_flags(scriptFlags);
     ScriptCompileFlags cf = parse_compile_flags(scriptFlags);
 
@@ -1337,7 +1155,7 @@ namespace vix::commands::RunCommand::detail
     append_line(s);
 
     append_target_include_directories(s, targetName, cf.includeDirs, false);
-    append_target_include_directories(s, targetName, cf.systemDirs, true);
+    append_target_include_directories(s, targetName, cf.systemIncludeDirs, true);
     append_bridged_dep_links(s, targetName, deps.cmakeDepAliases);
     append_target_compile_definitions(s, targetName, cf.defines);
     append_target_compile_options(s, targetName, cf.compileOpts);
@@ -1346,27 +1164,25 @@ namespace vix::commands::RunCommand::detail
     append_target_link_options(s, targetName, lf.linkOpts);
     append_base_warning_and_platform_flags(s, targetName);
 
-    if (!useVixRuntime)
+    if (!effectiveUseVixRuntime)
     {
       append_non_vix_runtime_links(s, targetName);
     }
     else
     {
-      const bool needsMysqlConnectorHint =
-          feat.usesMysql &&
-          !has_link_library(lf, "mysqlcppconn8") &&
-          !has_link_library(lf, "mysqlcppconn");
-
       append_vix_runtime_block(
           s,
           targetName,
           withSqlite,
           withMySql,
-          feat.usesOrm,
-          needsMysqlConnectorHint);
+          feat.usesOrm);
     }
 
     append_sanitizer_runtime_block(s, targetName);
+
+    append_line(s, "message(STATUS \"Vix script fallback mode: external non-Vix libraries are not auto-guessed\")");
+    append_line(s, "message(STATUS \"If link fails, pass explicit linker flags after --, for example: vix run file.cpp -- -lfmt\")");
+
     return s;
   }
 

@@ -14,6 +14,8 @@
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
+#include <vix/cli/commands/run/detail/ScriptProbe.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/Style.hpp>
@@ -51,6 +53,10 @@ namespace vix::commands::RunCommand::detail
 
   namespace
   {
+    void print_double_dash_warning_if_needed(const Options &opt);
+    bool ensure_script_exists(const fs::path &script);
+    void apply_auto_deps_includes_from_deps_folder(Options &opt, const fs::path &startDir);
+
     struct ScriptProjectState
     {
       fs::path script;
@@ -71,6 +77,38 @@ namespace vix::commands::RunCommand::detail
       std::string configSignature;
     };
 
+    ScriptProjectState make_state_from_cmake_plan(const CMakeScriptPlan &plan)
+    {
+      ScriptProjectState state;
+      state.script = plan.scriptPath;
+      state.exeName = plan.exeName;
+      state.scriptsRoot = plan.scriptsRoot;
+      state.projectDir = plan.projectDir;
+      state.cmakeLists = plan.cmakeListsPath;
+      state.buildDir = plan.buildDir;
+      state.exePath = plan.exePath;
+      state.sigFile = plan.signatureFile;
+      state.configureLogPath = plan.configureLogPath;
+      state.buildLogPath = plan.buildLogPath;
+      state.useVixRuntime = plan.useVixRuntime;
+      state.needConfigure = plan.shouldConfigure;
+      state.skipBuild = !plan.shouldBuild;
+      state.configSignature = plan.configSignature;
+      return state;
+    }
+
+    int prepare_script_options_common(Options &opt)
+    {
+      print_double_dash_warning_if_needed(opt);
+
+      if (!ensure_script_exists(opt.cppFile))
+        return 1;
+
+      if (opt.autoDeps != AutoDepsMode::None)
+        apply_auto_deps_includes_from_deps_folder(opt, opt.cppFile.parent_path());
+
+      return 0;
+    }
     inline bool is_sigint_exit_code(int code) noexcept
     {
       return code == 130;
@@ -421,101 +459,6 @@ namespace vix::commands::RunCommand::detail
       hint("If you meant a runtime arg, use `--run` (or repeatable --args).");
     }
 
-    unsigned long long fnv1a_64(const std::string &input)
-    {
-      constexpr unsigned long long offset = 14695981039346656037ULL;
-      constexpr unsigned long long prime = 1099511628211ULL;
-
-      unsigned long long hash = offset;
-      for (char c : input)
-      {
-        const unsigned char uc = static_cast<unsigned char>(c);
-        hash ^= static_cast<unsigned long long>(uc);
-        hash *= prime;
-      }
-
-      return hash;
-    }
-
-    std::string hex_u64(unsigned long long value)
-    {
-      static constexpr char digits[] = "0123456789abcdef";
-      std::string out(16, '0');
-
-      for (int i = 15; i >= 0; --i)
-      {
-        out[static_cast<std::size_t>(i)] = digits[value & 0xF];
-        value >>= 4ULL;
-      }
-
-      return out;
-    }
-
-    ScriptProjectState prepare_script_project_state(Options &opt)
-    {
-      ScriptProjectState state;
-      state.script = fs::absolute(opt.cppFile).lexically_normal();
-      state.exeName = state.script.stem().string();
-      state.scriptsRoot = get_scripts_root(opt.localCache);
-
-      const std::string scriptCacheKey = hex_u64(
-          fnv1a_64("script-cache:" + state.script.string()));
-
-      state.projectDir = state.scriptsRoot / scriptCacheKey;
-      state.cmakeLists = state.projectDir / "CMakeLists.txt";
-      state.buildDir = state.projectDir / "build-ninja";
-      state.sigFile = state.projectDir / ".vix-config.sig";
-      state.configureLogPath = state.projectDir / "configure.log";
-      state.buildLogPath = state.projectDir / "build.log";
-      state.useVixRuntime = script_uses_vix(state.script);
-      state.exePath = state.buildDir / state.exeName;
-#ifdef _WIN32
-      state.exePath += ".exe";
-#endif
-
-      fs::create_directories(state.scriptsRoot);
-      fs::create_directories(state.projectDir);
-
-      {
-        std::ofstream ofs(state.cmakeLists);
-        ofs << make_script_cmakelists(
-            state.exeName,
-            state.script,
-            state.useVixRuntime,
-            opt.scriptFlags,
-            opt.withSqlite,
-            opt.withMySql);
-      }
-
-      state.configSignature = make_script_config_signature(
-          state.useVixRuntime,
-          opt.enableSanitizers,
-          opt.enableUbsanOnly,
-          opt.scriptFlags);
-
-      return state;
-    }
-
-    void compute_need_configure(ScriptProjectState &state)
-    {
-      state.needConfigure = true;
-
-      std::error_code ec{};
-      if (fs::exists(state.buildDir / "CMakeCache.txt", ec) && !ec)
-      {
-        const std::string oldSig = text::read_text_file_or_empty(state.sigFile);
-        if (!oldSig.empty() && oldSig == state.configSignature)
-          state.needConfigure = false;
-      }
-
-      if (!cache_is_ninja_build(state.buildDir))
-      {
-        std::error_code rmEc;
-        fs::remove_all(state.buildDir, rmEc);
-        state.needConfigure = true;
-      }
-    }
-
     int configure_script_project(const Options &opt, const ScriptProjectState &state)
     {
       if (!state.needConfigure)
@@ -857,29 +800,60 @@ namespace vix::commands::RunCommand::detail
       return ensure_script_executable_exists(state);
     }
 
-    int prepare_script_state_from_options(Options &o, ScriptProjectState &state)
-    {
-      print_double_dash_warning_if_needed(o);
-
-      if (!ensure_script_exists(o.cppFile))
-        return 1;
-
-      if (o.autoDeps != AutoDepsMode::None)
-        apply_auto_deps_includes_from_deps_folder(o, o.cppFile.parent_path());
-
-      state = prepare_script_project_state(o);
-      compute_need_configure(state);
-      return 0;
-    }
-
     int build_script_executable_internal(const Options &opt, fs::path &exePath)
     {
       Options o = opt;
-      ScriptProjectState state;
 
-      const int prepCode = prepare_script_state_from_options(o, state);
+      const int prepCode = prepare_script_options_common(o);
       if (prepCode != 0)
         return prepCode;
+
+      const ScriptProbeResult probe = probe_single_cpp_script(o);
+
+      if (script_can_use_direct_compile(probe))
+      {
+        const DirectScriptPlan directPlan = make_direct_script_plan(o, probe);
+
+        std::error_code ec;
+        fs::create_directories(directPlan.cacheDir, ec);
+        if (ec)
+        {
+          error("Failed to create direct script cache directory.");
+          return 1;
+        }
+
+#ifndef _WIN32
+        apply_sanitizer_env_if_needed(o.enableSanitizers, o.enableUbsanOnly);
+#endif
+
+        const DirectScriptCacheState cache = load_direct_script_cache_state(directPlan);
+
+        if (directPlan.shouldCompile)
+        {
+          const LiveRunResult build = run_cmd_live_filtered_capture(
+              directPlan.compileCmd,
+              "Compiling script...",
+              false,
+              0);
+
+          if (build.exitCode != 0)
+          {
+            if (!build.failureHandled)
+              handle_runtime_exit_code(build.exitCode, "compile", false);
+
+            return build.exitCode == 0 ? 1 : build.exitCode;
+          }
+
+          // Do not rewrite legacy cache metadata here.
+          // The direct runner owns the cache metadata format.
+        }
+
+        exePath = directPlan.binaryPath;
+        return 0;
+      }
+
+      const CMakeScriptPlan cmakePlan = make_cmake_script_plan(o, probe);
+      ScriptProjectState state = make_state_from_cmake_plan(cmakePlan);
 
       if (o.clean)
       {
@@ -887,6 +861,7 @@ namespace vix::commands::RunCommand::detail
         fs::remove_all(state.buildDir, ec);
         fs::remove(state.sigFile, ec);
         state.needConfigure = true;
+        state.skipBuild = false;
       }
 
       const int code = configure_and_build_script(o, state);
@@ -897,16 +872,147 @@ namespace vix::commands::RunCommand::detail
       return 0;
     }
 
+    unsigned long long fnv1a_64(const std::string &input)
+    {
+      constexpr unsigned long long offset = 14695981039346656037ULL;
+      constexpr unsigned long long prime = 1099511628211ULL;
+
+      unsigned long long hash = offset;
+      for (char c : input)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        hash ^= static_cast<unsigned long long>(uc);
+        hash *= prime;
+      }
+
+      return hash;
+    }
+
+    std::string hex_u64(unsigned long long value)
+    {
+      static constexpr char digits[] = "0123456789abcdef";
+      std::string out(16, '0');
+
+      for (int i = 15; i >= 0; --i)
+      {
+        out[static_cast<std::size_t>(i)] = digits[value & 0xF];
+        value >>= 4ULL;
+      }
+
+      return out;
+    }
+
+    int materialize_cmake_script_project(const Options &opt, const ScriptProjectState &state)
+    {
+      std::error_code ec;
+      fs::create_directories(state.projectDir, ec);
+      if (ec)
+      {
+        error("Failed to create script project directory.");
+        return 1;
+      }
+
+      const std::string cmakeText = make_script_cmakelists(
+          state.exeName,
+          state.script,
+          state.useVixRuntime,
+          opt.scriptFlags,
+          opt.withSqlite,
+          opt.withMySql);
+
+      {
+        std::ofstream out(state.cmakeLists, std::ios::trunc);
+        if (!out)
+        {
+          error("Failed to write generated CMakeLists.txt.");
+          return 1;
+        }
+        out << cmakeText;
+      }
+
+      if (!state.configSignature.empty())
+      {
+        std::ofstream sig(state.sigFile, std::ios::trunc);
+        if (sig)
+          sig << state.configSignature;
+      }
+
+      return 0;
+    }
+
+    void compute_need_configure(ScriptProjectState &state)
+    {
+      state.needConfigure = true;
+
+      std::error_code ec{};
+      if (fs::exists(state.buildDir / "CMakeCache.txt", ec) && !ec)
+      {
+        const std::string oldSig = text::read_text_file_or_empty(state.sigFile);
+        if (!oldSig.empty() && oldSig == state.configSignature)
+          state.needConfigure = false;
+      }
+
+      if (!cache_is_ninja_build(state.buildDir))
+      {
+        std::error_code rmEc;
+        fs::remove_all(state.buildDir, rmEc);
+        state.needConfigure = true;
+      }
+    }
+
   } // namespace
 
-  int run_single_cpp(const Options &opt)
+  CMakeScriptPlan make_cmake_script_plan(
+      const Options &opt,
+      const ScriptProbeResult &probe)
+  {
+    CMakeScriptPlan plan{};
+
+    plan.scriptPath = fs::absolute(opt.cppFile).lexically_normal();
+    plan.exeName = plan.scriptPath.stem().string();
+    plan.scriptsRoot = get_scripts_root(opt.localCache);
+
+    const std::string scriptCacheKey = hex_u64(
+        fnv1a_64("script-cache:" + plan.scriptPath.string()));
+
+    plan.projectDir = plan.scriptsRoot / scriptCacheKey;
+    plan.cmakeListsPath = plan.projectDir / "CMakeLists.txt";
+    plan.buildDir = plan.projectDir / "build-ninja";
+    plan.signatureFile = plan.projectDir / ".vix-config.sig";
+    plan.configureLogPath = plan.projectDir / "configure.log";
+    plan.buildLogPath = plan.projectDir / "build.log";
+    plan.targetName = plan.exeName;
+
+    plan.useVixRuntime = probe.usesVixRuntime || script_uses_vix(plan.scriptPath);
+
+    plan.exePath = plan.buildDir / plan.exeName;
+#ifdef _WIN32
+    plan.exePath += ".exe";
+#endif
+
+    plan.configSignature = make_script_config_signature(
+        plan.useVixRuntime,
+        opt.enableSanitizers,
+        opt.enableUbsanOnly,
+        opt.scriptFlags);
+
+    plan.shouldConfigure = true;
+    plan.shouldBuild = true;
+    plan.shouldRun = true;
+    plan.passthroughRuntime = false;
+    plan.effectiveTimeoutSec = effective_timeout_sec(opt);
+
+    std::error_code ec;
+    fs::create_directories(plan.scriptsRoot, ec);
+    fs::create_directories(plan.projectDir, ec);
+
+    return plan;
+  }
+
+  int run_single_cpp_cmake(const Options &opt, const CMakeScriptPlan &plan)
   {
     Options o = opt;
-    ScriptProjectState state;
-
-    const int prepCode = prepare_script_state_from_options(o, state);
-    if (prepCode != 0)
-      return prepCode;
+    ScriptProjectState state = make_state_from_cmake_plan(plan);
 
     if (o.clean)
     {
@@ -914,17 +1020,62 @@ namespace vix::commands::RunCommand::detail
       fs::remove_all(state.buildDir, ec);
       fs::remove(state.sigFile, ec);
       state.needConfigure = true;
+      state.skipBuild = false;
     }
 
-    const int code = configure_and_build_script(o, state);
-    if (code != 0)
-      return code;
+    const int materializeCode = materialize_cmake_script_project(o, state);
+    if (materializeCode != 0)
+      return materializeCode;
+
+    compute_need_configure(state);
+
+#ifndef _WIN32
+    if (!state.needConfigure &&
+        !needs_rebuild_from_depfiles_cached(state.exePath, state.buildDir, state.exeName))
+    {
+      state.skipBuild = true;
+      if (!o.quiet)
+        hint("Up to date (skip build).");
+    }
+#endif
+
+    const int cfgCode = configure_script_project(o, state);
+    if (cfgCode != 0)
+      return cfgCode;
+
+    const int buildCode = build_script_project(o, state);
+    if (buildCode != 0)
+      return buildCode;
+
+    const int exeCode = ensure_script_executable_exists(state);
+    if (exeCode != 0)
+      return exeCode;
 
 #ifdef _WIN32
     return run_script_binary_windows(o, state);
 #else
     return run_script_binary_posix(o, state);
 #endif
+  }
+
+  int run_single_cpp(const Options &opt)
+  {
+    Options o = opt;
+
+    const int prepCode = prepare_script_options_common(o);
+    if (prepCode != 0)
+      return prepCode;
+
+    const ScriptProbeResult probe = probe_single_cpp_script(o);
+
+    if (script_can_use_direct_compile(probe))
+    {
+      const DirectScriptPlan directPlan = make_direct_script_plan(o, probe);
+      return run_single_cpp_direct(o, directPlan);
+    }
+
+    const CMakeScriptPlan cmakePlan = make_cmake_script_plan(o, probe);
+    return run_single_cpp_cmake(o, cmakePlan);
   }
 
   int build_script_executable(const Options &opt, std::filesystem::path &exePath)

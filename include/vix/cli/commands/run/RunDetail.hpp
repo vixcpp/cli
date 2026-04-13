@@ -57,6 +57,36 @@ namespace vix::commands::RunCommand::detail
   };
 
   /**
+   * @brief Execution strategy selected for a single C++ script.
+   *
+   * Direct means a fast compile-and-run path without generated CMake.
+   * CMakeFallback means the legacy generated CMake project pipeline.
+   */
+  enum class ScriptExecutionStrategy
+  {
+    None,
+    Direct,
+    CMakeFallback
+  };
+
+  /**
+   * @brief Coarse reason explaining why a script cannot use direct compilation.
+   */
+  enum class ScriptFallbackReason
+  {
+    None,
+    UsesCompiledDeps,
+    UsesVixRuntime,
+    UsesOrm,
+    UsesDatabase,
+    UsesMySql,
+    RequiresCMakeTargets,
+    UnsupportedFlags,
+    UnsupportedLayout,
+    Unknown
+  };
+
+  /**
    * @brief Parsing state and user-facing options for `vix run`.
    *
    * This structure intentionally stays close to the current CLI behavior.
@@ -178,6 +208,139 @@ namespace vix::commands::RunCommand::detail
     std::string configureCmd;
     std::string buildCmd;
     std::string runCmd;
+  };
+
+  /**
+   * @brief Parsed compile-related flags extracted from script mode arguments.
+   */
+  struct ScriptCompileFlags
+  {
+    std::vector<std::string> includeDirs;
+    std::vector<std::string> systemIncludeDirs;
+    std::vector<std::string> defines;
+    std::vector<std::string> compileOpts;
+  };
+
+  /**
+   * @brief Parsed link-related flags extracted from script mode arguments.
+   */
+  struct ScriptLinkFlags
+  {
+    std::vector<std::string> libs;
+    std::vector<std::string> libDirs;
+    std::vector<std::string> linkOpts;
+  };
+
+  /**
+   * @brief High-level feature detection result for a C++ script.
+   */
+  struct ScriptFeatures
+  {
+    bool usesVix = false;
+    bool usesOrm = false;
+    bool usesDb = false;
+    bool usesMySql = false;
+  };
+
+  /**
+   * @brief Result of probing a script before choosing the execution engine.
+   *
+   * This structure gathers the information needed to decide whether the script
+   * can be compiled directly or should fall back to the generated CMake path.
+   */
+  struct ScriptProbeResult
+  {
+    ScriptExecutionStrategy strategy = ScriptExecutionStrategy::None;
+    ScriptFallbackReason fallbackReason = ScriptFallbackReason::None;
+
+    bool canUseDirectCompile = false;
+    bool shouldUseCMakeFallback = true;
+
+    bool usesVixRuntime = false;
+    bool usesCompiledDeps = false;
+    bool requiresCMakeTargets = false;
+
+    ScriptFeatures features;
+    ScriptCompileFlags compileFlags;
+    ScriptLinkFlags linkFlags;
+
+    std::vector<std::string> includeDirs;
+    std::vector<std::string> systemIncludeDirs;
+    std::vector<std::string> defines;
+    std::vector<std::string> compileOpts;
+    std::vector<std::string> libDirs;
+    std::vector<std::string> libs;
+    std::vector<std::string> linkOpts;
+
+    std::vector<std::string> orderedDepIds;
+    std::vector<fs::path> compiledDepPaths;
+    std::vector<fs::path> headerOnlyDepIncludeDirs;
+  };
+
+  /**
+   * @brief Cache metadata for a directly compiled script artifact.
+   */
+  struct DirectScriptCacheState
+  {
+    fs::path rootDir;
+    fs::path binaryPath;
+    fs::path metaFile;
+    fs::path stdoutLogPath;
+    fs::path stderrLogPath;
+
+    std::string cacheKey;
+    bool cacheHit = false;
+    bool needsRebuild = true;
+  };
+
+  /**
+   * @brief Concrete plan for the fast direct-compile script path.
+   */
+  struct DirectScriptPlan
+  {
+    fs::path scriptPath;
+    fs::path workingDir;
+    fs::path binaryPath;
+    fs::path cacheDir;
+
+    std::string exeName;
+    std::string cacheKey;
+    std::string compileCmd;
+    std::string runCmd;
+
+    bool shouldCompile = true;
+    bool shouldRun = true;
+    bool passthroughRuntime = false;
+    int effectiveTimeoutSec = 0;
+
+    ScriptProbeResult probe;
+  };
+
+  /**
+   * @brief Concrete plan for the generated CMake fallback path.
+   */
+  struct CMakeScriptPlan
+  {
+    fs::path scriptPath;
+    fs::path scriptsRoot;
+    fs::path projectDir;
+    fs::path cmakeListsPath;
+    fs::path buildDir;
+    fs::path exePath;
+    fs::path signatureFile;
+    fs::path configureLogPath;
+    fs::path buildLogPath;
+
+    std::string exeName;
+    std::string targetName;
+    std::string configSignature;
+
+    bool useVixRuntime = false;
+    bool shouldConfigure = true;
+    bool shouldBuild = true;
+    bool shouldRun = true;
+    bool passthroughRuntime = false;
+    int effectiveTimeoutSec = 0;
   };
 
   /**
@@ -349,7 +512,116 @@ namespace vix::commands::RunCommand::detail
       bool alreadyHandled);
 
   // ===========================================================================
-  // Script mode
+  // Script probing / planning
+  // ===========================================================================
+
+  /**
+   * @brief Detect whether a .cpp script uses the Vix runtime.
+   */
+  bool script_uses_vix(const fs::path &cppPath);
+
+  /**
+   * @brief Detect high-level features used by a C++ script.
+   */
+  ScriptFeatures detect_script_features(const fs::path &cppPath);
+
+  /**
+   * @brief Parse compile flags from script-mode forwarded arguments.
+   */
+  ScriptCompileFlags parse_compile_flags(const std::vector<std::string> &flags);
+
+  /**
+   * @brief Parse link flags from script-mode forwarded arguments.
+   */
+  ScriptLinkFlags parse_link_flags(const std::vector<std::string> &flags);
+
+  /**
+   * @brief Probe a single C++ script and choose the execution strategy.
+   */
+  ScriptProbeResult probe_single_cpp_script(const Options &opt);
+
+  /**
+   * @brief Return true when the probed script can use direct compilation.
+   *
+   * The direct path is intentionally strict. It is reserved for simple,
+   * single-file, header-only friendly scripts that do not require runtime
+   * targets, compiled dependencies, or custom link steps.
+   */
+  inline bool script_can_use_direct_compile(const ScriptProbeResult &probe) noexcept
+  {
+    if (!probe.canUseDirectCompile)
+      return false;
+
+    if (probe.strategy != ScriptExecutionStrategy::Direct)
+      return false;
+
+    if (probe.usesVixRuntime)
+      return false;
+
+    if (probe.usesCompiledDeps)
+      return false;
+
+    if (probe.requiresCMakeTargets)
+      return false;
+
+    if (!probe.libs.empty())
+      return false;
+
+    if (!probe.libDirs.empty())
+      return false;
+
+    if (!probe.linkOpts.empty())
+      return false;
+
+    if (!probe.compiledDepPaths.empty())
+      return false;
+
+    return true;
+  }
+
+  /**
+   * @brief Return true when the probed script should use generated CMake fallback.
+   */
+  inline bool script_needs_cmake_fallback(const ScriptProbeResult &probe) noexcept
+  {
+    return probe.shouldUseCMakeFallback ||
+           probe.strategy == ScriptExecutionStrategy::CMakeFallback;
+  }
+
+  /**
+   * @brief Build the fast direct-compile plan for a probed script.
+   */
+  DirectScriptPlan make_direct_script_plan(
+      const Options &opt,
+      const ScriptProbeResult &probe);
+
+  /**
+   * @brief Build the generated CMake fallback plan for a probed script.
+   */
+  CMakeScriptPlan make_cmake_script_plan(
+      const Options &opt,
+      const ScriptProbeResult &probe);
+
+  /**
+   * @brief Compute the global cache root used for directly compiled scripts.
+   */
+  fs::path get_direct_scripts_cache_root();
+
+  /**
+   * @brief Compute the cache key used for a directly compiled script.
+   */
+  std::string make_direct_script_cache_key(
+      const fs::path &cppPath,
+      const ScriptProbeResult &probe,
+      const Options &opt);
+
+  /**
+   * @brief Load the cache state for a directly compiled script plan.
+   */
+  DirectScriptCacheState load_direct_script_cache_state(const DirectScriptPlan &plan);
+
+  // ===========================================================================
+  // Script mode execution
   // ===========================================================================
 
   /**
@@ -358,12 +630,7 @@ namespace vix::commands::RunCommand::detail
   fs::path get_scripts_root(bool localCache);
 
   /**
-   * @brief Detect whether a .cpp script uses the Vix runtime.
-   */
-  bool script_uses_vix(const fs::path &cppPath);
-
-  /**
-   * @brief Generate the CMakeLists.txt content used by script mode.
+   * @brief Generate the CMakeLists.txt content used by script fallback mode.
    */
   std::string make_script_cmakelists(
       const std::string &exeName,
@@ -374,9 +641,22 @@ namespace vix::commands::RunCommand::detail
       bool withMySql);
 
   /**
-   * @brief Execute a single C++ file with the script pipeline.
+   * @brief Execute a single C++ file using the best available script engine.
+   *
+   * This dispatcher probes the script first, then selects either the direct
+   * compile path or the generated CMake fallback path.
    */
   int run_single_cpp(const Options &opt);
+
+  /**
+   * @brief Execute a single C++ file with the fast direct-compile engine.
+   */
+  int run_single_cpp_direct(const Options &opt, const DirectScriptPlan &plan);
+
+  /**
+   * @brief Execute a single C++ file with the generated CMake fallback engine.
+   */
+  int run_single_cpp_cmake(const Options &opt, const CMakeScriptPlan &plan);
 
   /**
    * @brief Execute a single C++ file in watch mode.

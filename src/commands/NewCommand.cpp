@@ -867,10 +867,12 @@ int main()
     };
 
     int cursorIndex = 0;
+    int selectedIndex = 0;
+    res.selected[selectedIndex] = true;
 
     auto render_item = [&](const Item &item, bool active) -> std::string
     {
-      const bool on = static_cast<bool>(res.selected[item.index]);
+      const bool selected = (selectedIndex == static_cast<int>(item.index));
 
       std::string line = PAD;
       line += "  ";
@@ -880,7 +882,10 @@ int main()
       else
         line += "  ";
 
-      line += on ? "☑ " : "☐ ";
+      if (selected)
+        line += std::string(CYAN) + "● " + RESET;
+      else
+        line += std::string(GRAY) + "○ " + RESET;
 
       if (active)
         line += std::string(CYAN) + BOLD + item.label + RESET;
@@ -893,18 +898,19 @@ int main()
     auto build_lines = [&](int activeIdx) -> std::vector<std::string>
     {
       std::vector<std::string> out;
-      out.reserve(9);
 
       out.push_back(std::string(PAD) + BOLD + CYAN + "Core" + RESET);
 
       for (int i = 0; i < 3; ++i)
-        out.push_back(render_item(items[static_cast<std::size_t>(i)], i == activeIdx));
+        out.push_back(render_item(items[i], i == activeIdx));
 
-      out.push_back(std::string(PAD));
+      out.push_back("");
+
       out.push_back(std::string(PAD) + BOLD + CYAN + "Advanced" + RESET);
       out.push_back(render_item(items[3], activeIdx == 3));
 
-      out.push_back(std::string(PAD) + ui::dim("• " + items[static_cast<std::size_t>(activeIdx)].tip));
+      out.push_back("");
+      out.push_back(std::string(PAD) + ui::dim(items[activeIdx].tip));
 
       return out;
     };
@@ -935,9 +941,12 @@ int main()
 
       if (k == Key::Up)
       {
-        cursorIndex -= 1;
-        if (cursorIndex < 0)
-          cursorIndex = 3;
+        cursorIndex = (cursorIndex - 1 + 4) % 4;
+        selectedIndex = cursorIndex;
+
+        std::fill(res.selected.begin(), res.selected.end(), false);
+        res.selected[static_cast<std::size_t>(selectedIndex)] = true;
+
         render_lines(build_lines(cursorIndex), firstDraw);
         continue;
       }
@@ -945,29 +954,30 @@ int main()
       if (k == Key::Down)
       {
         cursorIndex = (cursorIndex + 1) % 4;
+        selectedIndex = cursorIndex;
+
+        std::fill(res.selected.begin(), res.selected.end(), false);
+        res.selected[static_cast<std::size_t>(selectedIndex)] = true;
+
         render_lines(build_lines(cursorIndex), firstDraw);
         continue;
       }
 
-      if (k == Key::Space)
+      if (k == Key::Space || k == Key::Enter)
       {
-        const std::size_t idx = items[static_cast<std::size_t>(cursorIndex)].index;
-        res.selected[idx] = !static_cast<bool>(res.selected[idx]);
+        selectedIndex = cursorIndex;
+
+        std::fill(res.selected.begin(), res.selected.end(), false);
+        res.selected[selectedIndex] = true;
+
+        if (k == Key::Enter)
+        {
+          res.cancelled = false;
+          return res;
+        }
+
         render_lines(build_lines(cursorIndex), firstDraw);
         continue;
-      }
-
-      if (k == Key::ToggleAll)
-      {
-        toggle_all(res.selected);
-        render_lines(build_lines(cursorIndex), firstDraw);
-        continue;
-      }
-
-      if (k == Key::Enter)
-      {
-        res.cancelled = false;
-        return res;
       }
 
       if (k == Key::Escape || k == Key::Quit)
@@ -980,11 +990,10 @@ int main()
     }
   }
 
-  // Project generation (strict: no unselected feature appears)
   static std::string make_readme_app(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(6200);
+    readme.reserve(7200);
 
     readme += "# " + projectName + "\n\n";
     readme += "Minimal Vix.cpp application.\n\n";
@@ -1013,6 +1022,7 @@ int main()
 
     readme += "## Tasks\n\n";
     readme += "This template also defines default tasks in `vix.json`.\n\n";
+
     readme += "Run them with:\n\n";
     readme += "```bash\n";
     readme += "vix task <name>\n";
@@ -1039,34 +1049,46 @@ int main()
     readme += "You can edit `vix.json` to customize commands, variables, environments, and task pipelines.\n\n";
 
     readme += "## Configuration\n\n";
-    readme += "Vix applications do not auto-load project configuration by default.\n";
-    readme += "If you want to use a project-level configuration, for example to configure the server port,\n";
-    readme += "you must explicitly initialize and read it in your application.\n\n";
+    readme += "Vix applications use `.env` files for project configuration.\n";
+    readme += "This lets you configure ports, database settings, logging, WebSocket options, and other runtime values without changing your C++ code.\n\n";
 
-    readme += "### Project config file\n\n";
-    readme += "Create a configuration file at:\n\n";
+    readme += "### Project env file\n\n";
+    readme += "Create a file at the project root:\n\n";
     readme += "```\n";
-    readme += "config/config.json\n";
+    readme += ".env\n";
     readme += "```\n\n";
 
     readme += "Example:\n\n";
-    readme += "```json\n";
-    readme += "{\n";
-    readme += "  \"server\": {\n";
-    readme += "    \"port\": 8081\n";
-    readme += "  }\n";
-    readme += "}\n";
+    readme += "```env\n";
+    readme += "SERVER_PORT=8081\n";
+    readme += "DATABASE_ENGINE=mysql\n";
+    readme += "DATABASE_DEFAULT_HOST=127.0.0.1\n";
+    readme += "DATABASE_DEFAULT_PORT=3306\n";
+    readme += "DATABASE_DEFAULT_USER=root\n";
+    readme += "DATABASE_DEFAULT_PASSWORD=\n";
+    readme += "DATABASE_DEFAULT_NAME=appdb\n";
+    readme += "LOGGING_ASYNC=true\n";
+    readme += "WAF_MODE=basic\n";
     readme += "```\n\n";
 
-    readme += "### Using the config in code\n\n";
+    readme += "### Layered env files\n\n";
+    readme += "Vix supports layered env files.\n";
+    readme += "Depending on your environment, you can use files such as:\n\n";
+    readme += "- `.env`\n";
+    readme += "- `.env.local`\n";
+    readme += "- `.env.production`\n";
+    readme += "- `.env.production.local`\n\n";
+
+    readme += "This makes it easy to separate local development and production configuration.\n\n";
+
+    readme += "### Using config in code\n\n";
     readme += "To use the project configuration, initialize and read it explicitly:\n\n";
     readme += "```cpp\n";
     readme += "#include <vix.hpp>\n";
     readme += "using namespace vix;\n\n";
     readme += "int main()\n";
     readme += "{\n";
-    readme += "  // Load project config (project config overrides Vix install config)\n";
-    readme += "  auto &cfg = vix::config::Config::getInstance();\n\n";
+    readme += "  auto &cfg = vix::config::Config::getInstance(\".env\");\n\n";
     readme += "  App app;\n";
     readme += "  app.get(\"/\", [](Request&, Response& res) {\n";
     readme += "    res.send(\"Hello world\");\n";
@@ -1075,10 +1097,26 @@ int main()
     readme += "}\n";
     readme += "```\n\n";
 
-    readme += "> The project `config/config.json` always takes precedence over the global Vix installation config.\n";
+    readme += "### Environment variable mapping\n\n";
+    readme += "Internally, Vix uses logical config keys such as:\n\n";
+    readme += "- `server.port`\n";
+    readme += "- `database.default.host`\n";
+    readme += "- `database.default.name`\n";
+    readme += "- `websocket.max_message_size`\n\n";
+
+    readme += "These are mapped automatically to environment variables such as:\n\n";
+    readme += "- `SERVER_PORT`\n";
+    readme += "- `DATABASE_DEFAULT_HOST`\n";
+    readme += "- `DATABASE_DEFAULT_NAME`\n";
+    readme += "- `WEBSOCKET_MAX_MESSAGE_SIZE`\n\n";
+
+    readme += "This keeps the C++ API clean while staying friendly to `.env` workflows.\n\n";
+
+    readme += "> Recommended: keep `.env` for development and use environment-specific files such as `.env.production` for deployment.\n";
 
     return readme;
   }
+
   static std::string make_readme_lib(const std::string &name)
   {
     std::string readme;
@@ -1843,27 +1881,31 @@ int main()
 
   static void print_next_steps_app(const fs::path &, const std::string &projName)
   {
+    namespace ui = vix::cli::util;
+
     const std::string manifest = projName + ".vix";
 
     std::cout << "\n";
-    info("Next steps");
-    step("cd " + projName + "/");
-    step("vix build");
-    step("vix run");
+    ui::info_line(std::cout, "Next steps");
+    std::cout << "    " << ui::dim("cd " + projName + "/") << "\n";
+    std::cout << "    " << ui::dim("vix build") << "\n";
+    std::cout << "    " << ui::dim("vix run") << "\n";
     std::cout << "\n";
-    hint("vix task dev");
-    hint("vix dev " + manifest);
+    std::cout << "    " << ui::dim("vix task dev") << "\n";
+    std::cout << "    " << ui::dim("vix dev " + manifest) << "\n";
   }
 
   static void print_next_steps_lib(const fs::path &, const std::string &projName)
   {
     namespace ui = vix::cli::util;
 
+    std::cout << "\n";
     ui::info_line(std::cout, "Next steps");
     std::cout << "    " << ui::dim("cd " + projName + "/") << "\n";
     std::cout << "    " << ui::dim("vix build") << "\n";
     std::cout << "    " << ui::dim("vix tests") << "\n";
-    ui::tip_line(std::cout, "tag + publish when ready");
+    std::cout << "\n";
+    std::cout << "    " << ui::dim("TIP: tag + publish when ready") << "\n";
   }
 } // namespace
 
@@ -2102,27 +2144,28 @@ namespace vix::commands::NewCommand
       {
         if (!generate_app_project(projectDir, projName, features, genErr))
         {
-          error("Failed to create project files.");
-          hint(genErr);
+          vix::cli::util::err_line(std::cerr, "Failed to create project files.");
+          vix::cli::util::warn_line(std::cerr, genErr);
           return 1;
         }
 
-        success("Project created.");
-        info("Location: " + projectDir.string());
+        vix::cli::util::ok_line(std::cout, "Project created.");
+        vix::cli::util::kv(std::cout, "Location", projectDir.string());
         print_next_steps_app(projectDir, projName);
         return 0;
       }
 
       if (!generate_lib_project(projectDir, projName, genErr))
       {
-        error("Failed to create project files.");
-        hint(genErr);
+        vix::cli::util::err_line(std::cerr, "Failed to create project files.");
+        vix::cli::util::warn_line(std::cerr, genErr);
         return 1;
       }
 
-      success("Project created.");
-      info("Location: " + projectDir.string());
+      vix::cli::util::ok_line(std::cout, "Project created.");
+      vix::cli::util::kv(std::cout, "Location", projectDir.string());
       print_next_steps_lib(projectDir, projName);
+      return 0;
       return 0;
     }
     catch (const std::exception &ex)

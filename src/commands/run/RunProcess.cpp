@@ -946,7 +946,7 @@ namespace vix::commands::RunCommand::detail
         ::kill(pid, sig);
     }
 
-    void child_exec_shell(const std::string &cmd, int masterFd, int slaveFd)
+    void child_exec_shell(const std::string &cmd, int masterFd, int slaveFd, bool useSan)
     {
       struct sigaction saChild{};
       saChild.sa_handler = SIG_DFL;
@@ -956,20 +956,24 @@ namespace vix::commands::RunCommand::detail
 
       ::setsid();
 
-      ::setenv("ASAN_OPTIONS",
-               "abort_on_error=1:"
-               "detect_leaks=1:"
-               "symbolize=1:"
-               "allocator_may_return_null=1:"
-               "fast_unwind_on_malloc=0:"
-               "strict_init_order=1:"
-               "check_initialization_order=1:"
-               "color=never",
-               1);
+      if (useSan)
+      {
+        ::setenv("ASAN_OPTIONS",
+                 "abort_on_error=1:"
+                 "halt_on_error=1:"
+                 "print_stacktrace=1:"
+                 "detect_leaks=1:"
+                 "symbolize=1:"
+                 "fast_unwind_on_malloc=0:"
+                 "strict_init_order=1:"
+                 "check_initialization_order=1:"
+                 "color=never",
+                 1);
 
-      ::setenv("UBSAN_OPTIONS",
-               "halt_on_error=1:print_stacktrace=1:color=never",
-               1);
+        ::setenv("UBSAN_OPTIONS",
+                 "halt_on_error=1:print_stacktrace=1:color=never",
+                 1);
+      }
 
       ::close(masterFd);
 
@@ -1057,7 +1061,8 @@ namespace vix::commands::RunCommand::detail
       const std::string &cmd,
       const std::string &spinnerLabel,
       bool passthroughRuntime,
-      int timeoutSec)
+      int timeoutSec,
+      bool useSan)
   {
     SigintGuard sigGuard;
     LiveRunResult result;
@@ -1081,7 +1086,7 @@ namespace vix::commands::RunCommand::detail
     }
 
     if (pid == 0)
-      child_exec_shell(cmd, pty.masterFd, pty.slaveFd);
+      child_exec_shell(cmd, pty.masterFd, pty.slaveFd, useSan);
 
     close_safe(pty.slaveFd);
     ::setpgid(pid, pid);
@@ -1339,7 +1344,8 @@ namespace vix::commands::RunCommand::detail
         cmd,
         spinnerLabel,
         false,
-        0);
+        0,
+        false);
     return r.exitCode;
 #endif
   }

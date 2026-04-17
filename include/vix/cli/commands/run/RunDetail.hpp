@@ -491,7 +491,8 @@ namespace vix::commands::RunCommand::detail
       const std::string &cmd,
       const std::string &spinnerLabel,
       bool passthroughRuntime,
-      int timeoutSec = 0);
+      int timeoutSec = 0,
+      bool useSan = false);
 
   /**
    * @brief Run a command and capture its output plus exit code.

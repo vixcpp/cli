@@ -175,7 +175,7 @@ namespace
     if (msg.find("no matching function for call to") != std::string::npos)
     {
       const bool isVixJson =
-          (msg.find("vix::vhttp::ResponseWrapper::json") != std::string::npos) ||
+          (msg.find("vix::http::ResponseWrapper::json") != std::string::npos) ||
           (msg.find("ResponseWrapper::json") != std::string::npos);
 
       if (isVixJson)

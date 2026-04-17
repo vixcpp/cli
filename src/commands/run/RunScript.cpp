@@ -633,7 +633,8 @@ namespace vix::commands::RunCommand::detail
           cmdRun,
           "",
           isPlainScript,
-          effective_timeout_sec(opt));
+          effective_timeout_sec(opt),
+          opt.enableSanitizers || opt.enableUbsanOnly);
 
       int runCode = normalize_exit_code(rr.exitCode);
 
@@ -748,7 +749,8 @@ namespace vix::commands::RunCommand::detail
           cmdRun,
           "",
           true,
-          effective_timeout_sec(opt));
+          effective_timeout_sec(opt),
+          opt.enableSanitizers || opt.enableUbsanOnly);
 
       int runCode = normalize_exit_code(rr.exitCode);
 
@@ -834,7 +836,8 @@ namespace vix::commands::RunCommand::detail
               directPlan.compileCmd,
               "Compiling script...",
               false,
-              0);
+              0,
+              o.enableSanitizers || o.enableUbsanOnly);
 
           if (build.exitCode != 0)
           {

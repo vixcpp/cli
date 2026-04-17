@@ -434,7 +434,8 @@ namespace vix::commands::RunCommand::detail
           plan.compileCmd,
           "Compiling script...",
           false,
-          0);
+          0,
+          opt.enableSanitizers || opt.enableUbsanOnly);
 
       if (build.exitCode != 0)
       {
@@ -459,7 +460,8 @@ namespace vix::commands::RunCommand::detail
         plan.runCmd,
         "Running script...",
         plan.passthroughRuntime,
-        plan.effectiveTimeoutSec);
+        plan.effectiveTimeoutSec,
+        opt.enableSanitizers || opt.enableUbsanOnly);
 
     handle_runtime_exit_code(run.exitCode, "run", run.failureHandled);
     return run.exitCode;

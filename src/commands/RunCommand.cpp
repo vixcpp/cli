@@ -582,7 +582,8 @@ namespace
             testCmd,
             "",
             true,
-            0);
+            0,
+            false);
 
     const int testExit = tr.exitCode;
 
@@ -602,13 +603,15 @@ namespace
 
       if (!log.empty())
       {
+        const fs::path diagnosticPath = *testExe;
+
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
-            testExe->string(),
+            diagnosticPath,
             "Test crashed");
 
         if (!handled &&
-            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, testExe->string()))
+            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, diagnosticPath))
         {
           handled = true;
         }
@@ -667,7 +670,8 @@ namespace
             runCmd,
             "",
             true,
-            timeoutSec);
+            timeoutSec,
+            opt.enableSanitizers || opt.enableUbsanOnly);
 
     int runExit = rr.exitCode;
 
@@ -687,13 +691,15 @@ namespace
 
       if (!log.empty())
       {
+        const fs::path diagnosticPath = opt.singleCpp ? opt.cppFile : exePath;
+
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
-            exePath,
+            diagnosticPath,
             failureContext);
 
         if (!handled &&
-            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, exePath))
+            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, diagnosticPath))
         {
           handled = true;
         }
@@ -791,7 +797,8 @@ namespace
           cmd,
           "",
           false,
-          0);
+          0,
+          false);
 
       const int code = cr.exitCode;
       if (code != 0)
@@ -1000,7 +1007,8 @@ namespace
           oss.str(),
           "",
           false,
-          0);
+          0,
+          false);
 
       const int code = cr.exitCode;
       if (code != 0)

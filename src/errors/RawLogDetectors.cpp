@@ -514,6 +514,157 @@ namespace vix::cli::errors
       return true;
     }
 
+    static std::optional<std::vector<std::string>> read_file_lines(
+        const std::filesystem::path &path)
+    {
+      std::ifstream ifs(path);
+      if (!ifs)
+        return std::nullopt;
+
+      std::vector<std::string> lines;
+      std::string line;
+      while (std::getline(ifs, line))
+        lines.push_back(line);
+
+      return lines;
+    }
+
+    static std::string ltrim_copy(std::string s)
+    {
+      while (!s.empty() &&
+             std::isspace(static_cast<unsigned char>(s.front())) != 0)
+      {
+        s.erase(s.begin());
+      }
+      return s;
+    }
+
+    static std::optional<std::string> try_extract_copy_initialized_type(
+        const std::string &line)
+    {
+      // Matches: Widget w2 = w1;
+      static const std::regex re(
+          R"(^\s*([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*=\s*[A-Za-z_]\w*\s*;\s*$)");
+
+      std::smatch m;
+      if (!std::regex_match(line, m, re))
+        return std::nullopt;
+
+      return m[1].str();
+    }
+
+    static std::optional<std::pair<std::size_t, std::size_t>> find_type_block_range(
+        const std::vector<std::string> &lines,
+        const std::string &typeName)
+    {
+      const std::regex startRe(
+          "^[[:space:]]*(struct|class)[[:space:]]+" + escape_regex(typeName) + R"((\s|$))");
+
+      for (std::size_t i = 0; i < lines.size(); ++i)
+      {
+        if (!std::regex_search(lines[i], startRe))
+          continue;
+
+        bool opened = false;
+        int depth = 0;
+        for (std::size_t j = i; j < lines.size(); ++j)
+        {
+          for (char c : lines[j])
+          {
+            if (c == '{')
+            {
+              opened = true;
+              ++depth;
+            }
+            else if (c == '}')
+            {
+              --depth;
+              if (opened && depth <= 0)
+                return std::make_pair(i, j);
+            }
+          }
+        }
+      }
+
+      return std::nullopt;
+    }
+
+    static bool type_block_has_destructor(
+        const std::vector<std::string> &lines,
+        std::size_t begin,
+        std::size_t end,
+        const std::string &typeName)
+    {
+      const std::regex dtorRe("~" + escape_regex(typeName) + R"(\s*\()");
+      for (std::size_t i = begin; i <= end && i < lines.size(); ++i)
+      {
+        if (std::regex_search(lines[i], dtorRe))
+          return true;
+      }
+      return false;
+    }
+
+    static bool type_block_has_raw_pointer_field(
+        const std::vector<std::string> &lines,
+        std::size_t begin,
+        std::size_t end)
+    {
+      // Simple heuristic:
+      // int *data;
+      // Foo* ptr;
+      // Bar * ptr;
+      static const std::regex ptrRe(
+          R"(\b[A-Za-z_]\w*(?:::\w+)?\s*\*\s*[A-Za-z_]\w*\s*(?:=\s*[^;]+)?;)");
+
+      for (std::size_t i = begin; i <= end && i < lines.size(); ++i)
+      {
+        const std::string trimmed = ltrim_copy(lines[i]);
+
+        if (trimmed.rfind("//", 0) == 0)
+          continue;
+
+        if (std::regex_search(lines[i], ptrRe))
+          return true;
+      }
+
+      return false;
+    }
+
+    static std::optional<std::string> try_explain_cpp_shallow_copy_double_free(
+        const vix::cli::errors::CompilerError &loc)
+    {
+      const auto linesOpt = read_file_lines(loc.file);
+      if (!linesOpt)
+        return std::nullopt;
+
+      const auto &lines = *linesOpt;
+      if (loc.line <= 0 || static_cast<std::size_t>(loc.line) > lines.size())
+        return std::nullopt;
+
+      const std::string &faultLine = lines[static_cast<std::size_t>(loc.line - 1)];
+
+      const auto typeNameOpt = try_extract_copy_initialized_type(faultLine);
+      if (!typeNameOpt)
+        return std::nullopt;
+
+      const auto blockOpt = find_type_block_range(lines, *typeNameOpt);
+      if (!blockOpt)
+        return std::nullopt;
+
+      const auto [begin, end] = *blockOpt;
+
+      const bool hasDestructor =
+          type_block_has_destructor(lines, begin, end, *typeNameOpt);
+
+      const bool hasRawPointer =
+          type_block_has_raw_pointer_field(lines, begin, end);
+
+      if (hasDestructor && hasRawPointer)
+        return std::string("shallow copy (Rule of Three violated)");
+
+      return std::nullopt;
+    }
+
     // Runtime detectors (allocator/memory)
     static bool handleRuntimeDoubleFreeInvalidFree(
         const std::string &runtimeLog,
@@ -643,17 +794,37 @@ namespace vix::cli::errors
 
       print_header("runtime error: double free");
 
-      const std::string hint =
+      const std::string genericHint =
           "the same allocation was freed twice (double owner or duplicate delete/free)";
 
       if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
       {
-        print_codeframe_then_bottom_default(*loc, hint);
+        if (auto note = try_explain_cpp_shallow_copy_double_free(*loc))
+        {
+          ErrorContext ctx;
+          CodeFrameOptions opt;
+          opt.contextLines = 2;
+          opt.maxLineWidth = 120;
+          opt.tabWidth = 4;
+
+          vix::cli::errors::CompilerError annotated = *loc;
+          annotated.message = *note;
+
+          printCodeFrame(annotated, ctx, opt);
+
+          print_hint_at_bottom(
+              "both objects now own the same raw pointer. define copy constructor/copy assignment, or disable copying, or use std::vector/std::unique_ptr",
+              loc->file + ":" + std::to_string(loc->line));
+
+          return true;
+        }
+
+        print_codeframe_then_bottom_default(*loc, genericHint);
       }
       else
       {
         print_hint_at_bottom(
-            maybe_add_san_hint(hint, runtimeLog),
+            maybe_add_san_hint(genericHint, runtimeLog),
             !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
         print_excerpt(runtimeLog);
       }

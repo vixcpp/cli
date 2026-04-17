@@ -30,7 +30,9 @@ namespace vix::commands::RunCommand::detail
       bool useVixRuntime,
       bool enableSanitizers,
       bool enableUbsanOnly,
-      const std::vector<std::string> &scriptFlags);
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql);
 
   void watch_spinner_start(std::string label);
   void watch_spinner_stop();

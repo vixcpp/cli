@@ -170,6 +170,18 @@ namespace vix::commands::CheckCommand::detail
       {
         o.tests = true;
       }
+      else if (a == "--with-sqlite")
+      {
+        o.withSqlite = true;
+      }
+      else if (a == "--with-mysql")
+      {
+        o.withMySql = true;
+      }
+      else if (a == "--local-cache")
+      {
+        o.localCache = true;
+      }
       else if (a == "--build-preset")
       {
         if (i + 1 < args.size())

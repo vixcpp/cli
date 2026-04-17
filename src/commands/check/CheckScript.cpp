@@ -227,7 +227,9 @@ namespace vix::commands::CheckCommand::detail
             useVixRuntime,
             enableSan,
             enableUbsanOnly,
-            /*scriptFlags=*/{});
+            /*scriptFlags=*/{},
+            opt.withSqlite,
+            opt.withMySql);
 
     bool needConfigure = true;
     {

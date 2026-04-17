@@ -141,10 +141,12 @@ namespace vix::commands::RunCommand::detail
       bool useVixRuntime,
       bool enableSanitizers,
       bool enableUbsanOnly,
-      const std::vector<std::string> &scriptFlags)
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql)
   {
     std::string sig;
-    sig.reserve(128);
+    sig.reserve(160);
 
     sig += "useVix=";
     sig += useVixRuntime ? "1" : "0";
@@ -155,6 +157,12 @@ namespace vix::commands::RunCommand::detail
     sig += ";mode=";
     sig += sanitizer_mode_string(enableSanitizers, enableUbsanOnly);
 
+    sig += ";sqlite=";
+    sig += withSqlite ? "1" : "0";
+
+    sig += ";mysql=";
+    sig += withMySql ? "1" : "0";
+
     sig += ";flags=";
     for (const auto &f : scriptFlags)
     {
@@ -164,7 +172,6 @@ namespace vix::commands::RunCommand::detail
 
     return sig;
   }
-
   std::string join_quoted_args_local(const std::vector<std::string> &a)
   {
     std::string s;

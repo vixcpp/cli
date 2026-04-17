@@ -997,7 +997,9 @@ namespace vix::commands::RunCommand::detail
         plan.useVixRuntime,
         opt.enableSanitizers,
         opt.enableUbsanOnly,
-        opt.scriptFlags);
+        opt.scriptFlags,
+        opt.withSqlite,
+        opt.withMySql);
 
     plan.shouldConfigure = true;
     plan.shouldBuild = true;

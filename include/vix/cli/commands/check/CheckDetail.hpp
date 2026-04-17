@@ -87,6 +87,12 @@ namespace vix::commands::CheckCommand::detail
     /// Enable UBSan only.
     bool enableUbsanOnly = false;
 
+    /// Enable SQLite backend.
+    bool withSqlite = false;
+
+    /// Enable MySQL backend.
+    bool withMySql = false;
+
     /** @} */
 
     /**

@@ -14,6 +14,7 @@
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/util/Ui.hpp>
 
 #include <algorithm>
 #include <string>
@@ -50,7 +51,7 @@ namespace vix::commands::DevCommand
 
     if (!has_watch_flag(forwarded))
       forwarded.emplace_back("--watch");
-    info("VIX dev  • hot-reload enabled");
+    vix::cli::util::info_line(std::cout, "Dev mode active");
     return vix::commands::RunCommand::run(forwarded);
   }
 

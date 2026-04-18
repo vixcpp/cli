@@ -787,8 +787,86 @@ namespace vix::commands::RunCommand::detail
     }
 #endif
 
+    int materialize_cmake_script_project(const Options &opt, const ScriptProjectState &state)
+    {
+      std::error_code ec;
+      fs::create_directories(state.projectDir, ec);
+      if (ec)
+      {
+        error("Failed to create script project directory.");
+        return 1;
+      }
+
+      const std::string cmakeText = make_script_cmakelists(
+          state.exeName,
+          state.script,
+          state.useVixRuntime,
+          opt.scriptFlags,
+          opt.withSqlite,
+          opt.withMySql);
+
+      {
+        std::ofstream out(state.cmakeLists, std::ios::trunc);
+        if (!out)
+        {
+          error("Failed to write generated CMakeLists.txt.");
+          return 1;
+        }
+        out << cmakeText;
+      }
+
+      if (!state.configSignature.empty())
+      {
+        std::ofstream sig(state.sigFile, std::ios::trunc);
+        if (sig)
+          sig << state.configSignature;
+      }
+
+      return 0;
+    }
+
+    void compute_need_configure(ScriptProjectState &state)
+    {
+      state.needConfigure = true;
+
+      std::error_code ec{};
+      if (fs::exists(state.buildDir / "CMakeCache.txt", ec) && !ec)
+      {
+        const std::string oldSig = text::read_text_file_or_empty(state.sigFile);
+        if (!oldSig.empty() && oldSig == state.configSignature)
+          state.needConfigure = false;
+      }
+
+      if (!cache_is_ninja_build(state.buildDir))
+      {
+        std::error_code rmEc;
+        fs::remove_all(state.buildDir, rmEc);
+        state.needConfigure = true;
+      }
+    }
+
     int configure_and_build_script(Options &o, ScriptProjectState &state)
     {
+      const int materializeCode = materialize_cmake_script_project(o, state);
+      if (materializeCode != 0)
+        return materializeCode;
+
+      compute_need_configure(state);
+
+      if (o.clean)
+      {
+        std::error_code ec;
+        fs::remove_all(state.buildDir, ec);
+        fs::remove(state.sigFile, ec);
+
+        const int rematerializeCode = materialize_cmake_script_project(o, state);
+        if (rematerializeCode != 0)
+          return rematerializeCode;
+
+        state.needConfigure = true;
+        state.skipBuild = false;
+      }
+
       const int cfgCode = configure_script_project(o, state);
       if (cfgCode != 0)
         return cfgCode;
@@ -905,64 +983,6 @@ namespace vix::commands::RunCommand::detail
       return out;
     }
 
-    int materialize_cmake_script_project(const Options &opt, const ScriptProjectState &state)
-    {
-      std::error_code ec;
-      fs::create_directories(state.projectDir, ec);
-      if (ec)
-      {
-        error("Failed to create script project directory.");
-        return 1;
-      }
-
-      const std::string cmakeText = make_script_cmakelists(
-          state.exeName,
-          state.script,
-          state.useVixRuntime,
-          opt.scriptFlags,
-          opt.withSqlite,
-          opt.withMySql);
-
-      {
-        std::ofstream out(state.cmakeLists, std::ios::trunc);
-        if (!out)
-        {
-          error("Failed to write generated CMakeLists.txt.");
-          return 1;
-        }
-        out << cmakeText;
-      }
-
-      if (!state.configSignature.empty())
-      {
-        std::ofstream sig(state.sigFile, std::ios::trunc);
-        if (sig)
-          sig << state.configSignature;
-      }
-
-      return 0;
-    }
-
-    void compute_need_configure(ScriptProjectState &state)
-    {
-      state.needConfigure = true;
-
-      std::error_code ec{};
-      if (fs::exists(state.buildDir / "CMakeCache.txt", ec) && !ec)
-      {
-        const std::string oldSig = text::read_text_file_or_empty(state.sigFile);
-        if (!oldSig.empty() && oldSig == state.configSignature)
-          state.needConfigure = false;
-      }
-
-      if (!cache_is_ninja_build(state.buildDir))
-      {
-        std::error_code rmEc;
-        fs::remove_all(state.buildDir, rmEc);
-        state.needConfigure = true;
-      }
-    }
-
   } // namespace
 
   CMakeScriptPlan make_cmake_script_plan(
@@ -1019,42 +1039,9 @@ namespace vix::commands::RunCommand::detail
     Options o = opt;
     ScriptProjectState state = make_state_from_cmake_plan(plan);
 
-    if (o.clean)
-    {
-      std::error_code ec;
-      fs::remove_all(state.buildDir, ec);
-      fs::remove(state.sigFile, ec);
-      state.needConfigure = true;
-      state.skipBuild = false;
-    }
-
-    const int materializeCode = materialize_cmake_script_project(o, state);
-    if (materializeCode != 0)
-      return materializeCode;
-
-    compute_need_configure(state);
-
-#ifndef _WIN32
-    if (!state.needConfigure &&
-        !needs_rebuild_from_depfiles_cached(state.exePath, state.buildDir, state.exeName))
-    {
-      state.skipBuild = true;
-      if (!o.quiet)
-        hint("Up to date (skip build).");
-    }
-#endif
-
-    const int cfgCode = configure_script_project(o, state);
-    if (cfgCode != 0)
-      return cfgCode;
-
-    const int buildCode = build_script_project(o, state);
-    if (buildCode != 0)
-      return buildCode;
-
-    const int exeCode = ensure_script_executable_exists(state);
-    if (exeCode != 0)
-      return exeCode;
+    const int code = configure_and_build_script(o, state);
+    if (code != 0)
+      return code;
 
 #ifdef _WIN32
     return run_script_binary_windows(o, state);

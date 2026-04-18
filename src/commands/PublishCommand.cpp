@@ -560,24 +560,6 @@ namespace vix::commands
       }
     }
 
-    static std::optional<std::string> read_vix_json_namespace(const fs::path &repoRoot)
-    {
-      const fs::path p = repoRoot / "vix.json";
-      if (!file_exists_nonempty(p))
-        return std::nullopt;
-
-      try
-      {
-        const json j = read_json_or_throw(p);
-        if (j.is_object() && j.contains("namespace") && j["namespace"].is_string())
-          return lower_copy(j["namespace"].get<std::string>());
-      }
-      catch (...)
-      {
-      }
-      return std::nullopt;
-    }
-
     static bool looks_like_semver_tag(const std::string &tag)
     {
       std::string s = trim_copy(tag);
@@ -677,24 +659,6 @@ namespace vix::commands
       }
 
       return detected;
-    }
-
-    static std::optional<std::string> read_vix_json_name(const fs::path &repoRoot)
-    {
-      const fs::path p = repoRoot / "vix.json";
-      if (!file_exists_nonempty(p))
-        return std::nullopt;
-
-      try
-      {
-        const json j = read_json_or_throw(p);
-        if (j.is_object() && j.contains("name") && j["name"].is_string())
-          return lower_copy(j["name"].get<std::string>());
-      }
-      catch (...)
-      {
-      }
-      return std::nullopt;
     }
 
     static json read_vix_json_object(const fs::path &repoRoot)

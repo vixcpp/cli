@@ -272,23 +272,6 @@ namespace vix::commands
       return true;
     }
 
-    static std::string find_latest_version(const json &entry)
-    {
-      if (entry.contains("latest") && entry["latest"].is_string())
-        return entry["latest"].get<std::string>();
-
-      if (!entry.contains("versions") || !entry["versions"].is_object())
-        return {};
-
-      std::vector<std::string> versions;
-      versions.reserve(entry["versions"].size());
-
-      for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
-        versions.push_back(it.key());
-
-      return vix::cli::util::semver::findLatest(versions);
-    }
-
     static int resolve_version_v1(const json &entry, PkgSpec &spec)
     {
       if (!entry.contains("versions") || !entry["versions"].is_object())

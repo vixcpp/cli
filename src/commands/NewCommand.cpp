@@ -108,12 +108,21 @@ int main()
 }
 )";
 
-  constexpr const char *kBasicTestCpp_App = R"(#include <iostream>
+  constexpr const char *kBasicTestCpp_App = R"(#include <vix/tests/TestRegistry.hpp>
+#include <vix/tests.hpp>
 
 int main()
 {
-  std::cout << "basic test OK\n";
-  return 0;
+  using namespace vix::tests;
+
+  auto &registry = TestRegistry::instance();
+  registry.clear();
+
+  registry.add(TestCase("app basic test", [] {
+    Assert::equal(2 + 2, 4);
+  }));
+
+  return TestRunner::run_all_and_exit();
 }
 )";
 
@@ -179,15 +188,26 @@ int main()
   static std::string make_basic_test_cpp_lib(const std::string &name)
   {
     std::string s;
-    s.reserve(800);
+    s.reserve(1200);
 
-    s += "#include <" + name + "/" + name + ".hpp>\n";
-    s += "#include <iostream>\n\n";
+    s += "#include <vix/tests/TestRegistry.hpp>\n";
+    s += "#include <vix/tests/TestRunner.hpp>\n";
+    s += "#include <vix/tests/TestCase.hpp>\n";
+    s += "#include <vix/tests/Assert.hpp>\n";
+    s += "#include <" + name + "/" + name + ".hpp>\n\n";
+
     s += "int main()\n";
     s += "{\n";
-    s += "  auto nodes = " + name + "::make_chain(5);\n";
-    s += "  std::cout << \"nodes=\" << nodes.size() << \"\\n\";\n";
-    s += "  return nodes.size() == 5 ? 0 : 1;\n";
+    s += "  using namespace vix::tests;\n\n";
+    s += "  auto &registry = TestRegistry::instance();\n";
+    s += "  registry.clear();\n\n";
+
+    s += "  registry.add(TestCase(\"" + name + " basic test\", [] {\n";
+    s += "    auto nodes = " + name + "::make_chain(5);\n";
+    s += "    Assert::equal(nodes.size(), static_cast<std::size_t>(5));\n";
+    s += "  }));\n\n";
+
+    s += "  return TestRunner::run_all_and_exit();\n";
     s += "}\n";
 
     return s;
@@ -803,23 +823,6 @@ int main()
     std::vector<bool> selected{};
   };
 
-  static bool all_checked(const std::vector<bool> &v)
-  {
-    if (v.empty())
-      return false;
-    for (bool b : v)
-      if (!b)
-        return false;
-    return true;
-  }
-
-  static void toggle_all(std::vector<bool> &v)
-  {
-    const bool turnOn = !all_checked(v);
-    for (std::size_t i = 0; i < v.size(); ++i)
-      v[i] = turnOn;
-  }
-
   static void render_lines(const std::vector<std::string> &lines, bool firstDraw)
   {
     const int total = (int)lines.size();
@@ -868,7 +871,7 @@ int main()
 
     int cursorIndex = 0;
     int selectedIndex = 0;
-    res.selected[selectedIndex] = true;
+    res.selected[static_cast<std::size_t>(selectedIndex)] = true;
 
     auto render_item = [&](const Item &item, bool active) -> std::string
     {
@@ -902,7 +905,7 @@ int main()
       out.push_back(std::string(PAD) + BOLD + CYAN + "Core" + RESET);
 
       for (int i = 0; i < 3; ++i)
-        out.push_back(render_item(items[i], i == activeIdx));
+        out.push_back(render_item(items[static_cast<std::size_t>(i)], i == activeIdx));
 
       out.push_back("");
 
@@ -910,7 +913,7 @@ int main()
       out.push_back(render_item(items[3], activeIdx == 3));
 
       out.push_back("");
-      out.push_back(std::string(PAD) + ui::dim(items[activeIdx].tip));
+      out.push_back(std::string(PAD) + ui::dim(items[static_cast<std::size_t>(activeIdx)].tip));
 
       return out;
     };
@@ -968,7 +971,7 @@ int main()
         selectedIndex = cursorIndex;
 
         std::fill(res.selected.begin(), res.selected.end(), false);
-        res.selected[selectedIndex] = true;
+        res.selected[static_cast<std::size_t>(selectedIndex)] = true;
 
         if (k == Key::Enter)
         {
@@ -1437,7 +1440,7 @@ int main()
     s += "      }\n";
     s += "    },\n";
     s += "    \"test\": {\n";
-    s += "      \"description\": \"Run CTest suite\",\n";
+    s += "      \"description\": \"Run project tests\",\n";
     s += "      \"command\": \"vix tests --preset ${preset} --fail-fast\"\n";
     s += "    },\n";
     s += "    \"dev\": {\n";

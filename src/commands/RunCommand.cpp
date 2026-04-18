@@ -65,6 +65,25 @@ namespace
     return s;
   }
 
+  static void warn_if_env_file_missing(const fs::path &projectDir)
+  {
+    std::error_code ec;
+
+    const fs::path envFile = projectDir / ".env";
+    if (fs::exists(envFile, ec) && !ec)
+      return;
+
+    const fs::path envExample = projectDir / ".env.example";
+    if (fs::exists(envExample, ec) && !ec)
+    {
+      hint(".env not found.");
+      step("cp .env.example .env");
+      return;
+    }
+
+    hint(".env not found.");
+  }
+
   std::string to_dep_folder_name(const std::string &pkg)
   {
     std::string s = pkg;
@@ -1225,6 +1244,8 @@ namespace vix::commands::RunCommand
       info("Using project directory:");
       step(projectDir.string());
     }
+
+    warn_if_env_file_missing(projectDir);
 
     if (!opt.singleCpp && opt.watch)
     {

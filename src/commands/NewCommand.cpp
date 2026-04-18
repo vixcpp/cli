@@ -993,24 +993,37 @@ int main()
   static std::string make_readme_app(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(7200);
+    readme.reserve(8000);
 
     readme += "# " + projectName + "\n\n";
     readme += "Minimal Vix.cpp application.\n\n";
 
-    readme += "## Build & Run\n\n";
+    // ---------------------------
+    // Quick start (IMPORTANT)
+    // ---------------------------
+    readme += "## Quick start\n\n";
     readme += "```bash\n";
+    readme += "cd " + projectName + "\n";
+    readme += "cp .env.example .env\n";
     readme += "vix build\n";
     readme += "vix run\n";
     readme += "```\n\n";
 
+    readme += "Then open:\n\n";
+    readme += "```\n";
+    readme += "http://localhost:8080\n";
+    readme += "```\n\n";
+
+    // ---------------------------
+    // Dependencies
+    // ---------------------------
     readme += "## Dependencies\n\n";
-    readme += "This project includes a `vix.json` manifest.\n\n";
-    readme += "Dependency workflow:\n\n";
-    readme += "- `vix.json` stores declared dependency requirements\n";
-    readme += "- `vix.lock` stores exact resolved versions for reproducible installs\n";
-    readme += "- `vix add` updates both `vix.json` and `vix.lock`\n";
-    readme += "- `vix install` installs dependencies from `vix.lock`\n\n";
+    readme += "This project uses a `vix.json` manifest.\n\n";
+
+    readme += "Workflow:\n\n";
+    readme += "- `vix add <pkg>` → add dependency\n";
+    readme += "- `vix install` → install dependencies\n";
+    readme += "- `vix.lock` → ensures reproducible builds\n\n";
 
     readme += "Example:\n\n";
     readme += "```bash\n";
@@ -1018,49 +1031,40 @@ int main()
     readme += "vix install\n";
     readme += "```\n\n";
 
-    readme += "If `.vix/vix_deps.cmake` exists, local registry dependencies can be included from CMake automatically.\n\n";
-
+    // ---------------------------
+    // Tasks
+    // ---------------------------
     readme += "## Tasks\n\n";
-    readme += "This template also defines default tasks in `vix.json`.\n\n";
+    readme += "Run project tasks:\n\n";
 
-    readme += "Run them with:\n\n";
     readme += "```bash\n";
     readme += "vix task <name>\n";
     readme += "```\n\n";
 
-    readme += "Examples:\n\n";
+    readme += "Common tasks:\n\n";
     readme += "```bash\n";
-    readme += "vix task fmt\n";
-    readme += "vix task check\n";
-    readme += "vix task test\n";
     readme += "vix task dev\n";
+    readme += "vix task test\n";
     readme += "vix task ci\n";
     readme += "```\n\n";
 
-    readme += "The generated app manifest includes tasks such as:\n\n";
-    readme += "- `fmt`\n";
-    readme += "- `check`\n";
-    readme += "- `test`\n";
-    readme += "- `dev`\n";
-    readme += "- `ci`\n";
-    readme += "- `release`\n";
-    readme += "- `package`\n\n";
+    readme += "Edit `vix.json` to customize tasks and pipelines.\n\n";
 
-    readme += "You can edit `vix.json` to customize commands, variables, environments, and task pipelines.\n\n";
-
+    // ---------------------------
+    // Configuration
+    // ---------------------------
     readme += "## Configuration\n\n";
-    readme += "Vix applications use `.env` files for project configuration.\n";
-    readme += "This lets you configure ports, database settings, logging, WebSocket options, and other runtime values without changing your C++ code.\n\n";
 
-    readme += "### Project env file\n\n";
-    readme += "Create a file at the project root:\n\n";
-    readme += "```\n";
-    readme += ".env\n";
+    readme += "Vix uses `.env` files for configuration.\n\n";
+
+    readme += "Start by copying the example:\n\n";
+    readme += "```bash\n";
+    readme += "cp .env.example .env\n";
     readme += "```\n\n";
 
     readme += "Example:\n\n";
     readme += "```env\n";
-    readme += "SERVER_PORT=8081\n";
+    readme += "SERVER_PORT=8080\n";
     readme += "DATABASE_ENGINE=mysql\n";
     readme += "DATABASE_DEFAULT_HOST=127.0.0.1\n";
     readme += "DATABASE_DEFAULT_PORT=3306\n";
@@ -1071,24 +1075,17 @@ int main()
     readme += "WAF_MODE=basic\n";
     readme += "```\n\n";
 
-    readme += "### Layered env files\n\n";
-    readme += "Vix supports layered env files.\n";
-    readme += "Depending on your environment, you can use files such as:\n\n";
-    readme += "- `.env`\n";
-    readme += "- `.env.local`\n";
-    readme += "- `.env.production`\n";
-    readme += "- `.env.production.local`\n\n";
+    // ---------------------------
+    // Code usage
+    // ---------------------------
+    readme += "## Using configuration in code\n\n";
 
-    readme += "This makes it easy to separate local development and production configuration.\n\n";
-
-    readme += "### Using config in code\n\n";
-    readme += "To use the project configuration, initialize and read it explicitly:\n\n";
     readme += "```cpp\n";
     readme += "#include <vix.hpp>\n";
     readme += "using namespace vix;\n\n";
     readme += "int main()\n";
     readme += "{\n";
-    readme += "  auto &cfg = vix::config::Config::getInstance(\".env\");\n\n";
+    readme += "  config::Config cfg{\".env\"};\n\n";
     readme += "  App app;\n";
     readme += "  app.get(\"/\", [](Request&, Response& res) {\n";
     readme += "    res.send(\"Hello world\");\n";
@@ -1097,22 +1094,30 @@ int main()
     readme += "}\n";
     readme += "```\n\n";
 
-    readme += "### Environment variable mapping\n\n";
-    readme += "Internally, Vix uses logical config keys such as:\n\n";
-    readme += "- `server.port`\n";
-    readme += "- `database.default.host`\n";
-    readme += "- `database.default.name`\n";
-    readme += "- `websocket.max_message_size`\n\n";
+    // ---------------------------
+    // Env mapping
+    // ---------------------------
+    readme += "## Environment mapping\n\n";
 
-    readme += "These are mapped automatically to environment variables such as:\n\n";
-    readme += "- `SERVER_PORT`\n";
-    readme += "- `DATABASE_DEFAULT_HOST`\n";
-    readme += "- `DATABASE_DEFAULT_NAME`\n";
-    readme += "- `WEBSOCKET_MAX_MESSAGE_SIZE`\n\n";
+    readme += "Vix maps config keys to environment variables:\n\n";
 
-    readme += "This keeps the C++ API clean while staying friendly to `.env` workflows.\n\n";
+    readme += "- `server.port` → `SERVER_PORT`\n";
+    readme += "- `database.default.host` → `DATABASE_DEFAULT_HOST`\n";
+    readme += "- `database.default.name` → `DATABASE_DEFAULT_NAME`\n\n";
 
-    readme += "> Recommended: keep `.env` for development and use environment-specific files such as `.env.production` for deployment.\n";
+    readme += "This keeps the C++ API clean and environment-driven.\n\n";
+
+    // ---------------------------
+    // Layered env
+    // ---------------------------
+    readme += "## Environment layers\n\n";
+
+    readme += "You can use multiple env files:\n\n";
+    readme += "- `.env`\n";
+    readme += "- `.env.local`\n";
+    readme += "- `.env.production`\n\n";
+
+    readme += "Use `.env` for development and environment-specific files for deployment.\n";
 
     return readme;
   }
@@ -1807,13 +1812,35 @@ int main()
   {
     const fs::path srcDir = projectDir / "src";
     const fs::path testsDir = projectDir / "tests";
-    const fs::path configDir = projectDir / "config";
+    static const char *kEnvExample = R"(# ----------------------------------
+    # Server
+    # ----------------------------------
+    SERVER_PORT=8080
+
+    # ----------------------------------
+    # Database
+    # ----------------------------------
+    DATABASE_ENGINE=mysql
+    DATABASE_DEFAULT_HOST=127.0.0.1
+    DATABASE_DEFAULT_PORT=3306
+    DATABASE_DEFAULT_USER=root
+    DATABASE_DEFAULT_PASSWORD=
+    DATABASE_DEFAULT_NAME=appdb
+
+    # ----------------------------------
+    # Logging
+    # ----------------------------------
+    LOGGING_ASYNC=true
+
+    # ----------------------------------
+    # Security / WAF
+    # ----------------------------------
+    WAF_MODE=basic
+    )";
 
     if (!ensure_dir(srcDir, err))
       return false;
     if (!ensure_dir(testsDir, err))
-      return false;
-    if (!ensure_dir(configDir, err))
       return false;
 
     if (!write_text_file(srcDir / "main.cpp", kMainCpp, err))
@@ -1821,7 +1848,10 @@ int main()
     if (!write_text_file(testsDir / "test_basic.cpp", kBasicTestCpp_App, err))
       return false;
 
-    if (!write_text_file(configDir / "config.json", kAppConfigJson, err))
+    if (!write_text_file(projectDir / ".env.example", kEnvExample, err))
+      return false;
+
+    if (!write_text_file(projectDir / ".env", kEnvExample, err))
       return false;
 
     if (!write_text_file(projectDir / "CMakeLists.txt", make_cmakelists_app(projName, features), err))

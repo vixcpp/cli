@@ -78,8 +78,8 @@ namespace vix::cli::make::generators
       return result;
     }
 
-    [[nodiscard]] void append_server(std::ostringstream &out,
-                                     bool add_comma)
+    void append_server(std::ostringstream &out,
+                       bool add_comma)
     {
       out << "  \"server\": {\n";
       out << "    \"port\": 8080,\n";
@@ -95,8 +95,8 @@ namespace vix::cli::make::generators
       out << "\n";
     }
 
-    [[nodiscard]] void append_logging(std::ostringstream &out,
-                                      bool add_comma)
+    void append_logging(std::ostringstream &out,
+                        bool add_comma)
     {
       out << "  \"logging\": {\n";
       out << "    \"async\": true,\n";
@@ -110,8 +110,8 @@ namespace vix::cli::make::generators
       out << "\n";
     }
 
-    [[nodiscard]] void append_waf(std::ostringstream &out,
-                                  bool add_comma)
+    void append_waf(std::ostringstream &out,
+                    bool add_comma)
     {
       out << "  \"waf\": {\n";
       out << "    \"mode\": \"off\",\n";
@@ -125,8 +125,8 @@ namespace vix::cli::make::generators
       out << "\n";
     }
 
-    [[nodiscard]] void append_websocket(std::ostringstream &out,
-                                        bool add_comma)
+    void append_websocket(std::ostringstream &out,
+                          bool add_comma)
     {
       out << "  \"websocket\": {\n";
       out << "    \"port\": 9090,\n";
@@ -143,8 +143,8 @@ namespace vix::cli::make::generators
       out << "\n";
     }
 
-    [[nodiscard]] void append_database(std::ostringstream &out,
-                                       bool add_comma)
+    void append_database(std::ostringstream &out,
+                         bool add_comma)
     {
       out << "  \"database\": {\n";
       out << "    \"default\": {\n";
@@ -162,8 +162,8 @@ namespace vix::cli::make::generators
       out << "\n";
     }
 
-    [[nodiscard]] std::string build_config_content(const MakeContext &ctx,
-                                                   const ConfigSpec &spec)
+    std::string build_config_content(const MakeContext &ctx,
+                                     const ConfigSpec &spec)
     {
       std::ostringstream out;
       std::vector<std::string> sections;
@@ -208,9 +208,9 @@ namespace vix::cli::make::generators
       return out.str();
     }
 
-    [[nodiscard]] std::string build_preview(const MakeContext &ctx,
-                                            const ConfigSpec &spec,
-                                            const fs::path &file_path)
+    std::string build_preview(const MakeContext &ctx,
+                              const ConfigSpec &spec,
+                              const fs::path &file_path)
     {
       std::ostringstream out;
 

@@ -109,9 +109,7 @@ int main()
 )";
 
   constexpr const char *kBasicTestCpp_App = R"(#include <vix/tests/TestRegistry.hpp>
-#include <vix/tests/TestRunner.hpp>
-#include <vix/tests/TestCase.hpp>
-#include <vix/tests/Assert.hpp>
+#include <vix/tests.hpp>
 
 int main()
 {
@@ -825,23 +823,6 @@ int main()
     std::vector<bool> selected{};
   };
 
-  static bool all_checked(const std::vector<bool> &v)
-  {
-    if (v.empty())
-      return false;
-    for (bool b : v)
-      if (!b)
-        return false;
-    return true;
-  }
-
-  static void toggle_all(std::vector<bool> &v)
-  {
-    const bool turnOn = !all_checked(v);
-    for (std::size_t i = 0; i < v.size(); ++i)
-      v[i] = turnOn;
-  }
-
   static void render_lines(const std::vector<std::string> &lines, bool firstDraw)
   {
     const int total = (int)lines.size();
@@ -890,7 +871,7 @@ int main()
 
     int cursorIndex = 0;
     int selectedIndex = 0;
-    res.selected[selectedIndex] = true;
+    res.selected[static_cast<std::size_t>(selectedIndex)] = true;
 
     auto render_item = [&](const Item &item, bool active) -> std::string
     {
@@ -924,7 +905,7 @@ int main()
       out.push_back(std::string(PAD) + BOLD + CYAN + "Core" + RESET);
 
       for (int i = 0; i < 3; ++i)
-        out.push_back(render_item(items[i], i == activeIdx));
+        out.push_back(render_item(items[static_cast<std::size_t>(i)], i == activeIdx));
 
       out.push_back("");
 
@@ -932,7 +913,7 @@ int main()
       out.push_back(render_item(items[3], activeIdx == 3));
 
       out.push_back("");
-      out.push_back(std::string(PAD) + ui::dim(items[activeIdx].tip));
+      out.push_back(std::string(PAD) + ui::dim(items[static_cast<std::size_t>(activeIdx)].tip));
 
       return out;
     };
@@ -990,7 +971,7 @@ int main()
         selectedIndex = cursorIndex;
 
         std::fill(res.selected.begin(), res.selected.end(), false);
-        res.selected[selectedIndex] = true;
+        res.selected[static_cast<std::size_t>(selectedIndex)] = true;
 
         if (k == Key::Enter)
         {

@@ -43,6 +43,7 @@ namespace vix::cli::make
       {
       case MakeKind::Unknown:
         return false;
+
       case MakeKind::Class:
       case MakeKind::Struct:
       case MakeKind::Enum:
@@ -53,9 +54,12 @@ namespace vix::cli::make
       case MakeKind::Test:
       case MakeKind::Module:
         return true;
+
+      case MakeKind::Config:
+        return true;
       }
 
-      return true;
+      return false;
     }
 
     [[nodiscard]] MakeResult validate_options(const MakeOptions &options,

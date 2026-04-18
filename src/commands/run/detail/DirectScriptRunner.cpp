@@ -327,6 +327,9 @@ namespace vix::commands::RunCommand::detail
 
     const fs::path abs = fs::absolute(cppPath).lexically_normal();
 
+    constexpr const char *kDirectRunnerCacheRev = "2";
+
+    sig << "direct_runner_rev=" << kDirectRunnerCacheRev << ";";
     sig << "script=" << abs.string() << ";";
     sig << "mtime=" << file_mtime_ns_local(abs) << ";";
     sig << "content=" << file_content_hash_hex(abs) << ";";

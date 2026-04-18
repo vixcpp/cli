@@ -90,11 +90,13 @@ namespace vix::commands::RunCommand::detail
       const std::string &cmd,
       const std::string &spinnerLabel,
       bool passthroughRuntime,
-      int timeoutSec)
+      int timeoutSec,
+      bool useSan)
   {
     (void)spinnerLabel;
     (void)passthroughRuntime;
     (void)timeoutSec;
+    (void)useSan;
 
     LiveRunResult result;
 
@@ -1006,6 +1008,7 @@ namespace vix::commands::RunCommand::detail
         bool cmakeConfigure,
         bool passthroughRuntime,
         bool captureOnly,
+        bool useSan,
         RuntimeOutputFilter &runtimeFilter,
         CMakeNoiseFilter &cmakeNoise,
         SanitizerSuppressor &sanitizer,
@@ -1026,8 +1029,15 @@ namespace vix::commands::RunCommand::detail
       if (cmakeConfigure)
         printable = cmakeNoise.filter(printable);
 
-      if (!printable.empty())
-        printable = sanitizer.filter_for_print(printable);
+      if (printable.empty())
+        return;
+
+      if (useSan)
+      {
+        return;
+      }
+
+      printable = sanitizer.filter_for_print(printable);
 
       if (!printable.empty())
         printable = uncaught.filter_for_print(printable);
@@ -1252,6 +1262,7 @@ namespace vix::commands::RunCommand::detail
                     cmakeConfigure,
                     passthroughRuntime,
                     captureOnly,
+                    useSan,
                     runtimeFilter,
                     cmakeNoise,
                     sanitizer,

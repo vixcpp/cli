@@ -542,7 +542,6 @@ namespace vix::cli::errors
     static std::optional<std::string> try_extract_copy_initialized_type(
         const std::string &line)
     {
-      // Matches: Widget w2 = w1;
       static const std::regex re(
           R"(^\s*([A-Za-z_]\w*)\s+[A-Za-z_]\w*\s*=\s*[A-Za-z_]\w*\s*;\s*$)");
 

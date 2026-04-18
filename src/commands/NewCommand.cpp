@@ -108,12 +108,23 @@ int main()
 }
 )";
 
-  constexpr const char *kBasicTestCpp_App = R"(#include <iostream>
+  constexpr const char *kBasicTestCpp_App = R"(#include <vix/tests/TestRegistry.hpp>
+#include <vix/tests/TestRunner.hpp>
+#include <vix/tests/TestCase.hpp>
+#include <vix/tests/Assert.hpp>
 
 int main()
 {
-  std::cout << "basic test OK\n";
-  return 0;
+  using namespace vix::tests;
+
+  auto &registry = TestRegistry::instance();
+  registry.clear();
+
+  registry.add(TestCase("app basic test", [] {
+    Assert::equal(2 + 2, 4);
+  }));
+
+  return TestRunner::run_all_and_exit();
 }
 )";
 
@@ -179,15 +190,26 @@ int main()
   static std::string make_basic_test_cpp_lib(const std::string &name)
   {
     std::string s;
-    s.reserve(800);
+    s.reserve(1200);
 
-    s += "#include <" + name + "/" + name + ".hpp>\n";
-    s += "#include <iostream>\n\n";
+    s += "#include <vix/tests/TestRegistry.hpp>\n";
+    s += "#include <vix/tests/TestRunner.hpp>\n";
+    s += "#include <vix/tests/TestCase.hpp>\n";
+    s += "#include <vix/tests/Assert.hpp>\n";
+    s += "#include <" + name + "/" + name + ".hpp>\n\n";
+
     s += "int main()\n";
     s += "{\n";
-    s += "  auto nodes = " + name + "::make_chain(5);\n";
-    s += "  std::cout << \"nodes=\" << nodes.size() << \"\\n\";\n";
-    s += "  return nodes.size() == 5 ? 0 : 1;\n";
+    s += "  using namespace vix::tests;\n\n";
+    s += "  auto &registry = TestRegistry::instance();\n";
+    s += "  registry.clear();\n\n";
+
+    s += "  registry.add(TestCase(\"" + name + " basic test\", [] {\n";
+    s += "    auto nodes = " + name + "::make_chain(5);\n";
+    s += "    Assert::equal(nodes.size(), static_cast<std::size_t>(5));\n";
+    s += "  }));\n\n";
+
+    s += "  return TestRunner::run_all_and_exit();\n";
     s += "}\n";
 
     return s;
@@ -1437,7 +1459,7 @@ int main()
     s += "      }\n";
     s += "    },\n";
     s += "    \"test\": {\n";
-    s += "      \"description\": \"Run CTest suite\",\n";
+    s += "      \"description\": \"Run project tests\",\n";
     s += "      \"command\": \"vix tests --preset ${preset} --fail-fast\"\n";
     s += "    },\n";
     s += "    \"dev\": {\n";

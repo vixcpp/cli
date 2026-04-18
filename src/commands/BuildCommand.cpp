@@ -797,6 +797,10 @@ namespace vix::commands::BuildCommand
       oss << "vars:\n";
       oss << util::signature_join(plan.cmakeVars);
 
+      oss << "rawCMakeArgs:\n";
+      for (const auto &arg : opt.cmakeArgs)
+        oss << arg << "\n";
+
       if (!opt.targetTriple.empty())
       {
         oss << "toolchain:\n";

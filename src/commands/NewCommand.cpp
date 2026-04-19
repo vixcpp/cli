@@ -1735,8 +1735,16 @@ int main()
     s += "  include(CTest)\n";
     s += "  enable_testing()\n\n";
 
+    s += "  find_package(vix QUIET CONFIG)\n";
+    s += "  if (NOT vix_FOUND)\n";
+    s += "    find_package(Vix CONFIG REQUIRED)\n";
+    s += "  endif()\n\n";
+
     s += "  add_executable(" + name + "_test_basic tests/test_basic.cpp)\n";
-    s += "  target_link_libraries(" + name + "_test_basic PRIVATE " + name + "::" + name + ")\n\n";
+    s += "  target_link_libraries(" + name + "_test_basic PRIVATE\n";
+    s += "    " + name + "::" + name + "\n";
+    s += "    vix::tests\n";
+    s += "  )\n\n";
 
     s += "  if (MSVC)\n";
     s += "    target_compile_options(" + name + "_test_basic PRIVATE /W4 /permissive-)\n";

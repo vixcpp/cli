@@ -307,115 +307,21 @@ namespace
     return "dev-ninja";
   }
 
-  static fs::path normalize_binary_dir(const fs::path &projectDir, const std::string &binaryDirRaw)
-  {
-    std::string s = binaryDirRaw;
-
-    const std::string tokenSourceDir = "${sourceDir}";
-    const std::string proj = projectDir.generic_string();
-
-    for (;;)
-    {
-      const auto pos = s.find(tokenSourceDir);
-      if (pos == std::string::npos)
-        break;
-
-      s.replace(pos, tokenSourceDir.size(), proj);
-    }
-
-    while (s.find("//") != std::string::npos)
-      s.replace(s.find("//"), 2, "/");
-
-    fs::path p = fs::path(s);
-
-    if (p.is_relative())
-      p = projectDir / p;
-
-    std::error_code ec;
-    return fs::weakly_canonical(p, ec);
-  }
-
-  static fs::path resolve_build_dir_or_fallback(
+  static fs::path resolve_build_dir_from_preset(
       const fs::path &projectDir,
       const std::string &presetName)
   {
-    const fs::path presetsPath = projectDir / "CMakePresets.json";
+    std::string dirName = "build";
 
-    auto fallback_build_dir = [&]() -> fs::path
-    {
-      std::error_code ec2;
-      return fs::weakly_canonical(projectDir / "build", ec2);
-    };
+    if (presetName == "dev")
+      dirName = "build-dev";
+    else if (presetName == "dev-ninja")
+      dirName = "build-ninja";
+    else if (presetName == "release")
+      dirName = "build-release";
 
     std::error_code ec;
-    if (!fs::exists(presetsPath, ec))
-    {
-      const std::vector<fs::path> candidates = {
-          projectDir / "out" / presetName,
-          projectDir / "out",
-          projectDir / "bld" / presetName,
-          projectDir / "bld",
-          projectDir / ("cmake-build-" + presetName),
-          projectDir / "build",
-      };
-
-      for (const auto &c : candidates)
-      {
-        if (fs::exists(c, ec) && fs::is_directory(c, ec))
-        {
-          std::error_code ec2;
-          return fs::weakly_canonical(c, ec2);
-        }
-      }
-
-      return fallback_build_dir();
-    }
-
-    std::ifstream in(presetsPath);
-    if (!in)
-      return fallback_build_dir();
-
-    nlohmann::json j;
-    try
-    {
-      in >> j;
-    }
-    catch (...)
-    {
-      return fallback_build_dir();
-    }
-
-    try
-    {
-      if (!j.contains("configurePresets") || !j["configurePresets"].is_array())
-        return fallback_build_dir();
-
-      for (const auto &p : j["configurePresets"])
-      {
-        if (!p.is_object())
-          continue;
-
-        const std::string name = p.value("name", "");
-        if (name != presetName)
-          continue;
-
-        const std::string binaryDir = p.value("binaryDir", "");
-        if (!binaryDir.empty())
-          return normalize_binary_dir(projectDir, binaryDir);
-
-        const std::string buildDirectory = p.value("buildDirectory", "");
-        if (!buildDirectory.empty())
-          return normalize_binary_dir(projectDir, buildDirectory);
-
-        return fallback_build_dir();
-      }
-
-      return fallback_build_dir();
-    }
-    catch (...)
-    {
-      return fallback_build_dir();
-    }
+    return fs::weakly_canonical(projectDir / dirName, ec);
   }
 
   struct ScopedCwd
@@ -488,57 +394,6 @@ namespace
 
     const int raw = std::system(cmd.c_str());
     return vix::cli::process::normalize_exit_code(raw);
-  }
-
-  static std::string project_name_from_dir(const fs::path &projectDir)
-  {
-    std::string name = projectDir.filename().string();
-    if (name.empty())
-      name = "app";
-    return name;
-  }
-
-  static int ensure_project_configured_and_built(
-      const vix::commands::TestsCommand::detail::Options &opt,
-      const std::string &presetName)
-  {
-    std::vector<std::string> forwarded = opt.forwarded;
-
-    if (!has_flag(forwarded, "--tests"))
-      forwarded.push_back("--tests");
-
-    if (!value_after_flag(forwarded, "--preset") &&
-        !value_after_flag(forwarded, "-p"))
-    {
-      forwarded.push_back("--preset");
-      forwarded.push_back(presetName);
-    }
-
-    const std::string projectName = project_name_from_dir(opt.projectDir);
-    const std::string testFlag = "-D" + projectName + "_BUILD_TESTS=ON";
-
-    bool hasDashDash = false;
-    bool hasTestFlag = false;
-
-    for (const auto &arg : forwarded)
-    {
-      if (arg == "--")
-        hasDashDash = true;
-
-      if (arg == testFlag)
-        hasTestFlag = true;
-    }
-
-    if (!hasTestFlag)
-    {
-      if (!hasDashDash)
-        forwarded.push_back("--");
-
-      forwarded.push_back(testFlag);
-    }
-
-    ScopedSilenceStdStreams silence;
-    return vix::commands::CheckCommand::run(forwarded);
   }
 
   static bool file_is_executable(const fs::path &p)
@@ -710,18 +565,15 @@ namespace
   static int run_native_tests(const vix::commands::TestsCommand::detail::Options &opt)
   {
     const std::string presetName = resolve_preset_name(opt);
-    const fs::path buildDir = resolve_build_dir_or_fallback(opt.projectDir, presetName);
+    const fs::path buildDir = resolve_build_dir_from_preset(opt.projectDir, presetName);
 
     std::error_code ec;
     if (!fs::exists(buildDir, ec) || !fs::is_directory(buildDir, ec))
     {
-      const int checkCode = ensure_project_configured_and_built(opt, presetName);
-      if (checkCode != 0)
-        return checkCode;
+      return 2;
     }
 
-    const fs::path refreshedBuildDir = resolve_build_dir_or_fallback(opt.projectDir, presetName);
-    const auto runner = find_native_test_runner(refreshedBuildDir);
+    const auto runner = find_native_test_runner(buildDir);
 
     if (!runner)
       return 2;
@@ -729,35 +581,26 @@ namespace
     std::vector<std::string> argv;
     argv.push_back(runner->string());
 
-    return run_in_dir(refreshedBuildDir, argv);
+    return run_in_dir(buildDir, argv);
   }
 
   static int run_ctest(const vix::commands::TestsCommand::detail::Options &opt)
   {
     const std::string presetName = resolve_preset_name(opt);
-    const fs::path buildDir = resolve_build_dir_or_fallback(opt.projectDir, presetName);
+    const fs::path buildDir = resolve_build_dir_from_preset(opt.projectDir, presetName);
 
     std::error_code ec;
     if (!fs::exists(buildDir, ec) || !fs::is_directory(buildDir, ec))
     {
-      const int checkCode = ensure_project_configured_and_built(opt, presetName);
-      if (checkCode != 0)
-        return checkCode;
+      error("No build directory found for tests.");
+      hint("Run vix build with tests enabled first.");
+      return 1;
     }
 
-    const fs::path refreshedBuildDir = resolve_build_dir_or_fallback(opt.projectDir, presetName);
-
-    if (!ctest_file_exists(refreshedBuildDir))
-    {
-      const int checkCode = ensure_project_configured_and_built(opt, presetName);
-      if (checkCode != 0)
-        return checkCode;
-    }
-
-    if (!ctest_file_exists(refreshedBuildDir))
+    if (!ctest_file_exists(buildDir))
     {
       error("No tests available.");
-      hint("Tests are disabled for this project in the current CMake configuration.");
+      hint("Tests were not generated in the existing build directory.");
       return 1;
     }
 
@@ -767,7 +610,7 @@ namespace
     for (const auto &a : opt.ctestArgs)
       argv.push_back(a);
 
-    return run_in_dir(refreshedBuildDir, argv);
+    return run_in_dir(buildDir, argv);
   }
 
   static int run_tests_once(const vix::commands::TestsCommand::detail::Options &opt)

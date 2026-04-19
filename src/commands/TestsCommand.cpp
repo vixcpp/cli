@@ -42,6 +42,7 @@
 #include <fcntl.h>
 #else
 #include <io.h>
+#include <fcntl.h>
 #endif
 
 using namespace vix::cli::style;

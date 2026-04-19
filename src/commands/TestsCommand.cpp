@@ -35,6 +35,15 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdio>
+
+#ifndef _WIN32
+#include <unistd.h>
+#include <fcntl.h>
+#else
+#include <io.h>
+#endif
+
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
 
@@ -64,6 +73,124 @@ namespace
 
     return false;
   }
+
+  struct ScopedSilenceStdStreams
+  {
+    bool active{false};
+
+#ifndef _WIN32
+    int savedStdout{-1};
+    int savedStderr{-1};
+    int nullFd{-1};
+#else
+    int savedStdout{-1};
+    int savedStderr{-1};
+    int nullFd{-1};
+#endif
+
+    ScopedSilenceStdStreams()
+    {
+      std::fflush(stdout);
+      std::fflush(stderr);
+
+#ifndef _WIN32
+      nullFd = ::open("/dev/null", O_WRONLY);
+      if (nullFd == -1)
+        return;
+
+      savedStdout = ::dup(STDOUT_FILENO);
+      savedStderr = ::dup(STDERR_FILENO);
+
+      if (savedStdout == -1 || savedStderr == -1)
+      {
+        if (savedStdout != -1)
+          ::close(savedStdout);
+        if (savedStderr != -1)
+          ::close(savedStderr);
+        ::close(nullFd);
+        savedStdout = -1;
+        savedStderr = -1;
+        nullFd = -1;
+        return;
+      }
+
+      if (::dup2(nullFd, STDOUT_FILENO) == -1 ||
+          ::dup2(nullFd, STDERR_FILENO) == -1)
+      {
+        ::dup2(savedStdout, STDOUT_FILENO);
+        ::dup2(savedStderr, STDERR_FILENO);
+        ::close(savedStdout);
+        ::close(savedStderr);
+        ::close(nullFd);
+        savedStdout = -1;
+        savedStderr = -1;
+        nullFd = -1;
+        return;
+      }
+
+      active = true;
+#else
+      nullFd = _open("NUL", _O_WRONLY);
+      if (nullFd == -1)
+        return;
+
+      savedStdout = _dup(_fileno(stdout));
+      savedStderr = _dup(_fileno(stderr));
+
+      if (savedStdout == -1 || savedStderr == -1)
+      {
+        if (savedStdout != -1)
+          _close(savedStdout);
+        if (savedStderr != -1)
+          _close(savedStderr);
+        _close(nullFd);
+        savedStdout = -1;
+        savedStderr = -1;
+        nullFd = -1;
+        return;
+      }
+
+      if (_dup2(nullFd, _fileno(stdout)) == -1 ||
+          _dup2(nullFd, _fileno(stderr)) == -1)
+      {
+        _dup2(savedStdout, _fileno(stdout));
+        _dup2(savedStderr, _fileno(stderr));
+        _close(savedStdout);
+        _close(savedStderr);
+        _close(nullFd);
+        savedStdout = -1;
+        savedStderr = -1;
+        nullFd = -1;
+        return;
+      }
+
+      active = true;
+#endif
+    }
+
+    ~ScopedSilenceStdStreams()
+    {
+      if (!active)
+        return;
+
+      std::fflush(stdout);
+      std::fflush(stderr);
+
+#ifndef _WIN32
+      ::dup2(savedStdout, STDOUT_FILENO);
+      ::dup2(savedStderr, STDERR_FILENO);
+      ::close(savedStdout);
+      ::close(savedStderr);
+      ::close(nullFd);
+#else
+      _dup2(savedStdout, _fileno(stdout));
+      _dup2(savedStderr, _fileno(stderr));
+      _close(savedStdout);
+      _close(savedStderr);
+      _close(nullFd);
+#endif
+    }
+  };
 
   static bool is_watched_file(const fs::path &p)
   {
@@ -363,12 +490,18 @@ namespace
     return vix::cli::process::normalize_exit_code(raw);
   }
 
+  static std::string project_name_from_dir(const fs::path &projectDir)
+  {
+    std::string name = projectDir.filename().string();
+    if (name.empty())
+      name = "app";
+    return name;
+  }
+
   static int ensure_project_configured_and_built(
       const vix::commands::TestsCommand::detail::Options &opt,
       const std::string &presetName)
   {
-    info("Tests are not ready. Auto-configure/auto-build via `vix check`.");
-
     std::vector<std::string> forwarded = opt.forwarded;
 
     if (!has_flag(forwarded, "--tests"))
@@ -381,6 +514,30 @@ namespace
       forwarded.push_back(presetName);
     }
 
+    const std::string projectName = project_name_from_dir(opt.projectDir);
+    const std::string testFlag = "-D" + projectName + "_BUILD_TESTS=ON";
+
+    bool hasDashDash = false;
+    bool hasTestFlag = false;
+
+    for (const auto &arg : forwarded)
+    {
+      if (arg == "--")
+        hasDashDash = true;
+
+      if (arg == testFlag)
+        hasTestFlag = true;
+    }
+
+    if (!hasTestFlag)
+    {
+      if (!hasDashDash)
+        forwarded.push_back("--");
+
+      forwarded.push_back(testFlag);
+    }
+
+    ScopedSilenceStdStreams silence;
     return vix::commands::CheckCommand::run(forwarded);
   }
 
@@ -567,17 +724,7 @@ namespace
     const auto runner = find_native_test_runner(refreshedBuildDir);
 
     if (!runner)
-    {
-      error("Native test runner not found.");
-      hint("Expected a built test executable from the project or umbrella.");
-      step(std::string("Build dir: ") + refreshedBuildDir.string());
       return 2;
-    }
-
-    info("Running tests (native runner).");
-    hint(std::string("Preset: ") + presetName);
-    hint(std::string("Build dir: ") + refreshedBuildDir.string());
-    hint(std::string("Runner: ") + runner->string());
 
     std::vector<std::string> argv;
     argv.push_back(runner->string());
@@ -609,15 +756,10 @@ namespace
 
     if (!ctest_file_exists(refreshedBuildDir))
     {
-      error("CTest metadata is not available.");
-      hint("Tests may be disabled in the project or no CTest entries were generated.");
-      step(std::string("Expected file: ") + (refreshedBuildDir / "CTestTestfile.cmake").string());
+      error("No tests available.");
+      hint("Tests are disabled for this project in the current CMake configuration.");
       return 1;
     }
-
-    info("Running tests (CTest fallback).");
-    hint(std::string("Preset: ") + presetName);
-    hint(std::string("Build dir: ") + refreshedBuildDir.string());
 
     std::vector<std::string> argv;
     argv.push_back("ctest");
@@ -640,10 +782,8 @@ namespace
     if (nativeCode != 2)
       return nativeCode;
 
-    info("Falling back to CTest.");
     return run_ctest(opt);
   }
-
 } // namespace
 
 namespace vix::commands::TestsCommand

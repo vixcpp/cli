@@ -108,8 +108,7 @@ int main()
 }
 )";
 
-  constexpr const char *kBasicTestCpp_App = R"(#include <vix/tests/TestRegistry.hpp>
-#include <vix/tests.hpp>
+  constexpr const char *kBasicTestCpp_App = R"(#include <vix/tests/tests.hpp>
 
 int main()
 {
@@ -190,10 +189,7 @@ int main()
     std::string s;
     s.reserve(1200);
 
-    s += "#include <vix/tests/TestRegistry.hpp>\n";
-    s += "#include <vix/tests/TestRunner.hpp>\n";
-    s += "#include <vix/tests/TestCase.hpp>\n";
-    s += "#include <vix/tests/Assert.hpp>\n";
+    s += "#include <vix/tests/tests.hpp>\n";
     s += "#include <" + name + "/" + name + ".hpp>\n\n";
 
     s += "int main()\n";

@@ -1183,8 +1183,8 @@ namespace vix::cli::errors
       rules.push_back(makeThreadJoinableRule());
       rules.push_back(makeDataRaceRule());
       rules.push_back(makeDeadlockRule());
-      rules.push_back(makeMutexMisuseRule());
       rules.push_back(makeConditionVariableMisuseRule());
+      rules.push_back(makeMutexMisuseRule());
       rules.push_back(makeFuturePromiseRule());
       rules.push_back(makeThreadCreationFailureRule());
       rules.push_back(makeDetachedThreadLifetimeRule());
@@ -1215,15 +1215,11 @@ namespace vix::cli::errors
       if (handleRuntimePortAlreadyInUse(log, sourceFile))
         return true;
 
-      // 2) C++ exceptions (your existing handler)
-      if (vix::cli::errors::rules::handleUncaughtException(log, sourceFile))
-        return true;
-
-      // 3) Typed UB (UBSan) MUST be early because it may also contain "runtime error:"
+      // 2) Typed UB (UBSan) MUST be early because it may also contain "runtime error:"
       if (handleUBSanRuntimeError(log, sourceFile))
         return true;
 
-      // 4) Typed allocator/memory families
+      // 3) Typed allocator/memory families
       if (handleRuntimeAllocDeallocMismatch(log, sourceFile))
         return true;
       if (handleRuntimeDoubleFree(log, sourceFile))
@@ -1239,17 +1235,21 @@ namespace vix::cli::errors
       if (handleRuntimeBufferOverflow(log, sourceFile))
         return true;
 
-      // 5) Other common crashes & signals
+      // 4) Other common crashes & signals
       if (handleRuntimeAssertionFailed(log, sourceFile))
         return true;
       if (handleRuntimeBadAllocOOM(log, sourceFile))
         return true;
 
-      // 5.1) Modular runtime rules
+      // 5) Modular runtime rules
       if (handleRuntimeRules(log, sourceFile))
         return true;
 
-      // 6) Other sanitizers (LSan/TSan/MSan)
+      // 6) C++ exceptions fallback
+      if (vix::cli::errors::rules::handleUncaughtException(log, sourceFile))
+        return true;
+
+      // 7) Other sanitizers (LSan/TSan/MSan)
       if (handleLeakSanitizer(log, sourceFile))
         return true;
       if (handleThreadSanitizer(log, sourceFile))
@@ -1257,13 +1257,12 @@ namespace vix::cli::errors
       if (handleMemorySanitizer(log, sourceFile))
         return true;
 
-      // 7) Generic sanitizer banner (last resort)
+      // 8) Generic sanitizer banner (last resort)
       if (handleGenericSanitizerBanner(log, sourceFile))
         return true;
 
       return handleGenericRuntimeFallback(log, sourceFile);
     }
-
   } // namespace
 
   bool RawLogDetectors::handleKnownRunFailure(

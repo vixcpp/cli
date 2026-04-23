@@ -122,15 +122,19 @@ namespace vix::cli::errors::runtime
     for (const auto &hintText : hints)
     {
       std::cerr << YELLOW
-                << "hint: " << hintText
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << hintText
+                << "\n";
     }
 
     if (!at.empty())
     {
       std::cerr << GREEN
-                << "at: " << at
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << at
+                << "\n";
     }
   }
 } // namespace vix::cli::errors::runtime

@@ -87,22 +87,30 @@ namespace vix::cli::errors::template_rules
       const std::string fileName = filePath.filename().string();
 
       std::cerr << RED
-                << "error: template argument mismatch"
-                << RESET << "\n";
+                << "error: "
+                << RESET
+                << "template argument mismatch"
+                << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: one or more template arguments do not match what this template expects"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "one or more template arguments do not match what this template expects"
+                << "\n";
 
       std::cerr << YELLOW
-                << "hint: check the number of template parameters and whether each argument should be a type, a value, or another template"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "check the number of template parameters and whether each argument should be a type, a value, or another template"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << fileName << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

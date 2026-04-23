@@ -15,6 +15,7 @@
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
 #include <vix/cli/errors/rules/UncaughtExceptionRule.hpp>
+#include <vix/cli/errors/runtime/IRuntimeErrorRule.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -394,59 +395,25 @@ namespace vix::cli::errors
       return true;
     }
 
-    static bool handleRuntimeSegfaultAbortTerminate(
+    static bool handleGenericRuntimeFallback(
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
     {
-      const bool segv =
-          icontains(runtimeLog, "segmentation fault") ||
-          icontains(runtimeLog, "sigsegv");
+      (void)runtimeLog;
 
-      const bool abrt =
-          icontains(runtimeLog, "sigabrt") ||
-          icontains(runtimeLog, "aborted") ||
-          icontains(runtimeLog, "abort()");
+      std::cerr << RED
+                << "runtime error: program failed at runtime"
+                << RESET << "\n";
 
-      const bool term =
-          icontains(runtimeLog, "terminate called after") ||
-          icontains(runtimeLog, "std::terminate") ||
-          icontains(runtimeLog, "terminating") ||
-          icontains(runtimeLog, "pure virtual method called");
+      std::cerr << YELLOW
+                << "hint: no specialized runtime rule matched this failure"
+                << RESET << "\n";
 
-      if (!(segv || abrt || term))
-        return false;
-
-      std::string title = "runtime error: crash";
-      std::string hint = "program crashed";
-
-      if (segv)
+      if (!sourceFile.empty())
       {
-        title = "runtime error: segmentation fault";
-        hint = "invalid memory access (null/dangling pointer, out-of-bounds, use-after-free)";
-      }
-      else if (abrt)
-      {
-        title = "runtime error: aborted";
-        hint = "the program aborted (assert/terminate/abort)";
-      }
-      else if (term)
-      {
-        title = "runtime error: terminate";
-        hint = "std::terminate/pure-virtual/unhandled fatal error";
-      }
-
-      hint = maybe_add_san_hint(hint, runtimeLog);
-
-      print_header(title);
-
-      if (auto loc = tryExtractFirstUserFrame(runtimeLog, sourceFile))
-      {
-        print_codeframe_then_bottom_default(*loc, maybe_add_san_hint(hint, runtimeLog));
-      }
-      else
-      {
-        print_hint_at_bottom(hint, !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
-        print_excerpt(runtimeLog);
+        std::cerr << GREEN
+                  << "at: source: " << sourceFile.filename().string()
+                  << RESET << "\n";
       }
 
       return true;
@@ -1198,6 +1165,35 @@ namespace vix::cli::errors
       return true;
     }
 
+    static std::vector<std::unique_ptr<vix::cli::errors::runtime::IRuntimeErrorRule>> makeRuntimeRules()
+    {
+      using vix::cli::errors::runtime::IRuntimeErrorRule;
+      using vix::cli::errors::runtime::makeAbortRule;
+      using vix::cli::errors::runtime::makeSegfaultRule;
+      using vix::cli::errors::runtime::makeThreadJoinableRule;
+
+      std::vector<std::unique_ptr<IRuntimeErrorRule>> rules;
+      rules.push_back(makeThreadJoinableRule());
+      rules.push_back(makeSegfaultRule());
+      rules.push_back(makeAbortRule());
+      return rules;
+    }
+
+    static bool handleRuntimeRules(
+        const std::string &log,
+        const std::filesystem::path &sourceFile)
+    {
+      const auto rules = makeRuntimeRules();
+
+      for (const auto &rule : rules)
+      {
+        if (rule && rule->match(log, sourceFile))
+          return rule->handle(log, sourceFile);
+      }
+
+      return false;
+    }
+
     // Master runtime dispatcher (order matters)
     static bool handleRuntimeAnything(const std::string &log, const std::filesystem::path &sourceFile)
     {
@@ -1234,7 +1230,9 @@ namespace vix::cli::errors
         return true;
       if (handleRuntimeBadAllocOOM(log, sourceFile))
         return true;
-      if (handleRuntimeSegfaultAbortTerminate(log, sourceFile))
+
+      // 5.1) Modular runtime rules
+      if (handleRuntimeRules(log, sourceFile))
         return true;
 
       // 6) Other sanitizers (LSan/TSan/MSan)
@@ -1249,16 +1247,15 @@ namespace vix::cli::errors
       if (handleGenericSanitizerBanner(log, sourceFile))
         return true;
 
-      return false;
+      return handleGenericRuntimeFallback(log, sourceFile);
     }
 
   } // namespace
 
-  bool RawLogDetectors::handleKnownRunFailure(const std::string &log, const std::filesystem::path &ctx)
+  bool RawLogDetectors::handleKnownRunFailure(
+      const std::string &log,
+      const std::filesystem::path &ctx)
   {
-    if (handleRuntimePortAlreadyInUse(log, ctx))
-      return true;
-
     return handleRuntimeAnything(log, ctx);
   }
 

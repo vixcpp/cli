@@ -44,6 +44,10 @@
 #include <windows.h>
 #endif
 
+#ifndef _WIN32
+#include <termios.h>
+#endif
+
 using namespace vix::cli::style;
 
 namespace vix::commands::RunCommand::detail
@@ -957,6 +961,16 @@ namespace vix::commands::RunCommand::detail
       ::sigaction(SIGINT, &saChild, nullptr);
 
       ::setsid();
+
+      if (::isatty(slaveFd))
+      {
+        struct termios tty{};
+        if (::tcgetattr(slaveFd, &tty) == 0)
+        {
+          tty.c_lflag &= ~ECHO;
+          ::tcsetattr(slaveFd, TCSANOW, &tty);
+        }
+      }
 
       if (useSan)
       {

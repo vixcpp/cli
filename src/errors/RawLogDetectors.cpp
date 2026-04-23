@@ -1169,11 +1169,25 @@ namespace vix::cli::errors
     {
       using vix::cli::errors::runtime::IRuntimeErrorRule;
       using vix::cli::errors::runtime::makeAbortRule;
+      using vix::cli::errors::runtime::makeConditionVariableMisuseRule;
+      using vix::cli::errors::runtime::makeDataRaceRule;
+      using vix::cli::errors::runtime::makeDeadlockRule;
+      using vix::cli::errors::runtime::makeDetachedThreadLifetimeRule;
+      using vix::cli::errors::runtime::makeFuturePromiseRule;
+      using vix::cli::errors::runtime::makeMutexMisuseRule;
       using vix::cli::errors::runtime::makeSegfaultRule;
+      using vix::cli::errors::runtime::makeThreadCreationFailureRule;
       using vix::cli::errors::runtime::makeThreadJoinableRule;
 
       std::vector<std::unique_ptr<IRuntimeErrorRule>> rules;
       rules.push_back(makeThreadJoinableRule());
+      rules.push_back(makeDataRaceRule());
+      rules.push_back(makeDeadlockRule());
+      rules.push_back(makeMutexMisuseRule());
+      rules.push_back(makeConditionVariableMisuseRule());
+      rules.push_back(makeFuturePromiseRule());
+      rules.push_back(makeThreadCreationFailureRule());
+      rules.push_back(makeDetachedThreadLifetimeRule());
       rules.push_back(makeSegfaultRule());
       rules.push_back(makeAbortRule());
       return rules;

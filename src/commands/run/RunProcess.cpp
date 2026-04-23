@@ -1033,20 +1033,26 @@ namespace vix::commands::RunCommand::detail
         return;
 
       if (useSan)
+        return;
+
+      std::string filtered;
+
+      if (passthroughRuntime)
       {
-        return;
+        filtered = printable;
       }
+      else
+      {
+        printable = sanitizer.filter_for_print(printable);
 
-      printable = sanitizer.filter_for_print(printable);
+        if (!printable.empty())
+          printable = uncaught.filter_for_print(printable);
 
-      if (!printable.empty())
-        printable = uncaught.filter_for_print(printable);
+        if (printable.empty())
+          return;
 
-      if (printable.empty())
-        return;
-
-      std::string filtered =
-          passthroughRuntime ? printable : runtimeFilter.process(printable);
+        filtered = runtimeFilter.process(printable);
+      }
 
       if (filtered.empty())
         return;
@@ -1102,6 +1108,9 @@ namespace vix::commands::RunCommand::detail
     ::setpgid(pid, pid);
 
     const bool captureOnly = false;
+    const bool forwardStdin =
+        passthroughRuntime && (::isatty(STDIN_FILENO) != 0);
+
     bool spinnerActive = false;
     std::size_t frameIndex = 0;
 
@@ -1192,10 +1201,18 @@ namespace vix::commands::RunCommand::detail
       FD_ZERO(&fds);
 
       int maxfd = -1;
+
       if (pty.masterFd >= 0)
       {
         FD_SET(pty.masterFd, &fds);
         maxfd = pty.masterFd;
+      }
+
+      if (forwardStdin)
+      {
+        FD_SET(STDIN_FILENO, &fds);
+        if (STDIN_FILENO > maxfd)
+          maxfd = STDIN_FILENO;
       }
 
       if (maxfd < 0)
@@ -1241,6 +1258,16 @@ namespace vix::commands::RunCommand::detail
         {
           spinner_clear(printedSomething, lastPrintedChar);
           spinnerActive = false;
+        }
+
+        if (forwardStdin && FD_ISSET(STDIN_FILENO, &fds) && pty.masterFd >= 0)
+        {
+          char inbuf[4096];
+          const ssize_t n = ::read(STDIN_FILENO, inbuf, sizeof(inbuf));
+          if (n > 0)
+          {
+            write_all(pty.masterFd, inbuf, static_cast<std::size_t>(n));
+          }
         }
 
         if (pty.masterFd >= 0 && FD_ISSET(pty.masterFd, &fds))
@@ -1340,7 +1367,6 @@ namespace vix::commands::RunCommand::detail
 
     return result;
   }
-
 #endif
 
   int run_cmd_live_filtered(

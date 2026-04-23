@@ -345,25 +345,118 @@ namespace vix::commands::RunCommand::detail
       auto has = [&](const char *s)
       { return line.find(s) != std::string::npos; };
 
-      if (has("vix::") ||
-          has("Vix::") ||
-          has("using namespace vix") ||
-          has("using namespace Vix") ||
-          has("using vix::") ||
-          has("using Vix::") ||
-          has("#include <vix/") ||
-          has("#include \"vix/"))
+      const bool uses_vix_runtime_header =
+          has("#include <vix.hpp>") ||
+          has("#include \"vix.hpp\"") ||
+
+          has("#include <vix/core") ||
+          has("#include \"vix/core") ||
+
+          has("#include <vix/async") ||
+          has("#include \"vix/async") ||
+
+          has("#include <vix/cache") ||
+          has("#include \"vix/cache") ||
+
+          has("#include <vix/crypto") ||
+          has("#include \"vix/crypto") ||
+
+          has("#include <vix/io") ||
+          has("#include \"vix/io") ||
+
+          has("#include <vix/log") ||
+          has("#include \"vix/log") ||
+
+          has("#include <vix/middleware") ||
+          has("#include \"vix/middleware") ||
+
+          has("#include <vix/net") ||
+          has("#include \"vix/net") ||
+
+          has("#include <vix/os") ||
+          has("#include \"vix/os") ||
+
+          has("#include <vix/p2p") ||
+          has("#include \"vix/p2p") ||
+
+          has("#include <vix/p2p_http") ||
+          has("#include \"vix/p2p_http") ||
+
+          has("#include <vix/process") ||
+          has("#include \"vix/process") ||
+
+          has("#include <vix/sync") ||
+          has("#include \"vix/sync") ||
+
+          has("#include <vix/webrpc") ||
+          has("#include \"vix/webrpc") ||
+
+          has("#include <vix/websocket") ||
+          has("#include \"vix/websocket");
+
+      const bool uses_vix_runtime_symbol =
+          has("vix::App") ||
+          has("Vix::App") ||
+
+          has("vix::serve") ||
+          has("Vix::serve") ||
+
+          has("vix::core") ||
+          has("Vix::core") ||
+
+          has("vix::async") ||
+          has("Vix::async") ||
+
+          has("vix::cache") ||
+          has("Vix::cache") ||
+
+          has("vix::crypto") ||
+          has("Vix::crypto") ||
+
+          has("vix::io") ||
+          has("Vix::io") ||
+
+          has("vix::log") ||
+          has("Vix::log") ||
+
+          has("vix::middleware") ||
+          has("Vix::middleware") ||
+
+          has("vix::net") ||
+          has("Vix::net") ||
+
+          has("vix::os") ||
+          has("Vix::os") ||
+
+          has("vix::p2p") ||
+          has("Vix::p2p") ||
+
+          has("vix::process") ||
+          has("Vix::process") ||
+
+          has("vix::sync") ||
+          has("Vix::sync") ||
+
+          has("vix::webrpc") ||
+          has("Vix::webrpc") ||
+
+          has("vix::websocket") ||
+          has("Vix::websocket");
+
+      if (uses_vix_runtime_header || uses_vix_runtime_symbol)
       {
         f.usesVix = true;
       }
 
       if (has("#include <vix/orm/") || has("#include \"vix/orm/") ||
+          has("#include <vix/orm") || has("#include \"vix/orm") ||
           has("vix::orm") || has("using namespace vix::orm"))
       {
         f.usesOrm = true;
       }
 
       if (has("#include <vix/db/") || has("#include \"vix/db/") ||
+          has("#include <vix/db") || has("#include \"vix/db") ||
           has("vix::db") || has("using namespace vix::db"))
       {
         f.usesDb = true;

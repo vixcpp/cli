@@ -87,22 +87,30 @@ namespace vix::cli::errors::template_rules
       const std::string fileName = filePath.filename().string();
 
       std::cerr << RED
-                << "error: template substitution failed"
-                << RESET << "\n";
+                << "error: "
+                << RESET
+                << "template substitution failed"
+                << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: the compiler tried to instantiate a template with your types, but one or more required expressions or types were not valid"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "the compiler tried to instantiate a template with your types, but one or more required expressions or types were not valid"
+                << "\n";
 
       std::cerr << YELLOW
-                << "hint: check the template constraints, required member types/functions, and whether the chosen type really supports the operations used inside the template"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "check the template constraints, required member types/functions, and whether the chosen type really supports the operations used inside the template"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << fileName << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

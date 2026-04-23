@@ -84,22 +84,30 @@ namespace vix::cli::errors::template_rules
       const std::string fileName = filePath.filename().string();
 
       std::cerr << RED
-                << "error: type alias or nested type not found"
-                << RESET << "\n";
+                << "error: "
+                << RESET
+                << "type alias or nested type not found"
+                << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: the template argument does not provide the nested type you are trying to use"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "the template argument does not provide the nested type you are trying to use"
+                << "\n";
 
       std::cerr << YELLOW
-                << "hint: check names like T::value_type, T::iterator, or U::type and make sure the chosen type actually defines them"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "check names like T::value_type, T::iterator, or U::type and make sure the chosen type actually defines them"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << fileName << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

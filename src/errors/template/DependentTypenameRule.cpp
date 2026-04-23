@@ -84,22 +84,30 @@ namespace vix::cli::errors::template_rules
       const std::string fileName = filePath.filename().string();
 
       std::cerr << RED
-                << "error: missing typename before dependent type"
-                << RESET << "\n";
+                << "error: "
+                << RESET
+                << "missing typename before dependent type"
+                << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: this type depends on a template parameter, so the compiler needs typename to know it is a type"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "this type depends on a template parameter, so the compiler needs typename to know it is a type"
+                << "\n";
 
       std::cerr << YELLOW
-                << "hint: write typename before names like T::value_type, T::iterator, or U::type when they refer to a type"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "write typename before names like T::value_type, T::iterator, or U::type when they refer to a type"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << fileName << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

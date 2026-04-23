@@ -37,9 +37,7 @@ namespace vix::cli::errors::runtime
       return icontains(log, "mutex") ||
              icontains(log, "resource deadlock avoided") ||
              icontains(log, "operation not permitted") ||
-             icontains(log, "invalid argument") ||
-             icontains(log, "pthread_mutex") ||
-             icontains(log, "std::system_error");
+             icontains(log, "pthread_mutex");
     }
 
     bool handle(

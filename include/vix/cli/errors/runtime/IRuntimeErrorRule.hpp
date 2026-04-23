@@ -39,6 +39,13 @@ namespace vix::cli::errors::runtime
   std::unique_ptr<IRuntimeErrorRule> makeThreadJoinableRule();
   std::unique_ptr<IRuntimeErrorRule> makeSegfaultRule();
   std::unique_ptr<IRuntimeErrorRule> makeAbortRule();
+  std::unique_ptr<IRuntimeErrorRule> makeDataRaceRule();
+  std::unique_ptr<IRuntimeErrorRule> makeDeadlockRule();
+  std::unique_ptr<IRuntimeErrorRule> makeMutexMisuseRule();
+  std::unique_ptr<IRuntimeErrorRule> makeConditionVariableMisuseRule();
+  std::unique_ptr<IRuntimeErrorRule> makeFuturePromiseRule();
+  std::unique_ptr<IRuntimeErrorRule> makeThreadCreationFailureRule();
+  std::unique_ptr<IRuntimeErrorRule> makeDetachedThreadLifetimeRule();
 } // namespace vix::cli::errors::runtime
 
 #endif

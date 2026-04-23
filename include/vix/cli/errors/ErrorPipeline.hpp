@@ -19,6 +19,7 @@
 #include <vix/cli/errors/CompilerError.hpp>
 #include <vix/cli/errors/ErrorContext.hpp>
 #include <vix/cli/errors/IErrorRule.hpp>
+#include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 
 namespace vix::cli::errors
 {
@@ -30,6 +31,7 @@ namespace vix::cli::errors
 
   private:
     std::vector<std::unique_ptr<IErrorRule>> rules_;
+    std::vector<std::unique_ptr<vix::cli::errors::template_rules::ITemplateErrorRule>> templateRules_;
   };
 } // namespace vix::cli::errors
 

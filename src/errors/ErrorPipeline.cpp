@@ -13,6 +13,7 @@
  */
 #include <vix/cli/errors/ErrorPipeline.hpp>
 #include <vix/cli/errors/RulesFactory.hpp>
+#include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 
 #include <string>
 
@@ -20,6 +21,12 @@ namespace vix::cli::errors
 {
   ErrorPipeline::ErrorPipeline()
   {
+    // Template-specific compile errors
+    templateRules_.push_back(vix::cli::errors::template_rules::makeDependentTypenameRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeNoTypeNamedRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeTemplateArgumentMismatchRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeSubstitutionFailureRule());
+
     // Beginner / syntax / common mistakes
     rules_.push_back(makeCoutNotDeclaredRule());
     rules_.push_back(makeHeaderNotFoundRule());
@@ -64,6 +71,12 @@ namespace vix::cli::errors
       if (!isUserFirst(err, ctx))
         continue;
 
+      for (const auto &rule : templateRules_)
+      {
+        if (rule && rule->match(err))
+          return rule->handle(err, ctx);
+      }
+
       for (const auto &rule : rules_)
       {
         if (rule && rule->match(err))
@@ -73,6 +86,12 @@ namespace vix::cli::errors
 
     for (const auto &err : errors)
     {
+      for (const auto &rule : templateRules_)
+      {
+        if (rule && rule->match(err))
+          return rule->handle(err, ctx);
+      }
+
       for (const auto &rule : rules_)
       {
         if (rule && rule->match(err))

@@ -124,6 +124,30 @@ namespace vix::commands::RunCommand::detail
     }
 
     /**
+     * @brief Return true when the include path is a Vix runtime header.
+     *
+     * Generic detection: any include of the form <vix/...> or "vix/..." is
+     * treated as a Vix runtime header, regardless of which sub-module it
+     * belongs to. This avoids the need to maintain an exhaustive list of
+     * known sub-module prefixes (vix/fs, vix/env, vix/error, vix/path, …)
+     * and ensures that newly added modules are picked up automatically.
+     *
+     * The umbrella header <vix.hpp> / "vix.hpp" is also matched.
+     */
+    bool is_vix_runtime_include(const std::string &includePath)
+    {
+      if (includePath.empty())
+        return false;
+
+      // <vix.hpp> or "vix.hpp"
+      if (includePath == "vix.hpp")
+        return true;
+
+      // <vix/...> or "vix/..." — any depth
+      return starts_with(includePath, "vix/");
+    }
+
+    /**
      * @brief Return true when the script source layout is not suitable for direct mode.
      *
      * This does not try to recognize specific libraries.
@@ -345,123 +369,41 @@ namespace vix::commands::RunCommand::detail
       auto has = [&](const char *s)
       { return line.find(s) != std::string::npos; };
 
-      const bool uses_vix_runtime_header =
-          has("#include <vix.hpp>") ||
-          has("#include \"vix.hpp\"") ||
+      // Vix runtime header detection — generic approach
+      //
+      // Any #include <vix/...> or #include "vix/..." is treated as a Vix
+      // runtime include, regardless of which sub-module it targets.
+      // This covers every existing and future module (fs, env, error, path,
+      // utils, time, validation, conversion, template, tests, …) without
+      // requiring an exhaustive, manually-maintained list.
+      const auto parsed_inc = parse_include_target(line);
+      const bool uses_vix_runtime_header = parsed_inc.has_value() &&
+                                           is_vix_runtime_include(parsed_inc->first);
 
-          has("#include <vix/core") ||
-          has("#include \"vix/core") ||
-
-          has("#include <vix/async") ||
-          has("#include \"vix/async") ||
-
-          has("#include <vix/cache") ||
-          has("#include \"vix/cache") ||
-
-          has("#include <vix/crypto") ||
-          has("#include \"vix/crypto") ||
-
-          has("#include <vix/io") ||
-          has("#include \"vix/io") ||
-
-          has("#include <vix/log") ||
-          has("#include \"vix/log") ||
-
-          has("#include <vix/middleware") ||
-          has("#include \"vix/middleware") ||
-
-          has("#include <vix/net") ||
-          has("#include \"vix/net") ||
-
-          has("#include <vix/os") ||
-          has("#include \"vix/os") ||
-
-          has("#include <vix/p2p") ||
-          has("#include \"vix/p2p") ||
-
-          has("#include <vix/p2p_http") ||
-          has("#include \"vix/p2p_http") ||
-
-          has("#include <vix/process") ||
-          has("#include \"vix/process") ||
-
-          has("#include <vix/sync") ||
-          has("#include \"vix/sync") ||
-
-          has("#include <vix/webrpc") ||
-          has("#include \"vix/webrpc") ||
-
-          has("#include <vix/websocket") ||
-          has("#include \"vix/websocket");
-
+      // Vix runtime symbol detection — any use of vix:: / Vix:: namespace
       const bool uses_vix_runtime_symbol =
-          has("vix::App") ||
-          has("Vix::App") ||
-
-          has("vix::serve") ||
-          has("Vix::serve") ||
-
-          has("vix::core") ||
-          has("Vix::core") ||
-
-          has("vix::async") ||
-          has("Vix::async") ||
-
-          has("vix::cache") ||
-          has("Vix::cache") ||
-
-          has("vix::crypto") ||
-          has("Vix::crypto") ||
-
-          has("vix::io") ||
-          has("Vix::io") ||
-
-          has("vix::log") ||
-          has("Vix::log") ||
-
-          has("vix::middleware") ||
-          has("Vix::middleware") ||
-
-          has("vix::net") ||
-          has("Vix::net") ||
-
-          has("vix::os") ||
-          has("Vix::os") ||
-
-          has("vix::p2p") ||
-          has("Vix::p2p") ||
-
-          has("vix::process") ||
-          has("Vix::process") ||
-
-          has("vix::sync") ||
-          has("Vix::sync") ||
-
-          has("vix::webrpc") ||
-          has("Vix::webrpc") ||
-
-          has("vix::websocket") ||
-          has("Vix::websocket");
+          has("vix::") || has("Vix::");
 
       if (uses_vix_runtime_header || uses_vix_runtime_symbol)
       {
         f.usesVix = true;
       }
 
-      if (has("#include <vix/orm/") || has("#include \"vix/orm/") ||
-          has("#include <vix/orm") || has("#include \"vix/orm") ||
+      // ORM detection — vix/orm sub-tree or vix::orm namespace
+      if (has("#include <vix/orm") || has("#include \"vix/orm") ||
           has("vix::orm") || has("using namespace vix::orm"))
       {
         f.usesOrm = true;
       }
 
-      if (has("#include <vix/db/") || has("#include \"vix/db/") ||
-          has("#include <vix/db") || has("#include \"vix/db") ||
+      // DB detection — vix/db sub-tree or vix::db namespace
+      if (has("#include <vix/db") || has("#include \"vix/db") ||
           has("vix::db") || has("using namespace vix::db"))
       {
         f.usesDb = true;
       }
 
+      // MySQL detection — factory helpers, engine enum, connector headers
       if (has("make_mysql_factory") ||
           has("Engine::MySQL") ||
           has("mysqlcppconn") ||

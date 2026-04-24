@@ -43,6 +43,13 @@ namespace vix::cli::errors::template_rules
   std::unique_ptr<ITemplateErrorRule> makeRequiresExpressionFailureRule();
   std::unique_ptr<ITemplateErrorRule> makeNoMatchingOverloadWithConstraintsRule();
   std::unique_ptr<ITemplateErrorRule> makeLambdaCaptureLifetimeRule();
+  std::unique_ptr<ITemplateErrorRule> makeCoroutineReturnTypeRule();
+  std::unique_ptr<ITemplateErrorRule> makeMissingCoReturnRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidAwaitableRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidPromiseTypeRule();
+  std::unique_ptr<ITemplateErrorRule> makeNoMemberAwaitReadyRule();
+  std::unique_ptr<ITemplateErrorRule> makeNoMemberAwaitSuspendRule();
+  std::unique_ptr<ITemplateErrorRule> makeNoMemberAwaitResumeRule();
 } // namespace vix::cli::errors::template_rules
 
 #endif

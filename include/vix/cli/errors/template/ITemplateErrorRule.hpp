@@ -50,6 +50,10 @@ namespace vix::cli::errors::template_rules
   std::unique_ptr<ITemplateErrorRule> makeNoMemberAwaitReadyRule();
   std::unique_ptr<ITemplateErrorRule> makeNoMemberAwaitSuspendRule();
   std::unique_ptr<ITemplateErrorRule> makeNoMemberAwaitResumeRule();
+  std::unique_ptr<ITemplateErrorRule> makeNonVirtualDestructorDeleteRule();
+  std::unique_ptr<ITemplateErrorRule> makeObjectSlicingRule();
+  std::unique_ptr<ITemplateErrorRule> makeBadOverrideRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidDowncastRule();
 } // namespace vix::cli::errors::template_rules
 
 #endif

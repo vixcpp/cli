@@ -25,6 +25,10 @@ namespace vix::cli::errors
     templateRules_.push_back(vix::cli::errors::template_rules::makeDependentTypenameRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoTypeNamedRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeTemplateArgumentMismatchRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeRequiresExpressionFailureRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeConceptConstraintFailureRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeNoMatchingOverloadWithConstraintsRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeLambdaCaptureLifetimeRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeSubstitutionFailureRule());
 
     // Beginner / syntax / common mistakes
@@ -45,7 +49,6 @@ namespace vix::cli::errors
     rules_.push_back(makeReturnLocalRefRule());
     rules_.push_back(makeUseOfUninitializedRule());
   }
-
   static bool isSystemPath(const std::string &p)
   {
     return p.rfind("/usr/include/", 0) == 0 ||

@@ -46,6 +46,12 @@ namespace vix::cli::errors::runtime
   std::unique_ptr<IRuntimeErrorRule> makeFuturePromiseRule();
   std::unique_ptr<IRuntimeErrorRule> makeThreadCreationFailureRule();
   std::unique_ptr<IRuntimeErrorRule> makeDetachedThreadLifetimeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeIteratorInvalidationRule();
+  std::unique_ptr<IRuntimeErrorRule> makeOutOfRangeAccessRule();
+  std::unique_ptr<IRuntimeErrorRule> makeInvalidIteratorDereferenceRule();
+  std::unique_ptr<IRuntimeErrorRule> makeEmptyContainerFrontBackRule();
+  std::unique_ptr<IRuntimeErrorRule> makeStringViewDanglingRuntimeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeSpanLifetimeRule();
 } // namespace vix::cli::errors::runtime
 
 #endif

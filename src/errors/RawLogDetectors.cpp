@@ -1173,9 +1173,15 @@ namespace vix::cli::errors
       using vix::cli::errors::runtime::makeDataRaceRule;
       using vix::cli::errors::runtime::makeDeadlockRule;
       using vix::cli::errors::runtime::makeDetachedThreadLifetimeRule;
+      using vix::cli::errors::runtime::makeEmptyContainerFrontBackRule;
       using vix::cli::errors::runtime::makeFuturePromiseRule;
+      using vix::cli::errors::runtime::makeInvalidIteratorDereferenceRule;
+      using vix::cli::errors::runtime::makeIteratorInvalidationRule;
       using vix::cli::errors::runtime::makeMutexMisuseRule;
+      using vix::cli::errors::runtime::makeOutOfRangeAccessRule;
       using vix::cli::errors::runtime::makeSegfaultRule;
+      using vix::cli::errors::runtime::makeSpanLifetimeRule;
+      using vix::cli::errors::runtime::makeStringViewDanglingRuntimeRule;
       using vix::cli::errors::runtime::makeThreadCreationFailureRule;
       using vix::cli::errors::runtime::makeThreadJoinableRule;
 
@@ -1188,6 +1194,12 @@ namespace vix::cli::errors
       rules.push_back(makeFuturePromiseRule());
       rules.push_back(makeThreadCreationFailureRule());
       rules.push_back(makeDetachedThreadLifetimeRule());
+      rules.push_back(makeEmptyContainerFrontBackRule());
+      rules.push_back(makeOutOfRangeAccessRule());
+      rules.push_back(makeInvalidIteratorDereferenceRule());
+      rules.push_back(makeIteratorInvalidationRule());
+      rules.push_back(makeStringViewDanglingRuntimeRule());
+      rules.push_back(makeSpanLifetimeRule());
       rules.push_back(makeSegfaultRule());
       rules.push_back(makeAbortRule());
       return rules;

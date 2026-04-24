@@ -39,6 +39,10 @@ namespace vix::cli::errors::template_rules
   std::unique_ptr<ITemplateErrorRule> makeNoTypeNamedRule();
   std::unique_ptr<ITemplateErrorRule> makeTemplateArgumentMismatchRule();
   std::unique_ptr<ITemplateErrorRule> makeSubstitutionFailureRule();
+  std::unique_ptr<ITemplateErrorRule> makeConceptConstraintFailureRule();
+  std::unique_ptr<ITemplateErrorRule> makeRequiresExpressionFailureRule();
+  std::unique_ptr<ITemplateErrorRule> makeNoMatchingOverloadWithConstraintsRule();
+  std::unique_ptr<ITemplateErrorRule> makeLambdaCaptureLifetimeRule();
 } // namespace vix::cli::errors::template_rules
 
 #endif

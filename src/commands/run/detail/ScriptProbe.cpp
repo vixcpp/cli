@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/detail/ScriptProbe.hpp>
+#include <vix/cli/commands/run/RunScriptHelpers.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -20,6 +21,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 namespace vix::commands::RunCommand::detail
 {
@@ -603,13 +605,25 @@ namespace vix::commands::RunCommand::detail
         !out.libDirs.empty() ||
         !out.linkOpts.empty();
 
-    if (out.usesCompiledDeps)
+    const bool vixInstalledLocally =
+        out.features.usesVix &&
+        find_vix_include_dir().has_value() &&
+        (find_vix_lib().has_value() || !find_vix_all_module_libs().empty());
+
+    const bool onlyVixIncludesAdded =
+        vixInstalledLocally &&
+        !dependencyManagedIncludes &&
+        out.libs.empty() &&
+        out.libDirs.empty() &&
+        out.linkOpts.empty();
+
+    if (out.usesCompiledDeps && !onlyVixIncludesAdded)
       out.compiledDepPaths.push_back(opt.cppFile.parent_path() / ".vix" / "deps");
 
     const bool allowDirect =
         !unsupportedFlags &&
-        !out.requiresCMakeTargets &&
-        !out.usesCompiledDeps;
+        (!out.usesCompiledDeps || onlyVixIncludesAdded) &&
+        (!out.requiresCMakeTargets || vixInstalledLocally);
 
     if (allowDirect)
     {

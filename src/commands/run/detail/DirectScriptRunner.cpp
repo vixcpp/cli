@@ -252,6 +252,44 @@ namespace vix::commands::RunCommand::detail
       if (!hasStd)
         cmd << " -std=c++20";
 
+      // --- Vix runtime fast path ---
+      // If vix is installed (~/.vix/include + ~/.vix/lib/libvix.a), link directly
+      // without going through CMake. If a PCH exists, use it to skip reparsing
+      // all Vix headers on every compile.
+      if (plan.probe.usesVixRuntime)
+      {
+        if (const auto incDir = find_vix_include_dir())
+          cmd << " -I" << process::quote(incDir->string());
+
+        if (const auto pch = find_vix_pch())
+          cmd << " -include-pch " << process::quote(pch->string());
+
+        if (const auto lib = find_vix_lib())
+        {
+          cmd << " " << process::quote(lib->string());
+        }
+        else
+        {
+          const auto libs = find_vix_all_module_libs();
+          if (!libs.empty())
+          {
+#ifndef __APPLE__
+            cmd << " -Wl,--start-group";
+#endif
+            for (const auto &lib : libs)
+              cmd << " " << process::quote(lib.string());
+#ifndef __APPLE__
+            cmd << " -Wl,--end-group";
+#endif
+          }
+        }
+
+        cmd << " -lpthread -ldl";
+#ifdef __APPLE__
+        cmd << " -framework CoreFoundation";
+#endif
+      }
+
       for (const auto &inc : plan.probe.includeDirs)
         cmd << " -I" << process::quote(inc);
 

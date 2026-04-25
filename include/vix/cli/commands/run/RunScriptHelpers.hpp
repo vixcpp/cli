@@ -12,17 +12,14 @@
  */
 #ifndef VIX_RUN_SCRIPT_HELPERS_HPP
 #define VIX_RUN_SCRIPT_HELPERS_HPP
-
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-
 namespace vix::commands::RunCommand::detail
 {
   namespace fs = std::filesystem;
-
-  // UI
   void print_watch_restart_banner(const fs::path &path, std::string_view label);
   std::string sanitizer_mode_string(bool enableSanitizers, bool enableUbsanOnly);
   bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly);
@@ -33,14 +30,17 @@ namespace vix::commands::RunCommand::detail
       const std::vector<std::string> &scriptFlags,
       bool withSqlite,
       bool withMySql);
-
   void watch_spinner_start(std::string label);
   void watch_spinner_stop();
   void watch_spinner_pause_for_output();
-
 #ifndef _WIN32
   void apply_sanitizer_env_if_needed(bool enableSanitizers, bool enableUbsanOnly);
 #endif
-} // namespace vix::commands::RunCommand::detail
 
+  std::optional<fs::path> find_vix_pch();
+  std::optional<fs::path> find_vix_include_dir();
+  std::optional<fs::path> find_vix_lib();
+  std::vector<fs::path> find_vix_all_module_libs();
+
+} // namespace vix::commands::RunCommand::detail
 #endif

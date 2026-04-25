@@ -556,15 +556,6 @@ namespace vix::commands::RunCommand::detail
     if (probe.strategy != ScriptExecutionStrategy::Direct)
       return false;
 
-    if (probe.usesVixRuntime)
-      return false;
-
-    if (probe.usesCompiledDeps)
-      return false;
-
-    if (probe.requiresCMakeTargets)
-      return false;
-
     if (!probe.libs.empty())
       return false;
 

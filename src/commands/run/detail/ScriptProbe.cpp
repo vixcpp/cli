@@ -100,30 +100,6 @@ namespace vix::commands::RunCommand::detail
     }
 
     /**
-     * @brief Return true when the include clearly looks project-managed.
-     *
-     * Direct script mode is intentionally strict:
-     * - quoted includes are treated as project headers
-     * - includes containing a path separator are treated as project layout
-     */
-    bool include_path_requires_fallback(const std::string &includePath, bool isQuotedInclude)
-    {
-      if (includePath.empty())
-        return false;
-
-      if (isQuotedInclude)
-        return true;
-
-      if (includePath.find('/') != std::string::npos ||
-          includePath.find('\\') != std::string::npos)
-      {
-        return true;
-      }
-
-      return false;
-    }
-
-    /**
      * @brief Return true when the include path is a Vix runtime header.
      *
      * Generic detection: any include of the form <vix/...> or "vix/..." is
@@ -145,6 +121,36 @@ namespace vix::commands::RunCommand::detail
 
       // <vix/...> or "vix/..." — any depth
       return starts_with(includePath, "vix/");
+    }
+
+    /**
+     * @brief Return true when the include clearly looks project-managed.
+     *
+     * Vix runtime headers (<vix/...>) are excluded from this check:
+     * they are handled separately via is_vix_runtime_include() and
+     * already force CMake fallback through usesVix → requiresCMakeTargets.
+     * Treating them as "project layout" here would cause script_source_requires_cmake_fallback
+     * to fire redundantly AND prevent the correct fallback reason from being set.
+     */
+    bool include_path_requires_fallback(const std::string &includePath, bool isQuotedInclude)
+    {
+      if (includePath.empty())
+        return false;
+
+      // Vix runtime headers are handled by is_vix_runtime_include() — skip them here.
+      if (is_vix_runtime_include(includePath))
+        return false;
+
+      if (isQuotedInclude)
+        return true;
+
+      if (includePath.find('/') != std::string::npos ||
+          includePath.find('\\') != std::string::npos)
+      {
+        return true;
+      }
+
+      return false;
     }
 
     /**

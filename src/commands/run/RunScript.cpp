@@ -624,7 +624,12 @@ namespace vix::commands::RunCommand::detail
     {
       apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
 
-      const bool isPlainScript = !state.useVixRuntime;
+      // A script using vix::io (stdin/stdout) needs stdin forwarded just like
+      // a plain script. Only true long-lived server apps should suppress passthrough.
+      // Use forceServerLike to distinguish: if the user didn't explicitly say
+      // --force-server, treat any non-watch script as interactive (passthrough).
+      const bool isInteractive = !opt.forceServerLike || !state.useVixRuntime;
+
       std::string cmdRun = "VIX_STDOUT_MODE=line " + quote(state.exePath.string());
       cmdRun += join_quoted_args_local(opt.runArgs);
       cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
@@ -632,7 +637,7 @@ namespace vix::commands::RunCommand::detail
       LiveRunResult rr = run_cmd_live_filtered_capture(
           cmdRun,
           "",
-          isPlainScript,
+          isInteractive, // ← corrigé
           effective_timeout_sec(opt),
           opt.enableSanitizers || opt.enableUbsanOnly);
 

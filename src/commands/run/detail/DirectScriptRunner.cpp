@@ -399,7 +399,7 @@ namespace vix::commands::RunCommand::detail
     plan.binaryPath = plan.cacheDir / (plan.exeName + executable_suffix());
 
     plan.shouldRun = true;
-    plan.passthroughRuntime = opt.forceServerLike || opt.watch;
+    plan.passthroughRuntime = !opt.forceServerLike;
     plan.effectiveTimeoutSec = effective_timeout_sec(opt);
     plan.probe = probe;
 

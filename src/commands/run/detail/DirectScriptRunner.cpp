@@ -15,6 +15,7 @@
 #include <vix/cli/commands/helpers/ProcessHelpers.hpp>
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -480,10 +481,23 @@ namespace vix::commands::RunCommand::detail
 
       if (build.exitCode != 0)
       {
-        if (!build.failureHandled)
-          handle_runtime_exit_code(build.exitCode, "compile", false);
+        if (!build.stdoutText.empty() || !build.stderrText.empty())
+        {
+          const std::string compileLog = build.stdoutText + build.stderrText;
+          const bool handled = vix::cli::ErrorHandler::printBuildErrors(
+              compileLog,
+              plan.scriptPath,
+              "Script compile failed");
 
-        return build.exitCode == 0 ? 1 : build.exitCode;
+          if (!handled && !build.printed_live)
+            handle_runtime_exit_code(build.exitCode, "compile", false);
+        }
+        else if (!build.failureHandled && !build.printed_live)
+        {
+          handle_runtime_exit_code(build.exitCode, "compile", false);
+        }
+
+        return -build.exitCode;
       }
 
       const std::string meta = make_direct_cache_meta(plan.scriptPath, plan);

@@ -455,6 +455,31 @@ namespace vix::commands::BuildCommand
             return o;
           }
         }
+        else if (a == "--bin")
+        {
+          o.exportBin = true;
+        }
+        else if (a == "--out")
+        {
+          auto v = util::take_value(args, i);
+          if (!v)
+          {
+            error("Missing value for --out <path>");
+            exitCode = 2;
+            return o;
+          }
+          o.outPath = std::string(*v);
+        }
+        else if (a.rfind("--out=", 0) == 0)
+        {
+          o.outPath = a.substr(std::string("--out=").size());
+          if (o.outPath.empty())
+          {
+            error("Missing value for --out <path>");
+            exitCode = 2;
+            return o;
+          }
+        }
         else if (a == "--clean")
         {
           o.clean = true;
@@ -892,6 +917,152 @@ namespace vix::commands::BuildCommand
       return false;
     }
 
+    static std::string platform_executable_name(const std::string &name)
+    {
+#ifdef _WIN32
+      if (name.size() >= 4 && name.substr(name.size() - 4) == ".exe")
+        return name;
+      return name + ".exe";
+#else
+      return name;
+#endif
+    }
+
+    static bool is_executable_candidate(const fs::path &p)
+    {
+      std::error_code ec{};
+
+      if (!fs::is_regular_file(p, ec) || ec)
+        return false;
+
+#ifdef _WIN32
+      return p.extension() == ".exe";
+#else
+      const auto perms = fs::status(p, ec).permissions();
+      if (ec)
+        return false;
+
+      using pr = fs::perms;
+      return (perms & pr::owner_exec) != pr::none ||
+             (perms & pr::group_exec) != pr::none ||
+             (perms & pr::others_exec) != pr::none;
+#endif
+    }
+
+    static bool looks_like_test_binary(const fs::path &p)
+    {
+      const std::string n = p.filename().string();
+      return n.find("_test") != std::string::npos ||
+             n.find("_tests") != std::string::npos ||
+             n.rfind("test_", 0) == 0;
+    }
+
+    static std::optional<fs::path> resolve_main_executable(
+        const fs::path &buildDir,
+        const fs::path &projectDir,
+        const std::string &buildTarget)
+    {
+      const std::string preferredBase =
+          !buildTarget.empty()
+              ? buildTarget
+              : projectDir.filename().string();
+
+      const std::string preferredName = platform_executable_name(preferredBase);
+
+      const std::vector<fs::path> preferredPaths = {
+          buildDir / preferredName,
+          buildDir / "bin" / preferredName,
+          buildDir / "src" / preferredName};
+
+      for (const auto &p : preferredPaths)
+      {
+        if (is_executable_candidate(p) && !looks_like_test_binary(p))
+          return p;
+      }
+
+      std::vector<fs::path> candidates;
+      std::error_code ec{};
+
+      for (auto it = fs::recursive_directory_iterator(
+               buildDir,
+               fs::directory_options::skip_permission_denied,
+               ec);
+           !ec && it != fs::recursive_directory_iterator();
+           ++it)
+      {
+        const fs::path p = it->path();
+
+        if (p.string().find("CMakeFiles") != std::string::npos)
+          continue;
+
+        if (!is_executable_candidate(p))
+          continue;
+
+        if (looks_like_test_binary(p))
+          continue;
+
+#ifdef _WIN32
+        const std::string baseName = p.stem().string();
+#else
+        const std::string baseName = p.filename().string();
+#endif
+
+        if (baseName == preferredBase || p.filename().string() == preferredName)
+          return p;
+
+        candidates.push_back(p);
+      }
+
+      if (candidates.size() == 1)
+        return candidates.front();
+
+      return std::nullopt;
+    }
+
+    static bool export_built_binary(
+        const fs::path &sourceExe,
+        const fs::path &destination,
+        bool quiet)
+    {
+      std::error_code ec{};
+
+      fs::path finalDest = destination;
+
+      if (fs::exists(destination, ec) && fs::is_directory(destination, ec))
+        finalDest = destination / sourceExe.filename();
+
+      const fs::path parent = finalDest.parent_path();
+      if (!parent.empty())
+      {
+        fs::create_directories(parent, ec);
+        if (ec)
+        {
+          error("Failed to create output directory: " + parent.string());
+          hint(ec.message());
+          return false;
+        }
+      }
+
+      fs::copy_file(sourceExe, finalDest, fs::copy_options::overwrite_existing, ec);
+      if (ec)
+      {
+        error("Failed to export binary to: " + finalDest.string());
+        hint(ec.message());
+        return false;
+      }
+
+#ifndef _WIN32
+      const auto perms = fs::status(sourceExe, ec).permissions();
+      if (!ec)
+        fs::permissions(finalDest, perms, fs::perm_options::replace, ec);
+#endif
+
+      if (!quiet)
+        success("Exported binary: " + finalDest.string());
+
+      return true;
+    }
+
     class BuildCommand
     {
     public:
@@ -1226,6 +1397,37 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        if (opt_.exportBin || !opt_.outPath.empty())
+        {
+          const auto exeOpt = resolve_main_executable(
+              plan_.buildDir,
+              plan_.projectDir,
+              opt_.buildTarget);
+
+          if (!exeOpt)
+          {
+            error("Unable to resolve the main executable to export.");
+            hint("Use --build-target <name> if your project produces multiple executables.");
+            return 1;
+          }
+
+          fs::path dest;
+          if (opt_.exportBin)
+          {
+            dest = plan_.projectDir / exeOpt->filename();
+          }
+          else
+          {
+            dest = fs::absolute(fs::path(opt_.outPath));
+          }
+
+          if (!export_built_binary(*exeOpt, dest, opt_.quiet))
+            return 1;
+        }
+
+        out.flush_to_stdout();
+        return 0;
+
         out.flush_to_stdout();
         return 0;
       }
@@ -1234,12 +1436,20 @@ namespace vix::commands::BuildCommand
       process::Options opt_;
       process::Plan plan_{};
     };
+
   } // namespace
 
   int run(const std::vector<std::string> &args)
   {
     int parseExit = 0;
     process::Options opt = parse_args_or_exit(args, parseExit);
+
+    if (opt.exportBin && !opt.outPath.empty())
+    {
+      error("Options --bin and --out cannot be used together.");
+      hint("Use either --bin or --out <path>.");
+      return 2;
+    }
 
     if (parseExit == -2)
       return help();
@@ -1279,6 +1489,8 @@ namespace vix::commands::BuildCommand
     out << "  release    -> Ninja + Release (build-release)\n\n";
 
     out << "Options:\n";
+    out << "  --bin                 Export the built executable to the project root\n";
+    out << "  --out <path>          Export the built executable to a specific path\n";
     out << "  --preset <name>       Preset to use (dev, dev-ninja, release)\n";
     out << "  --target <triple>     Cross-compilation target triple (auto toolchain)\n";
     out << "  --sysroot <path>      Sysroot for cross toolchain (optional)\n";
@@ -1319,6 +1531,8 @@ namespace vix::commands::BuildCommand
     out << "  vix build --target aarch64-linux-gnu\n";
     out << "  vix build --preset release --target aarch64-linux-gnu\n";
     out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
+    out << "  vix build --bin\n";
+    out << "  vix build --out dist/runner\n";
     out << "  VIX_BUILD_HEARTBEAT=1 vix build\n";
     out << "  vix build -j 8\n\n";
 

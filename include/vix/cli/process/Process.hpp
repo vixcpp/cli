@@ -154,6 +154,9 @@ namespace vix::cli::process
 
     bool withSqlite = false;
     bool withMySql = false;
+
+    bool exportBin = false;
+    std::string outPath;
   };
 
   /**

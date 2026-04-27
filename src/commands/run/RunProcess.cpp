@@ -95,7 +95,8 @@ namespace vix::commands::RunCommand::detail
       const std::string &spinnerLabel,
       bool passthroughRuntime,
       int timeoutSec,
-      bool useSan)
+      bool useSan,
+      bool captureOnly)
   {
     (void)spinnerLabel;
     (void)passthroughRuntime;
@@ -1092,7 +1093,8 @@ namespace vix::commands::RunCommand::detail
       const std::string &spinnerLabel,
       bool passthroughRuntime,
       int timeoutSec,
-      bool useSan)
+      bool useSan,
+      bool captureOnly)
   {
     SigintGuard sigGuard;
     LiveRunResult result;
@@ -1121,7 +1123,6 @@ namespace vix::commands::RunCommand::detail
     close_safe(pty.slaveFd);
     ::setpgid(pid, pid);
 
-    const bool captureOnly = false;
     const bool forwardStdin =
         passthroughRuntime && (::isatty(STDIN_FILENO) != 0);
 

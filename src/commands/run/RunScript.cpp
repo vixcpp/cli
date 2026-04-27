@@ -920,14 +920,26 @@ namespace vix::commands::RunCommand::detail
               "Compiling script...",
               false,
               0,
-              o.enableSanitizers || o.enableUbsanOnly);
+              o.enableSanitizers || o.enableUbsanOnly,
+              true);
 
           if (build.exitCode != 0)
           {
-            if (!build.failureHandled)
-              handle_runtime_exit_code(build.exitCode, "compile", false);
+            bool handled = false;
 
-            return build.exitCode == 0 ? 1 : build.exitCode;
+            if (!build.stdoutText.empty() || !build.stderrText.empty())
+            {
+              const std::string compileLog = build.stdoutText + build.stderrText;
+              handled = vix::cli::ErrorHandler::printBuildErrors(
+                  compileLog,
+                  directPlan.scriptPath,
+                  "Script compile failed");
+            }
+
+            if (!handled)
+              error("Script compile failed.");
+
+            return build.exitCode != 0 ? build.exitCode : 1;
           }
 
           // Do not rewrite legacy cache metadata here.

@@ -681,7 +681,7 @@ namespace vix::commands::RunCommand::detail
 
       if (interruptedBySigint)
       {
-        hint("ℹ Server interrupted by user (SIGINT).");
+        hint("ℹ Program interrupted by user (SIGINT).");
         return 0;
       }
 

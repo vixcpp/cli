@@ -529,7 +529,8 @@ namespace vix::commands::RunCommand::detail
         "Running script...",
         plan.passthroughRuntime,
         plan.effectiveTimeoutSec,
-        opt.enableSanitizers || opt.enableUbsanOnly);
+        opt.enableSanitizers || opt.enableUbsanOnly,
+        false);
 
     handle_runtime_exit_code(run.exitCode, "run", run.failureHandled);
     return run.exitCode;

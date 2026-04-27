@@ -804,6 +804,8 @@ namespace vix::commands::RunCommand::detail
 
         if (has("terminate called after throwing an instance of"))
           return true;
+        if (has("terminate called without an active exception"))
+          return true;
         if (has("terminating with uncaught exception"))
           return true;
         if (has("libc++abi: terminating with uncaught exception"))
@@ -1052,20 +1054,20 @@ namespace vix::commands::RunCommand::detail
 
       std::string filtered;
 
+      printable = sanitizer.filter_for_print(printable);
+
+      if (!printable.empty())
+        printable = uncaught.filter_for_print(printable);
+
+      if (printable.empty())
+        return;
+
       if (passthroughRuntime)
       {
         filtered = printable;
       }
       else
       {
-        printable = sanitizer.filter_for_print(printable);
-
-        if (!printable.empty())
-          printable = uncaught.filter_for_print(printable);
-
-        if (printable.empty())
-          return;
-
         filtered = runtimeFilter.process(printable);
       }
 

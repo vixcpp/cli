@@ -399,14 +399,8 @@ namespace vix::cli::errors
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
     {
-      (void)runtimeLog;
-
       std::cerr << RED
-                << "runtime error: program failed at runtime"
-                << RESET << "\n";
-
-      std::cerr << YELLOW
-                << "hint: no specialized runtime rule matched this failure"
+                << "runtime error: unclassified runtime failure"
                 << RESET << "\n";
 
       if (!sourceFile.empty())
@@ -414,6 +408,14 @@ namespace vix::cli::errors
         std::cerr << GREEN
                   << "at: source: " << sourceFile.filename().string()
                   << RESET << "\n";
+      }
+
+      if (!runtimeLog.empty())
+      {
+        std::cerr << "\n";
+        std::cerr << runtimeLog;
+        if (runtimeLog.back() != '\n')
+          std::cerr << "\n";
       }
 
       return true;
@@ -1297,11 +1299,25 @@ namespace vix::cli::errors
       const std::filesystem::path &sourceFile,
       [[maybe_unused]] const std::string &contextMessage)
   {
-    if (handleRuntimeAnything(buildLog, sourceFile))
-      return true;
-
     if (handleLinkerErrors(buildLog, sourceFile))
       return true;
+
+    const bool looksRuntime =
+        icontains(buildLog, "AddressSanitizer") ||
+        icontains(buildLog, "UndefinedBehaviorSanitizer") ||
+        icontains(buildLog, "LeakSanitizer") ||
+        icontains(buildLog, "ThreadSanitizer") ||
+        icontains(buildLog, "MemorySanitizer") ||
+        icontains(buildLog, "runtime error:") ||
+        icontains(buildLog, "Segmentation fault") ||
+        icontains(buildLog, "SIGSEGV") ||
+        icontains(buildLog, "SIGABRT") ||
+        icontains(buildLog, "Aborted") ||
+        icontains(buildLog, "terminate called after") ||
+        icontains(buildLog, "what():");
+
+    if (looksRuntime)
+      return handleRuntimeAnything(buildLog, sourceFile);
 
     return false;
   }

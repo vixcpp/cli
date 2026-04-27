@@ -25,23 +25,61 @@
 #endif
 
 #include <sstream>
+#include <string>
+#include <algorithm>
+#include <cctype>
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string trim_copy(std::string s)
+    {
+      while (!s.empty() &&
+             (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
+      {
+        s.pop_back();
+      }
+
+      std::size_t i = 0;
+      while (i < s.size() &&
+             (s[i] == '\n' || s[i] == '\r' || s[i] == ' ' || s[i] == '\t'))
+      {
+        ++i;
+      }
+
+      s.erase(0, i);
+      return s;
+    }
+
+    std::string strip_ansi(std::string s)
+    {
+      static const std::regex ansiRe(R"(\x1B\[[0-9;?]*[ -/]*[@-~])");
+      return std::regex_replace(s, ansiRe, "");
+    }
+  }
+
   std::vector<CompilerError> ClangGccParser::parse(const std::string &buildLog)
   {
     std::vector<CompilerError> out;
 
-    // Example:
+    // GCC / Clang examples:
     // /path/main.cpp:3:5: error: use of undeclared identifier 'std'
     // /path/foo.hpp:1:10: fatal error: 'h.hpp' file not found
-    std::regex re(R"((.+?):(\d+):(\d+):\s*(fatal error|error|warning):\s*(.+))");
+    // /path/main.cpp:2:10: fatal error: huh.hpp: No such file or directory
+    static const std::regex re(
+        R"(^(.+?):([0-9]+):([0-9]+):\s*(fatal error|error|warning):\s*(.+)$)");
 
     std::istringstream iss(buildLog);
     std::string line;
+
     while (std::getline(iss, line))
     {
-      // Ignore make/ninja noise
+      line = strip_ansi(trim_copy(line));
+
+      if (line.empty())
+        continue;
+
       if (line.rfind("gmake", 0) == 0 ||
           line.rfind("make", 0) == 0 ||
           line.rfind("ninja", 0) == 0)
@@ -50,20 +88,21 @@ namespace vix::cli::errors
       }
 
       std::smatch m;
-      if (std::regex_match(line, m, re))
+      if (std::regex_search(line, m, re))
       {
         CompilerError e;
-        e.file = m[1].str();
+        e.file = trim_copy(m[1].str());
         e.line = std::stoi(m[2].str());
         e.column = std::stoi(m[3].str());
-        // m[4] = "fatal error" | "error" | "warning"
-        e.message = m[5].str();
+
+        const std::string severity = m[4].str();
+        const std::string message = trim_copy(m[5].str());
+
+        e.message = severity + ": " + message;
         e.raw = line;
 
-        if (m[4].str() == "error" || m[4].str() == "fatal error")
-        {
+        if (severity == "error" || severity == "fatal error")
           out.push_back(std::move(e));
-        }
       }
     }
 

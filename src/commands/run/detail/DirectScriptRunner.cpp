@@ -477,27 +477,40 @@ namespace vix::commands::RunCommand::detail
           "Compiling script...",
           false,
           0,
-          opt.enableSanitizers || opt.enableUbsanOnly);
+          opt.enableSanitizers || opt.enableUbsanOnly,
+          true);
 
       if (build.exitCode != 0)
       {
+        std::cerr << "[DEBUG NEW VIX] direct compile failure path reached\n";
+        std::cerr << "[DEBUG NEW VIX] exitCode=" << build.exitCode << "\n";
+        std::cerr << "[DEBUG NEW VIX] stdout empty=" << std::boolalpha << build.stdoutText.empty() << "\n";
+        std::cerr << "[DEBUG NEW VIX] stderr empty=" << std::boolalpha << build.stderrText.empty() << "\n";
+
+        bool handled = false;
+
         if (!build.stdoutText.empty() || !build.stderrText.empty())
         {
           const std::string compileLog = build.stdoutText + build.stderrText;
-          const bool handled = vix::cli::ErrorHandler::printBuildErrors(
+
+          std::cerr << "[DEBUG NEW VIX] compileLog size=" << compileLog.size() << "\n";
+          std::cerr << "[DEBUG NEW VIX] calling printBuildErrors(...)\n";
+
+          handled = vix::cli::ErrorHandler::printBuildErrors(
               compileLog,
               plan.scriptPath,
               "Script compile failed");
 
-          if (!handled && !build.printed_live)
-            handle_runtime_exit_code(build.exitCode, "compile", false);
-        }
-        else if (!build.failureHandled && !build.printed_live)
-        {
-          handle_runtime_exit_code(build.exitCode, "compile", false);
+          std::cerr << "[DEBUG NEW VIX] printBuildErrors handled=" << handled << "\n";
         }
 
-        return -build.exitCode;
+        if (!handled)
+        {
+          std::cerr << "[DEBUG NEW VIX] fallback: error(\"Script compile failed.\")\n";
+          error("Script compile failed.");
+        }
+
+        return build.exitCode != 0 ? build.exitCode : 1;
       }
 
       const std::string meta = make_direct_cache_meta(plan.scriptPath, plan);

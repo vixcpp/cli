@@ -470,11 +470,9 @@ namespace vix::commands::RunCommand::detail
 
     if (plan.shouldCompile)
     {
-      info("Direct compile: " + plan.scriptPath.filename().string());
-
       const LiveRunResult build = run_cmd_live_filtered_capture(
           plan.compileCmd,
-          "Compiling script...",
+          "",
           false,
           0,
           opt.enableSanitizers || opt.enableUbsanOnly,
@@ -482,31 +480,20 @@ namespace vix::commands::RunCommand::detail
 
       if (build.exitCode != 0)
       {
-        std::cerr << "[DEBUG NEW VIX] direct compile failure path reached\n";
-        std::cerr << "[DEBUG NEW VIX] exitCode=" << build.exitCode << "\n";
-        std::cerr << "[DEBUG NEW VIX] stdout empty=" << std::boolalpha << build.stdoutText.empty() << "\n";
-        std::cerr << "[DEBUG NEW VIX] stderr empty=" << std::boolalpha << build.stderrText.empty() << "\n";
-
         bool handled = false;
 
         if (!build.stdoutText.empty() || !build.stderrText.empty())
         {
           const std::string compileLog = build.stdoutText + build.stderrText;
 
-          std::cerr << "[DEBUG NEW VIX] compileLog size=" << compileLog.size() << "\n";
-          std::cerr << "[DEBUG NEW VIX] calling printBuildErrors(...)\n";
-
           handled = vix::cli::ErrorHandler::printBuildErrors(
               compileLog,
               plan.scriptPath,
               "Script compile failed");
-
-          std::cerr << "[DEBUG NEW VIX] printBuildErrors handled=" << handled << "\n";
         }
 
         if (!handled)
         {
-          std::cerr << "[DEBUG NEW VIX] fallback: error(\"Script compile failed.\")\n";
           error("Script compile failed.");
         }
 
@@ -515,10 +502,6 @@ namespace vix::commands::RunCommand::detail
 
       const std::string meta = make_direct_cache_meta(plan.scriptPath, plan);
       text::write_text_file(cache.metaFile, meta);
-    }
-    else
-    {
-      success("Using cached direct build");
     }
 
     if (!plan.shouldRun)

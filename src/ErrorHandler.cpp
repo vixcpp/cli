@@ -206,15 +206,6 @@ namespace vix::cli
     const std::string cleanedLog = ::trim_build_preamble(buildLog);
     auto errors = ClangGccParser::parse(cleanedLog);
 
-    std::cerr << "[DEBUG PARSER] errors.size()=" << errors.size() << "\n";
-    for (const auto &e : errors)
-    {
-      std::cerr << "[DEBUG PARSER] file=" << e.file
-                << " line=" << e.line
-                << " col=" << e.column
-                << " msg=" << e.message << "\n";
-    }
-
     if (errors.empty())
     {
       if (handle_unrecognized_cli_option_as_script_runtime_args(cleanedLog))

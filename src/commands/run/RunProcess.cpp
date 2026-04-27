@@ -955,7 +955,7 @@ namespace vix::commands::RunCommand::detail
         ::kill(pid, sig);
     }
 
-    void child_exec_shell(const std::string &cmd, int masterFd, int slaveFd, bool useSan)
+    void child_exec_shell(const std::string &cmd, int masterFd, int slaveFd, bool useSan, bool inheritParentStdin)
     {
       struct sigaction saChild{};
       saChild.sa_handler = SIG_DFL;
@@ -996,7 +996,9 @@ namespace vix::commands::RunCommand::detail
 
       ::close(masterFd);
 
-      ::dup2(slaveFd, STDIN_FILENO);
+      if (!inheritParentStdin)
+        ::dup2(slaveFd, STDIN_FILENO);
+
       ::dup2(slaveFd, STDOUT_FILENO);
       ::dup2(slaveFd, STDERR_FILENO);
 
@@ -1119,14 +1121,20 @@ namespace vix::commands::RunCommand::detail
       return result;
     }
 
+    const bool stdinIsTty = (::isatty(STDIN_FILENO) != 0);
+    const bool inheritParentStdin = passthroughRuntime && !stdinIsTty;
+    bool forwardStdin = passthroughRuntime && stdinIsTty;
+
     if (pid == 0)
-      child_exec_shell(cmd, pty.masterFd, pty.slaveFd, useSan);
+      child_exec_shell(
+          cmd,
+          pty.masterFd,
+          pty.slaveFd,
+          useSan,
+          inheritParentStdin);
 
     close_safe(pty.slaveFd);
     ::setpgid(pid, pid);
-
-    const bool forwardStdin =
-        passthroughRuntime && (::isatty(STDIN_FILENO) != 0);
 
     bool spinnerActive = false;
     std::size_t frameIndex = 0;
@@ -1281,9 +1289,14 @@ namespace vix::commands::RunCommand::detail
         {
           char inbuf[4096];
           const ssize_t n = ::read(STDIN_FILENO, inbuf, sizeof(inbuf));
+
           if (n > 0)
           {
             write_all(pty.masterFd, inbuf, static_cast<std::size_t>(n));
+          }
+          else if (n == 0)
+          {
+            forwardStdin = false;
           }
         }
 

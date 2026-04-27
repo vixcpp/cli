@@ -623,7 +623,7 @@ namespace vix::commands::RunCommand::detail
 
     if (code == 130)
     {
-      hint("ℹ Server interrupted by user (SIGINT).");
+      hint("ℹ Program interrupted by user (SIGINT).");
       return;
     }
 

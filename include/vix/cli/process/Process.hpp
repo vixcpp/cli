@@ -157,6 +157,9 @@ namespace vix::cli::process
 
     bool exportBin = false;
     std::string outPath;
+
+    bool singleCpp = false;
+    fs::path cppFile;
   };
 
   /**

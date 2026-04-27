@@ -620,6 +620,27 @@ namespace vix::commands::RunCommand::detail
     if (out.usesCompiledDeps && !onlyVixIncludesAdded)
       out.compiledDepPaths.push_back(opt.cppFile.parent_path() / ".vix" / "deps");
 
+    const bool requiresFullBuildSystem =
+        out.features.usesOrm ||
+        out.features.usesDb ||
+        out.features.usesMySql ||
+        opt.withSqlite ||
+        opt.withMySql;
+
+    if (requiresFullBuildSystem)
+    {
+      out.strategy = ScriptExecutionStrategy::CMakeFallback;
+      out.fallbackReason = choose_fallback_reason(
+          out.features,
+          out.usesCompiledDeps,
+          out.requiresCMakeTargets,
+          unsupportedFlags);
+
+      out.canUseDirectCompile = false;
+      out.shouldUseCMakeFallback = true;
+      return out;
+    }
+
     const bool allowDirect =
         !unsupportedFlags &&
         (!out.usesCompiledDeps || onlyVixIncludesAdded) &&

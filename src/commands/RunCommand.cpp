@@ -577,7 +577,7 @@ namespace
 
     if (testExit == 130)
     {
-      hint("Stopped (SIGINT).");
+      hint("ℹ Program interrupted by user (SIGINT).");
       return 0;
     }
 
@@ -608,7 +608,7 @@ namespace
 
     if (testExit == 130)
     {
-      hint("Stopped (SIGINT).");
+      hint("ℹ Program interrupted by user (SIGINT).");
       return 0;
     }
 
@@ -665,7 +665,7 @@ namespace
 
     if (runExit == 130)
     {
-      hint("Stopped (SIGINT).");
+      hint("ℹ Program interrupted by user (SIGINT).");
       return 0;
     }
 
@@ -696,7 +696,7 @@ namespace
 
     if (runExit == 130)
     {
-      hint("Stopped (SIGINT).");
+      hint("ℹ Program interrupted by user (SIGINT).");
       return 0;
     }
 
@@ -860,7 +860,7 @@ namespace
       const int buildExit = normalize_exit_code(buildCode);
       if (buildExit == 130)
       {
-        hint("Stopped (SIGINT).");
+        hint("ℹ Program interrupted by user (SIGINT).");
         return 0;
       }
 
@@ -902,7 +902,7 @@ namespace
 
       if (buildExit == 130)
       {
-        hint("Stopped (SIGINT).");
+        hint("ℹ Program interrupted by user (SIGINT).");
         return 0;
       }
 

@@ -556,6 +556,15 @@ namespace vix::commands::RunCommand::detail
     out.features = detect_script_features(opt.cppFile);
     out.usesVixRuntime = out.features.usesVix;
 
+    if (out.features.usesVix)
+    {
+      out.strategy = ScriptExecutionStrategy::CMakeFallback;
+      out.fallbackReason = ScriptFallbackReason::UsesVixRuntime;
+      out.canUseDirectCompile = false;
+      out.shouldUseCMakeFallback = true;
+      return out;
+    }
+
     out.compileFlags = parse_compile_flags(opt.scriptFlags);
     out.linkFlags = parse_link_flags(opt.scriptFlags);
 

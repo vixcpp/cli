@@ -40,12 +40,18 @@
 #include <vix/cli/util/Strings.hpp>
 #include <vix/cli/util/Ui.hpp>
 
+#include <vix/cli/commands/run/detail/ScriptProbe.hpp>
+#include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
+#include <vix/cli/commands/run/detail/ScriptCMake.hpp>
+#include <vix/cli/commands/run/RunDetail.hpp>
+
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
 namespace process = vix::cli::process;
 namespace util = vix::cli::util;
 namespace build = vix::cli::build;
 namespace artifact_cache = vix::cli::cache;
+namespace run_detail = vix::commands::RunCommand::detail;
 
 namespace vix::commands::BuildCommand
 {
@@ -328,6 +334,31 @@ namespace vix::commands::BuildCommand
         else if (a == "--with-mysql")
         {
           o.withMySql = true;
+        }
+        else if (!a.empty() && a[0] != '-')
+        {
+          if (o.singleCpp)
+          {
+            error("Only one single C++ source file can be passed to vix build.");
+            exitCode = 2;
+            return o;
+          }
+
+          fs::path candidate = fs::path(a);
+          if (candidate.extension() == ".cpp" ||
+              candidate.extension() == ".cc" ||
+              candidate.extension() == ".cxx")
+          {
+            o.singleCpp = true;
+            o.cppFile = fs::absolute(candidate);
+          }
+          else
+          {
+            error("Unknown positional argument: " + a);
+            hint("For single-file mode, pass a .cpp file.");
+            exitCode = 2;
+            return o;
+          }
         }
         else if (a.rfind("--preset=", 0) == 0)
         {
@@ -1072,6 +1103,9 @@ namespace vix::commands::BuildCommand
       {
         const fs::path cwd = fs::current_path();
 
+        if (opt_.singleCpp)
+          return run_single_cpp_build();
+
         const auto planOpt = make_plan(opt_, cwd);
         if (!planOpt)
         {
@@ -1433,6 +1467,9 @@ namespace vix::commands::BuildCommand
       }
 
     private:
+      int run_single_cpp_build();
+
+    private:
       process::Options opt_;
       process::Plan plan_{};
     };
@@ -1465,6 +1502,76 @@ namespace vix::commands::BuildCommand
 
     BuildCommand cmd(std::move(opt));
     return cmd.run();
+  }
+
+  int BuildCommand::run_single_cpp_build()
+  {
+    if (opt_.cppFile.empty())
+    {
+      error("No C++ source file provided.");
+      return 1;
+    }
+
+    if (!fs::exists(opt_.cppFile))
+    {
+      error("Source file not found: " + opt_.cppFile.string());
+      return 1;
+    }
+
+    if (!opt_.exportBin && opt_.outPath.empty())
+    {
+      error("Single-file build requires --bin or --out <path>.");
+      hint("Example: vix build main.cpp --out app.exe");
+      return 2;
+    }
+
+    run_detail::Options runOpt{};
+    runOpt.singleCpp = true;
+    runOpt.cppFile = fs::absolute(opt_.cppFile);
+
+    runOpt.preset = opt_.preset;
+    runOpt.dir = opt_.dir;
+    runOpt.jobs = opt_.jobs;
+    runOpt.clean = opt_.clean;
+
+    runOpt.quiet = opt_.quiet;
+    runOpt.verbose = opt_.verbose;
+
+    runOpt.withSqlite = opt_.withSqlite;
+    runOpt.withMySql = opt_.withMySql;
+
+    runOpt.enableSanitizers = false;
+    runOpt.enableUbsanOnly = false;
+
+    runOpt.forceServerLike = false;
+    runOpt.forceScriptLike = true;
+
+    runOpt.watch = false;
+    runOpt.timeoutSec = 0;
+    runOpt.cwd.clear();
+
+    runOpt.runArgs.clear();
+    runOpt.runEnv.clear();
+    runOpt.scriptFlags = opt_.cmakeArgs;
+
+    fs::path exePath;
+    const int code = run_detail::build_script_executable(runOpt, exePath);
+    if (code != 0)
+      return code;
+
+    if (exePath.empty() || !fs::exists(exePath))
+    {
+      error("Built executable was not produced.");
+      return 1;
+    }
+
+    fs::path dest;
+    if (opt_.exportBin)
+      dest = fs::current_path() / exePath.filename();
+    else
+      dest = fs::absolute(fs::path(opt_.outPath));
+
+    return export_built_binary(exePath, dest, opt_.quiet) ? 0 : 1;
   }
 
   int help()

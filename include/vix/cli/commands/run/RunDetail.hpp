@@ -641,6 +641,13 @@ namespace vix::commands::RunCommand::detail
   int run_single_cpp(const Options &opt);
 
   /**
+   * @brief Build a single C++ script and return the produced executable path.
+   *
+   * This uses the same script engine as `vix run`, but stops after build.
+   */
+  int build_script_executable(const Options &opt, fs::path &exePath);
+
+  /**
    * @brief Execute a single C++ file with the fast direct-compile engine.
    */
   int run_single_cpp_direct(const Options &opt, const DirectScriptPlan &plan);

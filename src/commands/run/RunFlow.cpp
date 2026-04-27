@@ -362,6 +362,7 @@ namespace vix::commands::RunCommand::detail
   {
     Options opt;
     Zone zone = Zone::Vix;
+    bool afterTarget = false;
 
     for (std::size_t i = 0; i < args.size(); ++i)
     {
@@ -597,10 +598,24 @@ namespace vix::commands::RunCommand::detail
       }
       else if (!a.empty() && a[0] != '-')
       {
-        handle_positional_argument(opt, a);
+        if (!afterTarget)
+        {
+          handle_positional_argument(opt, a);
+          afterTarget = true;
+        }
+        else
+        {
+          opt.runArgs.push_back(a);
+        }
       }
       else if (!a.empty() && a[0] == '-')
       {
+        if (afterTarget)
+        {
+          opt.runArgs.push_back(a);
+          continue;
+        }
+
         error("Unknown option: " + a);
         hint("Use: vix run --help");
         opt.parseFailed = true;

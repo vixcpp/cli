@@ -44,6 +44,21 @@ namespace
   using vix::commands::RunCommand::detail::LiveRunResult;
   using vix::commands::RunCommand::detail::Options;
 
+  enum class RunTargetKind
+  {
+    Binary,
+    Script,
+    Project,
+    Container,
+    Unknown
+  };
+
+  struct RunTarget
+  {
+    RunTargetKind kind{RunTargetKind::Unknown};
+    fs::path path{};
+  };
+
   bool should_clear_terminal_now()
   {
     return false;
@@ -1166,6 +1181,271 @@ namespace
     return 0;
   }
 
+  static std::optional<std::filesystem::path> find_local_binary()
+  {
+    namespace fs = std::filesystem;
+
+    std::vector<fs::path> candidates;
+
+    for (auto &p : fs::directory_iterator(fs::current_path()))
+    {
+      if (!p.is_regular_file())
+        continue;
+
+      if (!is_executable_file(p.path()))
+        continue;
+
+      if (looks_like_test_binary(p.path()))
+        continue;
+
+      candidates.push_back(p.path());
+    }
+
+    if (candidates.empty())
+      return std::nullopt;
+
+    const std::string cwdName = fs::current_path().filename().string();
+
+    for (const auto &c : candidates)
+    {
+      if (c.filename() == cwdName)
+        return c;
+    }
+
+    std::vector<fs::path> filtered;
+
+    for (const auto &c : candidates)
+    {
+      const std::string name = c.filename().string();
+
+      if (name.find("test") != std::string::npos)
+        continue;
+
+      if (name.find("bench") != std::string::npos)
+        continue;
+
+      filtered.push_back(c);
+    }
+
+    if (filtered.size() == 1)
+      return filtered[0];
+
+    if (!filtered.empty())
+      return filtered[0];
+
+    return candidates[0];
+  }
+
+  static std::optional<fs::path> read_last_binary()
+  {
+    const fs::path metaFile = fs::current_path() / ".vix" / "meta.json";
+
+    std::ifstream in(metaFile);
+    if (!in)
+      return std::nullopt;
+
+    std::string line;
+    while (std::getline(in, line))
+    {
+      const auto pos = line.find("\"last_binary\"");
+      if (pos == std::string::npos)
+        continue;
+
+      const auto q1 = line.find('"', pos + 13);
+      if (q1 == std::string::npos)
+        continue;
+
+      const auto q2 = line.find('"', q1 + 1);
+      if (q2 == std::string::npos)
+        continue;
+
+      fs::path p = line.substr(q1 + 1, q2 - q1 - 1);
+
+      if (p.is_relative())
+        p = fs::current_path() / p;
+
+      return p;
+    }
+
+    return std::nullopt;
+  }
+
+  static RunTarget resolve_target(const Options &opt)
+  {
+    RunTarget t;
+
+    if (!opt.appName.empty())
+    {
+      const std::string &name = opt.appName;
+
+      // =========================
+      // Container runtimes
+      // =========================
+      if (name.rfind("docker://", 0) == 0 ||
+          name.rfind("container://", 0) == 0)
+      {
+        t.kind = RunTargetKind::Container;
+        t.path = name;
+        return t;
+      }
+
+      // =========================
+      // SSH
+      // =========================
+      if (name.rfind("ssh://", 0) == 0)
+      {
+        t.kind = RunTargetKind::Container;
+        t.path = name;
+        return t;
+      }
+
+      // =========================
+      // HTTP
+      // =========================
+      if (name.rfind("http://", 0) == 0 ||
+          name.rfind("https://", 0) == 0)
+      {
+        t.kind = RunTargetKind::Container;
+        t.path = name;
+        return t;
+      }
+    }
+
+    if (!opt.appName.empty())
+    {
+      fs::path p = opt.appName;
+
+      if (fs::exists(p))
+      {
+        if (fs::is_regular_file(p))
+        {
+          if (p.extension() == ".cpp")
+          {
+            t.kind = RunTargetKind::Script;
+            t.path = p;
+            return t;
+          }
+
+          if (is_executable_file(p))
+          {
+            t.kind = RunTargetKind::Binary;
+            t.path = p;
+            return t;
+          }
+        }
+
+        if (fs::is_directory(p))
+        {
+          t.kind = RunTargetKind::Project;
+          t.path = p;
+          return t;
+        }
+      }
+    }
+
+    if (auto bin = read_last_binary())
+    {
+      if (fs::exists(*bin))
+      {
+        t.kind = RunTargetKind::Binary;
+        t.path = *bin;
+        return t;
+      }
+    }
+
+    if (fs::exists("CMakeLists.txt"))
+    {
+      t.kind = RunTargetKind::Project;
+      t.path = fs::current_path();
+      return t;
+    }
+
+    if (auto bin = find_local_binary())
+    {
+      t.kind = RunTargetKind::Binary;
+      t.path = *bin;
+      return t;
+    }
+
+    return t;
+  }
+
+  static int run_container_target(const std::string &raw, const Options &opt)
+  {
+#ifndef _WIN32
+
+    auto join_args = [&](const std::vector<std::string> &args)
+    {
+      std::string out;
+      for (const auto &a : args)
+      {
+        out += " ";
+        out += a;
+      }
+      return out;
+    };
+
+    // =========================
+    // docker:// / container://
+    // =========================
+    if (raw.rfind("docker://", 0) == 0 ||
+        raw.rfind("container://", 0) == 0)
+    {
+      std::string image = raw.substr(raw.find("://") + 3);
+
+      const auto space = image.find(' ');
+      if (space != std::string::npos)
+        image = image.substr(0, space);
+
+      if (image.empty())
+      {
+        error("Invalid container image.");
+        return 1;
+      }
+
+      std::string cmd =
+          "docker run -it --rm " +
+          join_args(opt.runArgs) + " " +
+          image;
+
+      return std::system(cmd.c_str());
+    }
+
+    // =========================
+    // ssh://
+    // =========================
+    if (raw.rfind("ssh://", 0) == 0)
+    {
+      std::string target = raw.substr(6);
+
+      std::string cmd =
+          "ssh " + target +
+          join_args(opt.runArgs);
+
+      return std::system(cmd.c_str());
+    }
+
+    // =========================
+    // http://
+    // =========================
+    if (raw.rfind("http://", 0) == 0 ||
+        raw.rfind("https://", 0) == 0)
+    {
+      std::string cmd =
+          "curl -L " + raw +
+          join_args(opt.runArgs);
+
+      return std::system(cmd.c_str());
+    }
+
+    error("Unknown runtime target: " + raw);
+    return 1;
+
+#else
+    error("Container runtime not supported on Windows yet.");
+    return 1;
+#endif
+  }
 } // namespace
 
 namespace vix::commands::RunCommand
@@ -1228,6 +1508,41 @@ namespace vix::commands::RunCommand
     if (opt.singleCpp)
       return run_script_mode(opt);
 
+    const RunTarget target = resolve_target(opt);
+
+    switch (target.kind)
+    {
+    case RunTargetKind::Binary:
+      return run_executable_direct(
+          target.path,
+          opt,
+          "Execution failed",
+          detail::effective_timeout_sec(opt));
+
+    case RunTargetKind::Script:
+      opt.singleCpp = true;
+      opt.cppFile = target.path;
+      return run_script_mode(opt);
+
+    case RunTargetKind::Container:
+      return run_container_target(target.path.string(), opt);
+
+    case RunTargetKind::Project:
+    {
+      const fs::path projectDir = target.path.empty()
+                                      ? fs::current_path()
+                                      : target.path;
+
+      if (has_presets(projectDir))
+        return run_project_with_presets(projectDir, opt, ui_enabled());
+
+      return run_project_fallback(projectDir, opt, ui_enabled());
+    }
+
+    default:
+      break;
+    }
+
     const fs::path cwd = fs::current_path();
     auto projectDirOpt = choose_project_dir(opt, cwd);
     if (!projectDirOpt)
@@ -1267,36 +1582,55 @@ namespace vix::commands::RunCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix run [name|file.cpp|manifest.vix] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
+    out << "  vix run [name|file.cpp|manifest.vix|binary|runtime] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
 
     out << "What it does:\n";
-    out << "  Build + run a Vix.cpp app.\n";
-    out << "  This command supports 3 inputs:\n";
-    out << "    1) project name   (vix run api)\n";
-    out << "    2) single script  (vix run main.cpp)\n";
-    out << "    3) manifest file  (vix run app.vix)\n\n";
+    out << "  Build + run a Vix.cpp app or execute a runtime target.\n";
+    out << "  This command supports:\n";
+    out << "    1) project name     (vix run api)\n";
+    out << "    2) single script    (vix run main.cpp)\n";
+    out << "    3) manifest file    (vix run app.vix)\n";
+    out << "    4) binary           (vix run ./app)\n";
+    out << "    5) runtime targets  (docker://, ssh://, http://)\n\n";
 
     out << "Modes:\n";
     out << "  Project mode:\n";
     out << "    • Finds a CMake project (auto or via --dir)\n";
     out << "    • Uses CMake presets when available (recommended)\n\n";
+
     out << "  Script mode (.cpp):\n";
     out << "    • Compiles one .cpp file and runs it\n";
     out << "    • Everything after `--` is compiler/linker flags (NOT runtime args)\n";
     out << "    • Use `--run` to pass runtime args (argv) to the script\n\n";
+
     out << "  Manifest mode (.vix):\n";
     out << "    • Loads a .vix file then merges CLI options on top\n";
     out << "    • If [app].kind=\"project\", it behaves like project mode\n";
     out << "    • If [app].kind=\"script\", it behaves like script mode\n\n";
 
+    out << "  Runtime targets:\n";
+    out << "    • docker://image         Run container via Docker\n";
+    out << "    • container://image      Alias for docker://\n";
+    out << "    • ssh://user@host        Execute remote command via SSH\n";
+    out << "    • http://url             Fetch URL via curl\n\n";
+
+    out << "    • After a runtime target, all arguments are forwarded automatically\n";
+    out << "      to the underlying runtime.\n";
+    out << "      Example:\n";
+    out << "        vix run docker://nginx -p 8080:80\n\n";
+
     out << "Most common mistakes:\n";
     out << "  1) Passing runtime args after `--` (wrong)\n";
     out << "     vix run main.cpp -- --port 8080\n";
     out << "     # `--port` is treated as a compiler flag.\n\n";
+
     out << "  2) Correct way: use `--run` for runtime args\n";
     out << "     vix run main.cpp --run --port 8080\n";
     out << "     # Alternative: repeatable --args\n";
     out << "     # vix run main.cpp --args --port --args 8080\n\n";
+
+    out << "  3) Runtime targets do NOT require --run\n";
+    out << "     vix run docker://nginx -p 8080:80\n\n";
 
     out << "Options:\n";
     out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
@@ -1369,6 +1703,12 @@ namespace vix::commands::RunCommand
     out << "  vix run main.cpp -- -O2 -DNDEBUG --run hello 123\n";
     out << "  vix run main.cpp -- -lssl -lcrypto\n\n";
 
+    out << "  # Runtime targets\n";
+    out << "  vix run docker://nginx\n";
+    out << "  vix run docker://nginx -p 8080:80\n";
+    out << "  vix run ssh://localhost echo hello\n";
+    out << "  vix run http://example.com\n\n";
+
     out << "  # Manifest mode (.vix)\n";
     out << "  vix run app.vix\n";
     out << "  vix run app.vix --args --port --args 8080\n";
@@ -1379,14 +1719,13 @@ namespace vix::commands::RunCommand
     out << "  vix run example now_server\n\n";
 
     out << "Environment:\n";
-    out << "  VIX_DOCS        0|1             Enable or disable auto docs\n";
+    out << "  VIX_DOCS        0|1\n";
     out << "  VIX_LOG_LEVEL   trace|debug|info|warn|error|critical|off\n";
     out << "  VIX_LOG_FORMAT  kv|json|json-pretty\n";
-    out << "  VIX_COLOR       auto|always|never   (NO_COLOR disables colors)\n";
-    out << "  VIX_STDOUT_MODE line               Used by CLI for smoother live output\n";
-    out << "  VIX_CLI_CLEAR   auto|always|never   Clear terminal before runtime output\n\n";
+    out << "  VIX_COLOR       auto|always|never\n";
+    out << "  VIX_STDOUT_MODE line\n";
+    out << "  VIX_CLI_CLEAR   auto|always|never\n\n";
 
     return 0;
   }
-
 } // namespace vix::commands::RunCommand

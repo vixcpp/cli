@@ -592,6 +592,37 @@ namespace vix::commands::RunCommand::detail
       }
     };
 
+    std::string rtrim_copy(std::string s)
+    {
+      while (!s.empty() &&
+             (s.back() == ' ' || s.back() == '\t' ||
+              s.back() == '\n' || s.back() == '\r'))
+      {
+        s.pop_back();
+      }
+      return s;
+    }
+
+    bool looks_like_prompt_fragment(const std::string &chunk)
+    {
+      if (chunk.empty())
+        return false;
+
+      if (chunk.find('\n') != std::string::npos ||
+          chunk.find('\r') != std::string::npos)
+      {
+        return false;
+      }
+
+      const std::string trimmed = rtrim_copy(chunk);
+
+      return trimmed == ">" ||
+             trimmed == "$" ||
+             trimmed == "#" ||
+             trimmed == ">>>" ||
+             trimmed == "...";
+    }
+
     struct CMakeNoiseFilter
     {
       std::string carry;
@@ -763,6 +794,13 @@ namespace vix::commands::RunCommand::detail
           if (nl == std::string::npos)
           {
             carry = data.substr(start);
+
+            if (!inReport && looks_like_prompt_fragment(carry))
+            {
+              out += carry;
+              carry.clear();
+            }
+
             break;
           }
 
@@ -854,6 +892,13 @@ namespace vix::commands::RunCommand::detail
           if (nl == std::string::npos)
           {
             carry = data.substr(start);
+
+            if (looks_like_prompt_fragment(carry))
+            {
+              out += carry;
+              carry.clear();
+            }
+
             break;
           }
 
@@ -1053,6 +1098,19 @@ namespace vix::commands::RunCommand::detail
 
       if (useSan)
         return;
+
+      if (passthroughRuntime && looks_like_prompt_fragment(printable))
+      {
+        if (!captureOnly)
+        {
+          write_all(STDOUT_FILENO, printable.data(), printable.size());
+          printedSomething = true;
+          printedRealOutput = true;
+          result.printed_live = true;
+          lastPrintedChar = printable.back();
+        }
+        return;
+      }
 
       std::string filtered;
 

@@ -1640,6 +1640,11 @@ namespace vix::commands::BuildCommand
     out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
     out << "  vix build --bin\n";
     out << "  vix build --out dist/runner\n";
+    out << "  vix build main.cpp --bin\n";
+    out << "  vix build main.cpp --out app\n";
+    out << "  vix build main.cpp --with-sqlite --out app\n";
+    out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
+    out << "  vix build main.cpp --target aarch64-linux-gnu --out app\n";
     out << "  VIX_BUILD_HEARTBEAT=1 vix build\n";
     out << "  vix build -j 8\n\n";
 

@@ -1050,6 +1050,26 @@ namespace vix::commands::BuildCommand
       return std::nullopt;
     }
 
+    static void write_last_binary(const fs::path &path)
+    {
+      const fs::path metaDir = fs::current_path() / ".vix";
+      const fs::path metaFile = metaDir / "meta.json";
+
+      std::error_code ec;
+      fs::create_directories(metaDir, ec);
+
+      if (ec)
+        return;
+
+      std::ofstream out(metaFile);
+      if (!out)
+        return;
+
+      out << "{\n";
+      out << "  \"last_binary\": \"" << path.string() << "\"\n";
+      out << "}\n";
+    }
+
     static bool export_built_binary(
         const fs::path &sourceExe,
         const fs::path &destination,
@@ -1091,9 +1111,11 @@ namespace vix::commands::BuildCommand
       if (!quiet)
         success("Exported binary: " + finalDest.string());
 
+      // ✅ AJOUT ICI
+      write_last_binary(finalDest);
+
       return true;
     }
-
     class BuildCommand
     {
     public:
@@ -1474,6 +1496,40 @@ namespace vix::commands::BuildCommand
       process::Plan plan_{};
     };
 
+    static std::optional<fs::path> find_last_built_binary()
+    {
+      namespace fs = std::filesystem;
+
+      const fs::path meta = fs::current_path() / ".vix" / "meta.json";
+
+      if (!fs::exists(meta))
+        return std::nullopt;
+
+      std::ifstream f(meta);
+      if (!f)
+        return std::nullopt;
+
+      std::string content((std::istreambuf_iterator<char>(f)),
+                          std::istreambuf_iterator<char>());
+
+      const std::string key = "\"last_binary\":\"";
+      auto pos = content.find(key);
+      if (pos == std::string::npos)
+        return std::nullopt;
+
+      pos += key.size();
+      auto end = content.find("\"", pos);
+      if (end == std::string::npos)
+        return std::nullopt;
+
+      fs::path p = content.substr(pos, end - pos);
+
+      if (fs::exists(p))
+        return p;
+
+      return std::nullopt;
+    }
+
   } // namespace
 
   int run(const std::vector<std::string> &args)
@@ -1518,11 +1574,11 @@ namespace vix::commands::BuildCommand
       return 1;
     }
 
+    // Default behavior: if building a single file and no output option is provided,
+    // fallback to --bin automatically.
     if (!opt_.exportBin && opt_.outPath.empty())
     {
-      error("Single-file build requires --bin or --out <path>.");
-      hint("Example: vix build main.cpp --out app.exe");
-      return 2;
+      opt_.exportBin = true;
     }
 
     run_detail::Options runOpt{};

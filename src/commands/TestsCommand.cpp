@@ -290,13 +290,6 @@ namespace
     return std::nullopt;
   }
 
-  static bool has_flag(
-      const std::vector<std::string> &args,
-      const std::string &flag)
-  {
-    return std::find(args.begin(), args.end(), flag) != args.end();
-  }
-
   static std::string resolve_preset_name(const vix::commands::TestsCommand::detail::Options &opt)
   {
     if (auto p = value_after_flag(opt.forwarded, "--preset"))

@@ -72,7 +72,7 @@ namespace vix::cli::errors::template_rules
       const std::string &m = err.message;
 
       return icontains(m, "wrong number of template arguments") ||
-             icontains(m, "template argument") && icontains(m, "invalid") ||
+             (icontains(m, "template argument") && icontains(m, "invalid")) ||
              icontains(m, "type/value mismatch at argument") ||
              icontains(m, "expected a type, got") ||
              icontains(m, "expected a constant of type") ||

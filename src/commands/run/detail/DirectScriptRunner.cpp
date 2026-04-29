@@ -110,8 +110,9 @@ namespace vix::commands::RunCommand::detail
       constexpr std::uint64_t prime = 1099511628211ull;
 
       std::uint64_t h = offset;
-      for (unsigned char c : input)
+      for (char ch : input)
       {
+        const auto c = static_cast<unsigned char>(ch);
         h ^= static_cast<std::uint64_t>(c);
         h *= prime;
       }
@@ -265,9 +266,9 @@ namespace vix::commands::RunCommand::detail
         if (const auto pch = find_vix_pch())
           cmd << " -include-pch " << process::quote(pch->string());
 
-        if (const auto lib = find_vix_lib())
+        if (const auto vixLib = find_vix_lib())
         {
-          cmd << " " << process::quote(lib->string());
+          cmd << " " << process::quote(vixLib->string());
         }
         else
         {
@@ -277,8 +278,8 @@ namespace vix::commands::RunCommand::detail
 #ifndef __APPLE__
             cmd << " -Wl,--start-group";
 #endif
-            for (const auto &lib : libs)
-              cmd << " " << process::quote(lib.string());
+            for (const auto &moduleLib : libs)
+              cmd << " " << process::quote(moduleLib.string());
 #ifndef __APPLE__
             cmd << " -Wl,--end-group";
 #endif

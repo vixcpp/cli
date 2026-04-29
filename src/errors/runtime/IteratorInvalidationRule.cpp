@@ -41,9 +41,9 @@ namespace vix::cli::errors::runtime
              icontains(log, "attempt to dereference a singular iterator") ||
              icontains(log, "attempt to increment a singular iterator") ||
              icontains(log, "attempt to compare a singular iterator") ||
-             icontains(log, "vector iterator") && icontains(log, "invalid") ||
-             icontains(log, "deque iterator") && icontains(log, "invalid") ||
-             icontains(log, "list iterator") && icontains(log, "invalid");
+             (icontains(log, "vector iterator") && icontains(log, "invalid")) ||
+             (icontains(log, "deque iterator") && icontains(log, "invalid")) ||
+             (icontains(log, "list iterator") && icontains(log, "invalid"));
     }
 
     bool handle(

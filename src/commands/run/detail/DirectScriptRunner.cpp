@@ -27,6 +27,10 @@
 #include <string>
 #include <system_error>
 
+#ifndef _WIN32
+#include <signal.h>
+#endif
+
 namespace vix::commands::RunCommand::detail
 {
   namespace process = vix::cli::commands::helpers;
@@ -62,6 +66,19 @@ namespace vix::commands::RunCommand::detail
       return "";
 #endif
     }
+
+#ifndef _WIN32
+    bool is_user_interrupt_result(const LiveRunResult &result) noexcept
+    {
+      return result.exitCode == 130 ||
+             (result.terminatedBySignal && result.termSignal == SIGINT);
+    }
+#else
+    bool is_user_interrupt_result(const LiveRunResult &result) noexcept
+    {
+      return result.exitCode == 130;
+    }
+#endif
 
     /**
      * @brief Return a filesystem-safe executable name.
@@ -515,6 +532,12 @@ namespace vix::commands::RunCommand::detail
         plan.effectiveTimeoutSec,
         opt.enableSanitizers || opt.enableUbsanOnly,
         false);
+
+    if (is_user_interrupt_result(run))
+    {
+      hint("ℹ Program interrupted by user (SIGINT).");
+      return 0;
+    }
 
     handle_runtime_exit_code(run.exitCode, "run", run.failureHandled);
     return run.exitCode;

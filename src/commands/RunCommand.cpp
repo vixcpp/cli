@@ -555,8 +555,16 @@ namespace
     if (opt.singleCpp)
     {
       int rc = vix::commands::RunCommand::detail::run_single_cpp(opt);
+
+      if (rc == 130)
+      {
+        hint("ℹ Program interrupted by user (SIGINT).");
+        return 0;
+      }
+
       if (rc < 0)
         return -rc;
+
       return rc;
     }
 

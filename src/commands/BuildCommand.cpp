@@ -1050,9 +1050,58 @@ namespace vix::commands::BuildCommand
       return std::nullopt;
     }
 
+    static fs::path vix_home_dir()
+    {
+#ifdef _WIN32
+      const char *home = std::getenv("USERPROFILE");
+#else
+      const char *home = std::getenv("HOME");
+#endif
+
+      if (home && *home)
+      {
+        return fs::path(home) / ".vix";
+      }
+
+      return fs::current_path() / ".vix";
+    }
+
+    static std::string json_escape_string(const std::string &value)
+    {
+      std::string out;
+      out.reserve(value.size());
+
+      for (char c : value)
+      {
+        switch (c)
+        {
+        case '\\':
+          out += "\\\\";
+          break;
+        case '"':
+          out += "\\\"";
+          break;
+        case '\n':
+          out += "\\n";
+          break;
+        case '\r':
+          out += "\\r";
+          break;
+        case '\t':
+          out += "\\t";
+          break;
+        default:
+          out += c;
+          break;
+        }
+      }
+
+      return out;
+    }
+
     static void write_last_binary(const fs::path &path)
     {
-      const fs::path metaDir = fs::current_path() / ".vix";
+      const fs::path metaDir = vix_home_dir();
       const fs::path metaFile = metaDir / "meta.json";
 
       std::error_code ec;
@@ -1066,7 +1115,9 @@ namespace vix::commands::BuildCommand
         return;
 
       out << "{\n";
-      out << "  \"last_binary\": \"" << path.string() << "\"\n";
+      out << "  \"last_binary\": \""
+          << json_escape_string(fs::absolute(path).string())
+          << "\"\n";
       out << "}\n";
     }
 

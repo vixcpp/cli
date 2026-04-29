@@ -75,7 +75,7 @@ namespace vix::cli::errors::template_rules
              (icontains(m, "requires") && icontains(m, "invalid")) ||
              icontains(m, "required expression") ||
              icontains(m, "required type") ||
-             icontains(m, "required from here") && icontains(m, "requires") ||
+             (icontains(m, "required from here") && icontains(m, "requires")) ||
              icontains(m, "would be invalid") ||
              icontains(m, "does not satisfy return-type-requirement");
     }

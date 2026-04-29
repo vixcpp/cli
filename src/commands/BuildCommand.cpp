@@ -1496,40 +1496,6 @@ namespace vix::commands::BuildCommand
       process::Plan plan_{};
     };
 
-    static std::optional<fs::path> find_last_built_binary()
-    {
-      namespace fs = std::filesystem;
-
-      const fs::path meta = fs::current_path() / ".vix" / "meta.json";
-
-      if (!fs::exists(meta))
-        return std::nullopt;
-
-      std::ifstream f(meta);
-      if (!f)
-        return std::nullopt;
-
-      std::string content((std::istreambuf_iterator<char>(f)),
-                          std::istreambuf_iterator<char>());
-
-      const std::string key = "\"last_binary\":\"";
-      auto pos = content.find(key);
-      if (pos == std::string::npos)
-        return std::nullopt;
-
-      pos += key.size();
-      auto end = content.find("\"", pos);
-      if (end == std::string::npos)
-        return std::nullopt;
-
-      fs::path p = content.substr(pos, end - pos);
-
-      if (fs::exists(p))
-        return p;
-
-      return std::nullopt;
-    }
-
   } // namespace
 
   int run(const std::vector<std::string> &args)

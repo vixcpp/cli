@@ -238,24 +238,6 @@ namespace vix::commands
       return 0;
     }
 
-    bool lock_contains_dependency_id(const json &lock, const std::string &wantedId)
-    {
-      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
-      {
-        return false;
-      }
-
-      for (const auto &d : lock["dependencies"])
-      {
-        if (d.value("id", "") == wantedId)
-        {
-          return true;
-        }
-      }
-
-      return false;
-    }
-
     std::string read_locked_version(const json &lock, const std::string &id)
     {
       if (!lock.contains("dependencies") || !lock["dependencies"].is_array())

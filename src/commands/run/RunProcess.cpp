@@ -1015,7 +1015,7 @@ namespace vix::commands::RunCommand::detail
         struct termios tty{};
         if (::tcgetattr(slaveFd, &tty) == 0)
         {
-          tty.c_lflag &= ~ECHO;
+          tty.c_lflag &= static_cast<tcflag_t>(~ECHO);
           ::tcsetattr(slaveFd, TCSANOW, &tty);
         }
       }

@@ -73,7 +73,7 @@ namespace vix::cli::errors::template_rules
 
       return icontains(m, "constraints not satisfied") ||
              icontains(m, "constraint failure") ||
-             icontains(m, "concept") && icontains(m, "not satisfied") ||
+             (icontains(m, "concept") && icontains(m, "not satisfied")) ||
              icontains(m, "requirements not satisfied") ||
              icontains(m, "does not satisfy") ||
              icontains(m, "failed requirement");

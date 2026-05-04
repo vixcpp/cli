@@ -1591,13 +1591,6 @@ namespace vix::commands::BuildCommand
       return 1;
     }
 
-    // Default behavior: if building a single file and no output option is provided,
-    // fallback to --bin automatically.
-    if (!opt_.exportBin && opt_.outPath.empty())
-    {
-      opt_.exportBin = true;
-    }
-
     run_detail::Options runOpt{};
     runOpt.singleCpp = true;
     runOpt.cppFile = fs::absolute(opt_.cppFile);
@@ -1639,10 +1632,15 @@ namespace vix::commands::BuildCommand
     }
 
     fs::path dest;
-    if (opt_.exportBin)
-      dest = fs::current_path() / exePath.filename();
-    else
+
+    if (!opt_.outPath.empty())
+    {
       dest = fs::absolute(fs::path(opt_.outPath));
+    }
+    else
+    {
+      dest = fs::current_path() / exePath.filename();
+    }
 
     return export_built_binary(exePath, dest, opt_.quiet) ? 0 : 1;
   }

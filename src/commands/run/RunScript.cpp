@@ -285,6 +285,87 @@ namespace vix::commands::RunCommand::detail
       return false;
     }
 
+    std::vector<std::string> extract_script_include_prefixes_for_autodeps(const fs::path &cppPath)
+    {
+      std::vector<std::string> prefixes;
+
+      std::ifstream ifs(cppPath);
+      if (!ifs)
+        return prefixes;
+
+      std::string line;
+      while (std::getline(ifs, line))
+      {
+        const auto incPos = line.find("#include");
+        if (incPos == std::string::npos)
+          continue;
+
+        std::size_t start = line.find('<', incPos);
+        char closer = '>';
+
+        if (start == std::string::npos)
+        {
+          start = line.find('"', incPos);
+          closer = '"';
+        }
+
+        if (start == std::string::npos)
+          continue;
+
+        const std::size_t end = line.find(closer, start + 1);
+        if (end == std::string::npos || end <= start + 1)
+          continue;
+
+        std::string inc = line.substr(start + 1, end - start - 1);
+        if (inc.empty())
+          continue;
+
+        const auto slash = inc.find('/');
+        const std::string prefix = slash == std::string::npos
+                                       ? inc
+                                       : inc.substr(0, slash);
+
+        if (!prefix.empty())
+          prefixes.push_back(prefix);
+      }
+
+      std::sort(prefixes.begin(), prefixes.end());
+      prefixes.erase(std::unique(prefixes.begin(), prefixes.end()), prefixes.end());
+
+      return prefixes;
+    }
+
+    bool script_may_use_dep_id(const std::vector<std::string> &includePrefixes,
+                               const std::string &depId)
+    {
+      if (includePrefixes.empty() || depId.empty())
+        return false;
+
+      std::string normalized = depId;
+      normalized.erase(std::remove(normalized.begin(), normalized.end(), '@'), normalized.end());
+
+      const auto slash = normalized.find('/');
+      const std::string namespacePart =
+          slash == std::string::npos ? normalized : normalized.substr(0, slash);
+
+      const std::string packagePart =
+          slash == std::string::npos ? normalized : normalized.substr(slash + 1);
+
+      for (const auto &prefix : includePrefixes)
+      {
+        if (prefix == normalized)
+          return true;
+
+        if (prefix == namespacePart)
+          return true;
+
+        if (prefix == packagePart)
+          return true;
+      }
+
+      return false;
+    }
+
     void apply_auto_deps_includes_from_deps_folder(Options &opt, const fs::path &startDir)
     {
       auto already_has_I = [&](const std::string &inc) -> bool
@@ -332,6 +413,9 @@ namespace vix::commands::RunCommand::detail
       };
 
       std::unordered_set<std::string> localPkgDirs;
+
+      const std::vector<std::string> scriptIncludePrefixes =
+          extract_script_include_prefixes_for_autodeps(startDir / opt.cppFile.filename());
 
       auto scan_one = [&](const fs::path &baseDir)
       {
@@ -389,6 +473,10 @@ namespace vix::commands::RunCommand::detail
             continue;
 
           const std::string id = item["id"].get<std::string>();
+
+          if (!script_may_use_dep_id(scriptIncludePrefixes, id))
+            continue;
+
           const std::string pkgDir = dep_id_to_dir_local(id);
 
           if (localPkgDirs.contains(pkgDir))

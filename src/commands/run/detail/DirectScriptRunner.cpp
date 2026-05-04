@@ -192,6 +192,266 @@ namespace vix::commands::RunCommand::detail
     }
 
     /**
+     * @brief Return the current Vix version string used by cache fingerprints.
+     */
+    std::string vix_version_string()
+    {
+      if (const char *v = vix::utils::vix_getenv("VIX_VERSION"); v && *v)
+        return std::string(v);
+
+      return "unknown";
+    }
+
+    /**
+     * @brief Run a compiler query and return a trimmed result.
+     */
+    std::string compiler_query(const std::string &compiler, const std::string &arg)
+    {
+      int code = 0;
+      const std::string out = run_and_capture_with_code(
+          process::quote(compiler) + " " + arg,
+          code);
+
+      if (code != 0)
+        return "unknown";
+
+      std::string s = out;
+      while (!s.empty() &&
+             (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
+      {
+        s.pop_back();
+      }
+
+      return s.empty() ? "unknown" : s;
+    }
+
+    /**
+     * @brief Return the compiler version used by direct script mode.
+     */
+    std::string compiler_version_string(const std::string &compiler)
+    {
+#ifdef _WIN32
+      return "unknown";
+#else
+      return compiler_query(compiler, "-dumpfullversion -dumpversion");
+#endif
+    }
+
+    /**
+     * @brief Return the compiler target triple used by direct script mode.
+     */
+    std::string compiler_target_triple(const std::string &compiler)
+    {
+#ifdef _WIN32
+      return "windows";
+#else
+      return compiler_query(compiler, "-dumpmachine");
+#endif
+    }
+
+    /**
+     * @brief Detect the effective C++ standard used by direct script mode.
+     */
+    std::string detect_cpp_standard(const ScriptProbeResult &probe)
+    {
+      for (const auto &opt : probe.compileOpts)
+      {
+        if (opt.rfind("-std=", 0) == 0)
+          return opt.substr(5);
+      }
+
+      return "c++20";
+    }
+
+    /**
+     * @brief Return the logical build mode for direct script mode.
+     */
+    std::string direct_build_mode_string(const Options &opt)
+    {
+      std::ostringstream oss;
+
+      oss << "direct";
+      oss << ";san=" << text::bool01(want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly));
+      oss << ";san_mode=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
+      oss << ";sqlite=" << text::bool01(opt.withSqlite);
+      oss << ";mysql=" << text::bool01(opt.withMySql);
+
+      return oss.str();
+    }
+
+    /**
+     * @brief Add a stable vector block to a fingerprint stream.
+     */
+    void append_fingerprint_list(
+        std::ostringstream &oss,
+        const char *name,
+        const std::vector<std::string> &values)
+    {
+      oss << name << ".count=" << values.size() << "\n";
+
+      for (const auto &value : values)
+        oss << name << "[]=" << value << "\n";
+    }
+
+    /**
+     * @brief Create a cheap fingerprint for one filesystem path.
+     */
+    std::string path_fingerprint(const fs::path &p)
+    {
+      std::error_code ec;
+      const fs::path abs = fs::absolute(p, ec).lexically_normal();
+
+      const auto mtime = file_mtime_ns_local(abs);
+
+      ec.clear();
+      const auto size = fs::is_regular_file(abs, ec) && !ec
+                            ? file_size_u64(abs, ec)
+                            : 0ull;
+
+      std::ostringstream oss;
+      oss << abs.string() << "|mtime=" << mtime << "|size=" << size;
+      return oss.str();
+    }
+
+    /**
+     * @brief Collect fingerprints for known dependency paths.
+     */
+    std::vector<std::string> collect_dep_fingerprints(const ScriptProbeResult &probe)
+    {
+      std::vector<std::string> out;
+
+      for (const auto &p : probe.compiledDepPaths)
+        out.push_back(path_fingerprint(p));
+
+      std::sort(out.begin(), out.end());
+      return out;
+    }
+
+    /**
+     * @brief Collect header fingerprints from header-only dependency include roots.
+     */
+    std::vector<std::string> collect_header_fingerprints(const ScriptProbeResult &probe)
+    {
+      std::vector<std::string> out;
+
+      for (const auto &root : probe.headerOnlyDepIncludeDirs)
+      {
+        std::error_code ec;
+        if (!fs::exists(root, ec) || ec)
+          continue;
+
+        for (auto it = fs::recursive_directory_iterator(
+                 root,
+                 fs::directory_options::skip_permission_denied,
+                 ec);
+             !ec && it != fs::recursive_directory_iterator();
+             ++it)
+        {
+          if (!it->is_regular_file())
+            continue;
+
+          const auto ext = it->path().extension().string();
+          if (ext == ".h" ||
+              ext == ".hpp" ||
+              ext == ".hh" ||
+              ext == ".hxx" ||
+              ext == ".ipp")
+          {
+            out.push_back(path_fingerprint(it->path()));
+          }
+        }
+      }
+
+      std::sort(out.begin(), out.end());
+      return out;
+    }
+
+    /**
+     * @brief Build the full deterministic fingerprint for a direct script build.
+     */
+    DirectBuildFingerprint make_direct_build_fingerprint(
+        const fs::path &cppPath,
+        const ScriptProbeResult &probe,
+        const Options &opt)
+    {
+      const fs::path abs = fs::absolute(cppPath).lexically_normal();
+      const std::string compiler = choose_cxx_compiler();
+
+      DirectBuildFingerprint fp{};
+      fp.formatVersion = "1";
+      fp.vixVersion = vix_version_string();
+
+      fp.compilerPath = compiler;
+      fp.compilerVersion = compiler_version_string(compiler);
+      fp.targetTriple = compiler_target_triple(compiler);
+
+      fp.cppStandard = detect_cpp_standard(probe);
+      fp.buildMode = direct_build_mode_string(opt);
+
+      fp.scriptPath = abs.string();
+      fp.scriptContentHash = file_content_hash_hex(abs);
+      fp.scriptMtimeNs = file_mtime_ns_local(abs);
+
+      fp.includeDirs = probe.includeDirs;
+      fp.systemIncludeDirs = probe.systemIncludeDirs;
+      fp.defines = probe.defines;
+      fp.compileOpts = probe.compileOpts;
+
+      fp.libDirs = probe.libDirs;
+      fp.libs = probe.libs;
+      fp.linkOpts = probe.linkOpts;
+
+      fp.depFingerprints = collect_dep_fingerprints(probe);
+      fp.headerFingerprints = collect_header_fingerprints(probe);
+
+      return fp;
+    }
+
+    /**
+     * @brief Serialize a direct build fingerprint in a stable text format.
+     */
+    std::string serialize_direct_build_fingerprint(const DirectBuildFingerprint &fp)
+    {
+      std::ostringstream oss;
+
+      oss << "format_version=" << fp.formatVersion << "\n";
+      oss << "vix_version=" << fp.vixVersion << "\n";
+
+      oss << "compiler_path=" << fp.compilerPath << "\n";
+      oss << "compiler_version=" << fp.compilerVersion << "\n";
+      oss << "target_triple=" << fp.targetTriple << "\n";
+
+      oss << "cpp_standard=" << fp.cppStandard << "\n";
+      oss << "build_mode=" << fp.buildMode << "\n";
+
+      oss << "script_path=" << fp.scriptPath << "\n";
+      oss << "script_content_hash=" << fp.scriptContentHash << "\n";
+      oss << "script_mtime_ns=" << fp.scriptMtimeNs << "\n";
+
+      append_fingerprint_list(oss, "include_dirs", fp.includeDirs);
+      append_fingerprint_list(oss, "system_include_dirs", fp.systemIncludeDirs);
+      append_fingerprint_list(oss, "defines", fp.defines);
+      append_fingerprint_list(oss, "compile_opts", fp.compileOpts);
+
+      append_fingerprint_list(oss, "lib_dirs", fp.libDirs);
+      append_fingerprint_list(oss, "libs", fp.libs);
+      append_fingerprint_list(oss, "link_opts", fp.linkOpts);
+
+      append_fingerprint_list(oss, "dep_fingerprints", fp.depFingerprints);
+      append_fingerprint_list(oss, "header_fingerprints", fp.headerFingerprints);
+
+      return oss.str();
+    }
+
+    /**
+     * @brief Return the cache key derived from a direct build fingerprint.
+     */
+    std::string direct_build_fingerprint_cache_key(const DirectBuildFingerprint &fp)
+    {
+      return hex_u64(fnv1a_64(serialize_direct_build_fingerprint(fp)));
+    }
+
+    /**
      * @brief Serialize a direct script cache metadata buffer.
      */
     std::string make_direct_cache_meta(
@@ -201,11 +461,22 @@ namespace vix::commands::RunCommand::detail
       std::ostringstream oss;
 
       oss << "script=" << scriptPath.string() << "\n";
-      oss << "script_mtime_ns=" << file_mtime_ns_local(scriptPath) << "\n";
-      oss << "script_content_hash=" << file_content_hash_hex(scriptPath) << "\n";
+      oss << "script_mtime_ns=" << plan.fingerprint.scriptMtimeNs << "\n";
+      oss << "script_content_hash=" << plan.fingerprint.scriptContentHash << "\n";
       oss << "cache_key=" << plan.cacheKey << "\n";
+
+      oss << "vix_version=" << plan.fingerprint.vixVersion << "\n";
+      oss << "compiler_path=" << plan.fingerprint.compilerPath << "\n";
+      oss << "compiler_version=" << plan.fingerprint.compilerVersion << "\n";
+      oss << "target_triple=" << plan.fingerprint.targetTriple << "\n";
+      oss << "cpp_standard=" << plan.fingerprint.cppStandard << "\n";
+      oss << "build_mode=" << plan.fingerprint.buildMode << "\n";
+
       oss << "compile_cmd=" << plan.compileCmd << "\n";
       oss << "run_cmd=" << plan.runCmd << "\n";
+
+      oss << "\n[fingerprint]\n";
+      oss << serialize_direct_build_fingerprint(plan.fingerprint);
 
       return oss.str();
     }
@@ -380,44 +651,10 @@ namespace vix::commands::RunCommand::detail
       const ScriptProbeResult &probe,
       const Options &opt)
   {
-    std::ostringstream sig;
+    const DirectBuildFingerprint fp =
+        make_direct_build_fingerprint(cppPath, probe, opt);
 
-    const fs::path abs = fs::absolute(cppPath).lexically_normal();
-
-    constexpr const char *kDirectRunnerCacheRev = "2";
-
-    sig << "direct_runner_rev=" << kDirectRunnerCacheRev << ";";
-    sig << "script=" << abs.string() << ";";
-    sig << "mtime=" << file_mtime_ns_local(abs) << ";";
-    sig << "content=" << file_content_hash_hex(abs) << ";";
-    sig << "direct=1;";
-    sig << "san=" << text::bool01(want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly)) << ";";
-    sig << "san_mode=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly) << ";";
-    sig << "sqlite=" << text::bool01(opt.withSqlite) << ";";
-    sig << "mysql=" << text::bool01(opt.withMySql) << ";";
-
-    for (const auto &v : probe.includeDirs)
-      sig << "I=" << v << ";";
-
-    for (const auto &v : probe.systemIncludeDirs)
-      sig << "IS=" << v << ";";
-
-    for (const auto &v : probe.defines)
-      sig << "D=" << v << ";";
-
-    for (const auto &v : probe.compileOpts)
-      sig << "C=" << v << ";";
-
-    for (const auto &v : probe.libDirs)
-      sig << "L=" << v << ";";
-
-    for (const auto &v : probe.libs)
-      sig << "l=" << v << ";";
-
-    for (const auto &v : probe.linkOpts)
-      sig << "W=" << v << ";";
-
-    return hex_u64(fnv1a_64(sig.str()));
+    return direct_build_fingerprint_cache_key(fp);
   }
 
   DirectScriptCacheState load_direct_script_cache_state(const DirectScriptPlan &plan)
@@ -450,9 +687,13 @@ namespace vix::commands::RunCommand::detail
     plan.workingDir = plan.scriptPath.parent_path();
 
     const std::string stem = sanitize_exe_name(plan.scriptPath.stem().string());
+
     plan.exeName = stem.empty() ? "script" : stem;
-    plan.cacheKey = make_direct_script_cache_key(plan.scriptPath, probe, opt);
+
+    plan.fingerprint = make_direct_build_fingerprint(plan.scriptPath, probe, opt);
+    plan.cacheKey = direct_build_fingerprint_cache_key(plan.fingerprint);
     plan.cacheDir = get_direct_scripts_cache_root() / plan.cacheKey;
+
     plan.binaryPath = plan.cacheDir / (plan.exeName + executable_suffix());
 
     plan.shouldRun = true;

@@ -277,9 +277,6 @@ namespace vix::commands::RunCommand::detail
     std::vector<fs::path> headerOnlyDepIncludeDirs;
   };
 
-  /**
-   * @brief Cache metadata for a directly compiled script artifact.
-   */
   struct DirectScriptCacheState
   {
     fs::path rootDir;
@@ -291,6 +288,42 @@ namespace vix::commands::RunCommand::detail
     std::string cacheKey;
     bool cacheHit = false;
     bool needsRebuild = true;
+  };
+
+  /**
+   * @brief Full deterministic fingerprint used to identify a direct script build.
+   *
+   * This describes everything that can affect the produced binary. The direct
+   * script cache key should be derived from this structure instead of only the
+   * script path or source timestamp.
+   */
+  struct DirectBuildFingerprint
+  {
+    std::string formatVersion{"1"};
+    std::string vixVersion;
+
+    std::string compilerPath;
+    std::string compilerVersion;
+    std::string targetTriple;
+
+    std::string cppStandard;
+    std::string buildMode;
+
+    std::string scriptPath;
+    std::string scriptContentHash;
+    std::uint64_t scriptMtimeNs = 0;
+
+    std::vector<std::string> includeDirs;
+    std::vector<std::string> systemIncludeDirs;
+    std::vector<std::string> defines;
+    std::vector<std::string> compileOpts;
+
+    std::vector<std::string> libDirs;
+    std::vector<std::string> libs;
+    std::vector<std::string> linkOpts;
+
+    std::vector<std::string> depFingerprints;
+    std::vector<std::string> headerFingerprints;
   };
 
   /**
@@ -313,9 +346,9 @@ namespace vix::commands::RunCommand::detail
     bool passthroughRuntime = false;
     int effectiveTimeoutSec = 0;
 
+    DirectBuildFingerprint fingerprint;
     ScriptProbeResult probe;
   };
-
   /**
    * @brief Concrete plan for the generated CMake fallback path.
    */

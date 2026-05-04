@@ -1820,29 +1820,29 @@ int main()
     const fs::path srcDir = projectDir / "src";
     const fs::path testsDir = projectDir / "tests";
     static const char *kEnvExample = R"(# ----------------------------------
-    # Server
-    # ----------------------------------
-    SERVER_PORT=8080
+# Server
+# ----------------------------------
+SERVER_PORT=8080
 
-    # ----------------------------------
-    # Database
-    # ----------------------------------
-    DATABASE_ENGINE=mysql
-    DATABASE_DEFAULT_HOST=127.0.0.1
-    DATABASE_DEFAULT_PORT=3306
-    DATABASE_DEFAULT_USER=root
-    DATABASE_DEFAULT_PASSWORD=
-    DATABASE_DEFAULT_NAME=appdb
+# ----------------------------------
+# Database
+# ----------------------------------
+DATABASE_ENGINE=mysql
+DATABASE_DEFAULT_HOST=127.0.0.1
+DATABASE_DEFAULT_PORT=3306
+DATABASE_DEFAULT_USER=root
+DATABASE_DEFAULT_PASSWORD=
+DATABASE_DEFAULT_NAME=appdb
 
-    # ----------------------------------
-    # Logging
-    # ----------------------------------
-    LOGGING_ASYNC=true
+# ----------------------------------
+# Logging
+# ----------------------------------
+LOGGING_ASYNC=true
 
-    # ----------------------------------
-    # Security / WAF
-    # ----------------------------------
-    WAF_MODE=basic
+# ----------------------------------
+# Security / WAF
+# ----------------------------------
+WAF_MODE=basic
     )";
 
     if (!ensure_dir(srcDir, err))

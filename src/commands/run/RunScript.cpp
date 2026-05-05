@@ -17,6 +17,8 @@
 #include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
 #include <vix/cli/commands/run/detail/ScriptProbe.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
+#include <vix/cli/commands/replay/ReplayCapture.hpp>
+#include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
@@ -722,12 +724,64 @@ namespace vix::commands::RunCommand::detail
       cmdRun += join_quoted_args_local(opt.runArgs);
       cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
 
+      namespace replay = vix::commands::replay;
+
+      replay::ReplayRecorder recorder;
+      replay::ReplayRecorderConfig replayConfig{};
+
+      replayConfig.base_dir = fs::current_path();
+      replayConfig.cwd = fs::current_path();
+      replayConfig.project_dir = fs::current_path();
+      replayConfig.target_path = state.script;
+      replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
+      replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
+      replayConfig.command = opt.watch
+                                 ? "vix dev " + state.script.string()
+                                 : "vix run " + state.script.string();
+      replayConfig.resolved_command = cmdRun;
+      replayConfig.vix_args = opt.scriptFlags;
+      replayConfig.app_args = opt.runArgs;
+      replayConfig.watch = opt.watch;
+      replayConfig.direct_script = false;
+      replayConfig.cmake_fallback = true;
+      replayConfig.replayable = true;
+
+      std::string replayErr;
+      const bool replayEnabled = recorder.begin(replayConfig, replayErr);
+
+      replay::ReplayCapture replayCapture;
+      if (replayEnabled)
+        replayCapture.attach(&recorder);
+
       LiveRunResult rr = run_cmd_live_filtered_capture(
           cmdRun,
           "",
-          isInteractive, // ← corrigé
+          isInteractive,
           effective_timeout_sec(opt),
-          opt.enableSanitizers || opt.enableUbsanOnly);
+          opt.enableSanitizers || opt.enableUbsanOnly,
+          false,
+          replayEnabled ? &replayCapture : nullptr);
+
+      if (replayEnabled)
+      {
+        replay::ReplayProcessResult process =
+            replay::make_replay_process_result(
+                rr.exitCode,
+                rr.rawStatus,
+                rr.terminatedBySignal,
+                rr.termSignal);
+
+        replay::ReplayCapturedResult captured =
+            replay::make_replay_captured_result(
+                replayCapture.output(),
+                process);
+
+        replay::ReplayRecorderFinish finish =
+            replay::make_replay_finish_from_capture(captured);
+
+        std::string finishErr;
+        (void)recorder.finish(finish, finishErr);
+      }
 
       int runCode = normalize_exit_code(rr.exitCode);
 

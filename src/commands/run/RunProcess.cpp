@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -96,7 +97,8 @@ namespace vix::commands::RunCommand::detail
       bool passthroughRuntime,
       int timeoutSec,
       bool useSan,
-      bool captureOnly)
+      bool captureOnly,
+      vix::commands::replay::ReplayCapture *replayCapture)
   {
     (void)spinnerLabel;
     (void)passthroughRuntime;
@@ -162,6 +164,9 @@ namespace vix::commands::RunCommand::detail
         break;
 
       result.stdoutText.append(buffer, buffer + n);
+
+      if (replayCapture && n > 0)
+        replayCapture->capture_stdout_noexcept(std::string(buffer, buffer + n));
     }
 
     CloseHandle(outRead);
@@ -1156,7 +1161,8 @@ namespace vix::commands::RunCommand::detail
       bool passthroughRuntime,
       int timeoutSec,
       bool useSan,
-      bool captureOnly)
+      bool captureOnly,
+      vix::commands::replay::ReplayCapture *replayCapture)
   {
     SigintGuard sigGuard;
     LiveRunResult result;
@@ -1367,6 +1373,9 @@ namespace vix::commands::RunCommand::detail
             {
               result.stdoutText += chunk;
 
+              if (replayCapture)
+                replayCapture->capture_stdout_noexcept(chunk);
+
               if (!suppress_known_failure_output && is_known_runtime_port_in_use(chunk))
                 suppress_known_failure_output = true;
 
@@ -1470,7 +1479,9 @@ namespace vix::commands::RunCommand::detail
         spinnerLabel,
         false,
         0,
-        false);
+        false,
+        false,
+        nullptr);
     return r.exitCode;
 #endif
   }

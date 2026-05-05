@@ -16,6 +16,7 @@
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
+#include <vix/cli/commands/ReplayCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
@@ -99,6 +100,14 @@ namespace vix::cli::dispatch
          { return vix::commands::DevCommand::run(a); },
          []()
          { return vix::commands::DevCommand::help(); }});
+
+    add({"replay",
+         "Project",
+         "Replay a previously recorded Vix execution",
+         [](const Args &a)
+         { return vix::commands::ReplayCommand::run(a); },
+         []()
+         { return vix::commands::ReplayCommand::help(); }});
 
     add({"check",
          "Project",

@@ -17,6 +17,7 @@
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
+#include <vix/cli/commands/ReplayCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
@@ -203,6 +204,8 @@ namespace vix
     { return commands::MakeCommand::run(args); };
     commands_["dev"] = [](auto args)
     { return commands::DevCommand::run(args); };
+    commands_["replay"] = [](auto args)
+    { return commands::ReplayCommand::run(args); };
     commands_["orm"] = [](auto args)
     { return commands::OrmCommand::run(args); };
     commands_["pack"] = [](auto args)
@@ -432,6 +435,8 @@ namespace vix
         return commands::RunCommand::help();
       if (cmd == "dev")
         return commands::DevCommand::help();
+      if (cmd == "replay")
+        return commands::ReplayCommand::help();
       if (cmd == "orm")
         return commands::OrmCommand::help();
       if (cmd == "pack")
@@ -536,6 +541,7 @@ namespace vix
     out << indent(3) << "new <name>        Create a new project\n";
     out << indent(3) << "make              Generate C++ scaffolding\n";
     out << indent(3) << "dev               Start dev server (hot reload)\n";
+    out << indent(3) << "replay            Replay a recorded execution\n";
     out << indent(3) << "run               Build and run\n";
     out << indent(3) << "build             Build project\n";
     out << indent(3) << "check             Validate build or file\n";

@@ -13,6 +13,8 @@
  */
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/cli/commands/replay/ReplayCapture.hpp>
+#include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/manifest/RunManifestMerge.hpp>
 #include <vix/cli/manifest/VixManifest.hpp>
@@ -707,13 +709,60 @@ namespace
     runCmd += vix::commands::RunCommand::detail::join_quoted_args_local(opt.runArgs);
     runCmd = vix::commands::RunCommand::detail::wrap_with_cwd_if_needed(opt, runCmd);
 
+    namespace replay = vix::commands::replay;
+
+    replay::ReplayRecorder recorder;
+    replay::ReplayRecorderConfig replayConfig{};
+
+    replayConfig.base_dir = fs::current_path();
+    replayConfig.cwd = fs::current_path();
+    replayConfig.project_dir = fs::current_path();
+    replayConfig.target_path = exePath;
+    replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
+    replayConfig.target_kind = replay::ReplayTargetKind::Project;
+    replayConfig.command = opt.watch ? "vix dev" : "vix run";
+    replayConfig.resolved_command = runCmd;
+    replayConfig.app_args = opt.runArgs;
+    replayConfig.watch = opt.watch;
+    replayConfig.replayable = true;
+
+    std::string replayErr;
+    const bool replayEnabled = recorder.begin(replayConfig, replayErr);
+
+    replay::ReplayCapture replayCapture;
+    if (replayEnabled)
+      replayCapture.attach(&recorder);
+
     const LiveRunResult rr =
         vix::commands::RunCommand::detail::run_cmd_live_filtered_capture(
             runCmd,
             "",
             true,
             timeoutSec,
-            opt.enableSanitizers || opt.enableUbsanOnly);
+            opt.enableSanitizers || opt.enableUbsanOnly,
+            false,
+            replayEnabled ? &replayCapture : nullptr);
+
+    if (replayEnabled)
+    {
+      replay::ReplayProcessResult process =
+          replay::make_replay_process_result(
+              rr.exitCode,
+              rr.rawStatus,
+              rr.terminatedBySignal,
+              rr.termSignal);
+
+      replay::ReplayCapturedResult captured =
+          replay::make_replay_captured_result(
+              replayCapture.output(),
+              process);
+
+      replay::ReplayRecorderFinish finish =
+          replay::make_replay_finish_from_capture(captured);
+
+      std::string finishErr;
+      (void)recorder.finish(finish, finishErr);
+    }
 
     int runExit = rr.exitCode;
 

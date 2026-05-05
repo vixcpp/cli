@@ -26,6 +26,7 @@
 #include <vector>
 
 #include <vix/cli/ErrorHandler.hpp>
+#include <vix/cli/commands/replay/ReplayCapture.hpp>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -526,7 +527,8 @@ namespace vix::commands::RunCommand::detail
       bool passthroughRuntime,
       int timeoutSec = 0,
       bool useSan = false,
-      bool captureOnly = false);
+      bool captureOnly = false,
+      vix::commands::replay::ReplayCapture *replayCapture = nullptr);
   /**
    * @brief Run a command and capture its output plus exit code.
    */

@@ -14,6 +14,7 @@
  *
  */
 #include <vix/cli/commands/replay/ReplayProcess.hpp>
+#include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/Style.hpp>
 
 #include <cstdlib>
@@ -74,6 +75,29 @@ namespace vix::commands::replay
       }
 
       return out;
+    }
+
+    /**
+     * @brief Print the replay command in a readable multi-line format.
+     *
+     * @param cwd Working directory used for replay.
+     * @param command Command executed after changing directory.
+     */
+    void print_replay_command_block(const fs::path &cwd, const std::string &command)
+    {
+      std::cout << PAD << GRAY << "replay" << RESET << "\n";
+
+      std::cout << PAD
+                << GRAY << "cwd" << RESET
+                << "  "
+                << CYAN << BOLD << cwd.string() << RESET
+                << "\n";
+
+      std::cout << PAD
+                << GRAY << "cmd" << RESET
+                << "  "
+                << CYAN << BOLD << command << RESET
+                << "\n";
     }
 
 #ifdef _WIN32
@@ -253,10 +277,7 @@ namespace vix::commands::replay
 #endif
 
     if (options.print_command)
-    {
-      std::cout << PAD << GRAY << "replay" << RESET << "\n";
-      std::cout << PAD << CYAN << BOLD << finalCmd << RESET << "\n";
-    }
+      print_replay_command_block(result.cwd, result.command);
 
     if (options.dry_run)
     {
@@ -265,10 +286,24 @@ namespace vix::commands::replay
       return true;
     }
 
-    const int raw = std::system(finalCmd.c_str());
+    const auto run =
+        vix::commands::RunCommand::detail::run_cmd_live_filtered_capture(
+            finalCmd,
+            "",
+            true,
+            0,
+            false,
+            false);
 
-    result.raw_status = raw;
-    result.exit_code = replay_normalize_exit_code(raw);
+    result.raw_status = run.rawStatus;
+    result.exit_code = run.exitCode;
+
+    if (result.exit_code == 130 ||
+        (run.terminatedBySignal && run.termSignal == 2))
+    {
+      std::cout << "  " << GRAY << "➜" << RESET
+                << " ℹ Program interrupted by user (SIGINT).\n";
+    }
 
     return true;
   }

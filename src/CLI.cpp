@@ -521,12 +521,6 @@ namespace vix
     out << "Fast. Simple. Built for real apps.\n";
     out << "Version: " << VIX_CLI_VERSION << "\n\n";
 
-    out << indent(1) << "Start in seconds:\n";
-    out << indent(2) << "vix new api\n";
-    out << indent(2) << "cd api\n";
-    out << indent(2) << "vix install\n";
-    out << indent(2) << "vix dev\n\n";
-
     out << indent(1) << "Core workflow:\n";
     out << indent(2) << "add      Add a dependency\n";
     out << indent(2) << "install  Install project dependencies\n";

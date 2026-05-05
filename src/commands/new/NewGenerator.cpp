@@ -9,8 +9,8 @@
  */
 
 #include <vix/cli/commands/new/NewGenerator.hpp>
+#include <vix/cli/commands/new/NewOutput.hpp>
 #include <vix/cli/commands/new/NewTemplates.hpp>
-#include <vix/cli/util/Ui.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -19,10 +19,9 @@
 
 namespace vix::commands::new_cmd::generator
 {
-
   namespace fs = std::filesystem;
   namespace tpl = vix::commands::new_cmd::templates;
-  namespace ui = vix::cli::util;
+  namespace out = vix::commands::new_cmd::output;
 
   // ------------------------------------------------------------------
   // File-system helpers
@@ -215,29 +214,15 @@ namespace vix::commands::new_cmd::generator
   // Post-generation output
   // ------------------------------------------------------------------
 
-  void print_next_steps_app(const fs::path & /*projectDir*/, const std::string &projName)
+  void print_next_steps_app(const fs::path &projectDir, const std::string &projName)
   {
-    const std::string manifest = projName + ".vix";
-
-    std::cout << "\n";
-    ui::info_line(std::cout, "Next steps");
-    std::cout << "    " << ui::dim("cd " + projName + "/") << "\n";
-    std::cout << "    " << ui::dim("vix build") << "\n";
-    std::cout << "    " << ui::dim("vix run") << "\n";
-    std::cout << "\n";
-    std::cout << "    " << ui::dim("vix task dev") << "\n";
-    std::cout << "    " << ui::dim("vix dev " + manifest) << "\n";
+    FeaturesSelection features{};
+    out::print_creation_app(projectDir, projName, features);
   }
 
-  void print_next_steps_lib(const fs::path & /*projectDir*/, const std::string &projName)
+  void print_next_steps_lib(const fs::path &projectDir, const std::string &projName)
   {
-    std::cout << "\n";
-    ui::info_line(std::cout, "Next steps");
-    std::cout << "    " << ui::dim("cd " + projName + "/") << "\n";
-    std::cout << "    " << ui::dim("vix build") << "\n";
-    std::cout << "    " << ui::dim("vix tests") << "\n";
-    std::cout << "\n";
-    std::cout << "    " << ui::dim("TIP: tag + publish when ready") << "\n";
+    out::print_creation_lib(projectDir, projName);
   }
 
 } // namespace vix::commands::new_cmd::generator

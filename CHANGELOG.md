@@ -1,673 +1,134 @@
-# Changelog
+# Changelog - Vix CLI
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
----
-
-## [Unreleased]
-
-## 1.16.5
+## Unreleased / dev
 
 ### Fixed
-
-• Fixed `--linker lld|mold` integration: Vix now applies fast linker flags via `CMAKE_*_LINKER_FLAGS` (exe/shared/module), ensuring the linker is used reliably at link time.
-• Removed incorrect propagation of linker flags through `CMAKE_C_FLAGS` / `CMAKE_CXX_FLAGS`, avoiding CMake “unused variables” warnings and inconsistent behavior.
-• Improved run/build flow integration (RunDetail / RunFlow / RunCommand) to keep preset/build-dir resolution consistent and prevent missing helper symbol errors.
-
-## [1.16.4] - 2026-01-06
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## v1.16.4
-
-### 🐛 Fixes
-
-- Fixed a `-Wshadow` warning in the CLI build command by removing duplicate
-  toolchain variable declarations.
-- Ensured a single, consistent toolchain content buffer is used for both
-  toolchain file generation and build signature computation.
-- Improved code clarity and robustness when handling cross-compilation
-  toolchains.
-
-### 🛠 Internal
-
-- Cleaner build flow under strict compiler warnings (`-Wshadow`).
-- No behavior change for users; internal correctness and maintainability
-  improved.
-
-## [1.16.3] - 2026-01-05
+- Synchronized the global `vix help` output with all commands registered in the dispatcher.
+- Fixed missing commands in the help screen, including:
+  - `search`
+  - `publish`
+  - `unpublish`
+  - `modules`
+  - `completion`
+  - `up`
+  - `i`
+  - `deps`
+  - `test`
+  - `make:<type>`
+- Updated CLI help links to use the official documentation domain:
+  - `https://docs.vixcpp.com`
+  - `https://docs.vixcpp.com/cli/`
+  - `https://registry.vixcpp.com`
+- Improved command grouping in the global help output.
+- Added clearer usage examples for common workflows:
+  - `vix run main.cpp`
+  - `vix build main.cpp --out app`
+  - `vix make:class User`
+  - `vix add @cnerium/app`
+  - `vix install`
 
 ### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## v1.16.3 — Manifest-driven workflows
-
-### ✨ New
-
-- Added native support for **`.vix` manifest files**
-  - Run apps directly with `vix run app.vix`
-  - Dev mode supported: `vix dev app.vix`
-  - Supports both `kind="project"` and `kind="script"`
-- New project scaffolding now generates a **`<name>.vix` manifest** by default
-- CLI now auto-detects `.vix` and `.cpp` files without requiring `run`
-
-### 🔧 Improvements
-
-- Unified option resolution via **manifest + CLI merge**
-  - CLI flags always override manifest values
-- Improved entry-point resolution for project manifests
-- Extended `vix run --help` with detailed manifest documentation
-- Clear separation between:
-  - Manifest mode
-  - Project mode (CMake)
-  - Script mode (single `.cpp`)
-
-### 🧠 Developer Experience
-
-- Cleaner run flow for mixed repositories (apps, scripts, examples)
-- More explicit and predictable execution model
-- Better defaults for dev/watch/server workflows
-
-### ⚠️ Notes
-
-- CMake presets are still supported and recommended for advanced builds
-- `.vix` is now the preferred source of truth for runtime configuration
-
-## [1.16.2] - 2026-01-03
-
-### Added
-
--
+- Added replay support for recorded single-file script executions.
+- Added support for recording and replaying single-file script runs.
+- Added a dedicated `replay` command.
+- Added support for single-file binary export through `vix build`.
+- Added fast direct compile path for Vix scripts.
+- Added smart CMake fallback for scripts requiring Vix runtime, DB, ORM, or compiled dependencies.
+- Added improved build metadata storage under the Vix home directory.
+- Added better cache fingerprinting for direct script runs.
+- Added support for SQLite/MySQL and local-cache behavior in script mode.
+- Added structured compiler and runtime diagnostics, including template, container, coroutine, polymorphism, sanitizer, and CMake error detection.
+- Added command suggestions using dispatcher entries.
+- Added `fmt`, `task`, `info`, `completion`, `outdated`, `update`, `upgrade`, `doctor`, `uninstall`, `modules`, `make`, `p2p`, `pack`, `verify`, `cache`, `publish`, and `unpublish` commands across the CLI evolution.
 
 ### Changed
-
--
-
-### Removed
-
--
-
-## [1.16.1] - 2026-01-03
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.16.0] - 2026-01-02
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.7] - 2026-01-02
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.6] - 2026-01-02
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.5] - 2025-12-31
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.4] - 2025-12-29
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.3] - 2025-12-29
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.2] - 2025-12-26
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.1] - 2025-12-25
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.15.0] - 2025-12-25
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.14.0] - 2025-12-23
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.13.3] - 2025-12-22
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.13.2] - 2025-12-22
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.13.1] - 2025-12-21
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.13.0] - 2025-12-21
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.12.0] - 2025-12-20
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## v1.12.0 — 2025-12-20
-
-### Added
-
-- **`vix tests [path]`**: new command to run project tests easily.
-  - Acts as an alias of **`vix check --tests`** for a faster, more discoverable workflow.
-  - Supports both project validation and test execution depending on the detected target.
-
-### Changed
-
-- CLI global help output: improved readability by adding consistent **left padding / indentation** across sections (Usage, Commands, Options, Examples, Links).
-- `vix check` internals: updates to support the new `tests` entrypoint and shared flows.
-
-### Notes
-
-- This release focuses on improving the **testing UX** and making the CLI help output feel more modern and readable.
-
-## [1.11.0] - 2025-12-20
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.10.0] - 2025-12-20
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-feat(cli/run): add --san and --ubsan flags for script mode with clean sanitizer reports
-
-- Add --san (ASan+UBSan) and --ubsan (UBSan only) flags to `vix run`
-- Extend RunCommand Options to track sanitizer mode explicitly
-- Enable sanitizer-aware CMake generation for single-file .cpp scripts
-- Apply sanitizer runtime environment reliably at execution time
-- Improve runtime error detection and messaging (alloc/dealloc mismatch, UBSan)
-- Update `vix run -h` to document new sanitizer options
-
-This makes `vix run main.cpp --san/--ubsan` a fast, ergonomic way
-to debug memory errors and undefined behavior in standalone scripts.
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.9.2] - 2025-12-19
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## v1.9.2 — CLI Packaging & Signing UX Fix
+- Improved `vix run` behavior for single-file C++ scripts.
+- Improved `vix build` output handling for single-file builds.
+- Improved direct script cache behavior and stale-cache detection.
+- Improved forwarding of runtime arguments after the target in `vix run`.
+- Improved handling of `--run` and `--` separators in script mode.
+- Improved passthrough runtime behavior for interactive prompts and piped stdin.
+- Improved Ctrl+C behavior by treating script SIGINT as a normal shutdown.
+- Improved runtime output rendering by reducing noise from aborts, duplicate logs, CMake internals, Ninja internals, and spinners.
+- Improved `vix new` internals and output rendering.
+- Refactored `new` and `modules` command internals.
+- Refactored build/run script execution flow around direct compile, CMake fallback, cache signatures, and runtime process handling.
+- Replaced legacy `deps` workflow with `install`, while keeping `deps` as a deprecated alias.
+- Improved registry dependency workflow with deterministic installation, lockfile support, transitive dependency resolution, semver resolution, scoped package names, global package support, and outdated checks.
+- Improved generated project scaffolding, CMake templates, README files, `vix.json`, tasks, and optional module layout.
+- Improved shell UX with cleaner output, better color helpers, unified UI rendering, and more readable tips.
+- Improved Windows/MSVC compatibility by fixing path handling, unused warnings, missing includes, link issues, and platform-specific process behavior.
 
 ### Fixed
+- Fixed script runtime detection for direct compile vs CMake fallback.
+- Fixed CMake fallback for scripts using Vix runtime.
+- Fixed CMake fallback for DB and ORM scripts.
+- Fixed header-only, compiled, and header-plus-source dependency handling.
+- Fixed auto-dependency filtering for direct script runs.
+- Fixed stale cache issues by including CMake arguments in config signatures.
+- Fixed executable target resolution from build directories.
+- Fixed runtime argument forwarding in `vix run`.
+- Fixed interactive stdin and prompt preservation in script runner.
+- Fixed sanitizer output stability and diagnostics.
+- Fixed misleading CMake error detection.
+- Fixed project root detection and preset mapping.
+- Fixed `vix tests` behavior by auto-configuring/building when needed.
+- Fixed `vix publish` validation, duplicate version rejection, idempotency, and registry metadata generation.
+- Fixed `vix unpublish` registration and Windows build compatibility.
+- Fixed numerous compiler warnings across the CLI module.
+- Fixed Windows, macOS, Clang, GCC, and MSVC portability issues.
 
-- Fixed `vix pack` blocking when signing was auto-detected and minisign required a passphrase.
-- Ensured `--sign=auto` never blocks execution (non-interactive signing).
+## Major feature history
 
-### Added
+### Project workflow
+- `vix new`
+- `vix make`
+- `vix make:<type>`
+- `vix run`
+- `vix dev`
+- `vix build`
+- `vix check`
+- `vix tests`
+- `vix fmt`
+- `vix clean`
+- `vix reset`
+- `vix task`
+- `vix replay`
+- `vix repl`
 
-- Added explicit signing modes: `--sign=auto | never | required` (npm-style behavior).
-- Clear user-facing messages when signing is required (tool, key, file, prompt).
-
-### Improved
-
-- Better CLI UX around package signing and minisign integration.
-- Clear distinction between optional and mandatory cryptographic signing.
-
-## [1.9.1] - 2025-12-19
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-# Changelog
-
-## 1.9.1 — 2025-XX-XX
-
-### CLI
-
-- Improved `vix pack` signing behavior:
-  - Minisign password prompt is now visible when `--verbose` is enabled
-  - Prevents silent blocking when a protected secret key is used
-- Improved CLI help output:
-  - Cleaner global help layout
-  - Clearer `pack` and `verify` command descriptions
-  - Better examples aligned with real workflows
+### Dependency and registry workflow
+- `vix registry`
+- `vix add`
+- `vix search`
+- `vix install`
+- `vix i`
+- `vix deps`
+- `vix update`
+- `vix up`
+- `vix outdated`
+- `vix remove`
+- `vix list`
+- `vix store`
+- `vix publish`
+- `vix unpublish`
 
 ### Packaging
-
-- `vix pack` now provides a smoother UX when signing packages
-- Explicit feedback when a `.vixpkg` artifact is successfully created
-
-### Verification
-
-- Added `vix verify` command:
-  - Manifest v2 validation
-  - Payload digest verification
-  - Optional minisign signature verification
-  - Auto-detection of latest `dist/<name>@<version>`
-  - Support for `.vixpkg` artifacts
-- Added `--require-signature` and strict verification modes
-
-### Security
-
-- Clear separation between unsigned and signed packages
-- Environment-based key discovery:
-  - `VIX_MINISIGN_SECKEY` for signing
-  - `VIX_MINISIGN_PUBKEY` for verification
-
----
-
-This release focuses on **developer experience**, **security clarity**, and
-a more professional packaging & verification workflow.
-
-## [1.9.0] - 2025-12-19
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## v1.9.0 — 2025-01-18
-
-### Added
-
-- `vix pack`: new CLI command to package a Vix project into a distributable artifact.
-- Generation of `dist/<name>@<version>/` with optional `.vixpkg` zip archive.
-- Manifest v2 (`vix.manifest.v2`) including:
-  - Package metadata (name, version, kind, license).
-  - ABI detection (OS, architecture).
-  - Toolchain information (C++ compiler, standard, CMake version and generator).
-  - Layout flags (include, src, lib, modules, README).
-  - Exports and dependencies from `vix.toml`.
-
-### Security
-
-- Payload integrity verification via:
-  - Stable SHA256 listing of payload files.
-  - `meta/payload.digest` (content digest).
-- Optional Ed25519 signature using `minisign`:
-  - Signature stored as `meta/payload.digest.minisig`.
-  - Secret key provided via `VIX_MINISIGN_SECKEY`.
-
-### Changed
-
-- `vix help` now lists the `pack` command.
-- `vix help pack` provides detailed usage and options.
-
-### Notes
-
-- Signing is optional and only enabled when `minisign` is available and `VIX_MINISIGN_SECKEY` is set.
-- The manifest is generated after checksums to avoid self-referential hashes.
-
-## [1.8.1] - 2025-12-17
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.8.0] - 2025-12-14
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.7.0] - 2025-12-12
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.6.7] - 2025-12-11
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-## [1.6.6] - 2025-12-11
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-cli: fix WebSocket linkage in RunScript script-mode builds
-
-- Corrected the internal CMake generation so script builds now link against vix::websocket
-- Prevents unresolved symbols (LowLevelServer::run, Session, etc.)
-- Allows using <vix/websocket.hpp> directly inside standalone scripts
-- Improves reliability of `vix run` when testing HTTP+WS combined examples
-
-## [1.6.5] - 2025-12-10
-
-### Added
-
--
-
-### Changed
-
--
-
-### Removed
-
--
-
-### Added
-
-- Upcoming improvements will appear here.
-
-### Changed
-
-- Pending changes will be listed here.
-
-### Fixed
-
-- Pending fixes will be listed here.
-
----
-
-## [1.0.0] - Initial Release
-
-### Added
-
-- Modular C++ framework structure with `core`, `orm`, `cli`, `docs`, `middleware`, `websocket`, `devtools`, `examples`.
-- `App` class for simplified HTTP server setup.
-- Router system supporting dynamic route parameters (`/users/{id}` style).
-- JSON response wrapper using `nlohmann::json`.
-- Middleware system for request handling.
-- Example endpoints `/hello`, `/ping`, and `/users/{id}`.
-- Thread-safe signal handling for graceful shutdown.
-- Basic configuration system (`Config` class) to manage JSON config files.
-
-### Changed
-
-- Logger integrated using `spdlog` with configurable log levels.
-- Improved request parameter extraction for performance.
-
-### Fixed
-
-- Path parameter extraction now correctly handles `string_view` types.
-- Fixed default response for unmatched routes (`404` JSON message).
-
----
-
-## [0.0.1] - Draft
-
-### Added
-
-- Project skeleton created.
-- Basic CMake setup and folder structure.
-- Placeholder modules for `core`, `orm`, and `examples`.
+- `vix pack`
+- `vix verify`
+- `vix cache`
+
+### Runtime and advanced tooling
+- `vix p2p`
+- `vix orm`
+- `vix modules`
+
+### System commands
+- `vix info`
+- `vix doctor`
+- `vix upgrade`
+- `vix uninstall`
+- `vix completion`
+
+## Summary
+
+The Vix CLI evolved from a simple project runner into a complete C++ runtime command-line tool. It now supports project scaffolding, direct single-file execution, smart CMake fallback, binary export, dependency resolution, registry publishing, package verification, module management, P2P tooling, ORM migrations, task automation, shell completion, system diagnostics, and a cleaner developer experience across Linux, macOS, and Windows.

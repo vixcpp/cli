@@ -15,6 +15,9 @@
 #include <vix/cli/Style.hpp>
 #include <vix/cli/cache/ArtifactCache.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
+#include <vix/cli/build/BuildGraph.hpp>
+#include <vix/cli/build/BuildScheduler.hpp>
+#include <vix/cli/build/ObjectCache.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -1300,6 +1303,49 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        build::BuildGraphConfig graphConfig;
+        graphConfig.projectDir = plan_.projectDir;
+        graphConfig.buildDir = plan_.buildDir;
+        graphConfig.objectDir = plan_.buildDir / ".vix" / "obj";
+        graphConfig.compiler = "c++";
+        graphConfig.buildFingerprint = plan_.signature;
+
+        graphConfig.includeDirs.push_back((plan_.projectDir / "include").string());
+        graphConfig.includeDirs.push_back((plan_.projectDir / "src").string());
+
+        graphConfig.flags.push_back("-Wall");
+        graphConfig.flags.push_back("-Wextra");
+
+        build::BuildGraph graph(graphConfig);
+
+        const fs::path graphPath =
+            build::BuildGraph::default_graph_path(plan_.buildDir);
+
+        const auto previousGraph =
+            build::BuildGraph::load(graphPath);
+
+        const auto scan = graph.scan_project();
+        graph.load_dependency_files();
+
+        if (previousGraph)
+        {
+          graph.mark_clean_from_previous(*previousGraph);
+        }
+        else
+        {
+          graph.mark_all_dirty();
+        }
+
+        graph.propagate_dirty();
+
+        if (verboseMode && !opt_.quiet)
+        {
+          step("build graph: " +
+               std::to_string(scan.sources) + " sources, " +
+               std::to_string(scan.headers) + " headers, " +
+               std::to_string(scan.tasks) + " tasks");
+        }
+
         if (verboseMode && !opt_.quiet)
         {
           if (artifact_cache::ArtifactCache::exists(projectArtifact))
@@ -1457,6 +1503,11 @@ namespace vix::commands::BuildCommand
               !opt_.quiet)
           {
             hint("Warning: unable to write Vix build state");
+          }
+
+          if (!graph.save(graphPath) && !opt_.quiet)
+          {
+            hint("Warning: unable to write Vix build graph");
           }
 
           if (!opt_.quiet)

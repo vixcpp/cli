@@ -175,11 +175,15 @@ namespace vix::commands::CheckCommand::detail
     }
 
     ScriptCheckSummary summary;
-    summary.sanitizersEnabled = opt.enableSanitizers || opt.enableUbsanOnly;
+    summary.sanitizersEnabled = run::want_any_sanitizer(
+        opt.enableSanitizers,
+        opt.enableUbsanOnly,
+        opt.enableThreadSanitizer);
     summary.ubsanOnly = opt.enableUbsanOnly;
 
     const bool enableSan = opt.enableSanitizers;
     const bool enableUbsanOnly = opt.enableUbsanOnly;
+    const bool enableThreadSanitizer = opt.enableThreadSanitizer;
     const std::string exeName = script.stem().string();
 
     fs::path scriptsRoot = run::get_scripts_root(opt.localCache);
@@ -227,6 +231,7 @@ namespace vix::commands::CheckCommand::detail
             useVixRuntime,
             enableSan,
             enableUbsanOnly,
+            enableThreadSanitizer,
             /*scriptFlags=*/{},
             opt.withSqlite,
             opt.withMySql);
@@ -259,7 +264,7 @@ namespace vix::commands::CheckCommand::detail
       {
         conf << " -DVIX_ENABLE_SANITIZERS=ON"
              << " -DVIX_SANITIZER_MODE="
-             << run::sanitizer_mode_string(enableSan, enableUbsanOnly);
+             << run::sanitizer_mode_string(enableSan, enableUbsanOnly, enableThreadSanitizer);
       }
       else
       {
@@ -341,7 +346,10 @@ namespace vix::commands::CheckCommand::detail
       ui::ok_line(std::cout, "Build OK.");
 
 #ifndef _WIN32
-    if (run::want_sanitizers(enableSan, enableUbsanOnly))
+    if (run::want_any_sanitizer(
+            enableSan,
+            enableUbsanOnly,
+            enableThreadSanitizer))
     {
       ui::one_line_spacer(std::cout);
       ui::info_line(std::cout, "Running runtime validation.");
@@ -355,7 +363,10 @@ namespace vix::commands::CheckCommand::detail
         return 1;
       }
 
-      run::apply_sanitizer_env_if_needed(enableSan, enableUbsanOnly);
+      run::apply_sanitizer_env_if_needed(
+          enableSan,
+          enableUbsanOnly,
+          enableThreadSanitizer);
 
       const std::string cmdRun =
           "VIX_STDOUT_MODE=line " + run::quote(exePath.string());

@@ -42,18 +42,29 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      (void)log;
+      const RuntimeLocation location =
+          find_best_runtime_location(log, sourceFile);
 
       std::cerr << RED
                 << "runtime error: data race"
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            "data race");
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
           {
-              "two or more threads accessed the same memory without proper synchronization",
-              "protect shared state with std::mutex, std::scoped_lock, or std::atomic",
+              "protect shared mutable state with std::mutex, std::scoped_lock, or std::atomic",
           },
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          make_at_text(location, sourceFile));
 
       return true;
     }

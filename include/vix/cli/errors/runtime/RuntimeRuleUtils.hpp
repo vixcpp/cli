@@ -22,12 +22,37 @@
 
 namespace vix::cli::errors::runtime
 {
+  struct RuntimeLocation
+  {
+    std::filesystem::path file{};
+    int line = 0;
+    int column = 1;
+
+    [[nodiscard]] bool valid() const noexcept
+    {
+      return !file.empty() && line > 0;
+    }
+  };
+
   bool icontains(const std::string &text, const std::string &needle);
 
   std::string strip_line_comment(const std::string &line);
 
   std::optional<std::vector<std::string>> read_file_lines(
       const std::filesystem::path &path);
+
+  RuntimeLocation find_best_runtime_location(
+      const std::string &log,
+      const std::filesystem::path &sourceFile);
+
+  RuntimeLocation find_best_runtime_location_or_source_hint(
+      const std::string &log,
+      const std::filesystem::path &sourceFile,
+      const std::vector<std::string> &sourcePatterns);
+
+  std::string make_at_text(
+      const RuntimeLocation &location,
+      const std::filesystem::path &sourceFile);
 
   vix::cli::errors::CompilerError make_runtime_location(
       const std::filesystem::path &sourceFile,

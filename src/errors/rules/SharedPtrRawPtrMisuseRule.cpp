@@ -14,8 +14,10 @@
 #include <vix/cli/errors/IErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -24,34 +26,56 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+  } // namespace
+
   class SharedPtrRawPtrMisuseRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string message = to_lower_ascii(err.message);
 
-      const bool mentionsShared =
-          (m.find("std::shared_ptr") != std::string::npos) ||
-          (m.find("shared_ptr") != std::string::npos);
+      const bool mentionsSharedPtr =
+          message.find("std::shared_ptr") != std::string::npos ||
+          message.find("shared_ptr") != std::string::npos;
 
-      // Match known warning/error phrases across toolchains/lints
+      if (!mentionsSharedPtr)
+        return false;
+
       const bool rawPtrMisuse =
-          (m.find("constructed from raw pointer") != std::string::npos) ||
-          (m.find("construction from raw pointer") != std::string::npos) ||
-          (m.find("double delete") != std::string::npos) ||
-          (m.find("double-delete") != std::string::npos) ||
-          (m.find("may lead to") != std::string::npos && m.find("delete") != std::string::npos) ||
-          (m.find("will be deleted") != std::string::npos && m.find("shared_ptr") != std::string::npos);
+          message.find("constructed from raw pointer") != std::string::npos ||
+          message.find("construction from raw pointer") != std::string::npos ||
+          message.find("double delete") != std::string::npos ||
+          message.find("double-delete") != std::string::npos ||
+          message.find("double free") != std::string::npos ||
+          message.find("will be deleted") != std::string::npos ||
+          (message.find("may lead to") != std::string::npos &&
+           message.find("delete") != std::string::npos) ||
+          (message.find("raw pointer") != std::string::npos &&
+           message.find("ownership") != std::string::npos);
 
-      return mentionsShared && rawPtrMisuse;
+      return rawPtrMisuse;
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
                 << "error: invalid std::shared_ptr ownership"
                 << RESET << "\n";
@@ -59,12 +83,16 @@ namespace vix::cli::errors
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: never create multiple std::shared_ptr from the same raw pointer"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "create shared ownership with std::make_shared or pass an existing std::shared_ptr"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

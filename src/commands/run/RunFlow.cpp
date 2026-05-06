@@ -99,7 +99,7 @@ namespace vix::commands::RunCommand::detail
       return v == "--verbose" || v == "--quiet" || v == "-q" ||
              v == "--watch" || v == "--reload" ||
              v == "--force-server" || v == "--force-script" ||
-             v == "--san" || v == "--ubsan" ||
+             v == "--san" || v == "--ubsan" || v == "--tsan" ||
              v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
              v == "--no-color" ||
              v == "--preset" || v.rfind("--preset=", 0) == 0 ||
@@ -556,11 +556,19 @@ namespace vix::commands::RunCommand::detail
       {
         opt.enableSanitizers = true;
         opt.enableUbsanOnly = false;
+        opt.enableThreadSanitizer = false;
       }
       else if (a == "--ubsan")
       {
         opt.enableUbsanOnly = true;
         opt.enableSanitizers = false;
+        opt.enableThreadSanitizer = false;
+      }
+      else if (a == "--tsan")
+      {
+        opt.enableThreadSanitizer = true;
+        opt.enableSanitizers = false;
+        opt.enableUbsanOnly = false;
       }
       else if (a == "--auto-deps")
       {

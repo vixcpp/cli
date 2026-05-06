@@ -14,20 +14,23 @@
 #include <vix/cli/ErrorHandler.hpp>
 
 #include <vix/cli/errors/ClangGccParser.hpp>
+#include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
 #include <vix/cli/errors/ErrorContext.hpp>
 #include <vix/cli/errors/ErrorPipeline.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
-#include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/build/BuildErrorDetectors.hpp>
 #include <vix/utils/Env.hpp>
 
-#include <iostream>
-#include <sstream>
-#include <unordered_map>
-#include <unordered_set>
 #include <algorithm>
 #include <cstring>
+#include <iostream>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -35,163 +38,194 @@ using namespace vix::cli::style;
 
 namespace
 {
-  static void printSingleError(const vix::cli::errors::CompilerError &err)
+  void print_single_error(const vix::cli::errors::CompilerError &err)
   {
     std::ostringstream oss;
     oss << err.file << ":" << err.line << ":" << err.column << "\n";
     oss << "  error: " << err.message << "\n";
+
     error(oss.str());
   }
 
-  static bool handle_unrecognized_cli_option_as_script_runtime_args(std::string_view log)
+  void print_hint(std::string_view text)
   {
-    // Exemple:
-    // c++: error: unrecognized command-line option ‘--config’; did you mean ...
-    const std::size_t p = log.find("unrecognized command-line option");
-    if (p == std::string_view::npos)
-      return false;
+    if (text.empty())
+      return;
 
-    std::string opt;
-    {
-      std::size_t q1 = log.find("‘", p);
-      std::size_t q2 = std::string_view::npos;
-      if (q1 != std::string_view::npos)
-        q2 = log.find("’", q1 + 1);
-
-      if (q1 != std::string_view::npos && q2 != std::string_view::npos && q2 > q1 + 1)
-        opt = std::string(log.substr(q1 + 1, q2 - (q1 + 1)));
-    }
-
-    if (opt.size() >= 3 && opt.rfind("--", 0) == 0)
-    {
-      error("Script build failed: you passed runtime args as compiler flags.");
-      hint("In .cpp script mode, everything after `--` is treated as compiler/linker flags.");
-      hint("Use repeatable --args for runtime arguments.");
-      if (!opt.empty())
-      {
-        std::cerr << GRAY << "example: vix run main.cpp --args " << opt << " --args <value>\n"
-                  << RESET;
-      }
-      return true;
-    }
-
-    return false;
+    std::cerr << YELLOW
+              << "hint: "
+              << RESET
+              << text
+              << "\n";
   }
 
-  static bool hints_verbose_enabled() noexcept
+  bool handle_unrecognized_cli_option_as_script_runtime_args(
+      std::string_view log)
   {
-    const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
-    if (!lvl || !*lvl)
+    const std::size_t pos =
+        log.find("unrecognized command-line option");
+
+    if (pos == std::string_view::npos)
       return false;
 
-    return std::strcmp(lvl, "debug") == 0 ||
-           std::strcmp(lvl, "trace") == 0;
+    std::string option;
+
+    const std::size_t openQuote = log.find("‘", pos);
+    std::size_t closeQuote = std::string_view::npos;
+
+    if (openQuote != std::string_view::npos)
+      closeQuote = log.find("’", openQuote + 1);
+
+    if (openQuote != std::string_view::npos &&
+        closeQuote != std::string_view::npos &&
+        closeQuote > openQuote + 1)
+    {
+      option =
+          std::string(log.substr(openQuote + 1, closeQuote - (openQuote + 1)));
+    }
+
+    if (option.size() < 3 || option.rfind("--", 0) != 0)
+      return false;
+
+    std::cerr << RED
+              << "error: runtime argument passed as compiler flag"
+              << RESET << "\n";
+
+    print_hint("use --args for runtime arguments in .cpp script mode");
+
+    std::cerr << GREEN
+              << "at: "
+              << RESET
+              << "vix run <file.cpp> --args " << option << "\n";
+
+    return true;
   }
 
-  static std::size_t line_start(std::string_view s, std::size_t pos)
+  bool hints_verbose_enabled() noexcept
+  {
+    const char *level = vix::utils::vix_getenv("VIX_LOG_LEVEL");
+
+    if (!level || !*level)
+      return false;
+
+    return std::strcmp(level, "debug") == 0 ||
+           std::strcmp(level, "trace") == 0;
+  }
+
+  std::size_t line_start(std::string_view text, std::size_t pos)
   {
     if (pos == std::string_view::npos)
       return std::string_view::npos;
-    while (pos > 0 && s[pos - 1] != '\n')
+
+    while (pos > 0 && text[pos - 1] != '\n')
       --pos;
+
     return pos;
   }
 
-  static std::size_t find_first_error_anchor(std::string_view log)
+  std::size_t find_first_error_anchor(std::string_view log)
   {
     static constexpr std::string_view anchors[] = {
-        "FAILED:",               // ninja
-        "ninja: build stopped:", // ninja
-        "error:",                // gcc/clang
-        "fatal error:",          // gcc/clang
-        "CMake Error",           // cmake configure
-        "make: ***"              // make
+        "FAILED:",
+        "ninja: build stopped:",
+        "fatal error:",
+        "error:",
+        "CMake Error",
+        "make: ***",
     };
 
     std::size_t best = std::string_view::npos;
 
-    for (auto a : anchors)
+    for (const auto anchor : anchors)
     {
-      std::size_t p = log.find(a);
-      if (p == std::string_view::npos)
+      const std::size_t pos = log.find(anchor);
+
+      if (pos == std::string_view::npos)
         continue;
 
-      std::size_t ls = line_start(log, p);
-      if (ls == std::string_view::npos)
-        ls = 0;
+      std::size_t start = line_start(log, pos);
 
-      if (best == std::string_view::npos || ls < best)
-        best = ls;
+      if (start == std::string_view::npos)
+        start = 0;
+
+      if (best == std::string_view::npos || start < best)
+        best = start;
     }
 
     if (best == std::string_view::npos)
     {
-      std::size_t p = log.find(": error:");
-      if (p != std::string_view::npos)
+      const std::size_t pos = log.find(": error:");
+
+      if (pos != std::string_view::npos)
       {
-        std::size_t ls = line_start(log, p);
-        best = (ls == std::string_view::npos) ? 0 : ls;
+        const std::size_t start = line_start(log, pos);
+        best = start == std::string_view::npos ? 0 : start;
       }
     }
 
     return best;
   }
 
-  static std::string trim_build_preamble(const std::string &log)
+  std::string trim_build_preamble(const std::string &log)
   {
-    std::string_view v(log);
-    const std::size_t start = find_first_error_anchor(v);
+    const std::string_view view(log);
+    const std::size_t start = find_first_error_anchor(view);
+
     if (start == std::string_view::npos)
       return log;
-    return std::string(v.substr(start));
+
+    return std::string(view.substr(start));
   }
 
-  static void printHints(const vix::cli::errors::CompilerError &err)
+  void print_generic_hint(const vix::cli::errors::CompilerError &err)
   {
-    const std::string &msg = err.message;
+    const std::string &message = err.message;
     const bool verbose = hints_verbose_enabled();
 
-    auto h = [](const std::string &s)
+    if (message.find("use of undeclared identifier 'std'") != std::string::npos)
     {
-      std::cerr << "\n"
-                << YELLOW << "hint: " << RESET << s << "\n";
-    };
+      print_hint("include the required standard header before using std names");
 
-    if (msg.find("use of undeclared identifier 'std'") != std::string::npos)
-    {
-      h("std is not visible here (include the required standard header)");
       if (verbose)
-        std::cerr << GRAY << "e.g. #include <iostream>\n"
+      {
+        std::cerr << GRAY
+                  << "example: #include <iostream>\n"
                   << RESET;
+      }
+
       return;
     }
 
-    if (msg.find("expected ';'") != std::string::npos)
+    if (message.find("expected ';'") != std::string::npos)
     {
-      h("missing ';' (often the previous line)");
+      print_hint("add the missing semicolon, often on the previous line");
       return;
     }
 
-    if (msg.find("no matching function for call to") != std::string::npos)
+    if (message.find("no matching function for call to") != std::string::npos)
     {
       const bool isVixJson =
-          (msg.find("vix::http::ResponseWrapper::json") != std::string::npos) ||
-          (msg.find("ResponseWrapper::json") != std::string::npos);
+          message.find("vix::http::ResponseWrapper::json") != std::string::npos ||
+          message.find("ResponseWrapper::json") != std::string::npos;
 
       if (isVixJson)
       {
-        h("Response::json() expects one JSON value (not key,value)");
+        print_hint("Response::json() expects one JSON value, not key/value arguments");
+
         if (verbose)
-          std::cerr << GRAY << "e.g. res.json({\"message\", \"Hello\"});\n"
+        {
+          std::cerr << GRAY
+                    << "example: res.json({{\"message\", \"Hello\"}});\n"
                     << RESET;
+        }
+
         return;
       }
 
-      h("no matching overload (check argument types and qualifiers)");
+      print_hint("check argument types, overloads, const qualifiers, and references");
       return;
     }
   }
-
 } // namespace
 
 namespace vix::cli
@@ -209,22 +243,41 @@ namespace vix::cli
     if (errors.empty())
     {
       if (handle_unrecognized_cli_option_as_script_runtime_args(cleanedLog))
+        return true;
+
+      if (RawLogDetectors::handleLinkerOrSanitizer(
+              cleanedLog,
+              sourceFile,
+              contextMessage))
       {
-        std::cerr << "\n"
-                  << GRAY << "compiler output:\n"
-                  << RESET;
-        std::cerr << cleanedLog << "\n";
         return true;
       }
-
-      if (RawLogDetectors::handleLinkerOrSanitizer(cleanedLog, sourceFile, contextMessage))
-        return true;
 
       if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
         return true;
 
-      error(contextMessage + " (see compiler output below):");
-      std::cerr << cleanedLog << "\n";
+      std::cerr << RED
+                << "error: "
+                << RESET
+                << contextMessage
+                << "\n";
+
+      print_hint("run with --verbose to inspect the full build output");
+
+      if (!cleanedLog.empty())
+      {
+        std::cerr << "\n"
+                  << GRAY
+                  << "compiler output:"
+                  << RESET
+                  << "\n";
+
+        std::cerr << cleanedLog;
+
+        if (cleanedLog.back() != '\n')
+          std::cerr << "\n";
+      }
+
       return false;
     }
 
@@ -235,56 +288,77 @@ namespace vix::cli
       return true;
 
     std::unordered_map<std::string, int> counts;
-    for (const auto &e : errors)
+    counts.reserve(errors.size());
+
+    for (const auto &err : errors)
     {
-      std::string key = e.file + "|" + e.message;
-      counts[key]++;
+      const std::string key = err.file + "|" + err.message;
+      ++counts[key];
     }
 
     std::vector<CompilerError> unique;
     unique.reserve(errors.size());
 
     std::unordered_set<std::string> seen;
-    for (const auto &e : errors)
+    seen.reserve(errors.size());
+
+    for (const auto &err : errors)
     {
-      std::string key = e.file + "|" + e.message;
+      const std::string key = err.file + "|" + err.message;
+
       if (seen.insert(key).second)
-        unique.push_back(e);
+        unique.push_back(err);
     }
 
     if (unique.empty())
     {
-      error(contextMessage + " (no unique errors found, see compiler output below):");
-      std::cerr << buildLog << "\n";
+      std::cerr << RED
+                << "error: "
+                << RESET
+                << contextMessage
+                << "\n";
+
+      print_hint("no unique compiler error was detected; inspect the raw compiler output");
+
+      if (!cleanedLog.empty())
+        std::cerr << cleanedLog << "\n";
+
       return false;
     }
 
-    error(contextMessage + ":");
+    std::cerr << RED
+              << "error: "
+              << RESET
+              << contextMessage
+              << "\n";
 
-    CodeFrameOptions cf;
-    cf.contextLines = 2;
-    cf.maxLineWidth = 120;
-    cf.tabWidth = 4;
+    CodeFrameOptions codeFrameOptions;
+    codeFrameOptions.contextLines = 2;
+    codeFrameOptions.maxLineWidth = 120;
+    codeFrameOptions.tabWidth = 4;
 
-    std::size_t maxToShow = std::min<std::size_t>(unique.size(), 3);
+    const std::size_t maxToShow =
+        std::min<std::size_t>(unique.size(), 3);
 
     for (std::size_t i = 0; i < maxToShow; ++i)
     {
       const auto &err = unique[i];
 
       std::cerr << "\n";
-      ::printSingleError(err);
-      ::printHints(err);
+      ::print_single_error(err);
+      ::print_generic_hint(err);
 
-      ErrorContext frameCtx{
+      ErrorContext frameContext{
           err.file,
           contextMessage,
-          cleanedLog};
+          cleanedLog,
+      };
 
-      printCodeFrame(err, frameCtx, cf);
+      printCodeFrame(err, frameContext, codeFrameOptions);
 
       const std::string key = err.file + "|" + err.message;
-      auto it = counts.find(key);
+      const auto it = counts.find(key);
+
       if (it != counts.end() && it->second > 1)
       {
         std::cerr << GRAY
@@ -296,11 +370,23 @@ namespace vix::cli
 
     if (unique.size() > maxToShow)
     {
-      std::cerr << "\n… " << (unique.size() - maxToShow)
-                << " more distinct errors hidden. Run the build manually for full output.\n";
+      std::cerr << "\n"
+                << GRAY
+                << (unique.size() - maxToShow)
+                << " more distinct error(s) hidden. Run with --verbose for full output."
+                << RESET
+                << "\n";
     }
 
-    std::cerr << "\nSource file: " << sourceFile << "\n";
+    if (!sourceFile.empty())
+    {
+      std::cerr << GREEN
+                << "at: "
+                << RESET
+                << sourceFile.string()
+                << "\n";
+    }
+
     return true;
   }
 } // namespace vix::cli

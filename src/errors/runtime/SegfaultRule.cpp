@@ -25,6 +25,34 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "null") ||
+          icontains(log, "address 0x0") ||
+          icontains(log, "addr 0x0"))
+      {
+        return "check for null pointers before dereferencing them";
+      }
+
+      if (icontains(log, "out of bounds") ||
+          icontains(log, "buffer") ||
+          icontains(log, "overflow"))
+      {
+        return "check array, vector, string, and buffer bounds before access";
+      }
+
+      if (icontains(log, "use-after-free") ||
+          icontains(log, "dangling"))
+      {
+        return "check dangling pointers, references, and object lifetimes";
+      }
+
+      return "check null pointers, dangling pointers, out-of-bounds access, and invalid references";
+    }
+  } // namespace
+
   class SegfaultRule final : public IRuntimeErrorRule
   {
   public:
@@ -43,18 +71,44 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      (void)log;
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "nullptr",
+                  "= nullptr",
+                  "->",
+                  "*",
+                  "[",
+                  ".at(",
+                  "delete",
+                  "free(",
+              });
+
+      const std::string message = "segmentation fault";
 
       std::cerr << RED
-                << "runtime error: segmentation fault"
+                << "runtime error: "
+                << message
                 << RESET << "\n";
+
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
 
       print_runtime_hints_and_at(
           {
-              "the program accessed invalid memory",
-              "check null pointers, dangling pointers, out-of-bounds access, and invalid references",
+              choose_hint(log),
           },
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          make_at_text(location, sourceFile));
 
       return true;
     }

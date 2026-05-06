@@ -11,11 +11,13 @@
  *  Vix.cpp
  *
  */
-#include "vix/cli/errors/IErrorRule.hpp"
-#include "vix/cli/errors/CodeFrame.hpp"
+#include <vix/cli/errors/IErrorRule.hpp>
+#include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -24,47 +26,68 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+  } // namespace
+
   class UseOfUninitializedRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string message = to_lower_ascii(err.message);
 
-      // Typical diagnostics:
-      // - "may be used uninitialized" (GCC)
-      // - "is used uninitialized" (some builds)
-      // - "use of uninitialized" (clang)
-      // - "uninitialized use" (varies)
-      const bool mentionsUninit = (m.find("uninitialized") != std::string::npos);
+      const bool mentionsUninitialized =
+          message.find("uninitialized") != std::string::npos;
+
+      if (!mentionsUninitialized)
+        return false;
 
       const bool strongPhrase =
-          (m.find("may be used") != std::string::npos) ||
-          (m.find("is used") != std::string::npos) ||
-          (m.find("use of uninitialized") != std::string::npos) ||
-          (m.find("uninitialized use") != std::string::npos);
+          message.find("may be used") != std::string::npos ||
+          message.find("is used") != std::string::npos ||
+          message.find("use of uninitialized") != std::string::npos ||
+          message.find("uninitialized use") != std::string::npos ||
+          message.find("used uninitialized") != std::string::npos ||
+          message.find("maybe-uninitialized") != std::string::npos;
 
-      return mentionsUninit && strongPhrase;
+      return strongPhrase;
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: use of an uninitialized value"
+                << "error: uninitialized value"
                 << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: initialize the variable before using it"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "initialize the variable before reading or passing it"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

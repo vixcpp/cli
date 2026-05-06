@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,50 +69,39 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "coroutine") &&
-              icontains(m, "co_return")) ||
-             (icontains(m, "missing") &&
-              icontains(m, "co_return")) ||
-             (icontains(m, "must return a value") &&
-              icontains(m, "coroutine")) ||
-             (icontains(m, "control reaches end of coroutine")) ||
-             (icontains(m, "no return statement") &&
-              icontains(m, "coroutine"));
+      return (icontains(message, "coroutine") &&
+              icontains(message, "co_return")) ||
+             (icontains(message, "missing") &&
+              icontains(message, "co_return")) ||
+             (icontains(message, "must return a value") &&
+              icontains(message, "coroutine")) ||
+             icontains(message, "control reaches end of coroutine") ||
+             (icontains(message, "no return statement") &&
+              icontains(message, "coroutine"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "missing co_return in coroutine"
-                << "\n";
+                << "error: missing co_return"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "this coroutine likely reaches the end without a valid co_return for its return type"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "add co_return where needed, or ensure the coroutine promise type supports reaching the end of the function"
+                << "add co_return or use a coroutine promise type that supports reaching the end"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

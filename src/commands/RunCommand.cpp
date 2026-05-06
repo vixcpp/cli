@@ -733,13 +733,18 @@ namespace
     if (replayEnabled)
       replayCapture.attach(&recorder);
 
+    const bool useSanRuntime = vix::commands::RunCommand::detail::want_any_sanitizer(
+        opt.enableSanitizers,
+        opt.enableUbsanOnly,
+        opt.enableThreadSanitizer);
+
     const LiveRunResult rr =
         vix::commands::RunCommand::detail::run_cmd_live_filtered_capture(
             runCmd,
             "",
             true,
             timeoutSec,
-            opt.enableSanitizers || opt.enableUbsanOnly,
+            useSanRuntime,
             false,
             replayEnabled ? &replayCapture : nullptr);
 
@@ -1714,6 +1719,7 @@ namespace vix::commands::RunCommand
     out << "  --auto-deps=up                Also search deps in parent folders (future/optional)\n";
     out << "  --san                         Enable ASan and UBSan\n";
     out << "  --ubsan                       Enable UBSan only\n";
+    out << "  --tsan                        Enable ThreadSanitizer only\n";
     out << "  --with-sqlite                 Enable SQLite support for script mode\n";
     out << "  --with-mysql                  Enable MySQL support for script mode\n\n";
     out << "  --local-cache                 Use local .vix-scripts instead of global cache\n";

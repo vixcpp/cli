@@ -1,6 +1,6 @@
 /**
  *
- *  @file UseAfterMoveRUle.cpp
+ *  @file UseAfterMoveRule.cpp
  *  @author Gaspard Kirira
  *
  *  Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -25,8 +25,10 @@
 #pragma GCC diagnostic pop
 #endif
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -35,39 +37,71 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+
+    std::string extract_moved_variable(const std::string &message)
+    {
+      {
+        const std::regex re(R"(use of '([^']+)' after it was moved)");
+        std::smatch match;
+
+        if (std::regex_search(message, match, re) && match.size() >= 2)
+          return match[1].str();
+      }
+
+      {
+        const std::regex re(R"(use of moved-from variable '([^']+)')");
+        std::smatch match;
+
+        if (std::regex_search(message, match, re) && match.size() >= 2)
+          return match[1].str();
+      }
+
+      return "object";
+    }
+  } // namespace
+
   class UseAfterMoveRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &msg = err.message;
+      const std::string message = to_lower_ascii(err.message);
 
-      // Clang commonly:
-      //   "use of 'x' after it was moved"
-      //
-      // Some variants can contain "use of moved value" etc.
-      const bool afterMoved = (msg.find("after it was moved") != std::string::npos);
-      const bool useOf = (msg.find("use of") != std::string::npos);
+      const bool afterMoved =
+          message.find("after it was moved") != std::string::npos;
+
+      const bool useOf =
+          message.find("use of") != std::string::npos;
 
       const bool movedValue =
-          (msg.find("use of moved") != std::string::npos) ||
-          (msg.find("moved-from") != std::string::npos);
+          message.find("use of moved") != std::string::npos ||
+          message.find("moved-from") != std::string::npos ||
+          message.find("use-after-move") != std::string::npos;
 
       return (afterMoved && useOf) || movedValue;
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
-      std::string varName = "object";
-      {
-        std::regex re(R"(use of '([^']+)' after it was moved)");
-        std::smatch m;
-        if (std::regex_search(err.message, m, re) && m.size() >= 2)
-          varName = m[1].str();
-      }
+      const std::string variableName =
+          extract_moved_variable(err.message);
 
       std::cerr << RED
                 << "error: use-after-move"
@@ -76,12 +110,16 @@ namespace vix::cli::errors
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: '" << varName << "' was moved; do not use it unless you reassign/reset it"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "'" << variableName << "' was moved; reassign it before using it again"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

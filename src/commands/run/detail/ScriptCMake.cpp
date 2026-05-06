@@ -822,8 +822,8 @@ namespace vix::commands::RunCommand::detail
     void append_sanitizer_options_block(std::string &s, const ScriptFeatures &feat)
     {
       append_line(s, "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)");
-      append_line(s, "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan or ubsan\")");
-      append_line(s, "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan)");
+      append_line(s, "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan, ubsan, or tsan\")");
+      append_line(s, "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan tsan)");
       append_line(s, "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)");
       append_line(s, "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)");
       append_line(s, std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")");
@@ -1076,7 +1076,15 @@ namespace vix::commands::RunCommand::detail
     void append_sanitizer_runtime_block(std::string &s, const std::string &targetName)
     {
       append_line(s, "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)");
-      append_line(s, "  if (VIX_SANITIZER_MODE STREQUAL \"ubsan\")");
+      append_line(s, "  if (VIX_SANITIZER_MODE STREQUAL \"tsan\")");
+      append_line(s, "    message(STATUS \"Sanitizers: TSan enabled\")");
+      append_line(s, "    target_compile_options(" + targetName + " PRIVATE");
+      append_line(s, "      -O1 -g3");
+      append_line(s, "      -fno-omit-frame-pointer");
+      append_line(s, "      -fsanitize=thread");
+      append_line(s, "    )");
+      append_line(s, "    target_link_options(" + targetName + " PRIVATE -fsanitize=thread)");
+      append_line(s, "  elseif (VIX_SANITIZER_MODE STREQUAL \"ubsan\")");
       append_line(s, "    message(STATUS \"Sanitizers: UBSan enabled\")");
       append_line(s, "    target_compile_options(" + targetName + " PRIVATE");
       append_line(s, "      -O0 -g3");

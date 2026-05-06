@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,31 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_title(const std::string &log)
+    {
+      if (icontains(log, "front"))
+        return "runtime error: front() on empty container";
+
+      if (icontains(log, "back"))
+        return "runtime error: back() on empty container";
+
+      return "runtime error: access on empty container";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "front"))
+        return "check empty() before calling front(), or ensure the container has at least one element";
+
+      if (icontains(log, "back"))
+        return "check empty() before calling back(), or ensure the container has at least one element";
+
+      return "check empty() before accessing the first or last element of a container";
+    }
+  } // namespace
+
   class EmptyContainerFrontBackRule final : public IRuntimeErrorRule
   {
   public:
@@ -49,36 +73,29 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: access on empty container";
-      std::vector<std::string> hints = {
-          "front() or back() was used on an empty container",
-          "check empty() before calling front() or back()",
-      };
-
-      if (icontains(log, "front"))
-      {
-        title = "runtime error: front() on empty container";
-        hints = {
-            "front() was called but the container has no elements",
-            "check empty() first or ensure the container is filled before accessing the first element",
-        };
-      }
-      else if (icontains(log, "back"))
-      {
-        title = "runtime error: back() on empty container";
-        hints = {
-            "back() was called but the container has no elements",
-            "check empty() first or ensure the container is filled before accessing the last element",
-        };
-      }
+      const RuntimeLocation location =
+          find_best_runtime_location(log, sourceFile);
 
       std::cerr << RED
-                << title
+                << choose_title(log)
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            "empty container access");
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

@@ -47,28 +47,51 @@ namespace vix::cli::errors::build
       return log.find(needle) != std::string_view::npos;
     }
 
-    void printField(std::string_view label, std::string_view value)
+    void print_field(
+        std::string_view label,
+        std::string_view value)
     {
       if (value.empty())
-      {
         return;
-      }
 
       std::cerr << PAD << label << value << "\n";
     }
 
-    void printColoredField(
+    void print_colored_field(
         std::string_view label,
         const char *color,
         std::string_view value)
     {
       if (value.empty())
-      {
         return;
-      }
 
-      std::cerr << PAD << label
-                << color << value << RESET << "\n";
+      std::cerr << PAD
+                << label
+                << color
+                << value
+                << RESET
+                << "\n";
+    }
+
+    void print_error_title(std::string_view message)
+    {
+      std::cerr << RED
+                << "error: "
+                << RESET
+                << message
+                << "\n";
+    }
+
+    void print_hint(std::string_view message)
+    {
+      if (message.empty())
+        return;
+
+      std::cerr << YELLOW
+                << "hint: "
+                << RESET
+                << message
+                << "\n";
     }
 
     bool handleCacheMismatch(std::string_view log)
@@ -81,14 +104,11 @@ namespace vix::cli::errors::build
           contains(log, "used to generate cache");
 
       if (!hasCurrentCacheDir && !hasSourceMismatch)
-      {
         return false;
-      }
 
-      error("CMake configure failed: stale build cache detected.");
-      hint("Your build directory was generated from another source location.");
-      hint("Recommended: vix build --clean");
-      hint("Manual fix: rm -rf build-ninja build-dev build-release");
+      print_error_title("stale CMake build cache");
+      print_hint("run vix build --clean or remove the old build directory");
+
       return true;
     }
 
@@ -108,12 +128,11 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(links\s+to:\s*\n\s*\n\s*([^\s][^\n]*))re"));
 
-      error("Build failed: unresolved CMake target.");
-      printField("target: ", target);
-      printColoredField("missing: ", RED, missing);
-      blank(std::cerr);
-      hint("Fix the target name or ensure it is defined before linking.");
-      hint("If it is an imported target, call find_package() first.");
+      print_error_title("unresolved CMake target");
+      print_field("target: ", target);
+      print_colored_field("missing: ", RED, missing);
+      print_hint("define the target before linking it or call find_package() for imported targets");
+
       return true;
     }
 
@@ -136,21 +155,15 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(No package '([^']+)')re"));
 
-      error("CMake configure failed: required package not found.");
+      print_error_title("required package not found");
 
       if (!packageName.empty())
-      {
-        printColoredField("package: ", RED, packageName);
-      }
+        print_colored_field("package: ", RED, packageName);
       else
-      {
-        printColoredField("package: ", RED, packageNameAlt);
-      }
+        print_colored_field("package: ", RED, packageNameAlt);
 
-      blank(std::cerr);
-      hint("Install the missing library (e.g. via apt, brew, vcpkg, conan).");
-      hint("Or set the hint variable, e.g.: -DBoost_ROOT=/path/to/boost");
-      hint("Check that the package provides a <Pkg>Config.cmake file.");
+      print_hint("install the missing library or set its CMake hint variable, for example <Pkg>_ROOT");
+
       return true;
     }
 
@@ -164,10 +177,9 @@ namespace vix::cli::errors::build
         return false;
       }
 
-      error("CMake configure failed: compiler not found.");
-      hint("Install a C/C++ compiler (gcc, clang, msvc).");
-      hint("Or specify it explicitly: cmake -DCMAKE_CXX_COMPILER=clang++");
-      hint("On Ubuntu: sudo apt install build-essential");
+      print_error_title("compiler not found");
+      print_hint("install a C/C++ compiler or set CMAKE_CXX_COMPILER explicitly");
+
       return true;
     }
 
@@ -192,10 +204,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(cmake_minimum_required\s*\(\s*VERSION\s+([\d.]+))re"));
 
-      error("CMake configure failed: CMake version too old.");
-      printField("required: ", required);
-      hint("Upgrade CMake from the official CMake distribution.");
-      hint("On Ubuntu: pip install cmake --upgrade");
+      print_error_title("CMake version too old");
+      print_field("required: ", required);
+      print_hint("upgrade CMake or lower cmake_minimum_required() if the project supports it");
+
       return true;
     }
 
@@ -225,13 +237,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re((?:The source directory|Source directory)\s+"([^"]+)")re"));
 
-      error("CMake configure failed: CMakeLists.txt not found.");
+      print_error_title("CMakeLists.txt not found");
+      print_field("directory: ", path);
+      print_hint("check the source directory passed to CMake");
 
-      if (!path.empty())
-        printField("directory: ", path);
-
-      hint("Check the source directory passed to CMake.");
-      hint("Run with --verbose to inspect the full configure command.");
       return true;
     }
 
@@ -254,24 +263,20 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(CMake Error at [^\s:]+:(\d+))re"));
 
-      error("CMake configure failed: syntax error in CMakeLists.txt.");
+      print_error_title("syntax error in CMakeLists.txt");
 
       if (!file.empty())
-      {
-        const std::string location = file + ":" + line;
-        printField("file: ", location);
-      }
+        print_field("at: ", file + ":" + line);
 
-      hint("Check for mismatched parentheses or invalid CMake syntax.");
+      print_hint("check for mismatched parentheses, invalid commands, or malformed arguments");
+
       return true;
     }
 
     bool handleCMakePolicy(std::string_view log)
     {
       if (!contains(log, "CMP"))
-      {
         return false;
-      }
 
       if (!contains(log, "CMake Error") &&
           !contains(log, "cmake_policy") &&
@@ -284,15 +289,14 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re((CMP\d{4}))re"));
 
-      error("CMake configure failed: policy violation.");
-      printField("policy: ", policy);
+      print_error_title("CMake policy violation");
+      print_field("policy: ", policy);
 
       if (!policy.empty())
-      {
-        hint("Add cmake_policy(SET " + policy + " NEW) to your CMakeLists.txt.");
-      }
+        print_hint("set the policy explicitly with cmake_policy(SET " + policy + " NEW)");
+      else
+        print_hint("set the required CMake policy or increase cmake_minimum_required()");
 
-      hint("Or increase cmake_minimum_required(VERSION ...) to a newer version.");
       return true;
     }
 
@@ -317,10 +321,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(Cannot find source file:\s*\n?\s*([^\s\n]+))re"));
 
-      error("CMake configure failed: source file not found.");
-      printColoredField("file: ", RED, file);
-      hint("Check the filename spelling in add_executable() or add_library().");
-      hint("Make sure the file exists and the path is relative to CMakeLists.txt.");
+      print_error_title("source file not found");
+      print_colored_field("file: ", RED, file);
+      print_hint("check the filename spelling in add_executable() or add_library()");
+
       return true;
     }
 
@@ -338,10 +342,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re((?:No such|Unknown) generator[:\s]+"?([^"\n]+)"?)re"));
 
-      error("CMake configure failed: build system generator not available.");
-      printField("generator: ", generator);
-      hint("Install Ninja: sudo apt install ninja-build | brew install ninja");
-      hint("Or switch generator: cmake -G \"Unix Makefiles\"");
+      print_error_title("CMake generator not available");
+      print_field("generator: ", generator);
+      print_hint("install Ninja or switch to another generator such as Unix Makefiles");
+
       return true;
     }
 
@@ -358,10 +362,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(include could not find\s+(?:requested file|load file):\s*\n?\s*([^\s\n]+))re"));
 
-      error("CMake configure failed: missing CMake module or include file.");
-      printColoredField("module: ", RED, module);
-      hint("Check that the .cmake file exists in CMAKE_MODULE_PATH.");
-      hint("Or install the CMake module providing that file.");
+      print_error_title("missing CMake module");
+      print_colored_field("module: ", RED, module);
+      print_hint("check CMAKE_MODULE_PATH or install the CMake module providing that file");
+
       return true;
     }
 
@@ -378,10 +382,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(Unknown CMake command\s+"([^"]+)")re"));
 
-      error("CMake configure failed: unknown command or option.");
-      printColoredField("command: ", RED, command);
-      hint("Check spelling of the CMake command or variable.");
-      hint("This may also happen when the CMake version is too old for this command.");
+      print_error_title("unknown CMake command or option");
+      print_colored_field("command: ", RED, command);
+      print_hint("check the command spelling or upgrade CMake if the command requires a newer version");
+
       return true;
     }
 
@@ -398,10 +402,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(cannot create target\s+"([^"]+)")re"));
 
-      error("CMake configure failed: duplicate target name.");
-      printColoredField("target: ", RED, target);
-      hint("Each add_executable() / add_library() name must be unique.");
-      hint("Rename one of the conflicting targets.");
+      print_error_title("duplicate CMake target");
+      print_colored_field("target: ", RED, target);
+      print_hint("rename one target so every add_executable() or add_library() name is unique");
+
       return true;
     }
 
@@ -417,17 +421,16 @@ namespace vix::cli::errors::build
           contains(log, "does not exist");
 
       if (!referencesTargetCommand || !referencesMissingTarget)
-      {
         return false;
-      }
 
       const std::string target = extract(
           log,
           std::regex(R"re((?:target|Target)\s+"([^"]+)"\s+(?:is not|does not))re"));
 
-      error("CMake configure failed: property set on a non-existent target.");
-      printColoredField("target: ", RED, target);
-      hint("Make sure the target is created with add_executable() or add_library() before referencing it.");
+      print_error_title("CMake target does not exist");
+      print_colored_field("target: ", RED, target);
+      print_hint("create the target before referencing it with target_* or set_target_properties()");
+
       return true;
     }
 
@@ -444,9 +447,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(toolchain file\s+"([^"]+)")re"));
 
-      error("CMake configure failed: toolchain file not found.");
-      printColoredField("toolchain: ", RED, toolchain);
-      hint("Check the path passed to -DCMAKE_TOOLCHAIN_FILE=...");
+      print_error_title("toolchain file not found");
+      print_colored_field("toolchain: ", RED, toolchain);
+      print_hint("check the path passed to CMAKE_TOOLCHAIN_FILE");
+
       return true;
     }
 
@@ -470,11 +474,10 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(FetchContent[^\n]*?([A-Za-z0-9_\-]+)\s)re"));
 
-      error("CMake configure failed: FetchContent / ExternalProject download error.");
-      printField("dependency: ", dependency);
-      hint("Check your internet connection.");
-      hint("Verify the URL in FetchContent_Declare() is still valid.");
-      hint("Use GIT_SHALLOW TRUE to speed up fetches.");
+      print_error_title("dependency download failed");
+      print_field("dependency: ", dependency);
+      print_hint("check your internet connection and verify the FetchContent or ExternalProject URL");
+
       return true;
     }
 
@@ -498,109 +501,71 @@ namespace vix::cli::errors::build
           log,
           std::regex(R"re(CMake Error[^\n]*\n\s*([^\n]+))re"));
 
-      error("CMake configure failed.");
+      print_error_title("CMake configure failed");
 
       if (!file.empty())
-      {
-        const std::string location = file + ":" + lineNumber;
-        printField("at: ", location);
-      }
+        print_field("at: ", file + ":" + lineNumber);
 
-      printField("reason: ", message);
-      hint("Run cmake manually for full output: vix build --verbose");
+      print_field("reason: ", message);
+      print_hint("run vix build --verbose to inspect the full CMake output");
+
       return true;
     }
-
   } // namespace
 
   bool handleCMakeBuildError(std::string_view log)
   {
     if (handleCacheMismatch(log))
-    {
       return true;
-    }
 
     if (handleMissingLinkTarget(log))
-    {
       return true;
-    }
 
     if (handlePackageNotFound(log))
-    {
       return true;
-    }
 
     if (handleCompilerNotFound(log))
-    {
       return true;
-    }
 
     if (handleCMakeVersion(log))
-    {
       return true;
-    }
 
     if (handleMissingCMakeLists(log))
-    {
       return true;
-    }
 
     if (handleCMakeSyntaxError(log))
-    {
       return true;
-    }
 
     if (handleCMakePolicy(log))
-    {
       return true;
-    }
 
     if (handleMissingSourceFile(log))
-    {
       return true;
-    }
 
     if (handleUnknownGenerator(log))
-    {
       return true;
-    }
 
     if (handleMissingCMakeModule(log))
-    {
       return true;
-    }
 
     if (handleUnknownOption(log))
-    {
       return true;
-    }
 
     if (handleDuplicateTarget(log))
-    {
       return true;
-    }
 
     if (handlePropertyOnNonexistentTarget(log))
-    {
       return true;
-    }
 
     if (handleToolchainNotFound(log))
-    {
       return true;
-    }
 
     if (handleFetchContentError(log))
-    {
       return true;
-    }
 
     if (handleGenericCMakeError(log))
-    {
       return true;
-    }
 
     return false;
   }
-
 } // namespace vix::cli::errors::build

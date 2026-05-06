@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,43 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_title(const std::string &log)
+    {
+      if (icontains(log, "broken promise"))
+        return "runtime error: broken promise";
+
+      if (icontains(log, "promise already satisfied"))
+        return "runtime error: promise already satisfied";
+
+      if (icontains(log, "future already retrieved"))
+        return "runtime error: future already retrieved";
+
+      if (icontains(log, "no associated state"))
+        return "runtime error: invalid future state";
+
+      return "runtime error: future/promise misuse";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "broken promise"))
+        return "set a value or exception before the promise is destroyed";
+
+      if (icontains(log, "promise already satisfied"))
+        return "call set_value() or set_exception() only once for the same promise";
+
+      if (icontains(log, "future already retrieved"))
+        return "call get_future() only once for the same promise";
+
+      if (icontains(log, "no associated state"))
+        return "avoid using moved-from futures or promises without a valid shared state";
+
+      return "check future/promise ownership and ensure the shared state is consumed or fulfilled only once";
+    }
+  } // namespace
+
   class FuturePromiseRule final : public IRuntimeErrorRule
   {
   public:
@@ -47,52 +83,29 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: future/promise misuse";
-      std::vector<std::string> hints = {
-          "a std::future or std::promise was used incorrectly",
-          "check ownership, state validity, and whether the shared state was consumed or fulfilled more than once",
-      };
-
-      if (icontains(log, "broken promise"))
-      {
-        title = "runtime error: broken promise";
-        hints = {
-            "the promise was destroyed before setting a value or exception",
-            "ensure every promise sets a value or exception before it goes out of scope",
-        };
-      }
-      else if (icontains(log, "promise already satisfied"))
-      {
-        title = "runtime error: promise already satisfied";
-        hints = {
-            "the same promise was fulfilled more than once",
-            "call set_value() or set_exception() only once for a given promise",
-        };
-      }
-      else if (icontains(log, "future already retrieved"))
-      {
-        title = "runtime error: future already retrieved";
-        hints = {
-            "get_future() was likely called more than once on the same promise",
-            "retrieve the future only once, or redesign ownership of the shared state",
-        };
-      }
-      else if (icontains(log, "no associated state"))
-      {
-        title = "runtime error: invalid future state";
-        hints = {
-            "the future or promise has no valid shared state",
-            "check moved-from objects and avoid calling get(), wait(), or set_value() on invalid state",
-        };
-      }
+      const RuntimeLocation location =
+          find_best_runtime_location(log, sourceFile);
 
       std::cerr << RED
-                << title
+                << choose_title(log)
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            "future/promise misuse");
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

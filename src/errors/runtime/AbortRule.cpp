@@ -25,6 +25,41 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "terminate called"))
+        return "std::terminate called";
+
+      if (icontains(log, "abort()") ||
+          icontains(log, "std::abort"))
+        return "std::abort called";
+
+      if (icontains(log, "sigabrt") ||
+          icontains(log, "signal 6"))
+        return "SIGABRT received";
+
+      return "aborted";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "terminate called"))
+        return "check uncaught exceptions, joinable std::thread destruction, or noexcept violations";
+
+      if (icontains(log, "abort()") ||
+          icontains(log, "std::abort"))
+        return "check the code path that explicitly calls abort() or std::abort()";
+
+      if (icontains(log, "assert") ||
+          icontains(log, "assertion"))
+        return "check the failed assertion and the condition that was expected to be true";
+
+      return "check assertions, std::terminate(), uncaught exceptions, and invalid runtime states";
+    }
+  } // namespace
+
   class AbortRule final : public IRuntimeErrorRule
   {
   public:
@@ -47,18 +82,43 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      (void)log;
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "std::abort",
+                  "abort()",
+                  "abort(",
+                  "assert(",
+                  "throw ",
+                  "std::terminate",
+                  "terminate()",
+              });
+
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << "runtime error: aborted"
+                << "runtime error: "
+                << message
                 << RESET << "\n";
+
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
 
       print_runtime_hints_and_at(
           {
-              "the program aborted itself or was terminated after a fatal runtime failure",
-              "check assertions, std::terminate(), uncaught exceptions, and invalid runtime states",
+              choose_hint(log),
           },
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          make_at_text(location, sourceFile));
 
       return true;
     }

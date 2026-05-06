@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,52 +69,41 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "promise_type") &&
-              icontains(m, "invalid")) ||
-             (icontains(m, "promise_type") &&
-              icontains(m, "not found")) ||
-             (icontains(m, "no member named") &&
-              icontains(m, "promise_type")) ||
-             (icontains(m, "unable to find the promise type")) ||
-             (icontains(m, "std::coroutine_traits") &&
-              icontains(m, "promise_type")) ||
-             (icontains(m, "promise type") &&
-              icontains(m, "coroutine"));
+      return (icontains(message, "promise_type") &&
+              icontains(message, "invalid")) ||
+             (icontains(message, "promise_type") &&
+              icontains(message, "not found")) ||
+             (icontains(message, "no member named") &&
+              icontains(message, "promise_type")) ||
+             icontains(message, "unable to find the promise type") ||
+             (icontains(message, "std::coroutine_traits") &&
+              icontains(message, "promise_type")) ||
+             (icontains(message, "promise type") &&
+              icontains(message, "coroutine"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "invalid coroutine promise type"
-                << "\n";
+                << "error: invalid coroutine promise type"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the coroutine return type does not expose a valid promise_type usable by the compiler"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check the promise_type definition and ensure it provides the coroutine hooks required by the return type"
+                << "define a valid promise_type with the coroutine hooks required by the return type"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

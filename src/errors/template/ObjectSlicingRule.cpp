@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,46 +69,41 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "slicing") && icontains(m, "object")) ||
-             (icontains(m, "object slicing")) ||
-             (icontains(m, "base class") && icontains(m, "copy") && icontains(m, "derived")) ||
-             (icontains(m, "derived") && icontains(m, "sliced")) ||
-             (icontains(m, "polymorphic") && icontains(m, "copy") && icontains(m, "base"));
+      return (icontains(message, "slicing") &&
+              icontains(message, "object")) ||
+             icontains(message, "object slicing") ||
+             (icontains(message, "base class") &&
+              icontains(message, "copy") &&
+              icontains(message, "derived")) ||
+             (icontains(message, "derived") &&
+              icontains(message, "sliced")) ||
+             (icontains(message, "polymorphic") &&
+              icontains(message, "copy") &&
+              icontains(message, "base"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "object slicing detected"
-                << "\n";
+                << "error: object slicing"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "a derived object is being copied or assigned into a base object, which discards the derived part"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "store polymorphic objects by reference, pointer, or smart pointer when you need virtual behavior"
+                << "store polymorphic objects by reference, pointer, or smart pointer to preserve derived behavior"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

@@ -19,6 +19,6 @@
 namespace vix::cli::errors::build
 {
   bool handleBuildErrors(std::string_view log);
-}
+} // namespace vix::cli::errors::build
 
 #endif

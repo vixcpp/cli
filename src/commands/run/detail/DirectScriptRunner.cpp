@@ -274,8 +274,9 @@ namespace vix::commands::RunCommand::detail
       std::ostringstream oss;
 
       oss << "direct";
-      oss << ";san=" << text::bool01(want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly));
-      oss << ";san_mode=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
+      oss << ";san=" << text::bool01(want_any_sanitizer(opt.enableSanitizers, opt.enableUbsanOnly, opt.enableThreadSanitizer));
+
+      oss << ";san_mode=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly, opt.enableThreadSanitizer);
       oss << ";sqlite=" << text::bool01(opt.withSqlite);
       oss << ";mysql=" << text::bool01(opt.withMySql);
 
@@ -595,20 +596,31 @@ namespace vix::commands::RunCommand::detail
       for (const auto &compileOpt : plan.probe.compileOpts)
         append_quoted(cmd, compileOpt);
 
-      const bool san = want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly);
+      const bool san = want_any_sanitizer(
+          opt.enableSanitizers,
+          opt.enableUbsanOnly,
+          opt.enableThreadSanitizer);
+
       if (san)
       {
-        if (opt.enableUbsanOnly)
+        if (opt.enableThreadSanitizer)
+        {
+          cmd << " -fsanitize=thread";
+          cmd << " -O1";
+          cmd << " -g";
+          cmd << " -fno-omit-frame-pointer";
+        }
+        else if (opt.enableUbsanOnly)
         {
           cmd << " -fsanitize=undefined";
+          cmd << " -g";
         }
         else
         {
           cmd << " -fsanitize=address,undefined";
           cmd << " -fno-omit-frame-pointer";
+          cmd << " -g";
         }
-
-        cmd << " -g";
       }
 
       for (const auto &dir : plan.probe.libDirs)
@@ -725,7 +737,10 @@ namespace vix::commands::RunCommand::detail
     }
 
 #ifndef _WIN32
-    apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
+    apply_sanitizer_env_if_needed(
+        opt.enableSanitizers,
+        opt.enableUbsanOnly,
+        opt.enableThreadSanitizer);
 #endif
 
     const auto cache = load_direct_script_cache_state(plan);
@@ -737,7 +752,10 @@ namespace vix::commands::RunCommand::detail
           "",
           false,
           0,
-          opt.enableSanitizers || opt.enableUbsanOnly,
+          want_any_sanitizer(
+              opt.enableSanitizers,
+              opt.enableUbsanOnly,
+              opt.enableThreadSanitizer),
           true);
 
       if (build.exitCode != 0)
@@ -803,7 +821,10 @@ namespace vix::commands::RunCommand::detail
         "Running script...",
         plan.passthroughRuntime,
         plan.effectiveTimeoutSec,
-        opt.enableSanitizers || opt.enableUbsanOnly,
+        want_any_sanitizer(
+            opt.enableSanitizers,
+            opt.enableUbsanOnly,
+            opt.enableThreadSanitizer),
         false,
         replayEnabled ? &replayCapture : nullptr);
 

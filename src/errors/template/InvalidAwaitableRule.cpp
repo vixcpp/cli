@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,54 +69,43 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "co_await") &&
-              icontains(m, "awaitable")) ||
-             (icontains(m, "co_await") &&
-              icontains(m, "cannot be used")) ||
-             (icontains(m, "no member named") &&
-              (icontains(m, "await_ready") ||
-               icontains(m, "await_suspend") ||
-               icontains(m, "await_resume"))) ||
-             (icontains(m, "no matching") &&
-              icontains(m, "operator co_await")) ||
-             (icontains(m, "not awaitable")) ||
-             (icontains(m, "awaiter") &&
-              icontains(m, "invalid"));
+      return (icontains(message, "co_await") &&
+              icontains(message, "awaitable")) ||
+             (icontains(message, "co_await") &&
+              icontains(message, "cannot be used")) ||
+             (icontains(message, "no member named") &&
+              (icontains(message, "await_ready") ||
+               icontains(message, "await_suspend") ||
+               icontains(message, "await_resume"))) ||
+             (icontains(message, "no matching") &&
+              icontains(message, "operator co_await")) ||
+             icontains(message, "not awaitable") ||
+             (icontains(message, "awaiter") &&
+              icontains(message, "invalid"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "invalid awaitable used with co_await"
-                << "\n";
+                << "error: invalid awaitable"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the object used with co_await does not satisfy the awaitable protocol expected by the compiler"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check operator co_await, await_ready(), await_suspend(), and await_resume() on the awaited type"
+                << "provide operator co_await or await_ready(), await_suspend(), and await_resume()"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

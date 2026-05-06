@@ -130,8 +130,9 @@ namespace vix::commands::RunCommand::detail
     bool forceServerLike = false;
     bool forceScriptLike = false;
 
-    bool enableSanitizers = false; // ASan + UBSan
-    bool enableUbsanOnly = false;  // UBSan only
+    bool enableSanitizers = false;      // ASan + UBSan
+    bool enableUbsanOnly = false;       // UBSan only
+    bool enableThreadSanitizer = false; // TSan only
 
     bool withSqlite = false;
     bool withMySql = false;
@@ -449,6 +450,27 @@ namespace vix::commands::RunCommand::detail
       return 0;
 
     return opt.timeoutSec;
+  }
+
+  /**
+   * @brief Checks whether any sanitizer mode is enabled.
+   *
+   * This includes:
+   * - ASan+UBSan
+   * - UBSan-only
+   * - ThreadSanitizer
+   *
+   * @param enableSanitizers True when ASan+UBSan mode is enabled.
+   * @param enableUbsanOnly True when UBSan-only mode is enabled.
+   * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
+   * @return True if any sanitizer mode is active.
+   */
+  inline bool want_any_sanitizer(
+      bool enableSanitizers,
+      bool enableUbsanOnly,
+      bool enableThreadSanitizer) noexcept
+  {
+    return enableSanitizers || enableUbsanOnly || enableThreadSanitizer;
   }
 
   /**

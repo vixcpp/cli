@@ -590,7 +590,7 @@ namespace vix::commands::CheckCommand::detail
       }
 
       if (opt.enableSanitizers || opt.enableUbsanOnly)
-        run::apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
+        run::apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly, opt.enableThreadSanitizer);
 
       std::ostringstream cmd;
       cmd << "cd " << quote(buildDir.string()) << " && " << quote(exePath.string());

@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,47 +69,35 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return icontains(m, "substitution failure") ||
-             icontains(m, "substitution failed") ||
-             icontains(m, "template argument deduction/substitution failed") ||
-             icontains(m, "no matching function for call") ||
-             icontains(m, "candidate template ignored") ||
-             icontains(m, "requirements not satisfied");
+      return icontains(message, "substitution failure") ||
+             icontains(message, "substitution failed") ||
+             icontains(message, "template argument deduction/substitution failed") ||
+             icontains(message, "candidate template ignored") ||
+             icontains(message, "requirements not satisfied");
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "template substitution failed"
-                << "\n";
+                << "error: template substitution failed"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the compiler tried to instantiate a template with your types, but one or more required expressions or types were not valid"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check the template constraints, required member types/functions, and whether the chosen type really supports the operations used inside the template"
+                << "check template constraints, required member types, required functions, and supported operations"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

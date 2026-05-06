@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,51 +69,40 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "coroutine") &&
-              icontains(m, "return type")) ||
-             (icontains(m, "unable to find the promise type")) ||
-             (icontains(m, "this function cannot be a coroutine")) ||
-             (icontains(m, "std::coroutine_traits") &&
-              icontains(m, "promise_type")) ||
-             (icontains(m, "no member named") &&
-              icontains(m, "promise_type")) ||
-             (icontains(m, "coroutine") &&
-              icontains(m, "promise_type"));
+      return (icontains(message, "coroutine") &&
+              icontains(message, "return type")) ||
+             icontains(message, "unable to find the promise type") ||
+             icontains(message, "this function cannot be a coroutine") ||
+             (icontains(message, "std::coroutine_traits") &&
+              icontains(message, "promise_type")) ||
+             (icontains(message, "no member named") &&
+              icontains(message, "promise_type")) ||
+             (icontains(message, "coroutine") &&
+              icontains(message, "promise_type"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "invalid coroutine return type"
-                << "\n";
+                << "error: invalid coroutine return type"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the return type used by this coroutine does not provide the coroutine interface expected by the compiler"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check that the return type exposes a valid promise_type and that it is designed to be used as a coroutine return type"
+                << "use a coroutine return type that provides a valid promise_type"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

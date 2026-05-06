@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,53 +69,42 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "dynamic_cast") &&
-              icontains(m, "not polymorphic")) ||
-             (icontains(m, "invalid static_cast") &&
-              icontains(m, "base") &&
-              icontains(m, "derived")) ||
-             (icontains(m, "cannot dynamic_cast")) ||
-             (icontains(m, "downcast") &&
-              icontains(m, "invalid")) ||
-             (icontains(m, "source type is not polymorphic")) ||
-             (icontains(m, "cannot cast") &&
-              icontains(m, "base") &&
-              icontains(m, "derived"));
+      return (icontains(message, "dynamic_cast") &&
+              icontains(message, "not polymorphic")) ||
+             (icontains(message, "invalid static_cast") &&
+              icontains(message, "base") &&
+              icontains(message, "derived")) ||
+             icontains(message, "cannot dynamic_cast") ||
+             (icontains(message, "downcast") &&
+              icontains(message, "invalid")) ||
+             icontains(message, "source type is not polymorphic") ||
+             (icontains(message, "cannot cast") &&
+              icontains(message, "base") &&
+              icontains(message, "derived"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "invalid downcast"
-                << "\n";
+                << "error: invalid downcast"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "this cast tries to convert a base object or pointer into a derived type in a way that is not safe or not allowed"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "use dynamic_cast with a polymorphic base when runtime checking is needed, or redesign the ownership and type flow to avoid unsafe downcasts"
+                << "use dynamic_cast with a polymorphic base or avoid unsafe base-to-derived casts"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

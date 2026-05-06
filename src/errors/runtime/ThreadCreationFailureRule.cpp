@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,31 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "resource temporarily unavailable"))
+        return "thread resource limit reached";
+
+      if (icontains(log, "pthread_create"))
+        return "pthread_create failed";
+
+      return "thread creation failed";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "resource temporarily unavailable"))
+        return "reduce the number of concurrent threads or use a thread pool";
+
+      if (icontains(log, "pthread_create"))
+        return "check thread limits, available memory, stack size, and thread count";
+
+      return "check system thread limits, available memory, and excessive thread creation";
+    }
+  } // namespace
+
   class ThreadCreationFailureRule final : public IRuntimeErrorRule
   {
   public:
@@ -36,7 +60,8 @@ namespace vix::cli::errors::runtime
       (void)sourceFile;
 
       return (icontains(log, "std::system_error") &&
-              (icontains(log, "thread") || icontains(log, "resource temporarily unavailable"))) ||
+              (icontains(log, "thread") ||
+               icontains(log, "resource temporarily unavailable"))) ||
              icontains(log, "resource temporarily unavailable") ||
              icontains(log, "thread constructor failed") ||
              icontains(log, "failed to create thread") ||
@@ -47,36 +72,43 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: thread creation failed";
-      std::vector<std::string> hints = {
-          "the program failed to start a new thread",
-          "check system thread limits, available memory, stack size, and thread explosion in the design",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "std::thread",
+                  "thread(",
+                  ".detach(",
+                  ".join(",
+                  "pthread_create",
+                  "emplace_back(",
+                  "push_back(",
+              });
 
-      if (icontains(log, "resource temporarily unavailable"))
-      {
-        title = "runtime error: thread resource limit reached";
-        hints = {
-            "the system refused to create another thread",
-            "reduce the number of concurrent threads, reuse threads with a pool, or check process/system limits",
-        };
-      }
-      else if (icontains(log, "pthread_create"))
-      {
-        title = "runtime error: pthread_create failed";
-        hints = {
-            "the low-level thread creation call failed",
-            "check resource limits, stack size, and whether too many threads are being spawned",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

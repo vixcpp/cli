@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,37 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "stack-use-after-scope") ||
+          icontains(log, "use-after-return"))
+      {
+        return "std::string_view outlived local string data";
+      }
+
+      if (icontains(log, "heap-use-after-free"))
+        return "std::string_view points to freed memory";
+
+      return "dangling std::string_view";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "stack-use-after-scope") ||
+          icontains(log, "use-after-return"))
+      {
+        return "return std::string when ownership is needed or ensure the viewed storage outlives the std::string_view";
+      }
+
+      if (icontains(log, "heap-use-after-free"))
+        return "avoid keeping std::string_view after the owning string is destroyed, moved, cleared, or reallocated";
+
+      return "do not keep std::string_view to temporary, local, destroyed, moved, or reallocated string storage";
+    }
+  } // namespace
+
   class StringViewDanglingRuntimeRule final : public IRuntimeErrorRule
   {
   public:
@@ -51,36 +81,46 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: dangling std::string_view";
-      std::vector<std::string> hints = {
-          "a std::string_view likely points to characters that no longer exist",
-          "do not keep string_view to a temporary string, a destroyed local string, or reallocated string storage",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "std::string_view",
+                  "string_view",
+                  "basic_string_view",
+                  ".substr(",
+                  "substr(",
+                  ".data()",
+                  "data()",
+                  "std::string",
+                  "string ",
+                  "return",
+              });
 
-      if (icontains(log, "stack-use-after-scope") || icontains(log, "use-after-return"))
-      {
-        title = "runtime error: std::string_view outlived local string data";
-        hints = {
-            "a std::string_view likely refers to characters owned by a local object that already went out of scope",
-            "return std::string when ownership is needed, or ensure the viewed storage outlives the string_view",
-        };
-      }
-      else if (icontains(log, "heap-use-after-free"))
-      {
-        title = "runtime error: std::string_view points to freed memory";
-        hints = {
-            "a std::string_view likely refers to string storage that has already been released",
-            "avoid keeping string_view after the owning string is destroyed, moved, cleared, or reallocated",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

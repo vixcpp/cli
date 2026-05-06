@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,49 +69,38 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "await_resume") &&
-              icontains(m, "no member named")) ||
-             (icontains(m, "await_resume") &&
-              icontains(m, "not found")) ||
-             (icontains(m, "await_resume") &&
-              icontains(m, "invalid")) ||
-             (icontains(m, "co_await") &&
-              icontains(m, "await_resume"));
+      return (icontains(message, "await_resume") &&
+              icontains(message, "no member named")) ||
+             (icontains(message, "await_resume") &&
+              icontains(message, "not found")) ||
+             (icontains(message, "await_resume") &&
+              icontains(message, "invalid")) ||
+             (icontains(message, "co_await") &&
+              icontains(message, "await_resume"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "missing await_resume in awaiter"
-                << "\n";
+                << "error: missing await_resume"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the object used with co_await does not provide await_resume() as part of the awaiter protocol"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "define await_resume() or provide operator co_await that returns a valid awaiter type"
+                << "define await_resume() or provide operator co_await that returns a valid awaiter"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

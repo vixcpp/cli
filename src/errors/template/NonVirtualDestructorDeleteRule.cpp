@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,50 +69,39 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "delete") &&
-              icontains(m, "non-virtual destructor")) ||
-             (icontains(m, "deleting object of polymorphic class type") &&
-              icontains(m, "non-virtual destructor")) ||
-             (icontains(m, "destructor") &&
-              icontains(m, "not virtual") &&
-              icontains(m, "delete")) ||
-             (icontains(m, "base class") &&
-              icontains(m, "non-virtual destructor"));
+      return (icontains(message, "delete") &&
+              icontains(message, "non-virtual destructor")) ||
+             (icontains(message, "deleting object of polymorphic class type") &&
+              icontains(message, "non-virtual destructor")) ||
+             (icontains(message, "destructor") &&
+              icontains(message, "not virtual") &&
+              icontains(message, "delete")) ||
+             (icontains(message, "base class") &&
+              icontains(message, "non-virtual destructor"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "deleting through base class with non-virtual destructor"
-                << "\n";
+                << "error: non-virtual base destructor"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the object is deleted through a base pointer, but the base class destructor is not virtual"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "make the base destructor virtual when the class is used polymorphically"
+                << "make the base destructor virtual when deleting derived objects through a base pointer"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

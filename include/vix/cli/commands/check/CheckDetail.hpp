@@ -87,6 +87,9 @@ namespace vix::commands::CheckCommand::detail
     /// Enable UBSan only.
     bool enableUbsanOnly = false;
 
+    /// Enable ThreadSanitizer only.
+    bool enableThreadSanitizer = false;
+
     /// Enable SQLite backend.
     bool withSqlite = false;
 

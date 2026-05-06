@@ -564,11 +564,17 @@ namespace vix::commands::RunCommand::detail
             << " -DCMAKE_C_COMPILER_LAUNCHER=ccache";
       }
 
-      if (want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly))
+      if (want_any_sanitizer(
+              opt.enableSanitizers,
+              opt.enableUbsanOnly,
+              opt.enableThreadSanitizer))
       {
         oss << " -DVIX_ENABLE_SANITIZERS=ON"
             << " -DVIX_SANITIZER_MODE="
-            << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly);
+            << sanitizer_mode_string(
+                   opt.enableSanitizers,
+                   opt.enableUbsanOnly,
+                   opt.enableThreadSanitizer);
       }
       else
       {
@@ -712,7 +718,10 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
     int run_script_binary_posix(const Options &opt, const ScriptProjectState &state)
     {
-      apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
+      apply_sanitizer_env_if_needed(
+          opt.enableSanitizers,
+          opt.enableUbsanOnly,
+          opt.enableThreadSanitizer);
 
       // A script using vix::io (stdin/stdout) needs stdin forwarded just like
       // a plain script. Only true long-lived server apps should suppress passthrough.
@@ -753,12 +762,17 @@ namespace vix::commands::RunCommand::detail
       if (replayEnabled)
         replayCapture.attach(&recorder);
 
+      const bool useSanRuntime = want_any_sanitizer(
+          opt.enableSanitizers,
+          opt.enableUbsanOnly,
+          opt.enableThreadSanitizer);
+
       LiveRunResult rr = run_cmd_live_filtered_capture(
           cmdRun,
           "",
           isInteractive,
           effective_timeout_sec(opt),
-          opt.enableSanitizers || opt.enableUbsanOnly,
+          useSanRuntime,
           false,
           replayEnabled ? &replayCapture : nullptr);
 
@@ -892,12 +906,17 @@ namespace vix::commands::RunCommand::detail
 
       cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
 
+      const bool useSanRuntime = want_any_sanitizer(
+          opt.enableSanitizers,
+          opt.enableUbsanOnly,
+          opt.enableThreadSanitizer);
+
       const LiveRunResult rr = run_cmd_live_filtered_capture(
           cmdRun,
           "",
           true,
           effective_timeout_sec(opt),
-          opt.enableSanitizers || opt.enableUbsanOnly);
+          useSanRuntime);
 
       int runCode = normalize_exit_code(rr.exitCode);
 
@@ -1050,7 +1069,10 @@ namespace vix::commands::RunCommand::detail
         }
 
 #ifndef _WIN32
-        apply_sanitizer_env_if_needed(o.enableSanitizers, o.enableUbsanOnly);
+        apply_sanitizer_env_if_needed(
+            o.enableSanitizers,
+            o.enableUbsanOnly,
+            o.enableThreadSanitizer);
 #endif
 
         const DirectScriptCacheState cache = load_direct_script_cache_state(directPlan);
@@ -1176,6 +1198,7 @@ namespace vix::commands::RunCommand::detail
         plan.useVixRuntime,
         opt.enableSanitizers,
         opt.enableUbsanOnly,
+        opt.enableThreadSanitizer,
         opt.scriptFlags,
         opt.withSqlite,
         opt.withMySql);
@@ -1400,7 +1423,10 @@ namespace vix::commands::RunCommand::detail
         ::setenv("VIX_STDOUT_MODE", "line", 1);
         ::setenv("VIX_MODE", "dev", 1);
 
-        apply_sanitizer_env_if_needed(opt.enableSanitizers, opt.enableUbsanOnly);
+        apply_sanitizer_env_if_needed(
+            opt.enableSanitizers,
+            opt.enableUbsanOnly,
+            opt.enableThreadSanitizer);
 
         if (!opt.cwd.empty())
         {

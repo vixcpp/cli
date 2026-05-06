@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,44 +69,36 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "no type named") && icontains(m, "in")) ||
-             (icontains(m, "no type named") && icontains(m, "value_type")) ||
-             (icontains(m, "has no member named") && icontains(m, "type"));
+      return (icontains(message, "no type named") &&
+              icontains(message, "in")) ||
+             (icontains(message, "no type named") &&
+              icontains(message, "value_type")) ||
+             (icontains(message, "has no member named") &&
+              icontains(message, "type"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "type alias or nested type not found"
-                << "\n";
+                << "error: nested type not found"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the template argument does not provide the nested type you are trying to use"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check names like T::value_type, T::iterator, or U::type and make sure the chosen type actually defines them"
+                << "make sure the template argument defines the expected nested type"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

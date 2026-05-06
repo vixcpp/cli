@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,47 +69,37 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return icontains(m, "wrong number of template arguments") ||
-             (icontains(m, "template argument") && icontains(m, "invalid")) ||
-             icontains(m, "type/value mismatch at argument") ||
-             icontains(m, "expected a type, got") ||
-             icontains(m, "expected a constant of type") ||
-             icontains(m, "template argument deduction/substitution failed");
+      return icontains(message, "wrong number of template arguments") ||
+             (icontains(message, "template argument") &&
+              icontains(message, "invalid")) ||
+             icontains(message, "type/value mismatch at argument") ||
+             icontains(message, "expected a type, got") ||
+             icontains(message, "expected a constant of type") ||
+             icontains(message, "template argument deduction/substitution failed");
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "template argument mismatch"
-                << "\n";
+                << "error: template argument mismatch"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "one or more template arguments do not match what this template expects"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check the number of template parameters and whether each argument should be a type, a value, or another template"
+                << "check the number of template arguments and whether each one should be a type, value, or template"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

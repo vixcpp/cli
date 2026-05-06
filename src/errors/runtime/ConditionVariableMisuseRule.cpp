@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,39 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "wait without lock"))
+        return "condition variable wait without lock";
+
+      if (icontains(log, "uninitialized condition variable") ||
+          icontains(log, "invalid condition variable") ||
+          icontains(log, "pthread_cond"))
+      {
+        return "invalid condition variable state";
+      }
+
+      return "condition variable misuse";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "wait without lock"))
+        return "call wait() with a locked std::unique_lock<std::mutex>";
+
+      if (icontains(log, "uninitialized condition variable") ||
+          icontains(log, "invalid condition variable") ||
+          icontains(log, "pthread_cond"))
+      {
+        return "check condition variable lifetime and avoid waiting or notifying after destruction";
+      }
+
+      return "use wait(lock, predicate) and ensure the mutex is locked before waiting";
+    }
+  } // namespace
+
   class ConditionVariableMisuseRule final : public IRuntimeErrorRule
   {
   public:
@@ -47,38 +79,44 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: condition variable misuse";
-      std::vector<std::string> hints = {
-          "a condition variable was likely used incorrectly",
-          "check waits without a locked std::unique_lock, invalid lifetime, and missing predicate-based waits",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "std::condition_variable",
+                  "condition_variable",
+                  ".wait(",
+                  ".wait_for(",
+                  ".wait_until(",
+                  ".notify_one(",
+                  ".notify_all(",
+                  "pthread_cond",
+              });
 
-      if (icontains(log, "wait without lock"))
-      {
-        title = "runtime error: condition variable wait without lock";
-        hints = {
-            "wait() must be called with a locked std::unique_lock<std::mutex>",
-            "lock the mutex before waiting and use wait(lock, predicate) when possible",
-        };
-      }
-      else if (icontains(log, "uninitialized condition variable") ||
-               icontains(log, "invalid condition variable") ||
-               icontains(log, "pthread_cond"))
-      {
-        title = "runtime error: invalid condition variable state";
-        hints = {
-            "the condition variable may be uninitialized, destroyed, or otherwise invalid",
-            "check object lifetime and avoid waiting or notifying after destruction",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

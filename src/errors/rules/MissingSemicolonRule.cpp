@@ -14,8 +14,10 @@
 #include <vix/cli/errors/IErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -24,38 +26,49 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+  } // namespace
+
   class MissingSemicolonRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string message = to_lower_ascii(err.message);
 
-      // GCC example:
-      //   "expected ‘,’ or ‘;’ before ‘std’"
-      //
-      // Clang example:
-      //   "expected ';' after expression"
-      //
-      // We match "expected" + a semicolon token / wording, avoiding too-specific patterns.
-      const bool hasExpected = (m.find("expected") != std::string::npos);
+      const bool hasExpected =
+          message.find("expected") != std::string::npos;
 
       const bool hasSemicolonToken =
-          (m.find("';'") != std::string::npos) ||                                      // common
-          (m.find("‘;’") != std::string::npos) ||                                      // GCC fancy quotes
-          (m.find(";") != std::string::npos && m.find("before") != std::string::npos); // fallback for "before" cases
+          message.find("';'") != std::string::npos ||
+          message.find("‘;’") != std::string::npos ||
+          message.find("semicolon") != std::string::npos;
 
-      const bool mentionsSemicolonWord =
-          (m.find("semicolon") != std::string::npos);
+      const bool hasBeforeFallback =
+          message.find(";") != std::string::npos &&
+          message.find("before") != std::string::npos;
 
-      return hasExpected && (hasSemicolonToken || mentionsSemicolonWord);
+      return hasExpected && (hasSemicolonToken || hasBeforeFallback);
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
                 << "error: missing ';'"
                 << RESET << "\n";
@@ -63,12 +76,16 @@ namespace vix::cli::errors
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: add a semicolon at the end of the statement (often the previous line)"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "add a semicolon at the end of the statement, often on the previous line"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

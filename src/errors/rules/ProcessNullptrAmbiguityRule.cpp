@@ -11,11 +11,13 @@
  *  Vix.cpp
  *
  */
-#include "vix/cli/errors/IErrorRule.hpp"
-#include "vix/cli/errors/CodeFrame.hpp"
+#include <vix/cli/errors/IErrorRule.hpp>
+#include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -24,45 +26,66 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+  } // namespace
+
   class ProcessNullptrAmbiguityRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string message = to_lower_ascii(err.message);
 
-      // Clang/GCC usually:
-      //   "no matching function for call to 'process'"
-      // Sometimes:
-      //   "call to 'process' is ambiguous"
-      //   "ambiguous call to ... process"
-      const bool noMatching = (m.find("no matching function for call") != std::string::npos) &&
-                              (m.find("process") != std::string::npos);
+      const bool mentionsProcess =
+          message.find("process") != std::string::npos;
 
-      const bool ambiguous = (m.find("ambiguous") != std::string::npos) &&
-                             (m.find("process") != std::string::npos);
+      if (!mentionsProcess)
+        return false;
+
+      const bool noMatching =
+          message.find("no matching function for call") != std::string::npos;
+
+      const bool ambiguous =
+          message.find("ambiguous") != std::string::npos;
 
       return noMatching || ambiguous;
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: ambiguous call to function"
+                << "error: ambiguous process call"
                 << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: disambiguate the call with an explicit cast or exact type"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "use an explicit cast or exact argument type to select the intended overload"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

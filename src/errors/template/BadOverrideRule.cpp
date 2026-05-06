@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,51 +69,40 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "override") &&
-              icontains(m, "does not override")) ||
-             (icontains(m, "marked") &&
-              icontains(m, "override") &&
-              icontains(m, "but does not override")) ||
-             (icontains(m, "no member function declared in") &&
-              icontains(m, "override")) ||
-             (icontains(m, "hides overloaded virtual function")) ||
-             (icontains(m, "different qualifiers") &&
-              icontains(m, "override"));
+      return (icontains(message, "override") &&
+              icontains(message, "does not override")) ||
+             (icontains(message, "marked") &&
+              icontains(message, "override") &&
+              icontains(message, "but does not override")) ||
+             (icontains(message, "no member function declared in") &&
+              icontains(message, "override")) ||
+             icontains(message, "hides overloaded virtual function") ||
+             (icontains(message, "different qualifiers") &&
+              icontains(message, "override"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "invalid override"
-                << "\n";
+                << "error: invalid override"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "this function is marked override, but its signature does not match any virtual function in the base class"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check parameter types, const qualifiers, ref qualifiers, noexcept, and return type compatibility"
+                << "make the derived function signature match the virtual function in the base class"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

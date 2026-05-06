@@ -11,14 +11,13 @@
  *  Vix.cpp
  *
  */
-
 #include <vix/cli/errors/IErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
 #include <algorithm>
 #include <cctype>
-#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -29,12 +28,18 @@ namespace vix::cli::errors
 {
   namespace
   {
-    static std::string toLowerAscii(std::string s)
+    std::string to_lower_ascii(std::string text)
     {
-      std::transform(s.begin(), s.end(), s.begin(),
-                     [](unsigned char c)
-                     { return static_cast<char>(std::tolower(c)); });
-      return s;
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
     }
   } // namespace
 
@@ -43,38 +48,44 @@ namespace vix::cli::errors
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string m = toLowerAscii(err.message);
+      const std::string message = to_lower_ascii(err.message);
 
-      const bool hasCout = (m.find("cout") != std::string::npos);
-      if (!hasCout)
+      if (message.find("cout") == std::string::npos)
         return false;
 
-      const bool undeclared =
-          (m.find("undeclared identifier") != std::string::npos) ||
-          (m.find("was not declared in this scope") != std::string::npos) ||
-          (m.find("not declared in this scope") != std::string::npos);
+      const bool isUndeclared =
+          message.find("undeclared identifier") != std::string::npos ||
+          message.find("was not declared in this scope") != std::string::npos ||
+          message.find("not declared in this scope") != std::string::npos;
 
-      const bool notMemberStd =
-          (m.find("not a member of") != std::string::npos) &&
-          (m.find("std") != std::string::npos);
+      const bool isMissingStdMember =
+          message.find("not a member of") != std::string::npos &&
+          message.find("std") != std::string::npos;
 
-      return undeclared || notMemberStd;
+      return isUndeclared || isMissingStdMember;
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      std::string fileName = filePath.filename().string();
-
-      std::cerr << RED << "error: std::cout is not available here" << RESET << "\n";
+      std::cerr << RED
+                << "error: std::cout is not available"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
-      std::cerr << YELLOW << "hint: " << RESET
-                << "add #include <iostream> (then use std::cout)" << "\n";
+      std::cerr << YELLOW
+                << "hint: "
+                << RESET
+                << "add #include <iostream> and use std::cout"
+                << "\n";
 
-      std::cerr << GREEN << "at: " << RESET
-                << fileName << ":" << err.line << ":" << err.column << "\n";
+      std::cerr << GREEN
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

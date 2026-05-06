@@ -195,6 +195,44 @@ namespace vix::commands::RunCommand::detail
       g_sigint_requested = 1;
     }
 
+    bool is_runtime_crash_noise_line(std::string_view line) noexcept
+    {
+      while (!line.empty() &&
+             (line.front() == ' ' || line.front() == '\t' || line.front() == '\r'))
+      {
+        line.remove_prefix(1);
+      }
+
+      return line.find("free(): double free detected") != std::string_view::npos ||
+             line.find("double free detected in tcache") != std::string_view::npos ||
+             line.find("malloc(): corrupted") != std::string_view::npos ||
+             line.find("munmap_chunk(): invalid pointer") != std::string_view::npos ||
+             line.find("free(): invalid pointer") != std::string_view::npos ||
+             line.find("Aborted (core dumped)") != std::string_view::npos;
+    }
+
+    std::string drop_runtime_crash_noise_lines(const std::string &chunk)
+    {
+      std::string out;
+      out.reserve(chunk.size());
+
+      std::size_t start = 0;
+      while (start < chunk.size())
+      {
+        const std::size_t nl = chunk.find('\n', start);
+        const std::size_t end = (nl == std::string::npos) ? chunk.size() : (nl + 1);
+
+        std::string_view line(&chunk[start], end - start);
+
+        if (!is_runtime_crash_noise_line(line))
+          out.append(line.data(), line.size());
+
+        start = end;
+      }
+
+      return out;
+    }
+
     struct SigintGuard
     {
       struct sigaction oldAction{};
@@ -1140,8 +1178,12 @@ namespace vix::commands::RunCommand::detail
         return;
 
       std::string toPrint = drop_vix_error_tip_lines(filtered);
+
       if (!toPrint.empty())
         toPrint = drop_sanitizer_abort_banner_lines(toPrint);
+
+      if (!toPrint.empty())
+        toPrint = drop_runtime_crash_noise_lines(toPrint);
 
       if (toPrint.empty() || captureOnly)
         return;

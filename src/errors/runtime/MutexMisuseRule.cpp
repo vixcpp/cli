@@ -25,6 +25,37 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "resource deadlock avoided"))
+        return "mutex deadlock";
+
+      if (icontains(log, "operation not permitted"))
+        return "invalid mutex unlock";
+
+      if (icontains(log, "invalid argument"))
+        return "invalid mutex state";
+
+      return "mutex misuse";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "resource deadlock avoided"))
+        return "avoid locking the same non-recursive mutex twice in the same thread";
+
+      if (icontains(log, "operation not permitted"))
+        return "only unlock a mutex owned by the current thread and prefer RAII locks";
+
+      if (icontains(log, "invalid argument"))
+        return "check mutex lifetime and avoid using an uninitialized or destroyed mutex";
+
+      return "check double lock, invalid unlock, destroyed mutex access, and inconsistent lock usage";
+    }
+  } // namespace
+
   class MutexMisuseRule final : public IRuntimeErrorRule
   {
   public:
@@ -34,54 +65,46 @@ namespace vix::cli::errors::runtime
     {
       (void)sourceFile;
 
-      return icontains(log, "mutex") ||
-             icontains(log, "resource deadlock avoided") ||
+      return icontains(log, "resource deadlock avoided") ||
              icontains(log, "operation not permitted") ||
-             icontains(log, "pthread_mutex");
+             icontains(log, "pthread_mutex") ||
+             (icontains(log, "mutex") &&
+              (icontains(log, "deadlock") ||
+               icontains(log, "unlock") ||
+               icontains(log, "lock") ||
+               icontains(log, "invalid argument")));
     }
 
     bool handle(
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: mutex misuse";
-      std::vector<std::string> hints = {
-          "a mutex was used incorrectly",
-          "check double lock, unlock without ownership, destroyed mutex access, and inconsistent lock usage",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location(log, sourceFile);
 
-      if (icontains(log, "resource deadlock avoided"))
-      {
-        title = "runtime error: mutex deadlock";
-        hints = {
-            "the same thread likely tried to lock a non-recursive mutex twice",
-            "avoid locking the same mutex twice, or redesign the locking flow",
-        };
-      }
-      else if (icontains(log, "operation not permitted"))
-      {
-        title = "runtime error: invalid mutex unlock";
-        hints = {
-            "a mutex was likely unlocked by a thread that does not own it",
-            "only unlock mutexes locked by the current thread, and prefer RAII with std::lock_guard or std::unique_lock",
-        };
-      }
-      else if (icontains(log, "invalid argument"))
-      {
-        title = "runtime error: invalid mutex state";
-        hints = {
-            "the mutex may be uninitialized, destroyed, or otherwise invalid",
-            "check mutex lifetime and avoid using a mutex after destruction",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

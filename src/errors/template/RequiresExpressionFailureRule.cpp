@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,48 +69,40 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "requires") && icontains(m, "not satisfied")) ||
-             (icontains(m, "requires") && icontains(m, "invalid")) ||
-             icontains(m, "required expression") ||
-             icontains(m, "required type") ||
-             (icontains(m, "required from here") && icontains(m, "requires")) ||
-             icontains(m, "would be invalid") ||
-             icontains(m, "does not satisfy return-type-requirement");
+      return (icontains(message, "requires") &&
+              icontains(message, "not satisfied")) ||
+             (icontains(message, "requires") &&
+              icontains(message, "invalid")) ||
+             icontains(message, "required expression") ||
+             icontains(message, "required type") ||
+             (icontains(message, "required from here") &&
+              icontains(message, "requires")) ||
+             icontains(message, "would be invalid") ||
+             icontains(message, "does not satisfy return-type-requirement");
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "requires-expression failed"
-                << "\n";
+                << "error: requires-expression failed"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the type used here does not satisfy one or more requirements checked inside a requires-expression"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check the required expressions, nested types, valid operations, and expected return types in the requires block"
+                << "check the required expressions, nested types, valid operations, and expected return types"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

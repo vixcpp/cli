@@ -26,40 +26,62 @@
 
 #include <sstream>
 #include <string>
-#include <algorithm>
-#include <cctype>
 
 namespace vix::cli::errors
 {
   namespace
   {
-    std::string trim_copy(std::string s)
+    std::string trim_copy(std::string text)
     {
-      while (!s.empty() &&
-             (s.back() == '\n' || s.back() == '\r' || s.back() == ' ' || s.back() == '\t'))
+      while (!text.empty() &&
+             (text.back() == '\n' ||
+              text.back() == '\r' ||
+              text.back() == ' ' ||
+              text.back() == '\t'))
       {
-        s.pop_back();
+        text.pop_back();
       }
 
-      std::size_t i = 0;
-      while (i < s.size() &&
-             (s[i] == '\n' || s[i] == '\r' || s[i] == ' ' || s[i] == '\t'))
+      std::size_t start = 0;
+
+      while (start < text.size() &&
+             (text[start] == '\n' ||
+              text[start] == '\r' ||
+              text[start] == ' ' ||
+              text[start] == '\t'))
       {
-        ++i;
+        ++start;
       }
 
-      s.erase(0, i);
-      return s;
+      text.erase(0, start);
+      return text;
     }
 
-    std::string strip_ansi(std::string s)
+    std::string strip_ansi(std::string text)
     {
-      static const std::regex ansiRe(R"(\x1B\[[0-9;?]*[ -/]*[@-~])");
-      return std::regex_replace(s, ansiRe, "");
-    }
-  }
+      static const std::regex ansiRe(
+          R"(\x1B\[[0-9;?]*[ -/]*[@-~])");
 
-  std::vector<CompilerError> ClangGccParser::parse(const std::string &buildLog)
+      return std::regex_replace(text, ansiRe, "");
+    }
+
+    bool is_build_noise_line(const std::string &line)
+    {
+      return line.rfind("gmake", 0) == 0 ||
+             line.rfind("make", 0) == 0 ||
+             line.rfind("ninja", 0) == 0 ||
+             line.rfind("[", 0) == 0;
+    }
+
+    bool is_error_severity(const std::string &severity)
+    {
+      return severity == "error" ||
+             severity == "fatal error";
+    }
+  } // namespace
+
+  std::vector<CompilerError> ClangGccParser::parse(
+      const std::string &buildLog)
   {
     std::vector<CompilerError> out;
 
@@ -67,43 +89,40 @@ namespace vix::cli::errors
     // /path/main.cpp:3:5: error: use of undeclared identifier 'std'
     // /path/foo.hpp:1:10: fatal error: 'h.hpp' file not found
     // /path/main.cpp:2:10: fatal error: huh.hpp: No such file or directory
-    static const std::regex re(
+    static const std::regex diagnosticRe(
         R"(^(.+?):([0-9]+):([0-9]+):\s*(fatal error|error|warning):\s*(.+)$)");
 
-    std::istringstream iss(buildLog);
+    std::istringstream input(buildLog);
     std::string line;
 
-    while (std::getline(iss, line))
+    while (std::getline(input, line))
     {
       line = strip_ansi(trim_copy(line));
 
       if (line.empty())
         continue;
 
-      if (line.rfind("gmake", 0) == 0 ||
-          line.rfind("make", 0) == 0 ||
-          line.rfind("ninja", 0) == 0)
-      {
+      if (is_build_noise_line(line))
         continue;
-      }
 
-      std::smatch m;
-      if (std::regex_search(line, m, re))
-      {
-        CompilerError e;
-        e.file = trim_copy(m[1].str());
-        e.line = std::stoi(m[2].str());
-        e.column = std::stoi(m[3].str());
+      std::smatch match;
 
-        const std::string severity = m[4].str();
-        const std::string message = trim_copy(m[5].str());
+      if (!std::regex_search(line, match, diagnosticRe))
+        continue;
 
-        e.message = severity + ": " + message;
-        e.raw = line;
+      const std::string severity = match[4].str();
 
-        if (severity == "error" || severity == "fatal error")
-          out.push_back(std::move(e));
-      }
+      if (!is_error_severity(severity))
+        continue;
+
+      CompilerError err;
+      err.file = trim_copy(match[1].str());
+      err.line = std::stoi(match[2].str());
+      err.column = std::stoi(match[3].str());
+      err.message = severity + ": " + trim_copy(match[5].str());
+      err.raw = line;
+
+      out.push_back(std::move(err));
     }
 
     return out;

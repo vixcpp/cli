@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,37 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_title(const std::string &log)
+    {
+      if (icontains(log, "end iterator"))
+        return "runtime error: end iterator dereference";
+
+      if (icontains(log, "singular iterator"))
+        return "runtime error: singular iterator dereference";
+
+      if (icontains(log, "not dereferenceable"))
+        return "runtime error: non-dereferenceable iterator";
+
+      return "runtime error: invalid iterator dereference";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "end iterator"))
+        return "compare the iterator with end() before using *it or it->member";
+
+      if (icontains(log, "singular iterator"))
+        return "initialize the iterator and refresh it after erase, insert, or container reallocation";
+
+      if (icontains(log, "not dereferenceable"))
+        return "only dereference iterators that currently point to a valid container element";
+
+      return "check the iterator before dereferencing and avoid using invalidated iterators";
+    }
+  } // namespace
+
   class InvalidIteratorDereferenceRule final : public IRuntimeErrorRule
   {
   public:
@@ -48,36 +78,45 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: invalid iterator dereference";
-      std::vector<std::string> hints = {
-          "an iterator was dereferenced when it did not point to a valid element",
-          "check for end() before dereferencing and avoid using invalidated or singular iterators",
-      };
-
-      if (icontains(log, "end iterator"))
-      {
-        title = "runtime error: end iterator dereference";
-        hints = {
-            "end() was dereferenced, but it points past the last element",
-            "compare against end() before using *it or it->member",
-        };
-      }
-      else if (icontains(log, "singular iterator"))
-      {
-        title = "runtime error: singular iterator dereference";
-        hints = {
-            "a default-constructed, erased, or otherwise invalid iterator was dereferenced",
-            "initialize iterators properly and refresh them after erase, insert, or container reallocation",
-        };
-      }
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "*it",
+                  "it->",
+                  "++it",
+                  "it++",
+                  "*iter",
+                  "iter->",
+                  "++iter",
+                  "iter++",
+                  "*iterator",
+                  "iterator->",
+                  "++iterator",
+                  "iterator++",
+              });
 
       std::cerr << RED
-                << title
+                << choose_title(log)
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            "invalid iterator dereference");
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

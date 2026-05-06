@@ -15,10 +15,12 @@
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/ErrorContext.hpp>
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,129 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    bool is_digit(char c) noexcept
+    {
+      return std::isdigit(static_cast<unsigned char>(c)) != 0;
+    }
+
+    std::optional<int> parse_positive_int(
+        const std::string &text,
+        std::size_t begin,
+        std::size_t *endOut = nullptr)
+    {
+      if (begin >= text.size() || !is_digit(text[begin]))
+        return std::nullopt;
+
+      int value = 0;
+      std::size_t i = begin;
+
+      while (i < text.size() && is_digit(text[i]))
+      {
+        value = (value * 10) + (text[i] - '0');
+        ++i;
+      }
+
+      if (endOut)
+        *endOut = i;
+
+      return value;
+    }
+
+    RuntimeLocation parse_location_at(
+        const std::string &text,
+        std::size_t pathStart,
+        std::size_t pathEnd)
+    {
+      RuntimeLocation location{};
+
+      if (pathStart >= pathEnd || pathEnd >= text.size())
+        return location;
+
+      if (text[pathEnd] != ':')
+        return location;
+
+      std::size_t afterLine = 0;
+      const auto parsedLine = parse_positive_int(text, pathEnd + 1, &afterLine);
+      if (!parsedLine)
+        return location;
+
+      int column = 1;
+
+      if (afterLine < text.size() && text[afterLine] == ':')
+      {
+        std::size_t afterColumn = 0;
+        const auto parsedColumn =
+            parse_positive_int(text, afterLine + 1, &afterColumn);
+
+        if (parsedColumn)
+          column = *parsedColumn;
+      }
+
+      location.file = std::filesystem::path(
+          text.substr(pathStart, pathEnd - pathStart));
+      location.line = *parsedLine;
+      location.column = column;
+
+      return location;
+    }
+
+    RuntimeLocation find_location_from_exact_source(
+        const std::string &line,
+        const std::filesystem::path &sourceFile)
+    {
+      if (sourceFile.empty())
+        return {};
+
+      const std::string source = sourceFile.string();
+      const std::size_t pos = line.find(source);
+
+      if (pos == std::string::npos)
+        return {};
+
+      return parse_location_at(line, pos, pos + source.size());
+    }
+
+    RuntimeLocation find_location_from_filename(
+        const std::string &line,
+        const std::filesystem::path &sourceFile)
+    {
+      if (sourceFile.empty())
+        return {};
+
+      const std::string filename = sourceFile.filename().string();
+      if (filename.empty())
+        return {};
+
+      const std::size_t filenamePos = line.find(filename);
+      if (filenamePos == std::string::npos)
+        return {};
+
+      const std::size_t filenameEnd = filenamePos + filename.size();
+      if (filenameEnd >= line.size() || line[filenameEnd] != ':')
+        return {};
+
+      std::size_t pathStart = filenamePos;
+
+      while (pathStart > 0)
+      {
+        const char c = line[pathStart - 1];
+
+        if (std::isspace(static_cast<unsigned char>(c)) != 0 ||
+            c == '(' ||
+            c == '[')
+        {
+          break;
+        }
+
+        --pathStart;
+      }
+
+      return parse_location_at(line, pathStart, filenameEnd);
+    }
+  } // namespace
+
   bool icontains(const std::string &text, const std::string &needle)
   {
     if (needle.empty())
@@ -37,6 +162,7 @@ namespace vix::cli::errors::runtime
     {
       if (c >= 'A' && c <= 'Z')
         return static_cast<char>(c + ('a' - 'A'));
+
       return static_cast<char>(c);
     };
 
@@ -87,6 +213,90 @@ namespace vix::cli::errors::runtime
       lines.push_back(line);
 
     return lines;
+  }
+
+  RuntimeLocation find_best_runtime_location(
+      const std::string &log,
+      const std::filesystem::path &sourceFile)
+  {
+    std::istringstream input(log);
+    std::string line;
+
+    while (std::getline(input, line))
+    {
+      if (line.find('#') == std::string::npos)
+        continue;
+
+      RuntimeLocation location =
+          find_location_from_exact_source(line, sourceFile);
+
+      if (location.valid())
+        return location;
+
+      location = find_location_from_filename(line, sourceFile);
+
+      if (location.valid())
+        return location;
+    }
+
+    return {};
+  }
+
+  RuntimeLocation find_best_runtime_location_or_source_hint(
+      const std::string &log,
+      const std::filesystem::path &sourceFile,
+      const std::vector<std::string> &sourcePatterns)
+  {
+    RuntimeLocation location =
+        find_best_runtime_location(log, sourceFile);
+
+    if (location.valid())
+      return location;
+
+    if (sourceFile.empty() || sourcePatterns.empty())
+      return {};
+
+    const auto lines = read_file_lines(sourceFile);
+    if (!lines)
+      return {};
+
+    for (std::size_t i = 0; i < lines->size(); ++i)
+    {
+      const std::string cleanLine =
+          strip_line_comment((*lines)[i]);
+
+      for (const auto &pattern : sourcePatterns)
+      {
+        if (pattern.empty())
+          continue;
+
+        const std::size_t pos = cleanLine.find(pattern);
+        if (pos == std::string::npos)
+          continue;
+
+        RuntimeLocation hinted{};
+        hinted.file = sourceFile;
+        hinted.line = static_cast<int>(i + 1);
+        hinted.column = static_cast<int>(pos + 1);
+
+        return hinted;
+      }
+    }
+
+    return {};
+  }
+
+  std::string make_at_text(
+      const RuntimeLocation &location,
+      const std::filesystem::path &sourceFile)
+  {
+    if (location.valid())
+      return location.file.string() + ":" + std::to_string(location.line);
+
+    if (!sourceFile.empty())
+      return "source: " + sourceFile.filename().string();
+
+    return {};
   }
 
   vix::cli::errors::CompilerError make_runtime_location(

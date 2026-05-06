@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,53 +69,43 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "no matching function for call") &&
-              (icontains(m, "constraints not satisfied") ||
-               icontains(m, "requirement") ||
-               icontains(m, "concept"))) ||
-             (icontains(m, "candidate function not viable") &&
-              (icontains(m, "constraints not satisfied") ||
-               icontains(m, "requirement"))) ||
-             (icontains(m, "candidate template ignored") &&
-              (icontains(m, "constraints not satisfied") ||
-               icontains(m, "requirement"))) ||
-             (icontains(m, "no matching overloaded function found") &&
-              (icontains(m, "constraint") || icontains(m, "concept")));
+      return (icontains(message, "no matching function for call") &&
+              (icontains(message, "constraints not satisfied") ||
+               icontains(message, "requirement") ||
+               icontains(message, "concept"))) ||
+             (icontains(message, "candidate function not viable") &&
+              (icontains(message, "constraints not satisfied") ||
+               icontains(message, "requirement"))) ||
+             (icontains(message, "candidate template ignored") &&
+              (icontains(message, "constraints not satisfied") ||
+               icontains(message, "requirement"))) ||
+             (icontains(message, "no matching overloaded function found") &&
+              (icontains(message, "constraint") ||
+               icontains(message, "concept")));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "no matching overload satisfies the constraints"
-                << "\n";
+                << "error: no overload satisfies the constraints"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the call does not match any overload whose concepts or requires-clauses are satisfied by the provided arguments"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check argument types, required operations, and whether the chosen overload is filtered out by constraints"
+                << "check argument types and the concepts or requires-clauses on the candidate overloads"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

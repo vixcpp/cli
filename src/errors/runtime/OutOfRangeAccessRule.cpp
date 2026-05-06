@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,51 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "vector"))
+        return "vector out-of-range access";
+
+      if (icontains(log, "string") ||
+          icontains(log, "basic_string"))
+        return "string out-of-range access";
+
+      if (icontains(log, "map::at"))
+        return "missing key in map::at";
+
+      if (icontains(log, "array"))
+        return "array out-of-range access";
+
+      if (icontains(log, "deque"))
+        return "deque out-of-range access";
+
+      return "out-of-range access";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "vector"))
+        return "check vector indices against size() before accessing elements";
+
+      if (icontains(log, "string") ||
+          icontains(log, "basic_string"))
+        return "check string positions before calling at(), substr(), erase(), or insert()";
+
+      if (icontains(log, "map::at"))
+        return "check contains() or find() before calling map::at()";
+
+      if (icontains(log, "array"))
+        return "keep the index within the fixed array size before calling at()";
+
+      if (icontains(log, "deque"))
+        return "check deque indices against size() before accessing elements";
+
+      return "check indices, container size, loop bounds, and calls to at()";
+    }
+  } // namespace
+
   class OutOfRangeAccessRule final : public IRuntimeErrorRule
   {
   public:
@@ -54,60 +98,43 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: out-of-range access";
-      std::vector<std::string> hints = {
-          "an index or key access went outside the valid range of the container",
-          "check indices, container size, loop bounds, and calls to at() before accessing elements",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  ".at(",
+                  "at(",
+                  "operator[]",
+                  "[",
+                  "substr(",
+                  "erase(",
+                  "insert(",
+              });
 
-      if (icontains(log, "vector"))
-      {
-        title = "runtime error: vector out-of-range access";
-        hints = {
-            "a std::vector access went past the valid index range",
-            "check vector indices against size() and avoid using stale indices after erase or resize",
-        };
-      }
-      else if (icontains(log, "string"))
-      {
-        title = "runtime error: string out-of-range access";
-        hints = {
-            "a std::string access used an invalid position",
-            "check string positions before calling at(), substr(), erase(), or insert()",
-        };
-      }
-      else if (icontains(log, "map::at"))
-      {
-        title = "runtime error: missing key in map::at";
-        hints = {
-            "map::at() was called with a key that does not exist",
-            "check contains() first or use find() when the key may be absent",
-        };
-      }
-      else if (icontains(log, "array"))
-      {
-        title = "runtime error: array out-of-range access";
-        hints = {
-            "a fixed-size array access used an invalid index",
-            "verify bounds before calling at() and keep indices within the array size",
-        };
-      }
-      else if (icontains(log, "deque"))
-      {
-        title = "runtime error: deque out-of-range access";
-        hints = {
-            "a std::deque access used an invalid index",
-            "check bounds carefully and ensure the deque still has the expected size before access",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

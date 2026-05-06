@@ -37,7 +37,8 @@ namespace vix::cli::errors::runtime
       int column = 1;
     };
 
-    std::vector<ThreadDecl> find_thread_declarations(const std::vector<std::string> &lines)
+    std::vector<ThreadDecl> find_thread_declarations(
+        const std::vector<std::string> &lines)
     {
       std::vector<ThreadDecl> decls;
 
@@ -69,7 +70,9 @@ namespace vix::cli::errors::runtime
       const std::regex re(
           "\\b" + threadName + R"(\s*\.\s*(join|detach)\s*\()");
 
-      for (std::size_t i = static_cast<std::size_t>(startLine - 1); i < lines.size(); ++i)
+      for (std::size_t i = static_cast<std::size_t>(startLine - 1);
+           i < lines.size();
+           ++i)
       {
         const std::string code = strip_line_comment(lines[i]);
 
@@ -83,6 +86,9 @@ namespace vix::cli::errors::runtime
     std::optional<ThreadDecl> find_suspected_unjoined_thread(
         const std::filesystem::path &sourceFile)
     {
+      if (sourceFile.empty())
+        return std::nullopt;
+
       const auto linesOpt = read_file_lines(sourceFile);
       if (!linesOpt)
         return std::nullopt;
@@ -100,6 +106,11 @@ namespace vix::cli::errors::runtime
       }
 
       return std::nullopt;
+    }
+
+    std::string make_thread_hint(const ThreadDecl &decl)
+    {
+      return "call " + decl.name + ".join() or " + decl.name + ".detach() before leaving the scope";
     }
   } // namespace
 
@@ -127,17 +138,16 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      (void)log;
+      const std::string message = "joinable std::thread destroyed";
 
       std::cerr << RED
-                << "runtime error: joinable std::thread destroyed"
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
-      const auto suspect = sourceFile.empty()
-                               ? std::nullopt
-                               : find_suspected_unjoined_thread(sourceFile);
+      const auto suspect = find_suspected_unjoined_thread(sourceFile);
 
-      if (suspect && !sourceFile.empty())
+      if (suspect)
       {
         const auto err = make_runtime_location(
             sourceFile,
@@ -149,22 +159,40 @@ namespace vix::cli::errors::runtime
 
         print_runtime_hints_and_at(
             {
-                "thread '" + suspect->name + "' likely reaches its destructor without join() or detach()",
-                "call " + suspect->name + ".join() or " + suspect->name + ".detach() before leaving the scope",
+                make_thread_hint(*suspect),
             },
-            sourceFile.filename().string() + ":" +
-                std::to_string(suspect->line) + ":" +
-                std::to_string(suspect->column));
+            sourceFile.string() + ":" + std::to_string(suspect->line));
 
         return true;
       }
 
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "std::thread",
+                  "thread(",
+                  ".join(",
+                  ".detach(",
+              });
+
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
           {
-              "a std::thread likely reached its destructor without join() or detach()",
-              "join or detach every started thread before leaving the scope",
+              "join or detach every started std::thread before it leaves scope",
           },
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          make_at_text(location, sourceFile));
 
       return true;
     }

@@ -14,8 +14,10 @@
 #include <vix/cli/errors/IErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -24,36 +26,48 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+  } // namespace
+
   class HeaderNotFoundRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string message = to_lower_ascii(err.message);
 
-      // Clang/GCC typical:
-      //   "fatal error: 'x.hpp' file not found"
-      //   "fatal error: x.hpp: No such file or directory"
-      //
-      // We support .hpp/.h/.hh/.hxx/.hpp and also "No such file" messages.
       const bool hasNotFound =
-          (m.find("file not found") != std::string::npos) ||
-          (m.find("No such file or directory") != std::string::npos);
+          message.find("file not found") != std::string::npos ||
+          message.find("no such file or directory") != std::string::npos ||
+          message.find("cannot open include file") != std::string::npos;
 
       const bool looksLikeHeader =
-          (m.find(".hpp") != std::string::npos) ||
-          (m.find(".hh") != std::string::npos) ||
-          (m.find(".hxx") != std::string::npos) ||
-          (m.find(".h") != std::string::npos);
+          message.find(".hpp") != std::string::npos ||
+          message.find(".hh") != std::string::npos ||
+          message.find(".hxx") != std::string::npos ||
+          message.find(".h") != std::string::npos;
 
       return hasNotFound && looksLikeHeader;
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
                 << "error: header file not found"
                 << RESET << "\n";
@@ -61,12 +75,16 @@ namespace vix::cli::errors
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: check the include path and ensure the header exists"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "check the include path and make sure the header exists"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

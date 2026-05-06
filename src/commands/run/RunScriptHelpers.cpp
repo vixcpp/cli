@@ -129,35 +129,56 @@ namespace vix::commands::RunCommand::detail
     watch_spinner_start(std::string(label));
   }
 
-  std::string sanitizer_mode_string(bool /*enableSanitizers*/, bool enableUbsanOnly)
-  {
-    return enableUbsanOnly ? "ubsan" : "asan_ubsan";
-  }
-
   bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly)
   {
     return enableSanitizers || enableUbsanOnly;
+  }
+
+  std::string sanitizer_mode_string(
+      bool enableSanitizers,
+      bool enableUbsanOnly,
+      bool enableThreadSanitizer)
+  {
+    if (enableThreadSanitizer)
+      return "tsan";
+
+    if (enableUbsanOnly)
+      return "ubsan";
+
+    if (enableSanitizers)
+      return "asan_ubsan";
+
+    return "none";
   }
 
   std::string make_script_config_signature(
       bool useVixRuntime,
       bool enableSanitizers,
       bool enableUbsanOnly,
+      bool enableThreadSanitizer,
       const std::vector<std::string> &scriptFlags,
       bool withSqlite,
       bool withMySql)
   {
     std::string sig;
-    sig.reserve(160);
+    sig.reserve(192);
 
     sig += "useVix=";
     sig += useVixRuntime ? "1" : "0";
 
     sig += ";san=";
-    sig += want_sanitizers(enableSanitizers, enableUbsanOnly) ? "1" : "0";
+    sig += want_any_sanitizer(
+               enableSanitizers,
+               enableUbsanOnly,
+               enableThreadSanitizer)
+               ? "1"
+               : "0";
 
     sig += ";mode=";
-    sig += sanitizer_mode_string(enableSanitizers, enableUbsanOnly);
+    sig += sanitizer_mode_string(
+        enableSanitizers,
+        enableUbsanOnly,
+        enableThreadSanitizer);
 
     sig += ";sqlite=";
     sig += withSqlite ? "1" : "0";
@@ -174,6 +195,7 @@ namespace vix::commands::RunCommand::detail
 
     return sig;
   }
+
   std::string join_quoted_args_local(const std::vector<std::string> &a)
   {
     std::string s;
@@ -202,12 +224,35 @@ namespace vix::commands::RunCommand::detail
   }
 
 #ifndef _WIN32
-  void apply_sanitizer_env_if_needed(bool enableSanitizers, bool enableUbsanOnly)
+  void apply_sanitizer_env_if_needed(
+      bool enableSanitizers,
+      bool enableUbsanOnly,
+      bool enableThreadSanitizer)
   {
-    if (!want_sanitizers(enableSanitizers, enableUbsanOnly))
+    if (!want_any_sanitizer(
+            enableSanitizers,
+            enableUbsanOnly,
+            enableThreadSanitizer))
+    {
       return;
+    }
 
-    ::setenv("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1:color=never", 1);
+    if (enableThreadSanitizer)
+    {
+      ::setenv(
+          "TSAN_OPTIONS",
+          "halt_on_error=1:"
+          "second_deadlock_stack=1:"
+          "history_size=7:"
+          "color=never",
+          1);
+      return;
+    }
+
+    ::setenv(
+        "UBSAN_OPTIONS",
+        "halt_on_error=1:print_stacktrace=1:color=never",
+        1);
 
     if (!enableUbsanOnly)
     {

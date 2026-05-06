@@ -161,10 +161,20 @@ namespace vix::commands::CheckCommand::detail
       else if (a == "--san")
       {
         o.enableSanitizers = true;
+        o.enableUbsanOnly = false;
+        o.enableThreadSanitizer = false;
       }
       else if (a == "--ubsan")
       {
         o.enableUbsanOnly = true;
+        o.enableSanitizers = false;
+        o.enableThreadSanitizer = false;
+      }
+      else if (a == "--tsan")
+      {
+        o.enableThreadSanitizer = true;
+        o.enableSanitizers = false;
+        o.enableUbsanOnly = false;
       }
       else if (a == "--tests")
       {
@@ -236,9 +246,18 @@ namespace vix::commands::CheckCommand::detail
       o.dir = *dir_value;
 
     if (o.enableUbsanOnly)
+    {
       o.enableSanitizers = false;
+      o.enableThreadSanitizer = false;
+    }
 
-    if ((o.enableSanitizers || o.enableUbsanOnly) && !o.singleCpp)
+    if (o.enableThreadSanitizer)
+    {
+      o.enableSanitizers = false;
+      o.enableUbsanOnly = false;
+    }
+
+    if ((o.enableSanitizers || o.enableUbsanOnly || o.enableThreadSanitizer) && !o.singleCpp)
       o.runAfterBuild = true;
 
     if (o.quiet && o.verbose)

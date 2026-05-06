@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,54 +69,43 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return (icontains(m, "lambda capture") &&
-              (icontains(m, "dangling") ||
-               icontains(m, "lifetime") ||
-               icontains(m, "reference to local"))) ||
-             (icontains(m, "captures") &&
-              icontains(m, "local variable") &&
-              icontains(m, "returned")) ||
-             (icontains(m, "address of stack memory") &&
-              icontains(m, "returned")) ||
-             (icontains(m, "reference to stack memory") &&
-              icontains(m, "returned")) ||
-             (icontains(m, "pointer to local variable") &&
-              icontains(m, "returned"));
+      return (icontains(message, "lambda capture") &&
+              (icontains(message, "dangling") ||
+               icontains(message, "lifetime") ||
+               icontains(message, "reference to local"))) ||
+             (icontains(message, "captures") &&
+              icontains(message, "local variable") &&
+              icontains(message, "returned")) ||
+             (icontains(message, "address of stack memory") &&
+              icontains(message, "returned")) ||
+             (icontains(message, "reference to stack memory") &&
+              icontains(message, "returned")) ||
+             (icontains(message, "pointer to local variable") &&
+              icontains(message, "returned"));
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "lambda capture may outlive captured local state"
-                << "\n";
+                << "error: unsafe lambda capture"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "this lambda likely captures a local object by reference and may outlive the scope where that object exists"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "capture by value when ownership is needed, or ensure the lambda does not escape the lifetime of the captured locals"
+                << "capture by value or ensure the lambda does not outlive the captured local variables"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

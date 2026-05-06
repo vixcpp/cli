@@ -14,7 +14,6 @@
 #include <vix/cli/errors/template/ITemplateErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -36,6 +35,7 @@ namespace vix::cli::errors::template_rules
       {
         if (c >= 'A' && c <= 'Z')
           return static_cast<char>(c + ('a' - 'A'));
+
         return static_cast<char>(c);
       };
 
@@ -69,47 +69,37 @@ namespace vix::cli::errors::template_rules
   public:
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
-      const std::string &m = err.message;
+      const std::string &message = err.message;
 
-      return icontains(m, "constraints not satisfied") ||
-             icontains(m, "constraint failure") ||
-             (icontains(m, "concept") && icontains(m, "not satisfied")) ||
-             icontains(m, "requirements not satisfied") ||
-             icontains(m, "does not satisfy") ||
-             icontains(m, "failed requirement");
+      return icontains(message, "constraints not satisfied") ||
+             icontains(message, "constraint failure") ||
+             (icontains(message, "concept") &&
+              icontains(message, "not satisfied")) ||
+             icontains(message, "requirements not satisfied") ||
+             icontains(message, "does not satisfy") ||
+             icontains(message, "failed requirement");
     }
 
     bool handle(
         const vix::cli::errors::CompilerError &err,
         const vix::cli::errors::ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: "
-                << RESET
-                << "concept constraint not satisfied"
-                << "\n";
+                << "error: concept constraint not satisfied"
+                << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
                 << "hint: "
                 << RESET
-                << "the chosen type does not satisfy the concept or requires-clause used by this template"
-                << "\n";
-
-      std::cerr << YELLOW
-                << "hint: "
-                << RESET
-                << "check the required operations, nested types, and return types expected by the concept"
+                << "check that the type provides the operations, nested types, and return types required by the concept"
                 << "\n";
 
       std::cerr << GREEN
                 << "at: "
                 << RESET
-                << fileName << ":" << err.line << ":" << err.column
+                << err.file << ":" << err.line << ":" << err.column
                 << "\n";
 
       return true;

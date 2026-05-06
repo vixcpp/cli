@@ -14,8 +14,10 @@
 #include <vix/cli/errors/IErrorRule.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 
-#include <filesystem>
+#include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include <vix/cli/Style.hpp>
@@ -24,40 +26,72 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors
 {
+  namespace
+  {
+    std::string to_lower_ascii(std::string text)
+    {
+      std::transform(
+          text.begin(),
+          text.end(),
+          text.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return text;
+    }
+  } // namespace
+
   class ReturnLocalRefRule final : public IErrorRule
   {
   public:
     bool match(const CompilerError &err) const override
     {
-      const std::string &m = err.message;
-      const bool mentionsReturn = (m.find("return") != std::string::npos) || (m.find("returned") != std::string::npos);
-      const bool localAddr =
-          (m.find("address of local") != std::string::npos) ||
-          (m.find("local variable") != std::string::npos && m.find("returned") != std::string::npos);
-      const bool stackRef =
-          (m.find("reference to stack") != std::string::npos) ||
-          (m.find("stack memory") != std::string::npos);
-      return mentionsReturn && (localAddr || stackRef);
+      const std::string message = to_lower_ascii(err.message);
+
+      const bool mentionsReturn =
+          message.find("return") != std::string::npos ||
+          message.find("returned") != std::string::npos ||
+          message.find("returning") != std::string::npos;
+
+      const bool localAddress =
+          message.find("address of local") != std::string::npos ||
+          message.find("address of stack memory") != std::string::npos ||
+          message.find("reference to local") != std::string::npos ||
+          message.find("reference to stack") != std::string::npos ||
+          (message.find("local variable") != std::string::npos &&
+           message.find("returned") != std::string::npos);
+
+      const bool stackLifetime =
+          message.find("stack memory") != std::string::npos ||
+          message.find("temporary") != std::string::npos ||
+          message.find("does not live long enough") != std::string::npos;
+
+      return mentionsReturn && (localAddress || stackLifetime);
     }
 
-    bool handle(const CompilerError &err, const ErrorContext &ctx) const override
+    bool handle(
+        const CompilerError &err,
+        const ErrorContext &ctx) const override
     {
-      std::filesystem::path filePath(err.file);
-      const std::string fileName = filePath.filename().string();
-
       std::cerr << RED
-                << "error: returning reference or pointer to a local object"
+                << "error: returning local object reference"
                 << RESET << "\n";
 
       printCodeFrame(err, ctx);
 
       std::cerr << YELLOW
-                << "hint: return by value or ensure the referenced object outlives the function"
-                << RESET << "\n";
+                << "hint: "
+                << RESET
+                << "return by value or ensure the referenced object outlives the function"
+                << "\n";
 
       std::cerr << GREEN
-                << "at: " << fileName << ":" << err.line << ":" << err.column
-                << RESET << "\n";
+                << "at: "
+                << RESET
+                << err.file << ":" << err.line << ":" << err.column
+                << "\n";
 
       return true;
     }

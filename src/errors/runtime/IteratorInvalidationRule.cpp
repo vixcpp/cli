@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,37 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "dereference"))
+        return "invalid iterator dereference";
+
+      if (icontains(log, "increment"))
+        return "invalid iterator increment";
+
+      if (icontains(log, "compare"))
+        return "invalid iterator comparison";
+
+      return "iterator invalidation";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "dereference"))
+        return "refresh the iterator before dereferencing it after container modification";
+
+      if (icontains(log, "increment"))
+        return "re-acquire the iterator before incrementing it after container modification";
+
+      if (icontains(log, "compare"))
+        return "do not compare iterators that may have been invalidated by container modification";
+
+      return "avoid reusing iterators after erase, insert, push_back, resize, reserve, or reallocation";
+    }
+  } // namespace
+
   class IteratorInvalidationRule final : public IRuntimeErrorRule
   {
   public:
@@ -50,44 +80,32 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: iterator invalidation";
-      std::vector<std::string> hints = {
-          "an iterator was used after the container changed its valid iterator range",
-          "check insert(), erase(), push_back(), resize(), reserve(), and reallocation effects before reusing iterators",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location(log, sourceFile);
 
-      if (icontains(log, "dereference"))
-      {
-        title = "runtime error: invalid iterator dereference";
-        hints = {
-            "an invalidated iterator was dereferenced",
-            "refresh the iterator after container modification and avoid keeping old iterators across erase or reallocation",
-        };
-      }
-      else if (icontains(log, "increment"))
-      {
-        title = "runtime error: invalid iterator increment";
-        hints = {
-            "an invalidated iterator was incremented",
-            "re-acquire the iterator after container mutation before continuing iteration",
-        };
-      }
-      else if (icontains(log, "compare"))
-      {
-        title = "runtime error: invalid iterator comparison";
-        hints = {
-            "an invalidated iterator was compared after container mutation",
-            "do not compare iterators that may have been invalidated by erase, insert, or reallocation",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

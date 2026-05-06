@@ -18,7 +18,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include <vix/cli/Style.hpp>
 
@@ -26,6 +25,37 @@ using namespace vix::cli::style;
 
 namespace vix::cli::errors::runtime
 {
+  namespace
+  {
+    std::string choose_message(const std::string &log)
+    {
+      if (icontains(log, "stack-use-after-scope") ||
+          icontains(log, "use-after-return"))
+      {
+        return "std::span outlived local storage";
+      }
+
+      if (icontains(log, "heap-use-after-free"))
+        return "std::span points to freed memory";
+
+      return "dangling std::span";
+    }
+
+    std::string choose_hint(const std::string &log)
+    {
+      if (icontains(log, "stack-use-after-scope") ||
+          icontains(log, "use-after-return"))
+      {
+        return "ensure the underlying local storage outlives the std::span";
+      }
+
+      if (icontains(log, "heap-use-after-free"))
+        return "avoid keeping std::span after the owning container is destroyed, resized, or reallocated";
+
+      return "ensure the array, vector, or buffer referenced by std::span stays alive";
+    }
+  } // namespace
+
   class SpanLifetimeRule final : public IRuntimeErrorRule
   {
   public:
@@ -54,36 +84,45 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      std::string title = "runtime error: dangling std::span";
-      std::vector<std::string> hints = {
-          "a std::span likely refers to elements that no longer exist",
-          "do not keep span after the underlying array, vector, or buffer changes lifetime or storage",
-      };
+      const RuntimeLocation location =
+          find_best_runtime_location_or_source_hint(
+              log,
+              sourceFile,
+              {
+                  "std::span",
+                  "span<",
+                  "span ",
+                  ".data()",
+                  "data()",
+                  "resize(",
+                  "clear(",
+                  "delete",
+                  "return",
+              });
 
-      if (icontains(log, "stack-use-after-scope") || icontains(log, "use-after-return"))
-      {
-        title = "runtime error: std::span outlived local storage";
-        hints = {
-            "a std::span likely refers to local data that already went out of scope",
-            "ensure the underlying storage outlives the span, or return an owning container when ownership is needed",
-        };
-      }
-      else if (icontains(log, "heap-use-after-free"))
-      {
-        title = "runtime error: std::span points to freed memory";
-        hints = {
-            "a std::span likely refers to storage that has already been released",
-            "avoid keeping span after the owning container is destroyed, cleared, resized, or reallocated",
-        };
-      }
+      const std::string message = choose_message(log);
 
       std::cerr << RED
-                << title
+                << "runtime error: "
+                << message
                 << RESET << "\n";
 
+      if (location.valid())
+      {
+        const auto err = make_runtime_location(
+            location.file,
+            location.line,
+            location.column,
+            message);
+
+        print_runtime_codeframe(err);
+      }
+
       print_runtime_hints_and_at(
-          hints,
-          !sourceFile.empty() ? ("source: " + sourceFile.filename().string()) : "");
+          {
+              choose_hint(log),
+          },
+          make_at_text(location, sourceFile));
 
       return true;
     }

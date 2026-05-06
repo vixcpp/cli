@@ -199,27 +199,21 @@ namespace vix::commands::BuildCommand
 
     static std::string detect_compiler_identity()
     {
-      const std::vector<std::string> candidates = {
-          "c++",
-          "clang++",
-          "g++"};
-
-      for (const auto &tool : candidates)
-      {
-        if (!util::executable_on_path(tool))
-          continue;
-
-        std::string out;
-        (void)build::run_process_capture({tool, "--version"}, {}, out);
-
-        out = first_line_of(out);
-        if (out.empty())
-          return sanitize_cache_component(tool);
-
-        return sanitize_cache_component(tool + "-" + out);
-      }
-
+#ifdef __clang__
+      return sanitize_cache_component(
+          "clang++-" + std::to_string(__clang_major__) + "." +
+          std::to_string(__clang_minor__) + "." +
+          std::to_string(__clang_patchlevel__));
+#elif defined(__GNUC__)
+      return sanitize_cache_component(
+          "g++-" + std::to_string(__GNUC__) + "." +
+          std::to_string(__GNUC_MINOR__) + "." +
+          std::to_string(__GNUC_PATCHLEVEL__));
+#elif defined(_MSC_VER)
+      return sanitize_cache_component("msvc-" + std::to_string(_MSC_VER));
+#else
       return "unknown-compiler";
+#endif
     }
 
     static std::string make_artifact_fingerprint(
@@ -831,22 +825,13 @@ namespace vix::commands::BuildCommand
       oss << "linker=" << static_cast<int>(opt.linker) << "\n";
       oss << "launcher=" << static_cast<int>(opt.launcher) << "\n";
       oss << "verbose=" << (opt.verbose ? "1" : "0") << "\n";
-
-      oss << "tools:\n";
-      oss << run_tool_version_line("cmake");
-      oss << run_tool_version_line("ninja");
-#ifndef _WIN32
-      oss << run_tool_version_line("c++");
-      oss << run_tool_version_line("clang++");
-      oss << run_tool_version_line("g++");
-      oss << run_tool_version_line("mold");
-      oss << run_tool_version_line("ld.lld");
-#endif
+      oss << "cmakeVerbose=" << (opt.cmakeVerbose ? "1" : "0") << "\n";
 
       if (plan.launcher)
-        oss << "launcherTool:" << *plan.launcher << "\n";
+        oss << "launcherTool=" << *plan.launcher << "\n";
+
       if (plan.fastLinkerFlag)
-        oss << "linkerFlag:" << *plan.fastLinkerFlag << "\n";
+        oss << "linkerFlag=" << *plan.fastLinkerFlag << "\n";
 
       oss << "projectFingerprint=" << plan.projectFingerprint << "\n";
 
@@ -1162,7 +1147,6 @@ namespace vix::commands::BuildCommand
       if (!quiet)
         success("Exported binary: " + finalDest.string());
 
-      // ✅ AJOUT ICI
       write_last_binary(finalDest);
 
       return true;
@@ -1282,6 +1266,39 @@ namespace vix::commands::BuildCommand
 
         artifact_cache::Artifact projectArtifact =
             make_project_artifact(plan_, opt_, tc);
+
+        const auto previousState =
+            artifact_cache::ArtifactCache::read_build_state(plan_.buildDir);
+
+        std::vector<artifact_cache::ProjectInput> projectInputs =
+            artifact_cache::ArtifactCache::snapshot_project_inputs(
+                plan_.projectDir,
+                previousState ? &previousState->inputs : nullptr);
+
+        if (opt_.useCache && !opt_.clean && previousState)
+        {
+          if (artifact_cache::ArtifactCache::build_state_matches(
+                  *previousState,
+                  plan_.signature,
+                  plan_.projectFingerprint,
+                  opt_.buildTarget,
+                  projectInputs))
+          {
+            if (verboseMode && !opt_.quiet)
+            {
+              step("build state: hit -> " +
+                   artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
+            }
+
+            if (!opt_.quiet)
+            {
+              util::ok_line(std::cout, "Up to date");
+              util::ok_line(std::cout, "Done");
+            }
+
+            return 0;
+          }
+        }
 
         if (verboseMode && !opt_.quiet)
         {
@@ -1414,6 +1431,34 @@ namespace vix::commands::BuildCommand
           if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
             hint("Warning: unable to persist artifact cache metadata");
 
+          std::string lastBinary;
+
+          const auto exeOpt = resolve_main_executable(
+              plan_.buildDir,
+              plan_.projectDir,
+              opt_.buildTarget);
+
+          if (exeOpt)
+            lastBinary = exeOpt->string();
+
+          const auto state = artifact_cache::ArtifactCache::make_build_state(
+              plan_.signature,
+              plan_.projectFingerprint,
+              projectArtifact.root.string(),
+              lastBinary,
+              opt_.buildTarget,
+              plan_.preset.name,
+              plan_.preset.buildType,
+              projectArtifact.target,
+              projectArtifact.compiler,
+              projectInputs);
+
+          if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+              !opt_.quiet)
+          {
+            hint("Warning: unable to write Vix build state");
+          }
+
           if (!opt_.quiet)
           {
             if (configuredThisRun)
@@ -1421,6 +1466,7 @@ namespace vix::commands::BuildCommand
             util::ok_line(std::cout, "Up to date");
             util::ok_line(std::cout, "Done");
           }
+
           return 0;
         }
 
@@ -1472,6 +1518,34 @@ namespace vix::commands::BuildCommand
 
           if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
             hint("Warning: unable to persist artifact cache metadata");
+
+          std::string lastBinary;
+
+          const auto exeOpt = resolve_main_executable(
+              plan_.buildDir,
+              plan_.projectDir,
+              opt_.buildTarget);
+
+          if (exeOpt)
+            lastBinary = exeOpt->string();
+
+          const auto state = artifact_cache::ArtifactCache::make_build_state(
+              plan_.signature,
+              plan_.projectFingerprint,
+              projectArtifact.root.string(),
+              lastBinary,
+              opt_.buildTarget,
+              plan_.preset.name,
+              plan_.preset.buildType,
+              projectArtifact.target,
+              projectArtifact.compiler,
+              projectInputs);
+
+          if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+              !opt_.quiet)
+          {
+            hint("Warning: unable to write Vix build state");
+          }
 
           const std::string buildLog = util::read_text_file_or_empty(plan_.buildLog);
           const std::size_t builtTargets = count_built_targets_from_log(buildLog);
@@ -1531,9 +1605,6 @@ namespace vix::commands::BuildCommand
           if (!export_built_binary(*exeOpt, dest, opt_.quiet))
             return 1;
         }
-
-        out.flush_to_stdout();
-        return 0;
 
         out.flush_to_stdout();
         return 0;

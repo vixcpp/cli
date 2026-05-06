@@ -959,14 +959,14 @@ namespace vix::commands::RunCommand::detail
           error("Failed to write generated CMakeLists.txt.");
           return 1;
         }
-        out << cmakeText;
-      }
 
-      if (!state.configSignature.empty())
-      {
-        std::ofstream sig(state.sigFile, std::ios::trunc);
-        if (sig)
-          sig << state.configSignature;
+        out << cmakeText;
+
+        if (!out)
+        {
+          error("Failed to write generated CMakeLists.txt completely.");
+          return 1;
+        }
       }
 
       return 0;

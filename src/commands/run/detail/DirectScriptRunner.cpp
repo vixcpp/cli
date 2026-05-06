@@ -17,6 +17,7 @@
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/commands/replay/ReplayRecorder.hpp>
+#include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
@@ -833,7 +834,23 @@ namespace vix::commands::RunCommand::detail
       return 0;
     }
 
-    handle_runtime_exit_code(run.exitCode, "run", run.failureHandled);
+    bool handled = run.failureHandled;
+
+    if (!handled && run.exitCode != 0)
+    {
+      std::string runtimeLog = run.stderrText;
+      runtimeLog += run.stdoutText;
+
+      if (!runtimeLog.empty())
+      {
+        handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+            runtimeLog,
+            plan.scriptPath,
+            "run");
+      }
+    }
+
+    handle_runtime_exit_code(run.exitCode, "run", handled);
     return run.exitCode;
   }
 

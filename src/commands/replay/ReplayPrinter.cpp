@@ -26,10 +26,8 @@ using namespace vix::cli::style;
 
 namespace vix::commands::replay
 {
-
   namespace
   {
-
     /**
      * @brief Return a color for a replay status.
      *
@@ -125,18 +123,6 @@ namespace vix::commands::replay
     }
 
     /**
-     * @brief Return the first non-empty string.
-     *
-     * @param first First value.
-     * @param second Fallback value.
-     * @return first if non-empty, otherwise second.
-     */
-    std::string non_empty_or(const std::string &first, const std::string &second)
-    {
-      return first.empty() ? second : first;
-    }
-
-    /**
      * @brief Split a text into lines.
      *
      * @param text Input text.
@@ -156,7 +142,6 @@ namespace vix::commands::replay
 
       return lines;
     }
-
   } // namespace
 
   void print_replay_header(std::ostream &out, const ReplayRecord &record)

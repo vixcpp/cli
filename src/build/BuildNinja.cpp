@@ -253,17 +253,6 @@ namespace vix::cli::build
       return rule;
     }
 
-    static void append_paths(
-        std::vector<fs::path> &out,
-        const fs::path &base,
-        const std::string &text)
-    {
-      const auto tokens = tokenize_ninja_paths(text);
-      const auto paths = resolve_path_tokens(base, tokens);
-
-      out.insert(out.end(), paths.begin(), paths.end());
-    }
-
     static std::optional<NinjaEdge> parse_build_edge(
         const std::vector<std::string> &lines,
         std::size_t &index,

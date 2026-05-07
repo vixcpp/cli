@@ -25,6 +25,8 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <optional>
+#include <algorithm>
 
 #ifndef _WIN32
 #include <signal.h>
@@ -124,19 +126,20 @@ namespace vix::commands::RunCommand::dev
         continue;
       }
 
-      const fs::path exePath = executable_path();
+      const std::optional<fs::path> exePath = executable_path();
 
-      if (!fs::exists(exePath))
+      if (!exePath)
       {
         result.exitCode = 1;
-        result.message = "Dev executable not found: " + exePath.string();
+        result.message = "Dev executable not found for target: " + options_.targetName;
 
         error(result.message);
-        hint("Make sure your CMakeLists.txt defines an executable named '" + options_.targetName + "'.");
+        hint("Build directory: " + options_.buildDir.string());
+        hint("Make sure your CMakeLists.txt defines an executable target named '" + options_.targetName + "'.");
         return result;
       }
 
-      const int runCode = run_child_once(exePath);
+      const int runCode = run_child_once(*exePath);
 
       if (runCode != 0)
       {
@@ -308,11 +311,111 @@ namespace vix::commands::RunCommand::dev
     return 0;
   }
 
-  fs::path DevSession::executable_path() const
+  std::optional<fs::path> DevSession::executable_path() const
   {
-    return options_.buildDir / executable_name(options_.targetName);
-  }
+    const std::string exeName = executable_name(options_.targetName);
 
+    auto is_executable_candidate = [](const fs::path &path) -> bool
+    {
+      std::error_code ec;
+
+      if (!fs::is_regular_file(path, ec) || ec)
+        return false;
+
+#ifdef _WIN32
+      return path.extension() == ".exe";
+#else
+      const auto perms = fs::status(path, ec).permissions();
+      if (ec)
+        return false;
+
+      using pr = fs::perms;
+
+      return (perms & pr::owner_exec) != pr::none ||
+             (perms & pr::group_exec) != pr::none ||
+             (perms & pr::others_exec) != pr::none;
+#endif
+    };
+
+    auto looks_like_test_binary = [](const fs::path &path) -> bool
+    {
+      const std::string name = path.filename().string();
+
+      return name.find("_test") != std::string::npos ||
+             name.find("_tests") != std::string::npos ||
+             name.rfind("test_", 0) == 0;
+    };
+
+    const std::vector<fs::path> preferred = {
+        options_.buildDir / exeName,
+        options_.buildDir / "bin" / exeName,
+        options_.buildDir / "src" / exeName};
+
+    for (const auto &path : preferred)
+    {
+      if (is_executable_candidate(path))
+        return path;
+    }
+
+    std::vector<fs::path> exactNameCandidates;
+    std::vector<fs::path> otherCandidates;
+
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(
+             options_.buildDir,
+             fs::directory_options::skip_permission_denied,
+             ec);
+         !ec && it != fs::recursive_directory_iterator();
+         ++it)
+    {
+      const fs::path path = it->path();
+
+      if (path.string().find("CMakeFiles") != std::string::npos)
+        continue;
+
+      if (!is_executable_candidate(path))
+        continue;
+
+      if (looks_like_test_binary(path))
+        continue;
+
+#ifdef _WIN32
+      const std::string baseName = path.stem().string();
+#else
+      const std::string baseName = path.filename().string();
+#endif
+
+      if (baseName == options_.targetName)
+        exactNameCandidates.push_back(path);
+      else
+        otherCandidates.push_back(path);
+    }
+
+    auto prefer_bin_path = [](const fs::path &a, const fs::path &b) -> bool
+    {
+      const bool aBin = a.string().find("/bin/") != std::string::npos ||
+                        a.string().find("\\bin\\") != std::string::npos;
+
+      const bool bBin = b.string().find("/bin/") != std::string::npos ||
+                        b.string().find("\\bin\\") != std::string::npos;
+
+      if (aBin != bBin)
+        return aBin;
+
+      return a.string().size() < b.string().size();
+    };
+
+    if (!exactNameCandidates.empty())
+    {
+      std::sort(exactNameCandidates.begin(), exactNameCandidates.end(), prefer_bin_path);
+      return exactNameCandidates.front();
+    }
+
+    if (otherCandidates.size() == 1)
+      return otherCandidates.front();
+
+    return std::nullopt;
+  }
 #ifndef _WIN32
   int DevSession::run_child_once(const fs::path &exePath)
   {

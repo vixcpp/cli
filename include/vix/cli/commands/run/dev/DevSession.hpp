@@ -22,6 +22,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <optional>
 
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/run/dev/DevChangeClassifier.hpp>
@@ -98,7 +99,7 @@ namespace vix::commands::RunCommand::dev
 
     int rebuild_for_change(DevChangeKind kind) const;
 
-    fs::path executable_path() const;
+    std::optional<fs::path> executable_path() const;
 
 #ifndef _WIN32
     int run_child_once(const fs::path &exePath);

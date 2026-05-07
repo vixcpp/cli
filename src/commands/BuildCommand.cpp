@@ -18,6 +18,7 @@
 #include <vix/cli/build/BuildGraph.hpp>
 #include <vix/cli/build/BuildScheduler.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
+#include <vix/cli/build/BuildGraphExecutor.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -114,6 +115,69 @@ namespace vix::commands::BuildCommand
       }
 
       return util::write_text_file_atomic(path, content);
+    }
+
+    static std::string graph_build_target_name(
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      if (!opt.buildTarget.empty())
+        return opt.buildTarget;
+
+      return plan.projectDir.filename().string();
+    }
+
+    static bool graph_executor_enabled()
+    {
+      const char *value = std::getenv("VIX_GRAPH_EXECUTOR");
+
+      if (!value || !*value)
+        return false;
+
+      std::string s(value);
+
+      for (char &c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return s == "1" ||
+             s == "true" ||
+             s == "yes" ||
+             s == "on";
+    }
+
+    static bool can_use_target_graph_executor(
+        const process::Options &opt,
+        const std::size_t importedCompileCommands,
+        const std::size_t importedNinjaTasks)
+    {
+      if (!graph_executor_enabled())
+        return false;
+
+      if (!opt.useCache)
+        return false;
+
+      if (opt.clean)
+        return false;
+
+      if (!opt.targetTriple.empty())
+        return false;
+
+      if (!opt.cmakeArgs.empty())
+        return false;
+
+      if (opt.withSqlite || opt.withMySql)
+        return false;
+
+      if (opt.linkStatic)
+        return false;
+
+      if (importedCompileCommands == 0)
+        return false;
+
+      if (importedNinjaTasks == 0)
+        return false;
+
+      return true;
     }
 
     static std::optional<process::Preset> resolve_preset(const std::string &name)
@@ -1725,6 +1789,8 @@ namespace vix::commands::BuildCommand
 
         graph.load_dependency_files();
 
+        graph.propagate_dirty();
+
         if (previousGraph)
         {
           graph.mark_clean_from_previous(*previousGraph);
@@ -1744,6 +1810,53 @@ namespace vix::commands::BuildCommand
                std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
                std::to_string(importedCompileCommands) + " imported commands, " +
                std::to_string(importedNinjaTasks) + " ninja tasks");
+        }
+
+        if (can_use_target_graph_executor(
+                opt_,
+                importedCompileCommands,
+                importedNinjaTasks))
+        {
+          build::BuildGraphExecutorOptions executorOptions;
+          executorOptions.buildDir = plan_.buildDir;
+          executorOptions.target = graph_build_target_name(opt_, plan_);
+          executorOptions.jobs = opt_.jobs;
+          executorOptions.quiet = opt_.quiet;
+          executorOptions.verbose = verboseMode;
+
+          build::BuildGraphExecutor executor(executorOptions);
+
+          const build::BuildGraphExecutorResult graphResult =
+              executor.run_target(graph);
+
+          if (graphResult.ok)
+          {
+            if (!graph.save(graphPath) && !opt_.quiet)
+              hint("Warning: unable to write Vix build graph");
+
+            if (!opt_.quiet)
+            {
+              util::ok_line(
+                  std::cout,
+                  "Graph target: " + graphResult.target);
+
+              util::ok_line(
+                  std::cout,
+                  "Compiled " + std::to_string(graphResult.dirtyCompileTasks) +
+                      " dirty files from " +
+                      std::to_string(graphResult.selectedCompileTasks) +
+                      " selected compile tasks");
+
+              util::ok_line(std::cout, "Done");
+            }
+
+            return 0;
+          }
+
+          if (verboseMode && !opt_.quiet)
+          {
+            hint("Graph target executor skipped: " + graphResult.output);
+          }
         }
 
         if (can_use_graph_build(opt_, plan_, scan))

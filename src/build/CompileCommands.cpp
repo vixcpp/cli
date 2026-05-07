@@ -184,6 +184,9 @@ namespace vix::cli::build
       entry.source = source_path_from_entry(object, entry.directory);
       entry.output = output_path_from_entry(object, entry.arguments, entry.directory);
 
+      if (!entry.output.empty())
+        entry.output = resolve_compile_command_path(entry.directory, entry.output);
+
       return entry;
     }
   } // namespace

@@ -27,6 +27,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <filesystem>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -34,6 +35,8 @@
 
 namespace vix::cli::build
 {
+  namespace fs = std::filesystem;
+
   namespace
   {
     static std::string shell_quote(const std::string &value)
@@ -75,6 +78,32 @@ namespace vix::cli::build
         out << shell_quote(command[i]);
       }
 
+      return out.str();
+    }
+
+    static std::string command_to_shell_string_with_working_directory(
+        const std::vector<std::string> &command,
+        const fs::path &workingDirectory)
+    {
+      std::ostringstream out;
+
+#ifndef _WIN32
+      if (!workingDirectory.empty())
+      {
+        out << "cd ";
+        out << shell_quote(workingDirectory.string());
+        out << " && ";
+      }
+#else
+      if (!workingDirectory.empty())
+      {
+        out << "cd /d ";
+        out << shell_quote(workingDirectory.string());
+        out << " && ";
+      }
+#endif
+
+      out << command_to_shell_string(command);
       return out.str();
     }
 
@@ -493,7 +522,11 @@ namespace vix::cli::build
       return result;
     }
 
-    const std::string shellCommand = command_to_shell_string(task.command) + " 2>&1";
+    const std::string shellCommand =
+        command_to_shell_string_with_working_directory(
+            task.command,
+            task.workingDirectory) +
+        " 2>&1";
 
 #ifdef _WIN32
     FILE *pipe = _popen(shellCommand.c_str(), "r");

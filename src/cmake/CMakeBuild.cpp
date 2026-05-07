@@ -571,7 +571,7 @@ namespace vix::cli::build
         return false;
 
       if (filterCMakeSummary)
-        return !is_cmake_configure_summary_line(line);
+        return false;
 
       if (!progressOnly)
         return true;

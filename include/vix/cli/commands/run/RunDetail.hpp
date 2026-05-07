@@ -164,6 +164,7 @@ namespace vix::commands::RunCommand::detail
     std::string warnedArg;
 
     bool localCache = false;
+    bool devMode{false};
   };
 
   /**

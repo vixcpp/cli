@@ -1561,10 +1561,26 @@ namespace vix::commands::RunCommand::detail
   int run_project_watch(const Options &opt, const std::filesystem::path &projectDir)
   {
 #ifndef _WIN32
+
+    std::cerr << "[vix:dev] run_project_watch entered:"
+              << " watch=" << (opt.watch ? "1" : "0")
+              << " devMode=" << (opt.devMode ? "1" : "0")
+              << " projectDir=" << projectDir.string()
+              << "\n";
+
     using Clock = std::chrono::steady_clock;
     namespace fs = std::filesystem;
 
-    const fs::path buildDir = projectDir / "build-dev";
+    const bool devMode = opt.devMode;
+    const fs::path buildDir = projectDir / (devMode ? "build-ninja" : "build-dev");
+    const std::string targetName = projectDir.filename().string();
+
+    if (devMode)
+    {
+      info("Vix dev mode enabled.");
+      hint("Project: " + projectDir.string());
+      hint("Build directory: " + buildDir.string());
+    }
 
     std::error_code ec;
     fs::create_directories(buildDir, ec);
@@ -1582,31 +1598,87 @@ namespace vix::commands::RunCommand::detail
 
       ftime latest = ftime::min();
 
+      auto should_skip_dir = [](const fs::path &p) -> bool
+      {
+        const std::string name = p.filename().string();
+
+        return name == ".git" ||
+               name == ".vix" ||
+               name == "build" ||
+               name == "build-dev" ||
+               name == "build-ninja" ||
+               name == "build-release" ||
+               name == "node_modules" ||
+               name == ".cache" ||
+               name == ".idea" ||
+               name == ".vscode";
+      };
+
+      auto should_watch_file = [](const fs::path &p) -> bool
+      {
+        const std::string name = p.filename().string();
+        const std::string ext = p.extension().string();
+
+        if (name == "CMakeLists.txt" ||
+            name == "CMakePresets.json" ||
+            name == "vix.json" ||
+            name == "vix.toml" ||
+            name == "vix.lock")
+        {
+          return true;
+        }
+
+        return ext == ".cpp" ||
+               ext == ".cc" ||
+               ext == ".cxx" ||
+               ext == ".c" ||
+               ext == ".hpp" ||
+               ext == ".hh" ||
+               ext == ".hxx" ||
+               ext == ".h" ||
+               ext == ".ipp" ||
+               ext == ".cmake";
+      };
+
       auto touch = [&](const fs::path &p)
       {
         std::error_code e;
+
         if (!fs::exists(p, e) || e)
           return;
+
+        if (!fs::is_regular_file(p, e) || e)
+          return;
+
         auto t = fs::last_write_time(p, e);
         if (!e && t > latest)
           latest = t;
       };
 
-      touch(projectDir / "CMakeLists.txt");
-
-      fs::path srcDir = projectDir / "src";
-      if (fs::exists(srcDir, outEc) && !outEc)
+      for (auto it = fs::recursive_directory_iterator(
+               projectDir,
+               fs::directory_options::skip_permission_denied,
+               outEc);
+           !outEc && it != fs::recursive_directory_iterator();
+           ++it)
       {
-        for (auto it = fs::recursive_directory_iterator(
-                 srcDir,
-                 fs::directory_options::skip_permission_denied,
-                 outEc);
-             !outEc && it != fs::recursive_directory_iterator();
-             ++it)
+        const fs::path p = it->path();
+
+        if (it->is_directory())
         {
-          if (it->is_regular_file())
-            touch(it->path());
+          if (should_skip_dir(p))
+            it.disable_recursion_pending();
+
+          continue;
         }
+
+        if (!it->is_regular_file())
+          continue;
+
+        if (!should_watch_file(p))
+          continue;
+
+        touch(p);
       }
 
       return latest;
@@ -1625,37 +1697,81 @@ namespace vix::commands::RunCommand::detail
     {
       if (!has_cmake_cache(buildDir))
       {
-        info("Configuring project for dev mode (build-dev/).");
+        if (devMode)
+          info("Configuring project for dev mode (build-ninja/).");
+        else
+          info("Configuring project for watch mode (build-dev/).");
 
         std::ostringstream oss;
-        oss << "cd " << quote(buildDir.string()) << " && cmake ..";
+
+        if (devMode)
+        {
+          oss << "cmake"
+              << " -S " << quote(projectDir.string())
+              << " -B " << quote(buildDir.string())
+              << " -G Ninja"
+              << " -DCMAKE_BUILD_TYPE=Debug"
+              << " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
+        }
+        else
+        {
+          oss << "cd " << quote(buildDir.string()) << " && cmake ..";
+        }
+
         const std::string cmd = oss.str();
 
-        const int code = run_cmd_live_filtered(cmd, "Configuring project (dev mode)");
+        const int code = run_cmd_live_filtered(cmd, "Configuring project");
         if (code != 0)
         {
-          error("CMake configure failed for dev mode (build-dev/, code " + std::to_string(code) + ").");
+          const std::string label = devMode ? "build-ninja/" : "build-dev/";
+
+          error("CMake configure failed for dev mode (" + label + ", code " + std::to_string(code) + ").");
           hint("Check your CMakeLists.txt or run the command manually:");
-          step("  cd " + buildDir.string());
-          step("  cmake ..");
+
+          if (devMode)
+          {
+            step("  cmake -S " + projectDir.string() + " -B " + buildDir.string() + " -G Ninja");
+          }
+          else
+          {
+            step("  cd " + buildDir.string());
+            step("  cmake ..");
+          }
+
           return code != 0 ? code : 4;
         }
 
         if (dev_verbose_ui(opt))
-          success("Dev configure completed (build-dev/).");
+        {
+          if (devMode)
+            success("Dev configure completed (build-ninja/).");
+          else
+            success("Watch configure completed (build-dev/).");
+        }
       }
 
       {
         watch_spinner_start("Rebuilding project...");
 
         std::ostringstream oss;
-        oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
+
+        if (devMode)
+        {
+          oss << "cmake --build " << quote(buildDir.string())
+              << " --target " << quote(targetName);
+        }
+        else
+        {
+          oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
+        }
 
         if (fs::exists(buildDir / "build.ninja"))
         {
           oss << " --";
+
           if (opt.jobs > 0)
             oss << " -j " << opt.jobs;
+
           oss << " --quiet";
         }
         else
@@ -1672,6 +1788,8 @@ namespace vix::commands::RunCommand::detail
 
         watch_spinner_pause_for_output();
 
+        const std::string buildLabel = devMode ? "build-ninja/" : "build-dev/";
+
         if (code != 0)
         {
           if (!buildLog.empty())
@@ -1679,11 +1797,11 @@ namespace vix::commands::RunCommand::detail
             (void)vix::cli::ErrorHandler::printBuildErrors(
                 buildLog,
                 buildDir,
-                "Build failed in dev mode (build-dev/)");
+                "Build failed in dev mode (" + buildLabel + ")");
           }
           else
           {
-            error("Build failed in dev mode (build-dev/, code " + std::to_string(code) + ").");
+            error("Build failed in dev mode (" + buildLabel + ", code " + std::to_string(code) + ").");
           }
 
           hint("Fix the errors, save your files, and Vix will rebuild automatically.");
@@ -1730,7 +1848,11 @@ namespace vix::commands::RunCommand::detail
 
       if (pid == 0)
       {
-        if (::chdir(buildDir.string().c_str()) != 0)
+        const std::string runCwd = opt.cwd.empty()
+                                       ? projectDir.string()
+                                       : normalize_cwd_if_needed(opt.cwd);
+
+        if (::chdir(runCwd.c_str()) != 0)
         {
           std::cerr << "[vix][run] chdir failed: " << std::strerror(errno) << "\n";
           _exit(127);
@@ -1740,6 +1862,26 @@ namespace vix::commands::RunCommand::detail
         {
           std::cerr << "[vix][run] setenv failed: " << std::strerror(errno) << "\n";
           _exit(127);
+        }
+
+        if (::setenv("VIX_MODE", "dev", 1) != 0)
+        {
+          std::cerr << "[vix][run] setenv VIX_MODE failed: " << std::strerror(errno) << "\n";
+          _exit(127);
+        }
+
+        if (opt.withMySql)
+        {
+          ::setenv("VIX_DB_ENGINE", "mysql", 1);
+          ::setenv("VIX_ENABLE_DB", "1", 1);
+          ::setenv("VIX_DB_USE_MYSQL", "1", 1);
+        }
+
+        if (opt.withSqlite)
+        {
+          ::setenv("VIX_DB_ENGINE", "sqlite", 1);
+          ::setenv("VIX_ENABLE_DB", "1", 1);
+          ::setenv("VIX_DB_USE_SQLITE", "1", 1);
         }
 
         const std::string exeStr = exePath.string();

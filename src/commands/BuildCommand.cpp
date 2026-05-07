@@ -20,6 +20,7 @@
 #include <vix/cli/build/ObjectCache.hpp>
 #include <vix/cli/build/BuildGraphExecutor.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
+#include <vix/cli/build/BuildContext.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -95,17 +96,6 @@ namespace vix::commands::BuildCommand
       }
     };
 
-    static std::map<std::string, process::Preset> builtin_presets()
-    {
-      std::map<std::string, process::Preset> m;
-
-      m.emplace("dev", process::Preset{"dev", "Ninja", "Debug", "build-dev"});
-      m.emplace("dev-ninja", process::Preset{"dev-ninja", "Ninja", "Debug", "build-ninja"});
-      m.emplace("release", process::Preset{"release", "Ninja", "Release", "build-release"});
-
-      return m;
-    }
-
     static bool write_if_different(const fs::path &path, const std::string &content)
     {
       if (util::file_exists(path))
@@ -116,26 +106,6 @@ namespace vix::commands::BuildCommand
       }
 
       return util::write_text_file_atomic(path, content);
-    }
-
-    static std::string graph_build_target_name(
-        const process::Options &opt,
-        const process::Plan &plan)
-    {
-      if (!opt.buildTarget.empty())
-        return opt.buildTarget;
-
-      return plan.projectDir.filename().string();
-    }
-
-    static std::string cmake_build_target_name(
-        const process::Options &opt,
-        const process::Plan &plan)
-    {
-      if (!opt.buildTarget.empty())
-        return opt.buildTarget;
-
-      return plan.projectDir.filename().string();
     }
 
     static bool graph_executor_enabled()
@@ -189,15 +159,6 @@ namespace vix::commands::BuildCommand
         return false;
 
       return true;
-    }
-
-    static std::optional<process::Preset> resolve_preset(const std::string &name)
-    {
-      const auto presets = builtin_presets();
-      const auto it = presets.find(name);
-      if (it == presets.end())
-        return std::nullopt;
-      return it->second;
     }
 
     static std::size_t count_built_targets_from_log(const std::string &log)
@@ -927,7 +888,7 @@ namespace vix::commands::BuildCommand
         return std::nullopt;
       }
 
-      const auto presetOpt = resolve_preset(opt.preset);
+      const auto presetOpt = build::resolve_builtin_preset(opt.preset);
       if (!presetOpt)
         return std::nullopt;
 
@@ -1848,7 +1809,7 @@ namespace vix::commands::BuildCommand
         {
           build::BuildGraphExecutorOptions executorOptions;
           executorOptions.buildDir = plan_.buildDir;
-          executorOptions.target = graph_build_target_name(opt_, plan_);
+          executorOptions.target = build::default_graph_target_name(opt_, plan_);
           executorOptions.jobs = opt_.jobs;
           executorOptions.quiet = opt_.quiet;
           executorOptions.verbose = verboseMode;
@@ -2088,7 +2049,7 @@ namespace vix::commands::BuildCommand
 
               build::print_build_header_full(
                   std::cout,
-                  cmake_build_target_name(opt_, plan_),
+                  build::default_build_target_name(opt_, plan_),
                   display_build_profile(plan_),
                   plan_.launcher,
                   plan_.fastLinkerFlag,
@@ -2098,7 +2059,7 @@ namespace vix::commands::BuildCommand
             {
               build::print_build_header_full(
                   std::cout,
-                  cmake_build_target_name(opt_, plan_),
+                  build::default_build_target_name(opt_, plan_),
                   display_build_profile(plan_),
                   std::nullopt,
                   std::nullopt,
@@ -2280,7 +2241,7 @@ namespace vix::commands::BuildCommand
     if (parseExit != 0)
       return parseExit;
 
-    if (!resolve_preset(opt.preset))
+    if (!build::resolve_builtin_preset(opt.preset))
     {
       error("Unknown preset: " + opt.preset);
       hint("Available presets: dev, dev-ninja, release");

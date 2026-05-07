@@ -1563,12 +1563,6 @@ namespace vix::commands::RunCommand::detail
   {
 #ifndef _WIN32
 
-    std::cerr << "[vix:dev] run_project_watch entered:"
-              << " watch=" << (opt.watch ? "1" : "0")
-              << " devMode=" << (opt.devMode ? "1" : "0")
-              << " projectDir=" << projectDir.string()
-              << "\n";
-
     using Clock = std::chrono::steady_clock;
     namespace fs = std::filesystem;
 

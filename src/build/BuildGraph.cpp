@@ -16,6 +16,7 @@
 
 #include <vix/cli/build/BuildGraph.hpp>
 #include <vix/cli/build/CompileCommands.hpp>
+#include <vix/cli/build/BuildNinja.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -476,6 +477,129 @@ namespace vix::cli::build
 
       return out;
     }
+
+    static BuildNodeKind node_kind_from_ninja_edge_output(
+        const NinjaEdge &edge,
+        const fs::path &path)
+    {
+      const std::string ext = path.extension().string();
+
+      if (edge.kind == NinjaEdgeKind::Archive)
+        return BuildNodeKind::Library;
+
+      if (edge.kind == NinjaEdgeKind::Link)
+      {
+        if (ext == ".a" ||
+            ext == ".so" ||
+            ext == ".dylib" ||
+            ext == ".dll" ||
+            ext == ".lib")
+        {
+          return BuildNodeKind::Library;
+        }
+
+        return BuildNodeKind::Executable;
+      }
+
+      if (edge.kind == NinjaEdgeKind::Copy ||
+          edge.kind == NinjaEdgeKind::Install)
+      {
+        return BuildNodeKind::Config;
+      }
+
+      return BuildNodeKind::Unknown;
+    }
+
+    static BuildNodeKind node_kind_from_ninja_input(const fs::path &path)
+    {
+      const std::string ext = path.extension().string();
+
+      if (ext == ".o" || ext == ".obj")
+        return BuildNodeKind::Object;
+
+      if (ext == ".a" ||
+          ext == ".so" ||
+          ext == ".dylib" ||
+          ext == ".dll" ||
+          ext == ".lib")
+      {
+        return BuildNodeKind::Library;
+      }
+
+      if (is_source_extension(ext))
+        return BuildNodeKind::Source;
+
+      if (is_header_extension(ext))
+        return BuildNodeKind::Header;
+
+      return BuildNodeKind::Config;
+    }
+
+    static BuildTaskKind build_task_kind_from_ninja_edge_kind(NinjaEdgeKind kind)
+    {
+      switch (kind)
+      {
+      case NinjaEdgeKind::Archive:
+        return BuildTaskKind::Archive;
+      case NinjaEdgeKind::Link:
+        return BuildTaskKind::Link;
+      case NinjaEdgeKind::Copy:
+        return BuildTaskKind::Copy;
+      case NinjaEdgeKind::Install:
+        return BuildTaskKind::Copy;
+      case NinjaEdgeKind::Utility:
+        return BuildTaskKind::Generate;
+      case NinjaEdgeKind::Compile:
+        return BuildTaskKind::Compile;
+      case NinjaEdgeKind::Unknown:
+      default:
+        return BuildTaskKind::Unknown;
+      }
+    }
+
+    static std::string ninja_task_id_for_edge(const NinjaEdge &edge)
+    {
+      std::uint64_t h = FNV_OFFSET;
+
+      h = fnv_mix_string(h, "ninja:");
+      h = fnv_mix_string(h, to_string(edge.kind));
+      h = fnv_mix_string(h, edge.rule);
+
+      for (const fs::path &output : edge.outputs)
+        h = fnv_mix_string(h, normalize_path_string(output));
+
+      return "ninja:" + hex64(h);
+    }
+
+    static std::string command_hash_for_argv(
+        const std::vector<std::string> &command)
+    {
+      std::uint64_t h = FNV_OFFSET;
+
+      h = fnv_mix_string(h, "command:");
+
+      for (const std::string &arg : command)
+      {
+        h = fnv_mix_string(h, arg);
+        h = fnv_mix_string(h, "\0");
+      }
+
+      return hex64(h);
+    }
+
+    static bool should_import_ninja_edge(const NinjaEdge &edge)
+    {
+      if (!edge.valid())
+        return false;
+
+      if (edge.kind == NinjaEdgeKind::Compile)
+        return false;
+
+      if (edge.kind == NinjaEdgeKind::Unknown)
+        return false;
+
+      return true;
+    }
   } // namespace
 
   bool BuildGraphConfig::valid() const
@@ -723,6 +847,114 @@ namespace vix::cli::build
 
       add_task(task);
 
+      ++imported;
+    }
+
+    return imported;
+  }
+
+  std::size_t BuildGraph::load_ninja_build(const fs::path &path)
+  {
+    const auto ninjaBuild = read_build_ninja(path);
+
+    if (!ninjaBuild)
+      return 0;
+
+    std::size_t imported = 0;
+
+    for (const NinjaEdge &edge : ninjaBuild->edges)
+    {
+      if (!should_import_ninja_edge(edge))
+        continue;
+
+      const BuildTaskKind taskKind =
+          build_task_kind_from_ninja_edge_kind(edge.kind);
+
+      if (taskKind == BuildTaskKind::Unknown)
+        continue;
+
+      BuildTask task;
+      task.id = ninja_task_id_for_edge(edge);
+      task.kind = taskKind;
+      task.state = BuildTaskState::Pending;
+      task.workingDirectory = ninjaBuild->directory;
+
+      /*
+       * Do not expand Ninja rule commands here.
+       *
+       * build.ninja is already a complete execution graph. For now we import
+       * the DAG structure only. Execution remains delegated to Ninja/CMake until
+       * Vix has a full Ninja variable expander and target-aware executor.
+       */
+      task.command = {
+          "ninja",
+          "-C",
+          ninjaBuild->directory.string(),
+          edge.primary_output().string()};
+
+      task.commandHash = command_hash_for_argv(task.command);
+
+      for (const fs::path &input : edge.explicitInputs)
+      {
+        const BuildNodeKind inputKind = node_kind_from_ninja_input(input);
+
+        BuildNode inputNode = make_file_build_node(inputKind, input);
+
+        /*
+         * Keep Ninja import cheap.
+         * scan_project() and load_dependency_files() already hash real project
+         * inputs where needed. Ninja edges may reference many generated files.
+         */
+        inputNode.hash.clear();
+
+        add_node(inputNode);
+        task.add_input(inputNode.id);
+      }
+
+      for (const fs::path &input : edge.implicitInputs)
+      {
+        const BuildNodeKind inputKind = node_kind_from_ninja_input(input);
+
+        BuildNode inputNode = make_file_build_node(inputKind, input);
+        inputNode.hash.clear();
+
+        add_node(inputNode);
+        task.add_input(inputNode.id);
+      }
+
+      for (const fs::path &input : edge.orderOnlyInputs)
+      {
+        const BuildNodeKind inputKind = node_kind_from_ninja_input(input);
+
+        BuildNode inputNode = make_file_build_node(inputKind, input);
+        inputNode.hash.clear();
+
+        add_node(inputNode);
+        task.add_input(inputNode.id);
+      }
+
+      for (const fs::path &output : edge.outputs)
+      {
+        const BuildNodeKind outputKind =
+            node_kind_from_ninja_edge_output(edge, output);
+
+        if (outputKind == BuildNodeKind::Unknown)
+          continue;
+
+        BuildNode outputNode = make_file_build_node(outputKind, output);
+        outputNode.hash.clear();
+
+        for (const auto &inputId : task.inputs)
+          outputNode.add_dependency(inputId);
+
+        add_node(outputNode);
+        task.add_output(outputNode.id);
+      }
+
+      if (task.outputs.empty())
+        continue;
+
+      add_task(task);
       ++imported;
     }
 

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <iostream>
 
 #include <cstdlib>
 #ifdef _WIN32
@@ -46,12 +47,20 @@ namespace vix::commands::DevCommand
   int run(const std::vector<std::string> &args)
   {
     std::vector<std::string> forwarded;
-    forwarded.reserve(args.size() + 1);
+    forwarded.reserve(args.size() + 2);
+
     forwarded.insert(forwarded.end(), args.begin(), args.end());
 
     if (!has_watch_flag(forwarded))
       forwarded.emplace_back("--watch");
-    vix::cli::util::info_line(std::cout, "Dev mode active");
+
+    forwarded.emplace_back("--dev-mode");
+
+    std::cerr << "[vix:dev] forwarding to run:";
+    for (const auto &arg : forwarded)
+      std::cerr << " " << arg;
+    std::cerr << "\n";
+
     return vix::commands::RunCommand::run(forwarded);
   }
 

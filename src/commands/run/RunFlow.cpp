@@ -98,6 +98,7 @@ namespace vix::commands::RunCommand::detail
     {
       return v == "--verbose" || v == "--quiet" || v == "-q" ||
              v == "--watch" || v == "--reload" ||
+             v == "--dev-mode" ||
              v == "--force-server" || v == "--force-script" ||
              v == "--san" || v == "--ubsan" || v == "--tsan" ||
              v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
@@ -443,6 +444,10 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--local-cache")
       {
         opt.localCache = true;
+      }
+      else if (a == "--dev-mode")
+      {
+        opt.devMode = true;
       }
       else if (a == "--log-level" || a == "--loglevel")
       {

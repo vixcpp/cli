@@ -354,6 +354,8 @@ namespace vix::cli::build
     std::string currentProgressLine;
     bool progressVisible = false;
     std::size_t lastRenderedWidth = 0;
+    std::string lastRenderedProgressLine;
+    auto lastProgressRenderTs = std::chrono::steady_clock::now();
 
     auto is_progress_line = [](const std::string &line) -> bool
     {
@@ -408,19 +410,19 @@ namespace vix::cli::build
 
       std::string clear;
 
-      // Cursor is on the second progress line.
-      // Clear second line.
-      clear += "\r";
-      clear.append(width, ' ');
-      clear += "\r";
-
-      // Move to first progress line.
-      clear += "\033[1A";
+      // Cursor is below the 2-line progress block.
+      // Move to the first progress line.
+      clear += "\033[2A\r";
 
       // Clear first line.
-      clear += "\r";
       clear.append(width, ' ');
-      clear += "\r";
+
+      // Move to second progress line and clear it.
+      clear += "\n\r";
+      clear.append(width, ' ');
+
+      // Return to the first progress line before rendering again.
+      clear += "\033[1A\r";
 
       write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
     };
@@ -429,6 +431,21 @@ namespace vix::cli::build
     {
       if (quiet || line.empty())
         return;
+
+      const auto now = std::chrono::steady_clock::now();
+      const auto elapsedMs =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              now - lastProgressRenderTs)
+              .count();
+
+      if (line == lastRenderedProgressLine && progressVisible)
+        return;
+
+      if (progressVisible && elapsedMs < 120)
+        return;
+
+      lastProgressRenderTs = now;
+      lastRenderedProgressLine = line;
 
       std::size_t slash = line.find('/');
       std::size_t rb = line.find(']');
@@ -486,14 +503,15 @@ namespace vix::cli::build
 
       std::ostringstream lineOut;
       lineOut << "  "
-              << style::GREEN << "build " << style::RESET
+              << style::CYAN << "build " << style::RESET
               << bar
               << " "
               << style::CYAN << current << "/" << total << style::RESET
               << "\n"
               << "  "
               << style::CYAN << "› " << style::RESET
-              << action;
+              << action
+              << "\n";
 
       if (progressVisible)
         clear_rendered_progress_lines();
@@ -531,6 +549,7 @@ namespace vix::cli::build
       progressVisible = false;
       lastRenderedWidth = 0;
       currentProgressLine.clear();
+      lastRenderedProgressLine.clear();
     };
 
     auto clear_progress_line_for_error = [&]() -> void
@@ -543,6 +562,7 @@ namespace vix::cli::build
       progressVisible = false;
       lastRenderedWidth = 0;
       currentProgressLine.clear();
+      lastRenderedProgressLine.clear();
     };
 
     auto should_echo_line = [&](const std::string &line) -> bool

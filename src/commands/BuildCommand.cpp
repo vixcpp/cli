@@ -2080,17 +2080,32 @@ namespace vix::commands::BuildCommand
         }
 
         {
-          if (verboseMode && !opt_.quiet)
+          if (!opt_.quiet)
           {
-            out.flush_to_stdout();
+            if (verboseMode)
+            {
+              out.flush_to_stdout();
 
-            build::print_build_header_full(
-                std::cout,
-                cmake_build_target_name(opt_, plan_),
-                display_build_profile(plan_),
-                plan_.launcher,
-                plan_.fastLinkerFlag,
-                opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
+              build::print_build_header_full(
+                  std::cout,
+                  cmake_build_target_name(opt_, plan_),
+                  display_build_profile(plan_),
+                  plan_.launcher,
+                  plan_.fastLinkerFlag,
+                  opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
+            }
+            else
+            {
+              build::print_build_header_full(
+                  std::cout,
+                  cmake_build_target_name(opt_, plan_),
+                  display_build_profile(plan_),
+                  std::nullopt,
+                  std::nullopt,
+                  0);
+            }
+
+            std::cout.flush();
           }
 
           const auto t0 = std::chrono::steady_clock::now();

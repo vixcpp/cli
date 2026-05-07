@@ -317,6 +317,9 @@ namespace vix::cli
       if (handle_unrecognized_cli_option_as_script_runtime_args(cleanedLog))
         return true;
 
+      if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
+        return true;
+
       if (RawLogDetectors::handleLinkerOrSanitizer(
               cleanedLog,
               sourceFile,
@@ -324,9 +327,6 @@ namespace vix::cli
       {
         return true;
       }
-
-      if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
-        return true;
 
       vix::cli::build::print_build_error(
           std::cerr,

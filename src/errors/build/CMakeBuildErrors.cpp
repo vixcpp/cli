@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/errors/build/CMakeBuildErrors.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 
 #include <iostream>
 #include <regex>
@@ -71,6 +72,59 @@ namespace vix::cli::errors::build
                 << value
                 << RESET
                 << "\n";
+    }
+
+    std::string shorten_cpp_symbol(std::string symbol)
+    {
+      symbol = std::string(symbol.begin(), symbol.end());
+
+      const auto paren = symbol.find('(');
+      if (paren != std::string::npos)
+        symbol = symbol.substr(0, paren) + "(...)";
+
+      if (symbol.size() > 160)
+        symbol = symbol.substr(0, 157) + "...";
+
+      return symbol;
+    }
+
+    bool handleUndefinedSymbol(std::string_view log)
+    {
+      const bool hasUndefined =
+          contains(log, "undefined symbol:") ||
+          contains(log, "undefined reference");
+
+      const bool hasLinker =
+          contains(log, "mold: error:") ||
+          contains(log, "ld:") ||
+          contains(log, "collect2: error:");
+
+      if (!hasUndefined || !hasLinker)
+        return false;
+
+      const std::string symbol = extract(
+          log,
+          std::regex(R"re(undefined symbol:\s*([^\n]+))re"));
+
+      const std::string referencedBy = extract(
+          log,
+          std::regex(R"re(>>>\s+referenced by\s+([^\n]+))re"));
+
+      vix::cli::build::BuildDiagnostic diagnostic;
+      diagnostic.title = "Link failed";
+      diagnostic.error =
+          symbol.empty()
+              ? "undefined symbol or undefined reference"
+              : "undefined symbol: " + shorten_cpp_symbol(symbol);
+
+      diagnostic.hint =
+          "The symbol is declared and used, but no linked object or library provides its definition.";
+
+      if (!referencedBy.empty())
+        diagnostic.message = "Referenced by: " + referencedBy;
+
+      vix::cli::build::print_build_diagnostic(std::cerr, diagnostic);
+      return true;
     }
 
     void print_error_title(std::string_view message)
@@ -511,11 +565,15 @@ namespace vix::cli::errors::build
 
       return true;
     }
+
   } // namespace
 
   bool handleCMakeBuildError(std::string_view log)
   {
     if (handleCacheMismatch(log))
+      return true;
+
+    if (handleUndefinedSymbol(log))
       return true;
 
     if (handleMissingLinkTarget(log))

@@ -133,6 +133,19 @@ namespace vix::cli::build
   std::optional<BuildLocation> parse_build_location(
       const std::string &text);
 
+  void print_build_header_full(
+      std::ostream &out,
+      const std::string &target,
+      const std::string &preset,
+      const std::optional<std::string> &launcher,
+      const std::optional<std::string> &fastLinkerFlag,
+      int jobs);
+
+  void print_build_success_timed(
+      std::ostream &out,
+      const std::string &message,
+      long long milliseconds);
+
 } // namespace vix::cli::build
 
 #endif

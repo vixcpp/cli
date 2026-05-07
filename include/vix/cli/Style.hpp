@@ -27,6 +27,7 @@ namespace vix::cli::style
   inline constexpr const char *YELLOW = "\033[33m";
   inline constexpr const char *CYAN = "\033[36m";
   inline constexpr const char *GRAY = "\033[90m";
+  inline constexpr const char *MAGENTA = "\033[35m";
   inline constexpr const char *PAD = "  ";
 
   inline void error(const std::string &msg)
@@ -76,4 +77,4 @@ namespace vix::cli::style
 
 } // namespace vix::cli::style
 
-#endif // CLI_STYLE_HPP
+#endif // VIX_CLI_STYLE_HPP

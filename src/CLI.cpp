@@ -101,6 +101,59 @@ namespace vix
       return std::nullopt;
     }
 
+    static void print_invalid_log_level_error(
+        const std::string &source,
+        const std::string &value)
+    {
+      std::cerr << PAD
+                << RED
+                << BOLD
+                << "✖ Invalid log level"
+                << RESET
+                << "\n\n";
+
+      std::cerr << PAD
+                << CYAN
+                << "source:"
+                << RESET
+                << "\n"
+                << "    "
+                << source
+                << "\n\n";
+
+      std::cerr << PAD
+                << CYAN
+                << "value:"
+                << RESET
+                << "\n"
+                << "    "
+                << value
+                << "\n\n";
+
+      std::cerr << PAD
+                << CYAN
+                << "expected:"
+                << RESET
+                << "\n"
+                << "    trace, debug, info, warn, error, critical"
+                << "\n\n";
+
+      std::cerr << PAD
+                << YELLOW
+                << "hint:"
+                << RESET
+                << "\n";
+
+      if (to_lower_copy(value) == "release")
+      {
+        std::cerr << "    To build in release mode, use: vix build --preset release\n";
+      }
+      else
+      {
+        std::cerr << "    Example: VIX_LOG_LEVEL=debug vix build -v\n";
+      }
+    }
+
     static std::size_t levenshtein_distance(const std::string &a, const std::string &b)
     {
       const std::size_t m = a.size();
@@ -157,14 +210,14 @@ namespace vix
       if (const char *env = vix::utils::vix_getenv("VIX_LOG_LEVEL"))
       {
         std::string value(env);
+
         if (auto lvl = parse_log_level(value))
         {
           logger.setLevel(*lvl);
         }
         else
         {
-          std::cerr << "vix: invalid VIX_LOG_LEVEL value '" << value
-                    << "'. Expected one of: trace, debug, info, warn, error, critical.\n";
+          print_invalid_log_level_error("VIX_LOG_LEVEL", value);
         }
       }
     }
@@ -177,8 +230,7 @@ namespace vix
       }
       else
       {
-        std::cerr << "vix: invalid --log-level value '" << value
-                  << "'. Expected one of: trace, debug, info, warn, error, critical.\n";
+        print_invalid_log_level_error("--log-level", value);
       }
     }
 

@@ -15,7 +15,7 @@
  */
 
 #include <vix/cli/commands/run/dev/DevRebuilder.hpp>
-
+#include <vix/cli/cmake/CMakeBuild.hpp>
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
@@ -23,6 +23,9 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <fstream>
+#include <thread>
+#include <vector>
 
 using namespace vix::cli::style;
 
@@ -38,6 +41,17 @@ namespace vix::commands::RunCommand::dev
         return name + "/";
 
       return buildDir.string();
+    }
+
+    std::string read_text_file_or_empty(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return {};
+
+      std::ostringstream out;
+      out << in.rdbuf();
+      return out.str();
     }
   } // namespace
 
@@ -68,11 +82,70 @@ namespace vix::commands::RunCommand::dev
 
   DevRebuilderResult DevRebuilder::rebuild() const
   {
-    DevRebuilderResult configured = ensure_configured();
-    if (!configured.ok)
-      return configured;
+    DevRebuilderResult result;
 
-    return run_build_command();
+    if (!options_.quiet)
+    {
+      std::cout << CYAN << BOLD << "Compiling " << RESET
+                << CYAN << BOLD << options_.targetName << RESET
+                << GRAY << " (dev)" << RESET
+                << "\n"
+                << std::flush;
+    }
+
+    std::vector<std::string> argv;
+    argv.push_back("cmake");
+    argv.push_back("--build");
+    argv.push_back(options_.buildDir.string());
+    argv.push_back("--target");
+    argv.push_back(options_.targetName);
+
+    argv.push_back("--");
+
+    const int jobs =
+        options_.runOptions.jobs > 0
+            ? options_.runOptions.jobs
+            : static_cast<int>(std::thread::hardware_concurrency());
+
+    if (jobs > 0)
+    {
+      argv.push_back("-j");
+      argv.push_back(std::to_string(jobs));
+    }
+
+    const fs::path logPath = options_.buildDir / "dev-build.log";
+
+    const auto r = vix::cli::build::run_process_live_to_log(
+        argv,
+        {},
+        logPath,
+        options_.quiet,
+        false,
+        true);
+
+    result.exitCode = r.exitCode;
+    result.ok = r.exitCode == 0;
+
+    if (!result.ok)
+    {
+      const std::string log = read_text_file_or_empty(logPath);
+
+      bool handled = false;
+      if (!log.empty())
+      {
+        handled = vix::cli::ErrorHandler::printBuildErrors(
+            log,
+            options_.buildDir,
+            "Build failed in dev mode");
+      }
+
+      if (!handled)
+        error("Build failed in dev mode.");
+
+      return result;
+    }
+
+    return result;
   }
 
   DevRebuilderResult DevRebuilder::reconfigure_and_rebuild() const
@@ -84,7 +157,7 @@ namespace vix::commands::RunCommand::dev
     if (!configured.ok)
       return configured;
 
-    return run_build_command();
+    return rebuild();
   }
 
   bool DevRebuilder::has_cmake_cache() const
@@ -131,10 +204,6 @@ namespace vix::commands::RunCommand::dev
                  opt.enableUbsanOnly,
                  opt.enableThreadSanitizer);
     }
-    else
-    {
-      oss << " -DVIX_ENABLE_SANITIZERS=OFF";
-    }
 
     return oss.str();
   }
@@ -170,16 +239,19 @@ namespace vix::commands::RunCommand::dev
     DevRebuilderResult result;
     result.configured = true;
 
-    if (!options_.quiet)
-      info("Configuring project for dev mode (" + build_label(options_.buildDir) + ").");
+    if (!options_.quiet && options_.runOptions.verbose)
+    {
+      std::cout << CYAN << BOLD << "Configuring " << RESET
+                << CYAN << BOLD << options_.targetName << RESET
+                << GRAY << " (dev)" << RESET
+                << "\n";
+    }
 
     const std::string cmd = configure_command();
 
-    const int code = detail::run_cmd_live_filtered(
-        cmd,
-        "Configuring project");
-
-    result.exitCode = detail::normalize_exit_code(code);
+    int rawCode = 0;
+    result.output = detail::run_and_capture_with_code(cmd + " 2>&1", rawCode);
+    result.exitCode = detail::normalize_exit_code(rawCode);
     result.ok = result.exitCode == 0;
 
     if (!result.ok)
@@ -190,12 +262,25 @@ namespace vix::commands::RunCommand::dev
           ", code " + std::to_string(result.exitCode) + ").";
 
       error(result.message);
+
+      if (!result.output.empty())
+        std::cerr << result.output << "\n";
+
       hint("Check your CMakeLists.txt or run the command manually:");
       step("  " + cmd);
       return result;
     }
 
     result.message = "CMake configure completed.";
+
+    if (!options_.quiet)
+    {
+      std::cout << "  "
+                << GREEN << "✔" << RESET
+                << " Configured"
+                << "\n";
+    }
+
     return result;
   }
 

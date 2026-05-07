@@ -21,6 +21,7 @@
 #include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/util/Ui.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/commands/run/dev/DevSession.hpp>
 
@@ -1700,9 +1701,27 @@ namespace vix::commands::RunCommand::detail
     if (tsEc)
       hint("Unable to compute initial timestamp for dev watch: " + tsEc.message());
 
-    info("Watcher Process started (project hot reload).");
-    hint("Watching project: " + projectDir.string());
-    hint("Press Ctrl+C to stop dev mode.");
+    if (!opt.quiet)
+    {
+      std::cout << CYAN << BOLD << "Dev " << RESET
+                << CYAN << BOLD << targetName << RESET
+                << GRAY << " (dev)" << RESET
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "watching: " << RESET
+                << projectDir.string()
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "target  : " << RESET
+                << targetName
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "press Ctrl+C to stop" << RESET
+                << "\n\n";
+    }
 
     while (true)
     {
@@ -1752,17 +1771,20 @@ namespace vix::commands::RunCommand::detail
           return code != 0 ? code : 4;
         }
 
-        if (dev_verbose_ui(opt))
-        {
-          if (devMode)
-            success("Dev configure completed (build-ninja/).");
-          else
-            success("Watch configure completed (build-dev/).");
-        }
+        if (!opt.quiet)
+          vix::cli::util::ok_line(std::cout, "Configured");
       }
 
       {
-        watch_spinner_start("Rebuilding project...");
+        if (!opt.quiet)
+        {
+          std::cout << CYAN << BOLD << "Compiling " << RESET
+                    << CYAN << BOLD << targetName << RESET
+                    << GRAY << " (dev)" << RESET
+                    << "\n";
+        }
+
+        watch_spinner_start("Building project...");
 
         std::ostringstream oss;
 
@@ -1797,12 +1819,12 @@ namespace vix::commands::RunCommand::detail
         std::string buildLog = run_and_capture_with_code(cmd + " 2>&1", code);
         code = normalize_exit_code(code);
 
-        watch_spinner_pause_for_output();
-
-        const std::string buildLabel = devMode ? "build-ninja/" : "build-dev/";
-
         if (code != 0)
         {
+          watch_spinner_stop();
+
+          const std::string buildLabel = devMode ? "build-ninja/" : "build-dev/";
+
           if (!buildLog.empty())
           {
             (void)vix::cli::ErrorHandler::printBuildErrors(
@@ -1834,8 +1856,7 @@ namespace vix::commands::RunCommand::detail
           continue;
         }
 
-        if (dev_verbose_ui(opt))
-          success("Build completed (dev mode).");
+        watch_spinner_finish();
       }
 
       const std::string exeName = projectDir.filename().string();

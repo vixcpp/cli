@@ -1849,7 +1849,7 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        if (can_use_graph_build(opt_, plan_, scan))
+        if (graph_executor_enabled() && can_use_graph_build(opt_, plan_, scan))
         {
           return run_graph_build(
               graph,

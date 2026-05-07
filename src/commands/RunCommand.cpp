@@ -1600,12 +1600,6 @@ namespace vix::commands::RunCommand
       if (opt.watch)
       {
 #ifndef _WIN32
-        std::cerr << "[vix:dev] entering project watch from resolved target:"
-                  << " watch=" << (opt.watch ? "1" : "0")
-                  << " devMode=" << (opt.devMode ? "1" : "0")
-                  << " projectDir=" << projectDir.string()
-                  << "\n";
-
         return run_project_watch(opt, projectDir);
 #else
         hint("Project watch mode is not yet implemented on Windows; running once without auto-reload.");
@@ -1640,13 +1634,6 @@ namespace vix::commands::RunCommand
     }
 
     warn_if_env_file_missing(projectDir);
-
-    std::cerr << "[vix:dev] before project watch check:"
-              << " watch=" << (opt.watch ? "1" : "0")
-              << " devMode=" << (opt.devMode ? "1" : "0")
-              << " singleCpp=" << (opt.singleCpp ? "1" : "0")
-              << " projectDir=" << projectDir.string()
-              << "\n";
 
     if (!opt.singleCpp && opt.watch)
     {

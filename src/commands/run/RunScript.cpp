@@ -22,6 +22,7 @@
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/cli/commands/run/dev/DevSession.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -1562,18 +1563,28 @@ namespace vix::commands::RunCommand::detail
   {
 #ifndef _WIN32
 
-    std::cerr << "[vix:dev] run_project_watch entered:"
-              << " watch=" << (opt.watch ? "1" : "0")
-              << " devMode=" << (opt.devMode ? "1" : "0")
-              << " projectDir=" << projectDir.string()
-              << "\n";
-
     using Clock = std::chrono::steady_clock;
     namespace fs = std::filesystem;
 
     const bool devMode = opt.devMode;
     const fs::path buildDir = projectDir / (devMode ? "build-ninja" : "build-dev");
     const std::string targetName = projectDir.filename().string();
+
+    if (devMode)
+    {
+      vix::commands::RunCommand::dev::DevSession session(
+          vix::commands::RunCommand::dev::DevSessionOptions{
+              projectDir,
+              buildDir,
+              targetName,
+              opt,
+              std::chrono::milliseconds(300),
+              std::chrono::milliseconds(200),
+              opt.quiet});
+
+      const auto result = session.run();
+      return result.exitCode;
+    }
 
     if (devMode)
     {

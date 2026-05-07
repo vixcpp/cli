@@ -40,6 +40,9 @@ namespace vix::commands::RunCommand::detail
 
       void start(std::string label)
       {
+        if (label.empty())
+          label = "Rebuilding and restarting...";
+
         bool expected = false;
         if (!running.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
           return;
@@ -47,16 +50,39 @@ namespace vix::commands::RunCommand::detail
         worker = std::thread(
             [this, label = std::move(label)]()
             {
-            static const char *frames[] = {"⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"};
-            constexpr std::size_t frameCount = sizeof(frames) / sizeof(frames[0]);
+              constexpr std::size_t width = 28;
+              std::size_t current = 0;
 
-            std::size_t i = 0;
-            while (running.load(std::memory_order_relaxed))
-            {
-                std::cout << "\r┃   " << frames[i] << " " << label << "   " << std::flush;
-                i = (i + 1) % frameCount;
-                std::this_thread::sleep_for(std::chrono::milliseconds(80));
-            } });
+              while (running.load(std::memory_order_relaxed))
+              {
+                std::string bar;
+                bar.reserve(width);
+
+                for (std::size_t i = 0; i < width; ++i)
+                {
+                  if (i <= current)
+                    bar += "=";
+                  else
+                    bar += "-";
+                }
+
+                std::cout << "\r"
+                          << "  "
+                          << CYAN << "build " << RESET
+                          << GRAY << "[" << RESET
+                          << CYAN << bar << RESET
+                          << GRAY << "]" << RESET
+                          << "\n"
+                          << "  "
+                          << CYAN << "› " << RESET
+                          << label
+                          << "\033[1A\r"
+                          << std::flush;
+
+                current = (current + 1) % width;
+                std::this_thread::sleep_for(std::chrono::milliseconds(90));
+              }
+            });
       }
 
       void stop()
@@ -68,7 +94,28 @@ namespace vix::commands::RunCommand::detail
         if (worker.joinable())
           worker.join();
 
-        std::cout << "\r" << std::string(120, ' ') << "\r" << std::flush;
+        std::cout << "\r"
+                  << std::string(120, ' ')
+                  << "\n\r"
+                  << std::string(120, ' ')
+                  << "\033[1A\r"
+                  << std::flush;
+      }
+
+      void finish()
+      {
+        stop();
+
+        constexpr std::size_t width = 28;
+
+        std::cout << "  "
+                  << CYAN << "build "
+                  << "["
+                  << std::string(width, '=')
+                  << "] done"
+                  << RESET
+                  << "\n"
+                  << std::flush;
       }
 
       ~WatchSpinner()
@@ -95,36 +142,33 @@ namespace vix::commands::RunCommand::detail
     watch_spinner_stop();
   }
 
-  namespace
+  void watch_spinner_finish()
   {
-    struct WatchSpinnerScope
-    {
-      explicit WatchSpinnerScope(std::string label)
-      {
-        watch_spinner_start(std::move(label));
-      }
-      ~WatchSpinnerScope()
-      {
-        watch_spinner_stop();
-      }
-    };
+    g_watch_spinner.finish();
   }
 
   void print_watch_restart_banner(const fs::path &path, std::string_view label)
   {
-#ifdef _WIN32
-    std::system("cls");
-#else
-    std::cout << "\x1b[2J\x1b[H" << std::flush;
-#endif
-
-    info(std::string("Watcher Restarting! File change detected: \"") + path.string() + "\"");
-
-    std::cout << "\n"
-              << std::flush;
-
     if (label.empty())
-      label = "Rebuilding & restarting...";
+      label = "Rebuilding and restarting...";
+
+    const std::string file = path.string();
+
+    std::cout << CYAN << BOLD << "Dev" << RESET
+              << " "
+              << CYAN << BOLD << "reload" << RESET
+              << GRAY << " (dev)" << RESET
+              << "\n";
+
+    std::cout << "  "
+              << GRAY << "changed: " << RESET
+              << file
+              << "\n";
+
+    std::cout << "  "
+              << GRAY << "action : " << RESET
+              << label
+              << "\n";
 
     watch_spinner_start(std::string(label));
   }

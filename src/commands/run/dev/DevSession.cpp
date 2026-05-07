@@ -15,9 +15,10 @@
  */
 
 #include <vix/cli/commands/run/dev/DevSession.hpp>
-
 #include <vix/cli/Style.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/utils/Env.hpp>
+#include <cctype>
 
 #include <cerrno>
 #include <cstring>
@@ -65,6 +66,85 @@ namespace vix::commands::RunCommand::dev
 
       return false;
     }
+
+    void clear_dev_screen()
+    {
+      std::cout << "\033[2J\033[H" << std::flush;
+    }
+
+    bool dev_verbose_ui(const DevSessionOptions &options)
+    {
+      if (options.runOptions.verbose)
+        return true;
+
+      const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
+      if (!lvl || !*lvl)
+        return false;
+
+      std::string s(lvl);
+      for (char &c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return s == "debug" || s == "trace";
+    }
+
+    void print_dev_header(const DevSessionOptions &options)
+    {
+      if (options.quiet)
+        return;
+
+      std::cout << CYAN << BOLD << "Dev " << RESET
+                << CYAN << BOLD << options.targetName << RESET
+                << GRAY << " (dev)" << RESET
+                << "\n";
+
+      if (!dev_verbose_ui(options))
+        return;
+
+      std::cout << "  "
+                << GRAY << "watching: " << RESET
+                << options.projectDir.string()
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "target  : " << RESET
+                << options.targetName
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "build   : " << RESET
+                << options.buildDir.string()
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "press Ctrl+C to stop" << RESET
+                << "\n\n";
+    }
+
+    void print_dev_started(int pid)
+    {
+      std::cout << "  "
+                << GREEN << "✔" << RESET
+                << " Started"
+                << GRAY << " pid=" << pid << RESET
+                << "\n\n";
+    }
+
+    void print_dev_reload_header(const DevDetectedChange &change)
+    {
+      if (!change.valid())
+        return;
+
+      std::cout << CYAN << BOLD << "Dev " << RESET
+                << CYAN << BOLD << "reload" << RESET
+                << GRAY << " (dev)" << RESET
+                << "\n";
+
+      std::cout << "  "
+                << GRAY << "changed: " << RESET
+                << change.path.string()
+                << "\n";
+    }
   } // namespace
 
   bool DevFileSnapshot::empty() const
@@ -85,7 +165,8 @@ namespace vix::commands::RunCommand::dev
             options_.buildDir,
             options_.targetName,
             options_.runOptions,
-            options_.quiet})
+            options_.quiet}),
+        fileIndex_(options_.projectDir)
   {
   }
 
@@ -105,23 +186,66 @@ namespace vix::commands::RunCommand::dev
 #else
     DevSessionResult result;
 
-    info("Watcher Process started (project hot reload).");
-    hint("Watching project: " + options_.projectDir.string());
-    hint("Press Ctrl+C to stop dev mode.");
+    print_dev_header(options_);
 
-    DevFileSnapshot snapshot = snapshot_project();
+    bool fileIndexReady = false;
 
     while (true)
     {
-      const DevRebuilderResult rebuildResult = rebuilder_.rebuild();
+      DevRebuilderResult rebuildResult;
+
+      if (pendingChangeKind_ == DevChangeKind::ReconfigureAndRebuild)
+      {
+        rebuildResult = rebuilder_.reconfigure_and_rebuild();
+      }
+      else
+      {
+        const DevRebuilderResult configureResult = rebuilder_.ensure_configured();
+
+        if (!configureResult.ok)
+        {
+          hint("Fix the errors, save your files, and Vix will rebuild automatically.");
+
+          fileIndex_.refresh();
+
+          while (true)
+          {
+            std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
+            if (!changes.empty())
+            {
+              pendingChangeKind_ = DevChangeKind::ReconfigureAndRebuild;
+              break;
+            }
+
+            std::this_thread::sleep_for(options_.pollInterval);
+          }
+
+          continue;
+        }
+
+        rebuildResult = rebuilder_.rebuild();
+      }
+
+      pendingChangeKind_ = DevChangeKind::Ignore;
 
       if (!rebuildResult.ok)
       {
         hint("Fix the errors, save your files, and Vix will rebuild automatically.");
 
-        const DevDetectedChange change = wait_for_change(snapshot);
-        if (change.valid())
-          detail::print_watch_restart_banner(change.path, "Rebuilding project...");
+        fileIndex_.refresh();
+
+        while (true)
+        {
+          std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
+
+          if (!changes.empty())
+          {
+            pendingChangeKind_ = DevChangeKind::RebuildOnly;
+            break;
+          }
+
+          std::this_thread::sleep_for(options_.pollInterval);
+        }
 
         continue;
       }
@@ -137,6 +261,12 @@ namespace vix::commands::RunCommand::dev
         hint("Build directory: " + options_.buildDir.string());
         hint("Make sure your CMakeLists.txt defines an executable target named '" + options_.targetName + "'.");
         return result;
+      }
+
+      if (!fileIndexReady)
+      {
+        fileIndex_.refresh();
+        fileIndexReady = true;
       }
 
       const int runCode = run_child_once(*exePath);
@@ -163,7 +293,6 @@ namespace vix::commands::RunCommand::dev
 
     if (!fs::exists(options_.projectDir, ec) || ec)
       return snapshot;
-
     for (auto it = fs::recursive_directory_iterator(
              options_.projectDir,
              fs::directory_options::skip_permission_denied,
@@ -499,45 +628,66 @@ namespace vix::commands::RunCommand::dev
     bool needRestart = false;
     bool running = true;
 
+    if (!options_.quiet)
+      print_dev_started(static_cast<int>(pid));
+
     while (running)
     {
       std::this_thread::sleep_for(options_.pollInterval);
 
-      DevFileSnapshot before = snapshot_project();
-      std::this_thread::sleep_for(options_.debounceDelay);
-      DevFileSnapshot after = snapshot_project();
+      std::vector<DevIndexedChange> indexedChanges = fileIndex_.poll_changes();
 
-      std::vector<DevDetectedChange> changes = detect_changes(before, after);
-
-      if (!changes.empty())
+      if (!indexedChanges.empty())
       {
-        const DevDetectedChange change = first_relevant_change(changes);
-        const DevChangeKind kind = strongest_change_kind(changes);
+        std::this_thread::sleep_for(options_.debounceDelay);
 
-        if (change.valid())
+        DevChangeKind kind = DevChangeKind::Ignore;
+        DevIndexedChange selected{};
+
+        for (const auto &change : indexedChanges)
         {
-          const std::string label =
-              kind == DevChangeKind::ReconfigureAndRebuild
-                  ? "Reconfiguring project..."
-                  : "Rebuilding project...";
+          if (!change.valid())
+            continue;
 
-          detail::print_watch_restart_banner(change.path, label);
+          if (change.kind == DevChangeKind::ReconfigureAndRebuild)
+          {
+            selected = change;
+            kind = DevChangeKind::ReconfigureAndRebuild;
+            break;
+          }
+
+          if (!selected.valid())
+          {
+            selected = change;
+            kind = change.kind;
+          }
         }
+
+        if (!selected.valid())
+          continue;
+
+        if (!options_.quiet)
+        {
+          clear_dev_screen();
+
+          std::cout << CYAN << BOLD << "Dev " << RESET
+                    << CYAN << BOLD << options_.targetName << RESET
+                    << GRAY << " (dev)" << RESET
+                    << "\n";
+
+          std::cout << "  "
+                    << GRAY << "changed: " << RESET
+                    << selected.path.string()
+                    << "\n";
+        }
+
+        pendingChangeKind_ = kind;
 
         needRestart = true;
         stop_child(pid);
 
         int status = 0;
         (void)::waitpid(pid, &status, 0);
-
-        const int rebuildCode = rebuild_for_change(kind);
-
-        if (rebuildCode != 0)
-        {
-          hint("Fix the errors, save your files, and Vix will rebuild automatically.");
-          DevFileSnapshot stableSnapshot = after;
-          (void)wait_for_change(stableSnapshot);
-        }
 
         return 0;
       }

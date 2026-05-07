@@ -27,6 +27,7 @@
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/run/dev/DevChangeClassifier.hpp>
 #include <vix/cli/commands/run/dev/DevRebuilder.hpp>
+#include <vix/cli/commands/run/dev/DevFileIndex.hpp>
 
 namespace vix::commands::RunCommand::dev
 {
@@ -81,6 +82,8 @@ namespace vix::commands::RunCommand::dev
     DevSessionOptions options_;
     DevChangeClassifier classifier_;
     DevRebuilder rebuilder_;
+    DevFileIndex fileIndex_;
+    DevChangeKind pendingChangeKind_{DevChangeKind::Ignore};
 
     DevFileSnapshot snapshot_project() const;
 

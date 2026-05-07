@@ -97,6 +97,8 @@ namespace vix::commands::RunCommand::detail
    */
   void watch_spinner_start(std::string label);
 
+  void watch_spinner_finish();
+
   /**
    * @brief Stops the watch-mode spinner.
    */

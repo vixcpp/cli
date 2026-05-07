@@ -191,15 +191,6 @@ namespace vix::commands::BuildCommand
 #endif
     }
 
-    static std::string first_line_of(std::string s)
-    {
-      s = util::trim(s);
-      const auto pos = s.find('\n');
-      if (pos != std::string::npos)
-        s = s.substr(0, pos);
-      return util::trim(s);
-    }
-
     static std::string detect_compiler_identity()
     {
 #ifdef __clang__
@@ -684,25 +675,6 @@ namespace vix::commands::BuildCommand
 #endif
     }
 
-    static std::string run_tool_version_line(const std::string &tool)
-    {
-      if (!util::executable_on_path(tool))
-        return tool + ":<missing>\n";
-
-      std::string out;
-      (void)build::run_process_capture({tool, "--version"}, {}, out);
-
-      out = util::trim(out);
-      if (out.empty())
-        return tool + ":<unknown>\n";
-
-      const auto pos = out.find('\n');
-      if (pos != std::string::npos)
-        out = out.substr(0, pos);
-
-      return tool + ":" + out + "\n";
-    }
-
     static bool has_cmake_cache(const fs::path &buildDir)
     {
       return util::file_exists(buildDir / "CMakeCache.txt");
@@ -735,7 +707,7 @@ namespace vix::commands::BuildCommand
 
         if (ec)
         {
-          error("Failed to remove build directory: " + dir.string());
+          error("Failed to remove   build directory: " + dir.string());
           hint(ec.message());
           throw std::runtime_error("clean failed");
         }
@@ -1154,6 +1126,419 @@ namespace vix::commands::BuildCommand
 
       return true;
     }
+
+    static bool can_use_graph_build(
+        const process::Options &opt,
+        const process::Plan &plan,
+        const build::BuildGraphScanResult &scan)
+    {
+      if (!opt.useCache)
+        return false;
+
+      if (opt.clean)
+        return false;
+
+      if (!opt.targetTriple.empty())
+        return false;
+
+      if (!opt.buildTarget.empty())
+        return false;
+
+      if (!opt.cmakeArgs.empty())
+        return false;
+
+      if (opt.withSqlite || opt.withMySql)
+        return false;
+
+      if (opt.linkStatic)
+        return false;
+
+      if (scan.sources == 0)
+        return false;
+
+      if (scan.sources > 64)
+        return false;
+
+      if (fs::exists(plan.projectDir / "modules"))
+        return false;
+
+      if (fs::exists(plan.projectDir / "examples"))
+        return false;
+
+      if (fs::exists(plan.projectDir / "unittests"))
+        return false;
+
+      return true;
+    }
+
+    static fs::path graph_output_binary_path(
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      if (!opt.outPath.empty())
+        return fs::absolute(fs::path(opt.outPath));
+
+      return plan.buildDir / platform_executable_name(plan.projectDir.filename().string());
+    }
+
+    static bool file_exists_regular(const fs::path &path)
+    {
+      std::error_code ec;
+      return fs::exists(path, ec) && fs::is_regular_file(path, ec);
+    }
+
+    static bool collect_compile_task_paths(
+        const build::BuildGraph &graph,
+        const build::BuildTask &task,
+        fs::path &sourcePath,
+        fs::path &objectPath,
+        std::vector<fs::path> &dependencyPaths)
+    {
+      sourcePath.clear();
+      objectPath.clear();
+      dependencyPaths.clear();
+
+      for (const auto &inputId : task.inputs)
+      {
+        const build::BuildNode *node = graph.find_node(inputId);
+        if (!node)
+          continue;
+
+        if (node->kind == build::BuildNodeKind::Source && sourcePath.empty())
+        {
+          sourcePath = node->path;
+          continue;
+        }
+
+        if (node->kind == build::BuildNodeKind::Header ||
+            node->kind == build::BuildNodeKind::Config)
+        {
+          dependencyPaths.push_back(node->path);
+        }
+      }
+
+      for (const auto &outputId : task.outputs)
+      {
+        const build::BuildNode *node = graph.find_node(outputId);
+        if (!node)
+          continue;
+
+        if (node->kind == build::BuildNodeKind::Object)
+        {
+          objectPath = node->path;
+          break;
+        }
+      }
+
+      return !sourcePath.empty() && !objectPath.empty();
+    }
+
+    static build::BuildTaskResult run_cached_graph_compile_task(
+        const build::BuildGraph &graph,
+        const build::ObjectCache &objectCache,
+        build::BuildTask &task)
+    {
+      build::BuildTaskResult result;
+      result.taskId = task.id;
+
+      fs::path sourcePath;
+      fs::path objectPath;
+      std::vector<fs::path> dependencyPaths;
+
+      if (!collect_compile_task_paths(
+              graph,
+              task,
+              sourcePath,
+              objectPath,
+              dependencyPaths))
+      {
+        result.state = build::BuildTaskState::Failed;
+        result.exitCode = 127;
+        result.output = "Invalid graph compile task: " + task.id + "\n";
+        return result;
+      }
+
+      const fs::path dependencyFilePath =
+          build::dependency_file_for_object(objectPath);
+
+      const build::ObjectCacheResult restored =
+          objectCache.resolve_compile_task(
+              task,
+              sourcePath,
+              dependencyPaths,
+              objectPath,
+              dependencyFilePath,
+              graph.config().buildFingerprint);
+
+      if (restored.hit)
+      {
+        result.state = build::BuildTaskState::Skipped;
+        result.exitCode = 0;
+        result.output = "cache hit: " + sourcePath.string() + "\n";
+        return result;
+      }
+
+      result = build::BuildScheduler::execute_command_task(task);
+
+      if (result.exitCode != 0)
+        return result;
+
+      const std::string inputHash =
+          build::ObjectCache::compute_input_hash(sourcePath, dependencyPaths);
+
+      const std::string objectKey =
+          build::ObjectCache::compute_object_key(
+              sourcePath,
+              inputHash,
+              task.commandHash,
+              graph.config().buildFingerprint);
+
+      (void)objectCache.store(
+          objectKey,
+          sourcePath,
+          objectPath,
+          dependencyFilePath,
+          inputHash,
+          task.commandHash);
+
+      return result;
+    }
+
+    static std::vector<fs::path> graph_object_paths(const build::BuildGraph &graph)
+    {
+      std::vector<fs::path> objects;
+
+      for (const build::BuildTask &task : graph.compile_tasks())
+      {
+        for (const auto &outputId : task.outputs)
+        {
+          const build::BuildNode *node = graph.find_node(outputId);
+          if (!node)
+            continue;
+
+          if (node->kind != build::BuildNodeKind::Object)
+            continue;
+
+          if (!file_exists_regular(node->path))
+            continue;
+
+          objects.push_back(node->path);
+        }
+      }
+
+      std::sort(objects.begin(), objects.end());
+      objects.erase(std::unique(objects.begin(), objects.end()), objects.end());
+
+      return objects;
+    }
+
+    static int run_graph_link(
+        const build::BuildGraph &graph,
+        const process::Options &opt,
+        const process::Plan &plan,
+        const fs::path &outputBinary)
+    {
+      (void)opt;
+      const std::vector<fs::path> objects = graph_object_paths(graph);
+
+      if (objects.empty())
+      {
+        error("Graph build produced no object files.");
+        return 1;
+      }
+
+      std::vector<std::string> argv;
+      argv.reserve(objects.size() + 8);
+
+      argv.push_back(graph.config().compiler.empty() ? "c++" : graph.config().compiler);
+
+      if (plan.fastLinkerFlag && !plan.fastLinkerFlag->empty())
+        argv.push_back(*plan.fastLinkerFlag);
+
+      for (const fs::path &object : objects)
+        argv.push_back(object.string());
+
+      argv.push_back("-o");
+      argv.push_back(outputBinary.string());
+
+      std::string output;
+      const process::ExecResult r =
+          build::run_process_capture(argv, {}, output);
+
+      if (r.exitCode != 0)
+      {
+        error("Graph link failed.");
+        if (!output.empty())
+          std::cerr << output;
+        return r.exitCode == 0 ? 1 : r.exitCode;
+      }
+
+#ifndef _WIN32
+      std::error_code ec;
+      fs::permissions(
+          outputBinary,
+          fs::perms::owner_exec |
+              fs::perms::group_exec |
+              fs::perms::others_exec,
+          fs::perm_options::add,
+          ec);
+#endif
+
+      return 0;
+    }
+
+    static int run_graph_build(
+        build::BuildGraph &graph,
+        const fs::path &graphPath,
+        const process::Options &opt,
+        const process::Plan &plan,
+        const artifact_cache::Artifact &projectArtifact,
+        const std::vector<artifact_cache::ProjectInput> &projectInputs,
+        bool verboseMode)
+    {
+      {
+        std::string err;
+        if (!util::ensure_dir(graph.config().objectDir, err))
+        {
+          error("Unable to create Vix graph object directory: " +
+                graph.config().objectDir.string());
+
+          if (!err.empty())
+            hint(err);
+
+          return 1;
+        }
+      }
+
+      build::ObjectCache objectCache(plan.buildDir);
+
+      if (!objectCache.ensure_layout())
+      {
+        error("Unable to initialize Vix object cache.");
+        return 1;
+      }
+
+      const fs::path outputBinary = graph_output_binary_path(opt, plan);
+      const std::vector<build::BuildTask> dirtyTasks = graph.dirty_compile_tasks();
+
+      const bool outputMissing = !file_exists_regular(outputBinary);
+      const bool needsCompile = !dirtyTasks.empty();
+      const bool needsLink = needsCompile || outputMissing;
+
+      if (!needsCompile && !needsLink)
+      {
+        if (!graph.save(graphPath) && !opt.quiet)
+          hint("Warning: unable to write Vix build graph");
+
+        if (!opt.quiet)
+        {
+          util::ok_line(std::cout, "Up to date");
+          util::ok_line(std::cout, "Done");
+        }
+
+        return 0;
+      }
+
+      if (verboseMode && !opt.quiet)
+      {
+        step("graph build: " + std::to_string(dirtyTasks.size()) + " dirty compile tasks");
+      }
+
+      if (needsCompile)
+      {
+        build::BuildSchedulerOptions schedulerOptions;
+        schedulerOptions.jobs = opt.jobs;
+        schedulerOptions.quiet = opt.quiet;
+        schedulerOptions.stopOnFirstFailure = true;
+
+        build::BuildScheduler scheduler(schedulerOptions);
+        scheduler.add_tasks(dirtyTasks);
+
+        const build::BuildSchedulerResult result =
+            scheduler.run(
+                [&](build::BuildTask &task)
+                {
+                  return run_cached_graph_compile_task(
+                      graph,
+                      objectCache,
+                      task);
+                });
+
+        if (!result.success())
+        {
+          for (const auto &taskResult : result.results)
+          {
+            if (!taskResult.output.empty())
+              std::cerr << taskResult.output;
+          }
+
+          return 1;
+        }
+      }
+
+      const int linkCode =
+          run_graph_link(
+              graph,
+              opt,
+              plan,
+              outputBinary);
+
+      if (linkCode != 0)
+        return linkCode;
+
+      if (!persist_project_artifact(projectArtifact) && !opt.quiet)
+        hint("Warning: unable to persist artifact cache metadata");
+
+      const auto state =
+          artifact_cache::ArtifactCache::make_build_state(
+              plan.signature,
+              plan.projectFingerprint,
+              projectArtifact.root.string(),
+              outputBinary.string(),
+              opt.buildTarget,
+              plan.preset.name,
+              plan.preset.buildType,
+              projectArtifact.target,
+              projectArtifact.compiler,
+              projectInputs);
+
+      if (!artifact_cache::ArtifactCache::write_build_state(plan.buildDir, state) &&
+          !opt.quiet)
+      {
+        hint("Warning: unable to write Vix build state");
+      }
+
+      if (!graph.save(graphPath) && !opt.quiet)
+        hint("Warning: unable to write Vix build graph");
+
+      if (opt.exportBin)
+      {
+        const fs::path dest = plan.projectDir / outputBinary.filename();
+
+        if (!export_built_binary(outputBinary, dest, opt.quiet))
+          return 1;
+      }
+      else if (!opt.outPath.empty())
+      {
+        write_last_binary(outputBinary);
+
+        if (!opt.quiet)
+          success("Exported binary: " + outputBinary.string());
+      }
+      else
+      {
+        write_last_binary(outputBinary);
+      }
+
+      if (!opt.quiet)
+      {
+        util::ok_line(std::cout, needsCompile ? "Built with graph" : "Linked with graph");
+        util::ok_line(std::cout, "Done");
+      }
+
+      return 0;
+    }
+
     class BuildCommand
     {
     public:
@@ -1344,6 +1729,18 @@ namespace vix::commands::BuildCommand
                std::to_string(scan.sources) + " sources, " +
                std::to_string(scan.headers) + " headers, " +
                std::to_string(scan.tasks) + " tasks");
+        }
+
+        if (can_use_graph_build(opt_, plan_, scan))
+        {
+          return run_graph_build(
+              graph,
+              graphPath,
+              opt_,
+              plan_,
+              projectArtifact,
+              projectInputs,
+              verboseMode);
         }
 
         if (verboseMode && !opt_.quiet)

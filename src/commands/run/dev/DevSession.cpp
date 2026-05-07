@@ -412,7 +412,14 @@ namespace vix::commands::RunCommand::dev
         const DevChangeKind kind = strongest_change_kind(changes);
 
         if (change.valid())
-          detail::print_watch_restart_banner(change.path, "Rebuilding project...");
+        {
+          const std::string label =
+              kind == DevChangeKind::ReconfigureAndRebuild
+                  ? "Reconfiguring project..."
+                  : "Rebuilding project...";
+
+          detail::print_watch_restart_banner(change.path, label);
+        }
 
         needRestart = true;
         stop_child(pid);
@@ -421,6 +428,7 @@ namespace vix::commands::RunCommand::dev
         (void)::waitpid(pid, &status, 0);
 
         const int rebuildCode = rebuild_for_change(kind);
+
         if (rebuildCode != 0)
         {
           hint("Fix the errors, save your files, and Vix will rebuild automatically.");

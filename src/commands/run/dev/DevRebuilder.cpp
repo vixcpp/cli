@@ -77,6 +77,9 @@ namespace vix::commands::RunCommand::dev
 
   DevRebuilderResult DevRebuilder::reconfigure_and_rebuild() const
   {
+    if (!options_.quiet)
+      info("Configuration change detected.");
+
     DevRebuilderResult configured = run_configure_command();
     if (!configured.ok)
       return configured;

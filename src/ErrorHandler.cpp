@@ -31,21 +31,16 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <fstream>
 
 #include <vix/cli/Style.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 
 using namespace vix::cli::style;
 
 namespace
 {
-  void print_single_error(const vix::cli::errors::CompilerError &err)
-  {
-    std::ostringstream oss;
-    oss << err.file << ":" << err.line << ":" << err.column << "\n";
-    oss << "  error: " << err.message << "\n";
-
-    error(oss.str());
-  }
+  namespace fs = std::filesystem;
 
   void print_hint(std::string_view text)
   {
@@ -57,6 +52,133 @@ namespace
               << RESET
               << text
               << "\n";
+  }
+
+  vix::cli::build::BuildDiagnostic make_build_diagnostic(
+      const vix::cli::errors::CompilerError &err,
+      const std::string &contextMessage)
+  {
+    vix::cli::build::BuildDiagnostic diagnostic;
+
+    diagnostic.title = contextMessage.empty()
+                           ? "Build failed"
+                           : contextMessage;
+
+    diagnostic.error = err.message;
+
+    diagnostic.location.file = err.file;
+    diagnostic.location.line = static_cast<std::size_t>(err.line);
+    diagnostic.location.column = static_cast<std::size_t>(err.column);
+
+    return diagnostic;
+  }
+
+  std::vector<std::string> read_code_frame_lines(
+      const fs::path &file,
+      std::size_t line,
+      std::size_t contextLines,
+      std::size_t maxLineWidth)
+  {
+    std::vector<std::string> out;
+
+    if (file.empty() || line == 0)
+      return out;
+
+    std::ifstream in(file);
+    if (!in)
+      return out;
+
+    const std::size_t startLine =
+        line > contextLines ? line - contextLines : 1;
+
+    const std::size_t endLine = line + contextLines;
+
+    std::string current;
+    std::size_t currentLine = 0;
+
+    while (std::getline(in, current))
+    {
+      ++currentLine;
+
+      if (currentLine < startLine)
+        continue;
+
+      if (currentLine > endLine)
+        break;
+
+      if (maxLineWidth > 0 && current.size() > maxLineWidth)
+      {
+        current = current.substr(0, maxLineWidth);
+        current += "...";
+      }
+
+      out.push_back(current);
+    }
+
+    return out;
+  }
+
+  std::string hint_for_compiler_error(
+      const vix::cli::errors::CompilerError &err)
+  {
+    const std::string &message = err.message;
+
+    if (message.find("use of undeclared identifier 'std'") != std::string::npos)
+      return "Include the required standard header before using std names.";
+
+    if (message.find("expected ';'") != std::string::npos)
+      return "Add the missing semicolon, often on the previous line.";
+
+    if (message.find("no matching function for call to") != std::string::npos)
+    {
+      const bool isVixJson =
+          message.find("vix::http::ResponseWrapper::json") != std::string::npos ||
+          message.find("ResponseWrapper::json") != std::string::npos;
+
+      if (isVixJson)
+        return "Response::json() expects one JSON value, not key/value arguments.";
+
+      return "Check argument types, overloads, const qualifiers, and references.";
+    }
+
+    if (message.find("was not declared in this scope") != std::string::npos)
+      return "Declare the symbol before use, include the right header, or move the function definition above the call.";
+
+    if (message.find("defined but not used") != std::string::npos)
+      return "Remove the unused function or mark it intentionally unused.";
+
+    return {};
+  }
+
+  vix::cli::build::BuildDiagnostic diagnostic_from_compiler_error(
+      const vix::cli::errors::CompilerError &err,
+      const std::string &contextMessage)
+  {
+    vix::cli::build::BuildDiagnostic diagnostic;
+
+    diagnostic.title =
+        contextMessage.empty()
+            ? "Build failed"
+            : contextMessage;
+
+    diagnostic.error = err.message;
+    diagnostic.hint = hint_for_compiler_error(err);
+
+    diagnostic.location.file = err.file;
+    diagnostic.location.line =
+        err.line > 0 ? static_cast<std::size_t>(err.line) : 0;
+    diagnostic.location.column =
+        err.column > 0 ? static_cast<std::size_t>(err.column) : 0;
+
+    diagnostic.codeFrame.location = diagnostic.location;
+    diagnostic.codeFrame.lines =
+        read_code_frame_lines(
+            fs::path(err.file),
+            diagnostic.location.line,
+            2,
+            120);
+
+    return diagnostic;
   }
 
   bool handle_unrecognized_cli_option_as_script_runtime_args(
@@ -176,56 +298,6 @@ namespace
 
     return std::string(view.substr(start));
   }
-
-  void print_generic_hint(const vix::cli::errors::CompilerError &err)
-  {
-    const std::string &message = err.message;
-    const bool verbose = hints_verbose_enabled();
-
-    if (message.find("use of undeclared identifier 'std'") != std::string::npos)
-    {
-      print_hint("include the required standard header before using std names");
-
-      if (verbose)
-      {
-        std::cerr << GRAY
-                  << "example: #include <iostream>\n"
-                  << RESET;
-      }
-
-      return;
-    }
-
-    if (message.find("expected ';'") != std::string::npos)
-    {
-      print_hint("add the missing semicolon, often on the previous line");
-      return;
-    }
-
-    if (message.find("no matching function for call to") != std::string::npos)
-    {
-      const bool isVixJson =
-          message.find("vix::http::ResponseWrapper::json") != std::string::npos ||
-          message.find("ResponseWrapper::json") != std::string::npos;
-
-      if (isVixJson)
-      {
-        print_hint("Response::json() expects one JSON value, not key/value arguments");
-
-        if (verbose)
-        {
-          std::cerr << GRAY
-                    << "example: res.json({{\"message\", \"Hello\"}});\n"
-                    << RESET;
-        }
-
-        return;
-      }
-
-      print_hint("check argument types, overloads, const qualifiers, and references");
-      return;
-    }
-  }
 } // namespace
 
 namespace vix::cli
@@ -256,11 +328,9 @@ namespace vix::cli
       if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
         return true;
 
-      std::cerr << RED
-                << "error: "
-                << RESET
-                << contextMessage
-                << "\n";
+      vix::cli::build::print_build_error(
+          std::cerr,
+          contextMessage.empty() ? "Build failed" : contextMessage);
 
       print_hint("run with --verbose to inspect the full build output");
 
@@ -344,27 +414,23 @@ namespace vix::cli
     {
       const auto &err = unique[i];
 
-      std::cerr << "\n";
-      ::print_single_error(err);
-      ::print_generic_hint(err);
+      const vix::cli::build::BuildDiagnostic diagnostic =
+          ::diagnostic_from_compiler_error(
+              err,
+              contextMessage);
 
-      ErrorContext frameContext{
-          err.file,
-          contextMessage,
-          cleanedLog,
-      };
-
-      printCodeFrame(err, frameContext, codeFrameOptions);
+      vix::cli::build::print_build_diagnostic(
+          std::cerr,
+          diagnostic);
 
       const std::string key = err.file + "|" + err.message;
       const auto it = counts.find(key);
 
       if (it != counts.end() && it->second > 1)
       {
-        std::cerr << GRAY
-                  << "\n  (" << (it->second - 1)
-                  << " similar error(s) hidden)\n"
-                  << RESET;
+        vix::cli::build::print_build_warning(
+            std::cerr,
+            std::to_string(it->second - 1) + " similar error(s) hidden");
       }
     }
 
@@ -380,11 +446,9 @@ namespace vix::cli
 
     if (!sourceFile.empty())
     {
-      std::cerr << GREEN
-                << "at: "
-                << RESET
-                << sourceFile.string()
-                << "\n";
+      vix::cli::build::print_build_info(
+          std::cerr,
+          "at: " + sourceFile.string());
     }
 
     return true;

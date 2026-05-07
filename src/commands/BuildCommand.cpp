@@ -19,6 +19,7 @@
 #include <vix/cli/build/BuildScheduler.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
 #include <vix/cli/build/BuildGraphExecutor.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -118,6 +119,16 @@ namespace vix::commands::BuildCommand
     }
 
     static std::string graph_build_target_name(
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      if (!opt.buildTarget.empty())
+        return opt.buildTarget;
+
+      return plan.projectDir.filename().string();
+    }
+
+    static std::string cmake_build_target_name(
         const process::Options &opt,
         const process::Plan &plan)
     {
@@ -1496,8 +1507,8 @@ namespace vix::commands::BuildCommand
 
         if (!opt.quiet)
         {
-          util::ok_line(std::cout, "Up to date");
-          util::ok_line(std::cout, "Done");
+          build::print_build_success(std::cout, "Up to date");
+          build::print_build_success(std::cout, "Done");
         }
 
         return 0;
@@ -1596,8 +1607,11 @@ namespace vix::commands::BuildCommand
 
       if (!opt.quiet)
       {
-        util::ok_line(std::cout, needsCompile ? "Built with graph" : "Linked with graph");
-        util::ok_line(std::cout, "Done");
+        build::print_build_success(
+            std::cout,
+            needsCompile ? "Built with graph" : "Linked with graph");
+
+        build::print_build_success(std::cout, "Done");
       }
 
       return 0;
@@ -2049,14 +2063,20 @@ namespace vix::commands::BuildCommand
         {
           if (verboseMode && !opt_.quiet)
           {
-            out.print("  Building " + plan_.projectDir.filename().string() + " [" +
-                      plan_.preset.name + "]\n");
             out.flush_to_stdout();
+
+            build::print_build_header(
+                std::cout,
+                cmake_build_target_name(opt_, plan_),
+                plan_.preset.name);
           }
 
           const auto t0 = std::chrono::steady_clock::now();
           const auto argv = build::cmake_build_argv(plan_, opt_);
           const auto env = build::ninja_env(opt_, plan_);
+
+          const bool showRawBuildOutput = opt_.cmakeVerbose;
+          const bool progressOnly = !showRawBuildOutput;
 
           const process::ExecResult r = build::run_process_live_to_log(
               argv,
@@ -2064,7 +2084,7 @@ namespace vix::commands::BuildCommand
               plan_.buildLog,
               /*quiet=*/opt_.quiet,
               /*cmakeVerbose=*/opt_.cmakeVerbose,
-              /*progressOnly=*/!verboseMode);
+              /*progressOnly=*/progressOnly);
 
           const auto ms =
               std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2137,20 +2157,30 @@ namespace vix::commands::BuildCommand
                     ? "release [optimized]"
                     : "dev [unoptimized + debuginfo]";
 
-            out.print(PAD + std::string(GREEN) + "Finished" + RESET + " " +
-                      profile + " in " + util::format_seconds(ms) + "\n\n");
+            build::print_build_done(
+                std::cout,
+                profile,
+                util::format_seconds(ms));
           }
           else
           {
             if (configuredThisRun)
-              util::ok_line(std::cout, "Configured");
+              build::print_build_success(std::cout, "Configured");
 
             if (builtTargets > 0)
-              util::ok_line(std::cout, "Built (" + std::to_string(builtTargets) + " targets)");
+            {
+              build::print_build_success(
+                  std::cout,
+                  "Built (" + std::to_string(builtTargets) + " targets)");
+            }
             else
-              util::ok_line(std::cout, "Built");
+            {
+              build::print_build_success(std::cout, "Built");
+            }
 
-            util::ok_line(std::cout, "Done in " + util::format_seconds(totalMs));
+            build::print_build_success(
+                std::cout,
+                "Done in " + util::format_seconds(totalMs));
           }
         }
 

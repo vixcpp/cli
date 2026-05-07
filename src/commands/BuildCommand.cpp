@@ -1717,6 +1717,12 @@ namespace vix::commands::BuildCommand
         const std::size_t importedCompileCommands =
             graph.load_compile_commands(compileCommandsPath);
 
+        const fs::path buildNinjaPath =
+            build::default_build_ninja_path(plan_.buildDir);
+
+        const std::size_t importedNinjaTasks =
+            graph.load_ninja_build(buildNinjaPath);
+
         graph.load_dependency_files();
 
         if (previousGraph)
@@ -1736,7 +1742,8 @@ namespace vix::commands::BuildCommand
                std::to_string(scan.sources) + " sources, " +
                std::to_string(scan.headers) + " headers, " +
                std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
-               std::to_string(importedCompileCommands) + " imported commands");
+               std::to_string(importedCompileCommands) + " imported commands, " +
+               std::to_string(importedNinjaTasks) + " ninja tasks");
         }
 
         if (can_use_graph_build(opt_, plan_, scan))

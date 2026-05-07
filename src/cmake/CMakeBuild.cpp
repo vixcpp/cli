@@ -375,56 +375,170 @@ namespace vix::cli::build
 
     auto should_skip_progress_line = [](const std::string &line) -> bool
     {
-      return line.find("Copy compile_commands.json to project root") != std::string::npos;
+      return line.find("Copy compile_commands.json to project root") != std::string::npos ||
+             line.find("Re-checking globbed directories") != std::string::npos;
     };
 
     auto clear_progress_line = [&]() -> void
     {
-      if (quiet)
-        return;
-      if (!progressVisible)
+      if (quiet || !progressVisible)
         return;
 
-      std::string clear = "\r";
-      clear.append(lastRenderedWidth, ' ');
+      const std::size_t width = terminal_width();
+
+      std::string clear;
       clear += "\r";
+      clear.append(width, ' ');
+      clear += "\n\r";
+      clear.append(width, ' ');
+      clear += "\033[1A\r";
+
       write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
 
       progressVisible = false;
       lastRenderedWidth = 0;
     };
 
-    auto render_progress_line = [&](const std::string &line) -> void
+    auto clear_rendered_progress_lines = [&]() -> void
     {
-      if (quiet)
+      if (quiet || !progressVisible)
         return;
 
       const std::size_t width = terminal_width();
 
-      std::string visibleLine = line;
-      if (width > 1)
-        visibleLine = truncate_progress_text(line, width - 1);
+      std::string clear;
 
-      std::string out = "\r" + visibleLine;
+      // Cursor is on the second progress line.
+      // Clear second line.
+      clear += "\r";
+      clear.append(width, ' ');
+      clear += "\r";
 
-      if (lastRenderedWidth > visibleLine.size())
-        out.append(lastRenderedWidth - visibleLine.size(), ' ');
+      // Move to first progress line.
+      clear += "\033[1A";
 
-      write_all_fd(STDOUT_FILENO, out.data(), out.size());
+      // Clear first line.
+      clear += "\r";
+      clear.append(width, ' ');
+      clear += "\r";
 
-      progressVisible = true;
-      lastRenderedWidth = std::max(lastRenderedWidth, visibleLine.size());
+      write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
     };
 
-    auto flush_progress_line = [&]() -> void
+    auto render_progress_line = [&](const std::string &line) -> void
     {
-      if (quiet)
-        return;
-      if (!progressVisible)
+      if (quiet || line.empty())
         return;
 
-      std::string out = "\n";
+      std::size_t slash = line.find('/');
+      std::size_t rb = line.find(']');
+
+      int current = 0;
+      int total = 1;
+      std::string rest = line;
+
+      if (line[0] == '[' &&
+          slash != std::string::npos &&
+          rb != std::string::npos &&
+          slash < rb)
+      {
+        try
+        {
+          current = std::stoi(line.substr(1, slash - 1));
+          total = std::stoi(line.substr(slash + 1, rb - slash - 1));
+          rest = line.size() > rb + 2 ? line.substr(rb + 2) : "";
+        }
+        catch (...)
+        {
+          current = 0;
+          total = 1;
+          rest = line;
+        }
+      }
+
+      const std::size_t width = terminal_width();
+      const int barWidth = width > 90 ? 28 : 18;
+
+      const int filled =
+          total > 0
+              ? std::clamp(
+                    static_cast<int>(
+                        (static_cast<double>(current) / static_cast<double>(total)) *
+                        static_cast<double>(barWidth)),
+                    0,
+                    barWidth)
+              : 0;
+
+      std::string bar;
+      bar += style::GRAY;
+      bar += "[";
+      bar += style::CYAN;
+      bar.append(static_cast<std::size_t>(filled), '=');
+      bar += style::GRAY;
+      bar.append(static_cast<std::size_t>(barWidth - filled), '-');
+      bar += "]";
+      bar += style::RESET;
+
+      const std::string action =
+          truncate_progress_text(
+              rest,
+              width > 6 ? width - 6 : width);
+
+      std::ostringstream lineOut;
+      lineOut << "  "
+              << style::GREEN << "build " << style::RESET
+              << bar
+              << " "
+              << style::CYAN << current << "/" << total << style::RESET
+              << "\n"
+              << "  "
+              << style::CYAN << "› " << style::RESET
+              << action;
+
+      if (progressVisible)
+        clear_rendered_progress_lines();
+
+      const std::string rendered = lineOut.str();
+      write_all_fd(STDOUT_FILENO, rendered.data(), rendered.size());
+
+      progressVisible = true;
+      lastRenderedWidth = width;
+    };
+
+    auto keep_progress_line = [&]() -> void
+    {
+      if (quiet || !progressVisible)
+        return;
+
+      const std::size_t width = terminal_width();
+      const int barWidth = width > 90 ? 28 : 18;
+
+      clear_rendered_progress_lines();
+
+      std::string out;
+      out += "  ";
+      out += style::CYAN;
+      out += "build ";
+      out += "[";
+      out.append(static_cast<std::size_t>(barWidth), '=');
+      out += "]";
+      out += " done";
+      out += style::RESET;
+      out += "\n";
+
       write_all_fd(STDOUT_FILENO, out.data(), out.size());
+
+      progressVisible = false;
+      lastRenderedWidth = 0;
+      currentProgressLine.clear();
+    };
+
+    auto clear_progress_line_for_error = [&]() -> void
+    {
+      if (quiet || !progressVisible)
+        return;
+
+      clear_rendered_progress_lines();
 
       progressVisible = false;
       lastRenderedWidth = 0;
@@ -506,7 +620,12 @@ namespace vix::cli::build
       if (line.find("Copy compile_commands.json to project root") != std::string::npos)
         return false;
 
-      return looks_like_live_error_line(line);
+      /*
+       * In progress-only mode, keep raw compiler/linker errors out of the live
+       * console. They are already written to build.log and will be rendered by
+       * ErrorHandler with the unified Vix diagnostic style after the process exits.
+       */
+      return false;
     };
 
     std::string buf(16 * 1024, '\0');
@@ -581,9 +700,6 @@ namespace vix::cli::build
             }
             else if (should_echo_line(line))
             {
-              if (progressVisible)
-                flush_progress_line();
-
               line.push_back('\n');
               write_all_fd(STDOUT_FILENO, line.data(), line.size());
             }
@@ -643,16 +759,10 @@ namespace vix::cli::build
       }
       else if (should_echo_line(consoleBuf))
       {
-        if (progressVisible)
-          flush_progress_line();
-
         std::string tail = consoleBuf + "\n";
         write_all_fd(STDOUT_FILENO, tail.data(), tail.size());
       }
     }
-
-    if (!quiet && progressVisible)
-      flush_progress_line();
 
     ::close(pipefd[0]);
     ::close(logfd);
@@ -660,8 +770,21 @@ namespace vix::cli::build
     int status = 0;
     if (::waitpid(pid, &status, 0) < 0)
     {
+      if (!quiet && progressVisible)
+        clear_progress_line_for_error();
+
       r.exitCode = 127;
       return r;
+    }
+
+    r.exitCode = process::normalize_exit_code(status);
+
+    if (!quiet && progressVisible)
+    {
+      if (r.exitCode == 0)
+        keep_progress_line();
+      else
+        clear_progress_line_for_error();
     }
 
     if (heartbeatEnabled && heartbeatPrinted)
@@ -669,7 +792,6 @@ namespace vix::cli::build
       // nothing else to clear because heartbeat is now printed on its own line
     }
 
-    r.exitCode = process::normalize_exit_code(status);
     r.capturedFirstLine = util::trim(firstLine);
     return r;
   }

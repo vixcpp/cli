@@ -1632,6 +1632,14 @@ namespace vix::commands::BuildCommand
       return 0;
     }
 
+    static std::string display_build_profile(const process::Plan &plan)
+    {
+      if (plan.preset.buildType == "Release")
+        return "release";
+
+      return "dev";
+    }
+
     class BuildCommand
     {
     public:
@@ -1756,29 +1764,21 @@ namespace vix::commands::BuildCommand
                 plan_.projectDir,
                 previousState ? &previousState->inputs : nullptr);
 
-        if (opt_.useCache && !opt_.clean && previousState)
+        const bool buildStateHit =
+            opt_.useCache &&
+            !opt_.clean &&
+            previousState &&
+            artifact_cache::ArtifactCache::build_state_matches(
+                *previousState,
+                plan_.signature,
+                plan_.projectFingerprint,
+                opt_.buildTarget,
+                projectInputs);
+
+        if (buildStateHit && debug_build_details_enabled() && !opt_.quiet)
         {
-          if (artifact_cache::ArtifactCache::build_state_matches(
-                  *previousState,
-                  plan_.signature,
-                  plan_.projectFingerprint,
-                  opt_.buildTarget,
-                  projectInputs))
-          {
-            if (debug_build_details_enabled() && !opt_.quiet)
-            {
-              step("build state: hit -> " +
-                   artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
-            }
-
-            if (!opt_.quiet)
-            {
-              util::ok_line(std::cout, "Up to date");
-              util::ok_line(std::cout, "Done");
-            }
-
-            return 0;
-          }
+          step("build state: hit -> " +
+               artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
         }
 
         build::BuildGraphConfig graphConfig;
@@ -1947,21 +1947,22 @@ namespace vix::commands::BuildCommand
 
           if (verboseMode && !opt_.quiet)
           {
-            out.print("  Configuring " + plan_.projectDir.filename().string() +
-                      " (" + plan_.preset.name + ")\n");
-
-            if (plan_.launcher)
-              out.print("    • compiler cache: " + *plan_.launcher + "\n");
-            if (plan_.fastLinkerFlag)
-              out.print("    • fast linker: " + *plan_.fastLinkerFlag + "\n");
+            out.print("Configuring " + plan_.projectDir.filename().string() +
+                      " (" + display_build_profile(plan_) + ")\n");
 
             if (debug_build_details_enabled())
             {
-              for (const auto &kv : plan_.cmakeVars)
-                out.print("    • " + kv.first + "=" + kv.second + "\n");
-            }
+              if (plan_.launcher)
+                out.print("  • compiler cache: " + *plan_.launcher + "\n");
 
-            out.print("\n");
+              if (plan_.fastLinkerFlag)
+                out.print("  • fast linker: " + *plan_.fastLinkerFlag + "\n");
+
+              for (const auto &kv : plan_.cmakeVars)
+                out.print("  • " + kv.first + "=" + kv.second + "\n");
+
+              out.print("\n");
+            }
           }
 
           const auto t0 = std::chrono::steady_clock::now();
@@ -2083,10 +2084,13 @@ namespace vix::commands::BuildCommand
           {
             out.flush_to_stdout();
 
-            build::print_build_header(
+            build::print_build_header_full(
                 std::cout,
                 cmake_build_target_name(opt_, plan_),
-                plan_.preset.name);
+                display_build_profile(plan_),
+                plan_.launcher,
+                plan_.fastLinkerFlag,
+                opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
           }
 
           const auto t0 = std::chrono::steady_clock::now();

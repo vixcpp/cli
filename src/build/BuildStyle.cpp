@@ -21,12 +21,21 @@
 #include <regex>
 #include <sstream>
 #include <system_error>
+#include <vector>
+#include <optional>
 
 #include <vix/cli/Style.hpp>
 
 namespace vix::cli::build
 {
   namespace style = vix::cli::style;
+
+  static std::string colorize(
+      const char *color,
+      const std::string &value)
+  {
+    return std::string(color) + value + style::RESET;
+  }
 
   namespace
   {
@@ -49,13 +58,6 @@ namespace vix::cli::build
       }
 
       return value.substr(begin, end - begin);
-    }
-
-    static std::string colorize(
-        const char *color,
-        const std::string &value)
-    {
-      return std::string(color) + value + style::RESET;
     }
 
     static bool is_absolute_or_relative_path_like(const std::string &value)
@@ -106,6 +108,9 @@ namespace vix::cli::build
       if (label == "code:")
         return style::CYAN;
 
+      if (label == "message:")
+        return style::CYAN;
+
       return style::GRAY;
     }
 
@@ -130,6 +135,99 @@ namespace vix::cli::build
       out << "    " << value << "\n\n";
     }
   } // namespace
+
+  void print_build_header_full(
+      std::ostream &out,
+      const std::string &target,
+      const std::string &preset,
+      const std::optional<std::string> &launcher,
+      const std::optional<std::string> &fastLinkerFlag,
+      int jobs)
+  {
+    out << style::CYAN
+        << style::BOLD
+        << "Compiling"
+        << style::RESET;
+
+    if (!target.empty())
+    {
+      out << " "
+          << style::CYAN
+          << style::BOLD
+          << target
+          << style::RESET;
+    }
+
+    if (!preset.empty())
+      out << " " << colorize(style::GRAY, "(" + preset + ")");
+
+    out << "\n";
+
+    std::vector<std::string> meta;
+
+    if (launcher && !launcher->empty())
+    {
+      meta.push_back(
+          "launcher: " + colorize(style::MAGENTA, *launcher));
+    }
+
+    if (fastLinkerFlag && !fastLinkerFlag->empty())
+    {
+      const std::string name =
+          fastLinkerFlag->find("mold") != std::string::npos
+              ? "mold"
+              : "lld";
+
+      meta.push_back(
+          "linker: " + colorize(style::MAGENTA, name));
+    }
+
+    if (jobs > 0)
+    {
+      meta.push_back(
+          "jobs: " + colorize(style::MAGENTA, std::to_string(jobs)));
+    }
+
+    if (!meta.empty())
+    {
+      out << style::GRAY << "  * " << style::RESET;
+
+      for (std::size_t i = 0; i < meta.size(); ++i)
+      {
+        if (i > 0)
+          out << style::GRAY << " | " << style::RESET;
+
+        out << meta[i];
+      }
+
+      out << "\n";
+    }
+  }
+
+  void print_build_success_timed(
+      std::ostream &out,
+      const std::string &message,
+      long long milliseconds)
+  {
+    out << "  "
+        << colorize(style::GREEN, "ok")
+        << " "
+        << message;
+
+    if (milliseconds > 0)
+    {
+      const double seconds = static_cast<double>(milliseconds) / 1000.0;
+
+      std::ostringstream time;
+      time.setf(std::ios::fixed);
+      time.precision(seconds >= 10.0 ? 1 : 2);
+      time << seconds << "s";
+
+      out << " " << colorize(style::GRAY, "| " + time.str());
+    }
+
+    out << "\n";
+  }
 
   bool BuildLocation::valid() const
   {
@@ -289,17 +387,24 @@ namespace vix::cli::build
       std::ostream &out,
       const BuildDiagnostic &diagnostic)
   {
-    out << "\n";
+    const std::string title =
+        diagnostic.title.empty()
+            ? std::string("Build failed")
+            : diagnostic.title;
+
     out << "  "
-        << colorize(style::RED, "✖")
-        << " "
-        << colorize(style::BOLD, diagnostic.title.empty()
-                                     ? std::string("Build failed")
-                                     : diagnostic.title)
+        << style::RED
+        << style::BOLD
+        << "✖ "
+        << title
+        << style::RESET
         << "\n\n";
 
     if (!diagnostic.message.empty())
-      out << "  " << diagnostic.message << "\n\n";
+    {
+      print_label(out, "message:");
+      out << "    " << diagnostic.message << "\n\n";
+    }
 
     if (diagnostic.has_location())
     {

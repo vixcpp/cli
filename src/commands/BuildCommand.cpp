@@ -1710,6 +1710,13 @@ namespace vix::commands::BuildCommand
             build::BuildGraph::load(graphPath);
 
         const auto scan = graph.scan_project();
+
+        const fs::path compileCommandsPath =
+            build::default_compile_commands_path(plan_.buildDir);
+
+        const std::size_t importedCompileCommands =
+            graph.load_compile_commands(compileCommandsPath);
+
         graph.load_dependency_files();
 
         if (previousGraph)
@@ -1728,7 +1735,8 @@ namespace vix::commands::BuildCommand
           step("build graph: " +
                std::to_string(scan.sources) + " sources, " +
                std::to_string(scan.headers) + " headers, " +
-               std::to_string(scan.tasks) + " tasks");
+               std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
+               std::to_string(importedCompileCommands) + " imported commands");
         }
 
         if (can_use_graph_build(opt_, plan_, scan))

@@ -18,11 +18,11 @@
 
 #include <cctype>
 #include <iostream>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <system_error>
 #include <vector>
-#include <optional>
 
 #include <vix/cli/Style.hpp>
 
@@ -39,27 +39,6 @@ namespace vix::cli::build
 
   namespace
   {
-    static std::string trim_copy(const std::string &value)
-    {
-      std::size_t begin = 0;
-
-      while (begin < value.size() &&
-             std::isspace(static_cast<unsigned char>(value[begin])))
-      {
-        ++begin;
-      }
-
-      std::size_t end = value.size();
-
-      while (end > begin &&
-             std::isspace(static_cast<unsigned char>(value[end - 1])))
-      {
-        --end;
-      }
-
-      return value.substr(begin, end - begin);
-    }
-
     static bool is_absolute_or_relative_path_like(const std::string &value)
     {
       if (value.empty())

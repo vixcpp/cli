@@ -316,13 +316,6 @@ namespace vix::cli::build
       return !ec;
     }
 
-    static std::string manifest_path_for_key(
-        const fs::path &root,
-        const std::string &key)
-    {
-      return (root / key / "manifest.json").string();
-    }
-
     static std::uint64_t hash_file_content(const fs::path &path)
     {
       std::ifstream in(path, std::ios::binary);

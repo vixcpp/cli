@@ -545,58 +545,6 @@ namespace vix::cli::build
       currentProgressLine.clear();
     };
 
-    auto is_failed_line = [](const std::string &line) -> bool
-    {
-      return line.rfind("FAILED:", 0) == 0;
-    };
-
-    auto looks_like_live_error_line = [&](const std::string &line) -> bool
-    {
-      if (line.empty())
-        return false;
-
-      if (is_failed_line(line))
-        return true;
-
-      if (line.rfind("ninja:", 0) == 0)
-        return true;
-
-      if (line.find(": error:") != std::string::npos)
-        return true;
-
-      if (line.find(" error: ") != std::string::npos)
-        return true;
-
-      if (line.find("fatal error:") != std::string::npos)
-        return true;
-
-      if (line.find("undefined reference to") != std::string::npos)
-        return true;
-
-      if (line.find("collect2: error:") != std::string::npos)
-        return true;
-
-      if (line.find("ld: error:") != std::string::npos)
-        return true;
-
-      if (line.find("CMake Error") != std::string::npos)
-        return true;
-
-      if (line.rfind("-->", 0) == 0)
-        return true;
-
-      if (line == "code:")
-        return true;
-
-      if (line.rfind("hint:", 0) == 0)
-        return true;
-
-      if (line.rfind("at:", 0) == 0)
-        return true;
-
-      return false;
-    };
-
     auto should_echo_line = [&](const std::string &line) -> bool
     {
       if (quiet)

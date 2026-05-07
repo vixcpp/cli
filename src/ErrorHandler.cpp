@@ -20,10 +20,8 @@
 #include <vix/cli/errors/ErrorPipeline.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/errors/build/BuildErrorDetectors.hpp>
-#include <vix/utils/Env.hpp>
 
 #include <algorithm>
-#include <cstring>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -52,25 +50,6 @@ namespace
               << RESET
               << text
               << "\n";
-  }
-
-  vix::cli::build::BuildDiagnostic make_build_diagnostic(
-      const vix::cli::errors::CompilerError &err,
-      const std::string &contextMessage)
-  {
-    vix::cli::build::BuildDiagnostic diagnostic;
-
-    diagnostic.title = contextMessage.empty()
-                           ? "Build failed"
-                           : contextMessage;
-
-    diagnostic.error = err.message;
-
-    diagnostic.location.file = err.file;
-    diagnostic.location.line = static_cast<std::size_t>(err.line);
-    diagnostic.location.column = static_cast<std::size_t>(err.column);
-
-    return diagnostic;
   }
 
   std::vector<std::string> read_code_frame_lines(
@@ -221,17 +200,6 @@ namespace
               << "vix run <file.cpp> --args " << option << "\n";
 
     return true;
-  }
-
-  bool hints_verbose_enabled() noexcept
-  {
-    const char *level = vix::utils::vix_getenv("VIX_LOG_LEVEL");
-
-    if (!level || !*level)
-      return false;
-
-    return std::strcmp(level, "debug") == 0 ||
-           std::strcmp(level, "trace") == 0;
   }
 
   std::size_t line_start(std::string_view text, std::size_t pos)

@@ -90,12 +90,14 @@ namespace vix::commands::replay
     if (id.empty())
       return false;
 
-    for (unsigned char c : id)
+    for (char ch : id)
     {
+      const auto c = static_cast<unsigned char>(ch);
+
       const bool ok =
           std::isalnum(c) != 0 ||
-          c == '-' ||
-          c == '_';
+          ch == '-' ||
+          ch == '_';
 
       if (!ok)
         return false;

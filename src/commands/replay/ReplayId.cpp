@@ -107,8 +107,10 @@ namespace vix::commands::replay
 
     std::uint64_t hash = offset;
 
-    for (unsigned char c : value)
+    for (char ch : value)
     {
+      const auto c = static_cast<unsigned char>(ch);
+
       hash ^= static_cast<std::uint64_t>(c);
       hash *= prime;
     }

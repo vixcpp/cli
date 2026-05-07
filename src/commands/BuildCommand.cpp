@@ -2335,7 +2335,7 @@ namespace vix::commands::BuildCommand
     out << "  -v, --verbose         Show detailed configure and build summary\n";
     out << "  --targets             List detected cross toolchains on PATH\n";
     out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
-    out << "  --build-target <name> Build only a specific CMake target (ex: blog)\n";
+    out << "  --build-target <name> Build a specific CMake target (default: project directory name, ex: vix)\n";
     out << "  -h, --help            Show this help\n\n";
 
     out << "Environment variables:\n";
@@ -2364,6 +2364,7 @@ namespace vix::commands::BuildCommand
     out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
     out << "  vix build main.cpp --target aarch64-linux-gnu --out app\n";
     out << "  VIX_BUILD_HEARTBEAT=1 vix build\n";
+    out << "  vix build --build-target all\n";
     out << "  vix build -j 8\n\n";
 
     out << "Logs:\n";

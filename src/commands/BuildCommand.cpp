@@ -1379,6 +1379,21 @@ namespace vix::commands::BuildCommand
       return result;
     }
 
+    static bool debug_build_details_enabled()
+    {
+      const char *level = std::getenv("VIX_LOG_LEVEL");
+
+      if (!level || !*level)
+        return false;
+
+      std::string value(level);
+
+      for (char &c : value)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return value == "debug" || value == "trace";
+    }
+
     static std::vector<fs::path> graph_object_paths(const build::BuildGraph &graph)
     {
       std::vector<fs::path> objects;
@@ -1750,7 +1765,7 @@ namespace vix::commands::BuildCommand
                   opt_.buildTarget,
                   projectInputs))
           {
-            if (verboseMode && !opt_.quiet)
+            if (debug_build_details_enabled() && !opt_.quiet)
             {
               step("build state: hit -> " +
                    artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
@@ -1816,7 +1831,7 @@ namespace vix::commands::BuildCommand
 
         graph.propagate_dirty();
 
-        if (verboseMode && !opt_.quiet)
+        if (debug_build_details_enabled() && !opt_.quiet)
         {
           step("build graph: " +
                std::to_string(scan.sources) + " sources, " +
@@ -1885,7 +1900,7 @@ namespace vix::commands::BuildCommand
               verboseMode);
         }
 
-        if (verboseMode && !opt_.quiet)
+        if (debug_build_details_enabled() && !opt_.quiet)
         {
           if (artifact_cache::ArtifactCache::exists(projectArtifact))
             step("artifact cache: hit -> " + projectArtifact.root.string());
@@ -1904,7 +1919,7 @@ namespace vix::commands::BuildCommand
           return 1;
         }
 
-        if (verboseMode && !opt_.quiet)
+        if (debug_build_details_enabled() && !opt_.quiet)
         {
           out.print("  Using project directory:\n");
           out.print("    • " + plan_.projectDir.string() + "\n\n");
@@ -1940,8 +1955,11 @@ namespace vix::commands::BuildCommand
             if (plan_.fastLinkerFlag)
               out.print("    • fast linker: " + *plan_.fastLinkerFlag + "\n");
 
-            for (const auto &kv : plan_.cmakeVars)
-              out.print("    • " + kv.first + "=" + kv.second + "\n");
+            if (debug_build_details_enabled())
+            {
+              for (const auto &kv : plan_.cmakeVars)
+                out.print("    • " + kv.first + "=" + kv.second + "\n");
+            }
 
             out.print("\n");
           }
@@ -2004,7 +2022,7 @@ namespace vix::commands::BuildCommand
         }
         else
         {
-          if (verboseMode && !opt_.quiet)
+          if (debug_build_details_enabled() && !opt_.quiet)
           {
             out.print("  Using existing configuration (cache-friendly).\n");
             out.print("    • " + plan_.buildDir.string() + "\n\n");

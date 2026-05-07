@@ -162,7 +162,7 @@ namespace vix::cli::build
       const process::Options &opt)
   {
     std::vector<std::string> argv;
-    argv.reserve(16);
+    argv.reserve(18);
 
     argv.push_back("cmake");
     argv.push_back("--build");
@@ -172,10 +172,15 @@ namespace vix::cli::build
     if (jobs <= 0)
       jobs = default_jobs();
 
-    if (!opt.buildTarget.empty())
+    std::string target = opt.buildTarget;
+
+    if (target.empty())
+      target = plan.projectDir.filename().string();
+
+    if (!target.empty())
     {
       argv.push_back("--target");
-      argv.push_back(opt.buildTarget);
+      argv.push_back(target);
     }
 
     argv.push_back("--");

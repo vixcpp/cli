@@ -229,7 +229,6 @@ namespace vix::cli::build
       const std::string &target,
       const std::string &preset)
   {
-    out << "\n";
     out << colorize(style::BOLD, "Building");
 
     if (!target.empty())

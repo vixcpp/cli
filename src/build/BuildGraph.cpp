@@ -15,6 +15,7 @@
  */
 
 #include <vix/cli/build/BuildGraph.hpp>
+#include <vix/cli/build/CompileCommands.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -390,6 +391,91 @@ namespace vix::cli::build
         return 0;
       }
     }
+
+    static std::string compile_task_id_for_source(const fs::path &source)
+    {
+      std::uint64_t h = FNV_OFFSET;
+
+      const std::string normalized = normalize_path_string(source);
+      h = fnv_mix_string(h, "compile:");
+      h = fnv_mix_string(h, normalized);
+
+      return "compile:" + hex64(h);
+    }
+
+    static std::vector<std::string> make_dependency_enabled_command(
+        const std::vector<std::string> &arguments,
+        const fs::path &dependencyFile)
+    {
+      std::vector<std::string> out;
+      out.reserve(arguments.size() + 6);
+
+      bool hasMMD = false;
+      bool hasMP = false;
+      bool hasMF = false;
+      bool hasDependencyMode = false;
+
+      for (std::size_t i = 0; i < arguments.size(); ++i)
+      {
+        const std::string &arg = arguments[i];
+
+        if (arg == "-MMD")
+          hasMMD = true;
+
+        if (arg == "-MP")
+          hasMP = true;
+
+        if (arg == "-MF")
+        {
+          hasMF = true;
+          out.push_back(arg);
+
+          if (i + 1 < arguments.size())
+          {
+            out.push_back(dependencyFile.string());
+            ++i;
+          }
+          else
+          {
+            out.push_back(dependencyFile.string());
+          }
+
+          continue;
+        }
+
+        if (arg.rfind("-MF", 0) == 0 && arg.size() > 3)
+        {
+          hasMF = true;
+          out.push_back("-MF");
+          out.push_back(dependencyFile.string());
+          continue;
+        }
+
+        if (arg == "-MD" ||
+            arg == "-MMD" ||
+            arg == "-M" ||
+            arg == "-MM")
+        {
+          hasDependencyMode = true;
+        }
+
+        out.push_back(arg);
+      }
+
+      if (!hasDependencyMode && !hasMMD)
+        out.push_back("-MMD");
+
+      if (!hasMP)
+        out.push_back("-MP");
+
+      if (!hasMF)
+      {
+        out.push_back("-MF");
+        out.push_back(dependencyFile.string());
+      }
+
+      return out;
+    }
   } // namespace
 
   bool BuildGraphConfig::valid() const
@@ -573,48 +659,74 @@ namespace vix::cli::build
       add_node(node);
 
       if (kind == BuildNodeKind::Source)
-      {
         ++result.sources;
-
-        const fs::path objectPath = object_path_for_source(current);
-        const fs::path dependencyPath = dependency_path_for_source(current);
-
-        BuildNode objectNode =
-            make_file_build_node(BuildNodeKind::Object, objectPath);
-
-        objectNode.id = make_build_node_id(BuildNodeKind::Object, objectPath);
-        objectNode.hash = hash_file_content(objectPath);
-        objectNode.add_dependency(node.id);
-
-        add_node(objectNode);
-
-        const std::vector<std::string> command =
-            compile_command_for(current, objectPath, dependencyPath);
-
-        BuildTask task =
-            make_compile_task(
-                node.id,
-                objectNode.id,
-                command,
-                config_.projectDir);
-
-        task.logFile = dependencyPath;
-        add_task(task);
-      }
       else if (kind == BuildNodeKind::Header)
-      {
         ++result.headers;
-      }
       else if (kind == BuildNodeKind::Config)
-      {
         ++result.configs;
-      }
 
       ++it;
     }
 
     result.tasks = tasks_.size();
     return result;
+  }
+
+  std::size_t BuildGraph::load_compile_commands(const fs::path &path)
+  {
+    const auto compileCommands = read_compile_commands(path);
+
+    if (!compileCommands)
+      return 0;
+
+    std::size_t imported = 0;
+
+    for (const CompileCommandEntry &entry : *compileCommands)
+    {
+      if (!entry.valid() || !entry.has_output())
+        continue;
+
+      const fs::path sourcePath = entry.source.lexically_normal();
+      const fs::path objectPath = entry.output.lexically_normal();
+      const fs::path dependencyPath = dependency_file_for_object(objectPath);
+
+      BuildNode sourceNode =
+          make_file_build_node(BuildNodeKind::Source, sourcePath);
+
+      sourceNode.hash = hash_file_content(sourcePath);
+      add_node(sourceNode);
+
+      BuildNode objectNode =
+          make_file_build_node(BuildNodeKind::Object, objectPath);
+
+      objectNode.id = make_build_node_id(BuildNodeKind::Object, objectPath);
+      objectNode.hash = hash_file_content(objectPath);
+      objectNode.add_dependency(sourceNode.id);
+
+      add_node(objectNode);
+
+      std::vector<std::string> command =
+          make_dependency_enabled_command(
+              entry.arguments,
+              dependencyPath);
+
+      BuildTask task =
+          make_compile_task(
+              sourceNode.id,
+              objectNode.id,
+              command,
+              entry.directory);
+
+      task.id = compile_task_id_for_source(sourcePath);
+      task.workingDirectory = entry.directory;
+      task.logFile = dependencyPath;
+
+      add_task(task);
+
+      ++imported;
+    }
+
+    return imported;
   }
 
   void BuildGraph::load_dependency_files()

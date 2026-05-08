@@ -146,6 +146,23 @@ namespace vix::cli::build
       const std::string &message,
       long long milliseconds);
 
+  void print_task_header_full(
+      std::ostream &out,
+      const std::string &action,
+      const std::string &target,
+      const std::string &preset,
+      const std::vector<std::pair<std::string, std::string>> &meta);
+
+  void print_task_success_timed(
+      std::ostream &out,
+      const std::string &message,
+      long long milliseconds);
+
+  void print_task_failure_timed(
+      std::ostream &out,
+      const std::string &message,
+      long long milliseconds);
+
 } // namespace vix::cli::build
 
 #endif

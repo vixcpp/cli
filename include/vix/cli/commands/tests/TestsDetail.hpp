@@ -27,10 +27,12 @@ namespace vix::commands::TestsCommand::detail
     bool list = false;
     bool failFast = false;
     bool runAfter = false; // --run (tests + runtime)
+    bool raw = false;
+    std::string testPattern;
 
-    fs::path projectDir;                // resolved path (or cwd)
-    std::vector<std::string> forwarded; // args forwarded to `vix check`
-    std::vector<std::string> ctestArgs; // args forwarded to `ctest` (after `--`)
+    fs::path projectDir;
+    std::vector<std::string> forwarded;
+    std::vector<std::string> ctestArgs;
   };
 
   Options parse(const std::vector<std::string> &args);

@@ -23,6 +23,7 @@
 #include <sstream>
 #include <system_error>
 #include <vector>
+#include <iomanip>
 
 #include <vix/cli/Style.hpp>
 
@@ -506,6 +507,85 @@ namespace vix::cli::build
     }
 
     return location;
+  }
+
+  void print_task_header_full(
+      std::ostream &out,
+      const std::string &action,
+      const std::string &target,
+      const std::string &preset,
+      const std::vector<std::pair<std::string, std::string>> &meta)
+  {
+    out << style::CYAN
+        << style::BOLD
+        << action
+        << style::RESET;
+
+    if (!target.empty())
+    {
+      out << " "
+          << style::CYAN
+          << style::BOLD
+          << target
+          << style::RESET;
+    }
+
+    if (!preset.empty())
+      out << " " << colorize(style::GRAY, "(" + preset + ")");
+
+    out << "\n";
+
+    if (meta.empty())
+      return;
+
+    out << style::GRAY << "  * " << style::RESET;
+
+    for (std::size_t i = 0; i < meta.size(); ++i)
+    {
+      if (i > 0)
+        out << style::GRAY << " | " << style::RESET;
+
+      out << meta[i].first << ": "
+          << colorize(style::MAGENTA, meta[i].second);
+    }
+
+    out << "\n";
+  }
+
+  void print_task_success_timed(
+      std::ostream &out,
+      const std::string &message,
+      long long milliseconds)
+  {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1)
+        << (static_cast<double>(milliseconds) / 1000.0);
+
+    out << "  "
+        << colorize(style::GREEN, "✔")
+        << " "
+        << message
+        << " in "
+        << oss.str()
+        << "s\n";
+  }
+
+  void print_task_failure_timed(
+      std::ostream &out,
+      const std::string &message,
+      long long milliseconds)
+  {
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1)
+        << (static_cast<double>(milliseconds) / 1000.0);
+
+    out << "  "
+        << colorize(style::RED, "✖")
+        << " "
+        << message
+        << " after "
+        << oss.str()
+        << "s\n";
   }
 
 } // namespace vix::cli::build

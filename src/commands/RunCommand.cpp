@@ -520,13 +520,12 @@ namespace
 
   void apply_docs_env(const Options &opt)
   {
-    if (!opt.docs.has_value())
-      return;
+    const bool enabled = opt.docs.has_value() && *opt.docs;
 
 #ifdef _WIN32
-    _putenv_s("VIX_DOCS", (*opt.docs ? "1" : "0"));
+    _putenv_s("VIX_DOCS", enabled ? "1" : "0");
 #else
-    ::setenv("VIX_DOCS", (*opt.docs ? "1" : "0"), 1);
+    ::setenv("VIX_DOCS", enabled ? "1" : "0", 1);
 #endif
   }
 
@@ -727,7 +726,8 @@ namespace
     replayConfig.replayable = true;
 
     std::string replayErr;
-    const bool replayEnabled = recorder.begin(replayConfig, replayErr);
+    const bool replayEnabled =
+        opt.replay && recorder.begin(replayConfig, replayErr);
 
     replay::ReplayCapture replayCapture;
     if (replayEnabled)
@@ -1712,6 +1712,7 @@ namespace vix::commands::RunCommand
     out << "  -j, --jobs <n>                Parallel build jobs\n";
     out << "  --clear <auto|always|never>   Clear terminal before runtime output (default: auto)\n";
     out << "  --no-clear                    Alias for --clear=never\n\n";
+    out << "  --replay          Record this run under .vix/runs/ for vix replay\n";
 
     out << "Runtime options (argv / env):\n";
     out << "  --cwd <path>                  Run the program with this working directory\n";
@@ -1736,9 +1737,9 @@ namespace vix::commands::RunCommand
     out << "  --local-cache                 Use local .vix-scripts instead of global cache\n";
 
     out << "Documentation:\n";
-    out << "  --docs                        Enable auto docs (sets VIX_DOCS=1)\n";
-    out << "  --no-docs                     Disable auto docs (sets VIX_DOCS=0)\n";
-    out << "  --docs=<0|1|true|false>       Explicitly control docs generation\n\n";
+    out << "  --docs                        Enable OpenAPI/docs for this run (sets VIX_DOCS=1)\n";
+    out << "  --no-docs                     Keep OpenAPI/docs disabled (sets VIX_DOCS=0)\n";
+    out << "  --docs=<0|1|true|false>       Explicitly control OpenAPI/docs\n\n";
 
     out << "Logging:\n";
     out << "  --log-level <level>           trace | debug | info | warn | error | critical | off\n";
@@ -1776,6 +1777,8 @@ namespace vix::commands::RunCommand
     out << "  vix run main.cpp --with-mysql\n";
     out << "  vix run main.cpp -- -O2 -DNDEBUG --run hello 123\n";
     out << "  vix run main.cpp -- -lssl -lcrypto\n\n";
+    out << "  vix run api --replay\n";
+    out << "  vix run main.cpp --replay\n";
 
     out << "  # Runtime targets\n";
     out << "  vix run docker://nginx\n";

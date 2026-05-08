@@ -758,7 +758,8 @@ namespace vix::commands::RunCommand::detail
       replayConfig.replayable = true;
 
       std::string replayErr;
-      const bool replayEnabled = recorder.begin(replayConfig, replayErr);
+      const bool replayEnabled =
+          opt.replay && recorder.begin(replayConfig, replayErr);
 
       replay::ReplayCapture replayCapture;
       if (replayEnabled)

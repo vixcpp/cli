@@ -165,6 +165,7 @@ namespace vix::commands::RunCommand::detail
 
     bool localCache = false;
     bool devMode{false};
+    bool replay = false;
   };
 
   /**

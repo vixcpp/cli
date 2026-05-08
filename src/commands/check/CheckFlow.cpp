@@ -257,7 +257,7 @@ namespace vix::commands::CheckCommand::detail
       o.enableUbsanOnly = false;
     }
 
-    if ((o.enableSanitizers || o.enableUbsanOnly || o.enableThreadSanitizer) && !o.singleCpp)
+    if ((o.enableSanitizers || o.enableUbsanOnly || o.enableThreadSanitizer) && o.singleCpp)
       o.runAfterBuild = true;
 
     if (o.quiet && o.verbose)

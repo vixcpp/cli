@@ -73,10 +73,10 @@ namespace vix::commands::CheckCommand
 
     static void print_project_resolution(const Options &opt, const fs::path &projectDir)
     {
-      if (opt.quiet)
+      if (opt.quiet || !opt.verbose)
         return;
 
-      ui::section(std::cout, "Check");
+      ui::section(std::cout, "Check resolution");
       ui::kv(std::cout, "mode", "project");
       ui::kv(std::cout, "project dir", projectDir.string());
       ui::one_line_spacer(std::cout);
@@ -84,10 +84,10 @@ namespace vix::commands::CheckCommand
 
     static void print_script_resolution(const Options &opt, const fs::path &scriptPath)
     {
-      if (opt.quiet)
+      if (opt.quiet || !opt.verbose)
         return;
 
-      ui::section(std::cout, "Check");
+      ui::section(std::cout, "Check resolution");
       ui::kv(std::cout, "mode", "script");
       ui::kv(std::cout, "script", scriptPath.string());
       ui::one_line_spacer(std::cout);

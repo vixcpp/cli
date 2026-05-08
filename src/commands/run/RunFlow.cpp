@@ -103,6 +103,7 @@ namespace vix::commands::RunCommand::detail
              v == "--san" || v == "--ubsan" || v == "--tsan" ||
              v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
              v == "--no-color" ||
+             v == "--replay" ||
              v == "--preset" || v.rfind("--preset=", 0) == 0 ||
              v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
              v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
@@ -444,6 +445,10 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--local-cache")
       {
         opt.localCache = true;
+      }
+      else if (a == "--replay")
+      {
+        opt.replay = true;
       }
       else if (a == "--dev-mode")
       {

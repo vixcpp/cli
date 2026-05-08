@@ -20,6 +20,8 @@
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/cmake/GlobalPackages.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
+#include <vix/cli/commands/TestsCommand.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -31,6 +33,8 @@
 #include <string>
 #include <system_error>
 #include <vector>
+#include <chrono>
+#include <thread>
 
 #ifndef _WIN32
 #include <cstdlib> // setenv
@@ -491,6 +495,159 @@ namespace vix::commands::CheckCommand::detail
       return file;
     }
 
+    static int effective_jobs(const Options &opt)
+    {
+      if (opt.jobs > 0)
+        return opt.jobs;
+
+      unsigned int hc = std::thread::hardware_concurrency();
+
+      if (hc == 0)
+        return 4;
+
+      if (hc > 64)
+        hc = 64;
+
+      return static_cast<int>(hc);
+    }
+
+    static std::string display_preset_name(const std::string &preset)
+    {
+      if (preset == "dev-ninja")
+        return "dev";
+
+      return preset;
+    }
+
+    static std::string project_display_name(const fs::path &projectDir)
+    {
+      std::string name = projectDir.filename().string();
+
+      if (name.empty())
+        return "project";
+
+      return name;
+    }
+
+    static void print_check_header(
+        const Options &opt,
+        const fs::path &projectDir,
+        const std::string &preset,
+        bool runtimeEnabled)
+    {
+      if (opt.quiet)
+        return;
+
+      std::vector<std::pair<std::string, std::string>> meta;
+      meta.emplace_back("profile", profile_name(opt.enableSanitizers, opt.enableUbsanOnly));
+      meta.emplace_back("tests", opt.tests ? "on" : "off");
+      meta.emplace_back("runtime", runtimeEnabled ? "on" : "off");
+      meta.emplace_back("jobs", std::to_string(effective_jobs(opt)));
+
+      build::print_task_header_full(
+          std::cout,
+          "Checking",
+          project_display_name(projectDir),
+          display_preset_name(preset),
+          meta);
+    }
+
+    static void print_check_progress(
+        const std::string &label,
+        bool success)
+    {
+      const std::string status = success ? "done" : "failed";
+      const char *lineColor = success ? style::CYAN : style::RED;
+      const char *statusColor = success ? style::GREEN : style::RED;
+
+      std::cout << "  "
+                << lineColor
+                << label
+                << style::RESET
+                << " "
+                << lineColor
+                << "[============================]"
+                << style::RESET
+                << " "
+                << statusColor
+                << status
+                << style::RESET
+                << "\n";
+    }
+
+    static long long elapsed_ms_since(std::chrono::steady_clock::time_point start)
+    {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - start)
+          .count();
+    }
+
+    static int run_check_command(
+        const Options &opt,
+        const std::string &cmd,
+        const fs::path &diagnosticPath,
+        const std::string &errorTitle)
+    {
+      if (opt.verbose)
+      {
+#ifndef _WIN32
+        return run_cmd_live_filtered(cmd, errorTitle);
+#else
+        int code = 0;
+        const std::string log = run_and_capture_with_code(cmd, code);
+        if (!log.empty())
+          std::cout << log;
+        return code;
+#endif
+      }
+
+      int code = 0;
+      const std::string log = run_and_capture_with_code(cmd, code);
+
+      if (code == 0)
+        return 0;
+
+      if (!log.empty())
+      {
+        vix::cli::ErrorHandler::printBuildErrors(
+            log,
+            diagnosticPath,
+            errorTitle);
+      }
+      else
+      {
+        style::error(errorTitle);
+      }
+
+      return code;
+    }
+
+    static void print_verbose_check_context(
+        const Options &opt,
+        const fs::path &projectDir,
+        const std::string &preset,
+        const fs::path &buildDir,
+        bool dedicatedSanPreset,
+        bool runtimeEnabled)
+    {
+      if (opt.quiet || !opt.verbose)
+        return;
+
+      ui::one_line_spacer(std::cout);
+      ui::section(std::cout, "Check details");
+      ui::kv(std::cout, "project", projectDir.string());
+      ui::kv(std::cout, "preset", preset);
+      ui::kv(std::cout, "build dir", buildDir.string());
+      ui::kv(std::cout, "profile", profile_name(opt.enableSanitizers, opt.enableUbsanOnly));
+      ui::kv(std::cout, "tests", opt.tests ? "enabled" : "disabled");
+      ui::kv(std::cout, "runtime", runtimeEnabled ? "enabled" : "disabled");
+
+      if (opt.enableSanitizers || opt.enableUbsanOnly)
+        ui::kv(std::cout, "san preset", dedicatedSanPreset ? "dedicated preset" : "fallback manual configure");
+
+      ui::one_line_spacer(std::cout);
+    }
+
 #ifndef _WIN32
     static int run_tests_with_fallback(
         const Options &opt,
@@ -661,21 +818,15 @@ namespace vix::commands::CheckCommand::detail
         bool dedicatedSanPreset,
         bool runtimeEnabled)
     {
-      if (opt.quiet)
-        return;
+      print_check_header(opt, projectDir, preset, runtimeEnabled);
 
-      ui::section(std::cout, "Check");
-      ui::kv(std::cout, "project", projectDir.string());
-      ui::kv(std::cout, "preset", preset);
-      ui::kv(std::cout, "build dir", buildDir.string());
-      ui::kv(std::cout, "profile", profile_name(opt.enableSanitizers, opt.enableUbsanOnly));
-      ui::kv(std::cout, "tests", opt.tests ? "enabled" : "disabled");
-      ui::kv(std::cout, "runtime", runtimeEnabled ? "enabled" : "disabled");
-
-      if (opt.enableSanitizers || opt.enableUbsanOnly)
-        ui::kv(std::cout, "san preset", dedicatedSanPreset ? "dedicated preset" : "fallback manual configure");
-
-      ui::one_line_spacer(std::cout);
+      print_verbose_check_context(
+          opt,
+          projectDir,
+          preset,
+          buildDir,
+          dedicatedSanPreset,
+          runtimeEnabled);
     }
 
     static bool should_use_smart_sanitizer_mode(
@@ -707,13 +858,13 @@ namespace vix::commands::CheckCommand::detail
   int check_project(const Options &opt, const fs::path &projectDir)
   {
     apply_log_level_env_local(opt);
+    const auto checkStart = std::chrono::steady_clock::now();
 
     ProjectCheckSummary summary;
     summary.sanitizersEnabled = opt.enableSanitizers || opt.enableUbsanOnly;
     summary.ubsanOnly = opt.enableUbsanOnly;
 
-    const bool shouldRunRuntime =
-        opt.runAfterBuild || opt.enableSanitizers || opt.enableUbsanOnly;
+    const bool shouldRunRuntime = opt.runAfterBuild;
 
     const bool smartSanitizerMode =
         should_use_smart_sanitizer_mode(opt, projectDir);
@@ -758,7 +909,7 @@ namespace vix::commands::CheckCommand::detail
 
       if (needsConfigure)
       {
-        if (!opt.quiet)
+        if (!opt.quiet && opt.verbose)
         {
           ui::info_line(std::cout, "Project configuration is required for this check profile.");
           ui::kv(std::cout, "action", "configure");
@@ -837,21 +988,27 @@ namespace vix::commands::CheckCommand::detail
                << " -DCMAKE_PROJECT_TOP_LEVEL_INCLUDES=" << quote(globalPackagesFile->string());
         }
 
-        const int code = run_cmd_live_filtered(conf.str(), "Configuring project");
+        const int code = run_check_command(
+            opt,
+            conf.str(),
+            projectDir / "CMakeLists.txt",
+            "Project check failed (configure)");
+
         if (code != 0)
         {
-          style::error("CMake configure failed.");
-          style::hint("Check the configure output above.");
+          if (!opt.quiet)
+            print_check_progress("configure", false);
+
           return code != 0 ? code : 2;
         }
 #endif
         summary.configured = true;
         if (!opt.quiet)
-          ui::ok_line(std::cout, "Configure OK.");
+          print_check_progress("configure", true);
       }
       else
       {
-        if (!opt.quiet)
+        if (!opt.quiet && opt.verbose)
         {
           ui::ok_line(std::cout, "CMake cache detected for this check profile.");
           ui::kv(std::cout, "build dir", buildDir.string());
@@ -866,7 +1023,7 @@ namespace vix::commands::CheckCommand::detail
       const bool useDirectBuildDir =
           summary.sanitizersEnabled && !hasDedicatedSanPreset;
 
-      if (!opt.quiet)
+      if (!opt.quiet && opt.verbose)
       {
         ui::info_line(std::cout, "Starting build.");
         ui::kv(std::cout, "mode", useDirectBuildDir ? "direct build dir" : "build preset");
@@ -889,9 +1046,7 @@ namespace vix::commands::CheckCommand::detail
                    << " && cmake --build --preset " << quote(buildPreset) << " --target all";
         }
 
-        if (opt.jobs > 0)
-          buildCmd << " -- -j " << opt.jobs;
-
+        buildCmd << " -- -j " << effective_jobs(opt);
         buildCmd << "\"";
 
         int code = 0;
@@ -926,60 +1081,94 @@ namespace vix::commands::CheckCommand::detail
                    << " && cmake --build --preset " << quote(buildPreset) << " --target all";
         }
 
-        if (opt.jobs > 0)
-          buildCmd << " -- -j " << opt.jobs;
+        buildCmd << " -- -j " << effective_jobs(opt);
 
-        const int code = run_cmd_live_filtered(buildCmd.str(), "Checking build");
+        const int code = run_check_command(
+            opt,
+            buildCmd.str(),
+            projectDir / "CMakeLists.txt",
+            "Project check failed (build)");
+
         if (code != 0)
         {
-          style::error("Project check failed during build.");
-          style::hint("Check the compiler output above.");
+          if (!opt.quiet)
+            print_check_progress("build", false);
+
           return code != 0 ? code : 3;
         }
       }
 #endif
 
       summary.built = true;
+
       if (!opt.quiet)
-        ui::ok_line(std::cout, "Build OK.");
+        print_check_progress("build", true);
 
 #ifndef _WIN32
       if (opt.tests)
       {
-        ui::one_line_spacer(std::cout);
-        ui::info_line(std::cout, "Running tests.");
+        std::vector<std::string> testArgs;
+        testArgs.push_back(projectDir.string());
+        testArgs.push_back("--preset");
+        testArgs.push_back(configurePreset);
 
-        const int tcode = run_tests_with_fallback(opt, projectDir, buildDir, configurePreset);
+        if (opt.verbose)
+          testArgs.push_back("-v");
+
+        for (const auto &arg : opt.ctestArgs)
+        {
+          testArgs.push_back("--");
+          testArgs.push_back(arg);
+        }
+
+        const int tcode = vix::commands::TestsCommand::run(testArgs);
+
         if (tcode != 0)
         {
-          style::error("Tests failed.");
+          if (!opt.quiet)
+            print_check_progress("tests", false);
+
           return tcode != 0 ? tcode : 4;
         }
 
         summary.testsRan = true;
-        if (!opt.quiet)
-          ui::ok_line(std::cout, "Tests OK.");
       }
 
       if (shouldRunRuntime)
       {
-        ui::one_line_spacer(std::cout);
-        ui::info_line(std::cout, "Running runtime validation.");
+        if (!opt.quiet && opt.verbose)
+        {
+          ui::one_line_spacer(std::cout);
+          ui::info_line(std::cout, "Running runtime validation.");
+        }
 
         const int rcode = run_runtime_check(opt, projectDir, buildDir, summary);
         if (rcode != 0)
+        {
+          if (!opt.quiet)
+            print_check_progress("runtime", false);
+
           return rcode;
+        }
 
         if (!opt.quiet)
-          ui::ok_line(std::cout, "Runtime OK.");
+          print_check_progress("runtime", true);
       }
 #endif
 
-      ui::one_line_spacer(std::cout);
+      const long long totalMs = elapsed_ms_since(checkStart);
+
       if (!opt.quiet)
-        ui::ok_line(std::cout, "Project check OK (" + make_check_summary(summary) + ").");
+      {
+        build::print_task_success_timed(
+            std::cout,
+            "Project check OK (" + make_check_summary(summary) + ")",
+            totalMs);
+      }
       else
+      {
         style::success("Project check OK (" + make_check_summary(summary) + ").");
+      }
 
       return 0;
     }
@@ -1084,7 +1273,7 @@ namespace vix::commands::CheckCommand::detail
 
       summary.configured = true;
       if (!opt.quiet)
-        ui::ok_line(std::cout, "Configure OK.");
+        print_check_progress("configure", true);
     }
     else
     {
@@ -1100,8 +1289,8 @@ namespace vix::commands::CheckCommand::detail
       std::ostringstream buildCmd;
       buildCmd << "cmd /C \"cd /D " << quote(projectDir.string())
                << " && cmake --build " << quote(buildDir.string());
-      if (opt.jobs > 0)
-        buildCmd << " -- -j " << opt.jobs;
+
+      buildCmd << " -- -j " << effective_jobs(opt);
       buildCmd << "\"";
 
       int code = 0;
@@ -1127,8 +1316,7 @@ namespace vix::commands::CheckCommand::detail
       std::ostringstream buildCmd;
       buildCmd << "cd " << quote(projectDir.string())
                << " && cmake --build " << quote(buildDir.string());
-      if (opt.jobs > 0)
-        buildCmd << " -- -j " << opt.jobs;
+      buildCmd << " -- -j " << effective_jobs(opt);
 
       const int code = run_cmd_live_filtered(buildCmd.str(), "Checking build (fallback)");
       if (code != 0)
@@ -1172,18 +1360,32 @@ namespace vix::commands::CheckCommand::detail
 
       const int rcode = run_runtime_check(opt, projectDir, buildDir, summary);
       if (rcode != 0)
+      {
+        if (!opt.quiet)
+          print_check_progress("runtime", false);
+
         return rcode;
+      }
 
       if (!opt.quiet)
-        ui::ok_line(std::cout, "Runtime OK.");
+        print_check_progress("runtime", true);
     }
 #endif
 
     ui::one_line_spacer(std::cout);
+    const long long totalMs = elapsed_ms_since(checkStart);
+
     if (!opt.quiet)
-      ui::ok_line(std::cout, "Project check OK (" + make_check_summary(summary) + ").");
+    {
+      build::print_task_success_timed(
+          std::cout,
+          "Project check OK (" + make_check_summary(summary) + ")",
+          totalMs);
+    }
     else
+    {
       style::success("Project check OK (" + make_check_summary(summary) + ").");
+    }
 
     return 0;
   }

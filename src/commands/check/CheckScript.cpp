@@ -20,7 +20,10 @@
 #include <vix/cli/Style.hpp>
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 
+#include <chrono>
+#include <thread>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -36,6 +39,7 @@ namespace vix::commands::CheckCommand::detail
   namespace run = vix::commands::RunCommand::detail;
   namespace ui = vix::cli::util;
   namespace style = vix::cli::style;
+  namespace build = vix::cli::build;
 
   using vix::cli::commands::helpers::quote;
 
@@ -131,36 +135,137 @@ namespace vix::commands::CheckCommand::detail
       return "build";
     }
 
-    static void print_header(
+    static int effective_jobs(const Options &opt)
+    {
+      if (opt.jobs > 0)
+        return opt.jobs;
+
+      unsigned int hc = std::thread::hardware_concurrency();
+
+      if (hc == 0)
+        return 4;
+
+      if (hc > 64)
+        hc = 64;
+
+      return static_cast<int>(hc);
+    }
+
+    static std::string script_display_name(const fs::path &script)
+    {
+      std::string name = script.filename().string();
+
+      if (name.empty())
+        return "script";
+
+      return name;
+    }
+
+    static bool script_runtime_enabled(
+        bool enableSan,
+        bool enableUbsanOnly,
+        bool enableThreadSanitizer)
+    {
+#ifndef _WIN32
+      return run::want_any_sanitizer(
+          enableSan,
+          enableUbsanOnly,
+          enableThreadSanitizer);
+#else
+      (void)enableSan;
+      (void)enableUbsanOnly;
+      (void)enableThreadSanitizer;
+      return false;
+#endif
+    }
+
+    static void print_script_check_header(
         const Options &opt,
         const fs::path &script,
-        const fs::path &projectDir,
-        const fs::path &buildDir)
+        bool runtimeEnabled)
     {
       if (opt.quiet)
         return;
 
-      ui::section(std::cout, "Check");
+      std::vector<std::pair<std::string, std::string>> meta;
+      meta.emplace_back("profile", profile_name(opt.enableSanitizers, opt.enableUbsanOnly));
+      meta.emplace_back("runtime", runtimeEnabled ? "on" : "off");
+      meta.emplace_back("jobs", std::to_string(effective_jobs(opt)));
+
+      build::print_task_header_full(
+          std::cout,
+          "Checking",
+          script_display_name(script),
+          "script",
+          meta);
+    }
+
+    static void print_script_check_progress(
+        const std::string &label,
+        bool success)
+    {
+      const std::string status = success ? "done" : "failed";
+      const char *lineColor = success ? style::CYAN : style::RED;
+      const char *statusColor = success ? style::GREEN : style::RED;
+
+      std::cout << "  "
+                << lineColor
+                << label
+                << style::RESET
+                << " "
+                << lineColor
+                << "[============================]"
+                << style::RESET
+                << " "
+                << statusColor
+                << status
+                << style::RESET
+                << "\n";
+    }
+
+    static long long elapsed_ms_since(std::chrono::steady_clock::time_point start)
+    {
+      return std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - start)
+          .count();
+    }
+
+    static void print_verbose_script_context(
+        const Options &opt,
+        const fs::path &script,
+        const fs::path &projectDir,
+        const fs::path &buildDir,
+        bool runtimeEnabled)
+    {
+      if (opt.quiet || !opt.verbose)
+        return;
+
+      ui::one_line_spacer(std::cout);
+      ui::section(std::cout, "Check details");
       ui::kv(std::cout, "script", script.string());
       ui::kv(std::cout, "project dir", projectDir.string());
       ui::kv(std::cout, "build dir", buildDir.string());
       ui::kv(std::cout, "profile", profile_name(opt.enableSanitizers, opt.enableUbsanOnly));
-      ui::kv(
-          std::cout,
-          "runtime",
-#ifndef _WIN32
-          run::want_sanitizers(opt.enableSanitizers, opt.enableUbsanOnly) ? "enabled" : "disabled"
-#else
-          "disabled"
-#endif
-      );
+      ui::kv(std::cout, "runtime", runtimeEnabled ? "enabled" : "disabled");
       ui::one_line_spacer(std::cout);
+    }
+
+    static void print_header(
+        const Options &opt,
+        const fs::path &script,
+        const fs::path &projectDir,
+        const fs::path &buildDir,
+        bool runtimeEnabled)
+    {
+      print_script_check_header(opt, script, runtimeEnabled);
+      print_verbose_script_context(opt, script, projectDir, buildDir, runtimeEnabled);
     }
   } // namespace
 
   int check_single_cpp(const Options &opt)
   {
     const fs::path script = opt.cppFile;
+    const auto checkStart = std::chrono::steady_clock::now();
 
     if (script.empty())
     {
@@ -211,7 +316,10 @@ namespace vix::commands::CheckCommand::detail
     const fs::path sigFile = projectDir / (build_dir_name(enableSan, enableUbsanOnly) + ".vix-config.sig");
     const fs::path logPath = projectDir / (build_dir_name(enableSan, enableUbsanOnly) + ".build.log");
 
-    print_header(opt, script, projectDir, buildDir);
+    const bool runtimeEnabled =
+        script_runtime_enabled(enableSan, enableUbsanOnly, enableThreadSanitizer);
+
+    print_header(opt, script, projectDir, buildDir, runtimeEnabled);
 
     if (!write_file_or_report(
             cmakeLists,
@@ -249,7 +357,7 @@ namespace vix::commands::CheckCommand::detail
 
     if (needConfigure)
     {
-      if (!opt.quiet)
+      if (!opt.quiet && opt.verbose)
       {
         ui::info_line(std::cout, "No matching cache found for this script profile.");
         ui::kv(std::cout, "action", "configure");
@@ -285,11 +393,11 @@ namespace vix::commands::CheckCommand::detail
       summary.configured = true;
 
       if (!opt.quiet)
-        ui::ok_line(std::cout, "Configure OK.");
+        print_script_check_progress("configure", true);
     }
     else
     {
-      if (!opt.quiet)
+      if (!opt.quiet && opt.verbose)
       {
         ui::ok_line(std::cout, "Matching cache detected for this script profile.");
         ui::kv(std::cout, "build dir", buildDir.string());
@@ -297,7 +405,7 @@ namespace vix::commands::CheckCommand::detail
       }
     }
 
-    if (!opt.quiet)
+    if (!opt.quiet && opt.verbose)
     {
       ui::info_line(std::cout, "Starting build.");
       ui::kv(std::cout, "target", exeName);
@@ -308,20 +416,21 @@ namespace vix::commands::CheckCommand::detail
 #ifndef _WIN32
     buildCmd << "cd " << quote(projectDir.string())
              << " && cmake --build " << quote(buildDir.string())
-             << " --target " << exeName;
-    if (opt.jobs > 0)
-      buildCmd << " -- -j " << opt.jobs;
-    buildCmd << " >" << quote(logPath.string()) << " 2>&1";
+             << " -- -j " << effective_jobs(opt)
+             << " >" << quote(logPath.string()) << " 2>&1";
 #else
     buildCmd << "cd " << quote(projectDir.string())
              << " && cmake --build " << quote(buildDir.string())
-             << " --target " << exeName
+             << " -- -j " << effective_jobs(opt)
              << " >" << quote(logPath.string()) << " 2>&1";
 #endif
 
     const int buildCode = run::normalize_exit_code(std::system(buildCmd.str().c_str()));
     if (buildCode != 0)
     {
+      if (!opt.quiet)
+        print_script_check_progress("build", false);
+
       const std::string log = text::read_text_file_or_empty(logPath);
 
       if (!log.empty())
@@ -343,7 +452,7 @@ namespace vix::commands::CheckCommand::detail
     summary.built = true;
 
     if (!opt.quiet)
-      ui::ok_line(std::cout, "Build OK.");
+      print_script_check_progress("build", true);
 
 #ifndef _WIN32
     if (run::want_any_sanitizer(
@@ -351,8 +460,11 @@ namespace vix::commands::CheckCommand::detail
             enableUbsanOnly,
             enableThreadSanitizer))
     {
-      ui::one_line_spacer(std::cout);
-      ui::info_line(std::cout, "Running runtime validation.");
+      if (!opt.quiet && opt.verbose)
+      {
+        ui::one_line_spacer(std::cout);
+        ui::info_line(std::cout, "Running runtime validation.");
+      }
 
       const fs::path exePath = buildDir / exeName;
 
@@ -420,16 +532,23 @@ namespace vix::commands::CheckCommand::detail
       summary.runtimeRan = true;
 
       if (!opt.quiet)
-        ui::ok_line(std::cout, "Runtime OK.");
+        print_script_check_progress("runtime", true);
     }
 #endif
 
-    ui::one_line_spacer(std::cout);
+    const long long totalMs = elapsed_ms_since(checkStart);
 
     if (!opt.quiet)
-      ui::ok_line(std::cout, "Script check OK (" + make_summary(summary) + ").");
+    {
+      build::print_task_success_timed(
+          std::cout,
+          "Script check OK (" + make_summary(summary) + ")",
+          totalMs);
+    }
     else
+    {
       style::success("Script check OK (" + make_summary(summary) + ").");
+    }
 
     return 0;
   }

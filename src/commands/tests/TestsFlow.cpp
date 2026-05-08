@@ -105,6 +105,29 @@ namespace vix::commands::TestsCommand::detail
         opt.runAfter = true;
         continue;
       }
+      if (a == "--raw")
+      {
+        opt.raw = true;
+        continue;
+      }
+      if (a == "--test" || a == "-R")
+      {
+        if (i + 1 < left.size())
+        {
+          opt.testPattern = left[++i];
+          continue;
+        }
+
+        opt.forwarded.push_back(a);
+        continue;
+      }
+
+      constexpr const char testPrefix[] = "--test=";
+      if (a.rfind(testPrefix, 0) == 0)
+      {
+        opt.testPattern = a.substr(sizeof(testPrefix) - 1);
+        continue;
+      }
 
       if (!projectSet && looks_like_path(a))
       {
@@ -124,6 +147,12 @@ namespace vix::commands::TestsCommand::detail
 
     if (opt.failFast)
       opt.ctestArgs.push_back("--stop-on-failure");
+
+    if (!opt.testPattern.empty())
+    {
+      opt.ctestArgs.push_back("-R");
+      opt.ctestArgs.push_back(opt.testPattern);
+    }
 
     if (opt.runAfter)
       opt.forwarded.push_back("--run");

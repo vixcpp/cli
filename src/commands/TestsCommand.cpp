@@ -17,6 +17,7 @@
 #include <vix/cli/Style.hpp>
 
 #include <vix/cli/process/Process.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 
 #include <filesystem>
 #include <unordered_map>
@@ -32,6 +33,7 @@
 #include <optional>
 #include <cstdlib>
 #include <algorithm>
+#include <cctype>
 
 #include <nlohmann/json.hpp>
 
@@ -47,6 +49,7 @@
 
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
+namespace build = vix::cli::build;
 
 namespace
 {
@@ -55,6 +58,45 @@ namespace
   void on_sigint(int)
   {
     g_stop.store(true);
+  }
+
+  struct TestExecResult
+  {
+    int code{0};
+    std::string output;
+  };
+
+  static int default_test_jobs()
+  {
+    unsigned int hc = std::thread::hardware_concurrency();
+
+    if (hc == 0)
+      return 4;
+
+    if (hc > 64)
+      hc = 64;
+
+    return static_cast<int>(hc);
+  }
+
+  static bool tests_verbose_enabled(
+      const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    for (const auto &arg : opt.forwarded)
+    {
+      if (arg == "-v" || arg == "--verbose")
+        return true;
+    }
+
+    return false;
+  }
+
+  static std::string display_preset_name(const std::string &presetName)
+  {
+    if (presetName == "dev-ninja")
+      return "dev";
+
+    return presetName;
   }
 
   static bool is_ignored_dir(const fs::path &p)
@@ -301,6 +343,167 @@ namespace
     return "dev-ninja";
   }
 
+  static std::string resolve_test_target_name(
+      const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    if (auto target = value_after_flag(opt.forwarded, "--build-target"))
+      return *target;
+
+    if (!opt.testPattern.empty())
+      return opt.testPattern;
+
+    return "all";
+  }
+
+  static void print_test_header(
+      const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    const std::string presetName = resolve_preset_name(opt);
+    const std::string targetName = resolve_test_target_name(opt);
+
+    std::vector<std::pair<std::string, std::string>> meta;
+    meta.emplace_back("engine", "vix");
+    meta.emplace_back("jobs", std::to_string(default_test_jobs()));
+
+    build::print_task_header_full(
+        std::cout,
+        "Testing",
+        targetName,
+        display_preset_name(presetName),
+        meta);
+  }
+
+  static void print_tests_progress(bool success)
+  {
+    const std::string status = success ? "done" : "failed";
+    const char *lineColor = success ? CYAN : RED;
+    const char *statusColor = success ? GREEN : RED;
+
+    std::cout << "  "
+              << lineColor
+              << "tests"
+              << RESET
+              << " "
+              << lineColor
+              << "[============================]"
+              << RESET
+              << " "
+              << statusColor
+              << status
+              << RESET
+              << "\n";
+  }
+
+  static bool has_ctest_parallel_arg(const std::vector<std::string> &args)
+  {
+    for (std::size_t i = 0; i < args.size(); ++i)
+    {
+      const std::string &arg = args[i];
+
+      if (arg == "-j" ||
+          arg == "--parallel" ||
+          arg == "--test-load")
+      {
+        return true;
+      }
+
+      if (arg.rfind("-j", 0) == 0 && arg.size() > 2)
+        return true;
+
+      if (arg.rfind("--parallel=", 0) == 0)
+        return true;
+
+      if (arg.rfind("--test-load=", 0) == 0)
+        return true;
+    }
+
+    return false;
+  }
+
+  static std::optional<int> extract_ctest_total_count(const std::string &output)
+  {
+    const std::string marker = " tests failed out of ";
+
+    const auto markerPos = output.find(marker);
+    if (markerPos == std::string::npos)
+      return std::nullopt;
+
+    std::size_t begin = markerPos + marker.size();
+    std::size_t end = begin;
+
+    while (end < output.size() &&
+           output[end] >= '0' &&
+           output[end] <= '9')
+    {
+      ++end;
+    }
+
+    if (end == begin)
+      return std::nullopt;
+
+    try
+    {
+      return std::stoi(output.substr(begin, end - begin));
+    }
+    catch (...)
+    {
+      return std::nullopt;
+    }
+  }
+
+  static std::optional<int> extract_ctest_failed_count(const std::string &output)
+  {
+    const std::string marker = " tests failed out of ";
+
+    const auto markerPos = output.find(marker);
+    if (markerPos == std::string::npos)
+      return std::nullopt;
+
+    std::size_t end = markerPos;
+    std::size_t begin = end;
+
+    while (begin > 0 &&
+           output[begin - 1] >= '0' &&
+           output[begin - 1] <= '9')
+    {
+      --begin;
+    }
+
+    if (begin == end)
+      return std::nullopt;
+
+    try
+    {
+      return std::stoi(output.substr(begin, end - begin));
+    }
+    catch (...)
+    {
+      return std::nullopt;
+    }
+  }
+
+  static std::string passed_tests_message(const TestExecResult &result)
+  {
+    if (auto total = extract_ctest_total_count(result.output))
+      return "Passed " + std::to_string(*total) + " tests";
+
+    return "Passed tests";
+  }
+
+  static std::string failed_tests_message(const TestExecResult &result)
+  {
+    const auto failed = extract_ctest_failed_count(result.output);
+    const auto total = extract_ctest_total_count(result.output);
+
+    if (failed && total)
+    {
+      return "Failed " + std::to_string(*failed) +
+             " of " + std::to_string(*total) + " tests";
+    }
+
+    return "Tests failed";
+  }
+
   static fs::path resolve_build_dir_from_preset(
       const fs::path &projectDir,
       const std::string &presetName)
@@ -379,15 +582,33 @@ namespace
     return oss.str();
   }
 
-  static int run_in_dir(const fs::path &cwd, const std::vector<std::string> &argv)
+  static TestExecResult run_in_dir_capture(
+      const fs::path &cwd,
+      const std::vector<std::string> &argv)
   {
+    TestExecResult result;
+
     ScopedCwd sc(cwd);
 
-    const std::string cmd = shell_join(argv);
-    step(std::string("Exec: ") + cmd);
+    const std::string cmd = shell_join(argv) + " 2>&1";
 
-    const int raw = std::system(cmd.c_str());
-    return vix::cli::process::normalize_exit_code(raw);
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe)
+    {
+      result.code = 127;
+      result.output = "failed to start test process";
+      return result;
+    }
+
+    char buffer[4096];
+
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+      result.output += buffer;
+
+    const int raw = pclose(pipe);
+    result.code = vix::cli::process::normalize_exit_code(raw);
+
+    return result;
   }
 
   static bool file_is_executable(const fs::path &p)
@@ -556,6 +777,226 @@ namespace
     return false;
   }
 
+  struct ParsedTestFailure
+  {
+    std::string name;
+    std::string message;
+  };
+
+  static std::string trim_copy(std::string value)
+  {
+    while (!value.empty() &&
+           (value.back() == ' ' ||
+            value.back() == '\t' ||
+            value.back() == '\n' ||
+            value.back() == '\r'))
+    {
+      value.pop_back();
+    }
+
+    std::size_t i = 0;
+    while (i < value.size() &&
+           (value[i] == ' ' ||
+            value[i] == '\t' ||
+            value[i] == '\n' ||
+            value[i] == '\r'))
+    {
+      ++i;
+    }
+
+    value.erase(0, i);
+    return value;
+  }
+
+  static bool starts_with_test_result_line(const std::string &line)
+  {
+    const auto slash = line.find('/');
+    if (slash == std::string::npos)
+      return false;
+
+    if (slash == 0)
+      return false;
+
+    for (std::size_t i = 0; i < slash; ++i)
+    {
+      if (!std::isdigit(static_cast<unsigned char>(line[i])))
+        return false;
+    }
+
+    return line.find(" Test ") != std::string::npos;
+  }
+
+  static std::optional<std::string> extract_failed_test_name_from_line(
+      const std::string &line)
+  {
+    if (line.find("***Failed") == std::string::npos)
+      return std::nullopt;
+
+    const auto colon = line.find(':');
+    if (colon == std::string::npos)
+      return std::nullopt;
+
+    std::string rest = trim_copy(line.substr(colon + 1));
+
+    const auto dots = rest.find("...");
+    if (dots != std::string::npos)
+      rest = rest.substr(0, dots);
+
+    const auto failed = rest.find("***Failed");
+    if (failed != std::string::npos)
+      rest = rest.substr(0, failed);
+
+    rest = trim_copy(rest);
+
+    if (rest.empty())
+      return std::nullopt;
+
+    return rest;
+  }
+
+  static std::vector<ParsedTestFailure> parse_test_failures(
+      const std::string &output)
+  {
+    std::vector<ParsedTestFailure> failures;
+
+    std::istringstream in(output);
+    std::string line;
+
+    ParsedTestFailure current;
+    bool collecting = false;
+
+    auto flush = [&]()
+    {
+      if (current.name.empty())
+        return;
+
+      current.message = trim_copy(current.message);
+
+      failures.push_back(current);
+      current = ParsedTestFailure{};
+    };
+
+    while (std::getline(in, line))
+    {
+      const std::string trimmed = trim_copy(line);
+
+      if (auto name = extract_failed_test_name_from_line(line))
+      {
+        flush();
+
+        current.name = *name;
+        collecting = true;
+        continue;
+      }
+
+      if (!collecting)
+        continue;
+
+      if (trimmed.empty())
+        continue;
+
+      if (trimmed.rfind("Start ", 0) == 0)
+        continue;
+
+      if (starts_with_test_result_line(trimmed))
+      {
+        flush();
+        collecting = false;
+
+        if (auto name = extract_failed_test_name_from_line(trimmed))
+        {
+          current.name = *name;
+          collecting = true;
+        }
+
+        continue;
+      }
+
+      if (trimmed.find("% tests passed") != std::string::npos ||
+          trimmed.find("tests failed out of") != std::string::npos ||
+          trimmed.find("Total Test time") != std::string::npos ||
+          trimmed.find("The following tests FAILED") != std::string::npos ||
+          trimmed.find("Errors while running CTest") != std::string::npos ||
+          trimmed.rfind("Test project ", 0) == 0)
+      {
+        continue;
+      }
+
+      if (!current.message.empty())
+        current.message += "\n";
+
+      current.message += trimmed;
+    }
+
+    flush();
+
+    return failures;
+  }
+
+  static void print_clean_test_failure_details(
+      const TestExecResult &result,
+      bool verbose)
+  {
+    const auto failures = parse_test_failures(result.output);
+
+    if (!failures.empty())
+    {
+      std::cout << "\n";
+      std::cout << "  " << CYAN << "failed:" << RESET << "\n";
+
+      for (const auto &failure : failures)
+        std::cout << "    " << failure.name << "\n";
+
+      const auto &first = failures.front();
+
+      if (!first.message.empty())
+      {
+        std::cout << "\n";
+        std::cout << "  " << CYAN << "error:" << RESET << "\n";
+        std::cout << "    " << first.message << "\n";
+      }
+    }
+    else
+    {
+      std::cout << "\n";
+      error("Tests failed");
+    }
+
+    std::cout << "\n";
+
+    if (verbose)
+    {
+      const auto failures = parse_test_failures(result.output);
+
+      if (!failures.empty())
+      {
+        std::cout << "  " << CYAN << "details:" << RESET << "\n";
+
+        for (const auto &failure : failures)
+        {
+          std::cout << "    " << failure.name << "\n";
+
+          if (!failure.message.empty())
+          {
+            std::istringstream lines(failure.message);
+            std::string line;
+
+            while (std::getline(lines, line))
+              std::cout << "      " << line << "\n";
+          }
+        }
+
+        return;
+      }
+
+      hint("No structured failure details were found.");
+      return;
+    }
+
+    hint("Run `vix tests -v` to show detailed Vix test output.");
+    hint("Run `vix tests --raw` to show raw runner output.");
+  }
+
   static int run_native_tests(const vix::commands::TestsCommand::detail::Options &opt)
   {
     const std::string presetName = resolve_preset_name(opt);
@@ -563,9 +1004,7 @@ namespace
 
     std::error_code ec;
     if (!fs::exists(buildDir, ec) || !fs::is_directory(buildDir, ec))
-    {
       return 2;
-    }
 
     const auto runner = find_native_test_runner(buildDir);
 
@@ -575,7 +1014,40 @@ namespace
     std::vector<std::string> argv;
     argv.push_back(runner->string());
 
-    return run_in_dir(buildDir, argv);
+    print_test_header(opt);
+
+    const auto start = std::chrono::steady_clock::now();
+    const TestExecResult result = run_in_dir_capture(buildDir, argv);
+    const auto end = std::chrono::steady_clock::now();
+
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    const bool ok = result.code == 0;
+
+    print_tests_progress(ok);
+
+    if (ok)
+    {
+      build::print_task_success_timed(std::cout, "Passed tests", ms);
+      return 0;
+    }
+
+    build::print_task_failure_timed(std::cout, "Tests failed", ms);
+
+    if (opt.raw)
+    {
+      std::cout << "\n";
+      std::cout << result.output;
+    }
+    else
+    {
+      print_clean_test_failure_details(
+          result,
+          tests_verbose_enabled(opt));
+    }
+
+    return result.code;
   }
 
   static int run_ctest(const vix::commands::TestsCommand::detail::Options &opt)
@@ -587,7 +1059,7 @@ namespace
     if (!fs::exists(buildDir, ec) || !fs::is_directory(buildDir, ec))
     {
       error("No build directory found for tests.");
-      hint("Run vix build with tests enabled first.");
+      hint("Run `vix build --build-target all` first.");
       return 1;
     }
 
@@ -600,11 +1072,64 @@ namespace
 
     std::vector<std::string> argv;
     argv.push_back("ctest");
+    argv.push_back("--output-on-failure");
+
+    if (!has_ctest_parallel_arg(opt.ctestArgs))
+    {
+      argv.push_back("--parallel");
+      argv.push_back(std::to_string(default_test_jobs()));
+    }
 
     for (const auto &a : opt.ctestArgs)
       argv.push_back(a);
 
-    return run_in_dir(buildDir, argv);
+    print_test_header(opt);
+
+    const auto start = std::chrono::steady_clock::now();
+    const TestExecResult result = run_in_dir_capture(buildDir, argv);
+    const auto end = std::chrono::steady_clock::now();
+
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+
+    const bool ok = result.code == 0;
+
+    print_tests_progress(ok);
+
+    if (ok)
+    {
+      build::print_task_success_timed(
+          std::cout,
+          passed_tests_message(result),
+          ms);
+
+      if (tests_verbose_enabled(opt))
+      {
+        std::cout << "\n";
+        std::cout << result.output;
+      }
+
+      return 0;
+    }
+
+    build::print_task_failure_timed(
+        std::cout,
+        failed_tests_message(result),
+        ms);
+
+    if (opt.raw)
+    {
+      std::cout << "\n";
+      std::cout << result.output;
+    }
+    else
+    {
+      print_clean_test_failure_details(
+          result,
+          tests_verbose_enabled(opt));
+    }
+
+    return result.code;
   }
 
   static int run_tests_once(const vix::commands::TestsCommand::detail::Options &opt)
@@ -729,8 +1254,11 @@ namespace vix::commands::TestsCommand
     out << "Tests flags:\n";
     out << "  --watch                   Watch files and re-run tests on changes\n";
     out << "  --run                     Run runtime check after tests (tests + runtime)\n";
-    out << "  --list                    Forward to CTest (--show-only)\n";
-    out << "  --fail-fast               Forward to CTest (--stop-on-failure)\n\n";
+    out << "  --list                    List matching tests\n";
+    out << "  --test <name|regex>        Run tests matching a name or regex\n";
+    out << "  -R <name|regex>            Alias for --test\n";
+    out << "  --fail-fast               Stop on first failure\n";
+    out << "  --raw                     Show raw internal test runner output\n\n";
 
     out << "CTest passthrough:\n";
     out << "  Use `--` to pass raw arguments to ctest.\n";
@@ -750,6 +1278,8 @@ namespace vix::commands::TestsCommand
     out << "  vix tests ./examples/blog\n";
     out << "  vix tests --preset release\n";
     out << "  vix tests -- --output-on-failure -R MySuite\n\n";
+    out << "  vix tests --test kv_test_segment\n";
+    out << "  vix tests -R kv_test_segment\n";
 
     out << "See also:\n";
     out << "  vix check --tests\n";

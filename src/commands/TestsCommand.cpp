@@ -47,6 +47,14 @@
 #include <fcntl.h>
 #endif
 
+#ifdef _WIN32
+#define VIX_TESTS_POPEN _popen
+#define VIX_TESTS_PCLOSE _pclose
+#else
+#define VIX_TESTS_POPEN popen
+#define VIX_TESTS_PCLOSE pclose
+#endif
+
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
 namespace build = vix::cli::build;
@@ -592,7 +600,7 @@ namespace
 
     const std::string cmd = shell_join(argv) + " 2>&1";
 
-    FILE *pipe = popen(cmd.c_str(), "r");
+    FILE *pipe = VIX_TESTS_POPEN(cmd.c_str(), "r");
     if (!pipe)
     {
       result.code = 127;
@@ -605,7 +613,7 @@ namespace
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
       result.output += buffer;
 
-    const int raw = pclose(pipe);
+    const int raw = VIX_TESTS_PCLOSE(pipe);
     result.code = vix::cli::process::normalize_exit_code(raw);
 
     return result;

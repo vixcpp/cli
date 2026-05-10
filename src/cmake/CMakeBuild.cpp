@@ -288,19 +288,29 @@ namespace vix::cli::build
 
     const bool filterCMakeSummary = is_configure_cmd(argv) && !cmakeVerbose;
 
+    const bool isConfigure = is_configure_cmd(argv);
+
     const bool heartbeatEnabled = [&]() -> bool
     {
       if (quiet)
         return false;
 
+      /*
+       * Configure can stay silent for a long time when CMake FetchContent
+       * downloads dependencies. Keep a heartbeat enabled by default for
+       * configure, while still allowing explicit control through the env var.
+       */
       const char *v = vix::utils::vix_getenv("VIX_BUILD_HEARTBEAT");
-      if (!v)
-        return false;
+      if (!v || !*v)
+        return isConfigure;
 
       std::string s(v);
       s = util::trim(s);
       for (char &c : s)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      if (s == "0" || s == "false" || s == "no" || s == "off")
+        return false;
 
       return (s == "1" || s == "true" || s == "yes" || s == "on");
     }();
@@ -353,6 +363,7 @@ namespace vix::cli::build
 
     std::string currentProgressLine;
     bool progressVisible = false;
+    bool heartbeatVisible = false;
     std::size_t lastRenderedWidth = 0;
     std::string lastRenderedProgressLine;
     auto lastProgressRenderTs = std::chrono::steady_clock::now();
@@ -565,6 +576,17 @@ namespace vix::cli::build
       lastRenderedProgressLine.clear();
     };
 
+    auto finish_heartbeat_line = [&]() -> void
+    {
+      if (quiet || !heartbeatVisible)
+        return;
+
+      const std::string newline = "\n";
+      write_all_fd(STDOUT_FILENO, newline.data(), newline.size());
+
+      heartbeatVisible = false;
+    };
+
     auto should_echo_line = [&](const std::string &line) -> bool
     {
       if (quiet)
@@ -670,6 +692,7 @@ namespace vix::cli::build
             {
               line.push_back('\n');
               write_all_fd(STDOUT_FILENO, line.data(), line.size());
+              heartbeatVisible = true;
             }
 
             start = nl + 1;
@@ -702,10 +725,43 @@ namespace vix::cli::build
           if (progressVisible)
             clear_progress_line();
 
-          std::string msg =
-              "[building] still running... (" + util::format_seconds(elapsedMs) + ")";
-          msg.push_back('\n');
-          write_all_fd(STDOUT_FILENO, msg.data(), msg.size());
+          std::string msg;
+
+          if (isConfigure)
+          {
+            msg =
+                "  " +
+                std::string(style::CYAN) +
+                "configure" +
+                style::RESET +
+                " still running... " +
+                style::GRAY +
+                "(" + util::format_seconds(elapsedMs) + ", checking/downloading dependencies)" +
+                style::RESET;
+          }
+          else
+          {
+            msg =
+                "  " +
+                std::string(style::CYAN) +
+                "build" +
+                style::RESET +
+                " still running... " +
+                style::GRAY +
+                "(" + util::format_seconds(elapsedMs) + ")" +
+                style::RESET;
+          }
+
+          const std::size_t width = terminal_width();
+
+          std::string line;
+          line += "\r";
+          line.append(width, ' ');
+          line += "\r";
+          line += truncate_progress_text(msg, width);
+
+          write_all_fd(STDOUT_FILENO, line.data(), line.size());
+          heartbeatVisible = true;
 
           if (!currentProgressLine.empty())
             render_progress_line(currentProgressLine);
@@ -761,6 +817,7 @@ namespace vix::cli::build
     }
 
     r.capturedFirstLine = util::trim(firstLine);
+    finish_heartbeat_line();
     return r;
   }
 

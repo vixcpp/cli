@@ -2367,8 +2367,8 @@ namespace vix::commands::BuildCommand
     out << "  -h, --help            Show this help\n\n";
 
     out << "Environment variables:\n";
-    out << "  VIX_BUILD_HEARTBEAT=1 Enable build heartbeat when no output is produced\n";
-    out << "                       for several seconds (disabled by default)\n\n";
+    out << "  VIX_BUILD_HEARTBEAT=0 Disable configure/build heartbeat\n";
+    out << "  VIX_BUILD_HEARTBEAT=1 Force heartbeat when no output is produced\n\n";
 
     out << "Examples:\n";
     out << "  vix build\n";

@@ -583,11 +583,39 @@ namespace vix::commands::RunCommand::detail
         oss << " -DVIX_ENABLE_SANITIZERS=OFF";
       }
 
-      oss << " >" << quote(state.configureLogPath.string()) << " 2>&1";
-
       const std::string cmd = oss.str();
-      int code = std::system(cmd.c_str());
-      code = normalize_exit_code(code);
+
+      if (vix::utils::vix_getenv("VIX_PROCESS_DEBUG"))
+      {
+        std::cerr << "[vix:process] script configure cmd="
+                  << cmd
+                  << "\n";
+      }
+
+      const LiveRunResult configureResult = run_cmd_live_filtered_capture(
+          cmd,
+          "Configuring script...",
+          false,
+          0,
+          false,
+          false,
+          nullptr);
+
+      const int code = normalize_exit_code(configureResult.exitCode);
+
+      {
+        std::ofstream logOut(
+            state.configureLogPath,
+            std::ios::binary | std::ios::trunc);
+
+        if (logOut)
+        {
+          logOut << configureResult.stdoutText;
+
+          if (!configureResult.stderrText.empty())
+            logOut << configureResult.stderrText;
+        }
+      }
 
       if (code == 0)
       {
@@ -613,13 +641,22 @@ namespace vix::commands::RunCommand::detail
       }
 
       bool handled = false;
+
       if (!logContent.empty())
       {
-        std::cout << logContent << "\n";
-        handled = true;
+        handled = vix::cli::ErrorHandler::printBuildErrors(
+            logContent,
+            state.script,
+            "Script configure failed");
       }
 
-      error("Script configure failed.");
+      if (!handled)
+      {
+        error("Script configure failed.");
+        hint("CMake output was captured in:");
+        step(state.configureLogPath.string());
+      }
+
       handle_runtime_exit_code(code, "Script configure failed", handled);
       return code;
     }
@@ -1225,6 +1262,10 @@ namespace vix::commands::RunCommand::detail
     ScriptProjectState state = make_state_from_cmake_plan(plan);
 
     const int code = configure_and_build_script(o, state);
+
+    if (code == 130)
+      return 0;
+
     if (code != 0)
       return code;
 

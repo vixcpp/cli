@@ -271,7 +271,13 @@ namespace vix::commands
         {
           UpdateItem item;
           item.id = dep.id;
-          item.rawSpec = make_raw_spec(dep.id, dep.requested);
+
+          // Important:
+          // vix update without an explicit version must resolve the latest
+          // available version from the registry, not reuse the old requested
+          // version from vix.json.
+          item.rawSpec = dep.id;
+
           item.beforeVersion = read_locked_version(lock, dep.id);
           items.push_back(item);
         }
@@ -313,10 +319,11 @@ namespace vix::commands
         }
         else
         {
-          const std::string requested = read_manifest_requested(manifestDeps, id);
-          item.rawSpec = make_raw_spec(id, requested);
+          // Important:
+          // vix update namespace/name must also resolve the latest version.
+          // Do not reuse the old version range from vix.json here.
+          item.rawSpec = id;
         }
-
         items.push_back(item);
       }
 

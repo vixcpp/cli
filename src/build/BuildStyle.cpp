@@ -114,6 +114,21 @@ namespace vix::cli::build
       print_label(out, label);
       out << "    " << value << "\n\n";
     }
+
+    static void print_compact_optional_line(
+        std::ostream &out,
+        const std::string &label,
+        const std::string &value)
+    {
+      if (value.empty())
+        return;
+
+      out << "  "
+          << colorize(label_color(label).c_str(), label)
+          << " "
+          << value
+          << "\n";
+    }
   } // namespace
 
   void print_build_header_full(
@@ -378,23 +393,20 @@ namespace vix::cli::build
         << "✖ "
         << title
         << style::RESET
-        << "\n\n";
+        << "\n";
 
-    if (!diagnostic.message.empty())
-    {
-      print_label(out, "message:");
-      out << "    " << diagnostic.message << "\n\n";
-    }
+    print_compact_optional_line(out, "message:", diagnostic.message);
 
     if (diagnostic.has_location())
     {
-      print_label(out, "location:");
-      out << "    "
+      out << "  "
+          << colorize(label_color("location:").c_str(), "location:")
+          << " "
           << format_build_location(diagnostic.location)
-          << "\n\n";
+          << "\n";
     }
 
-    print_optional_line(out, "error:", diagnostic.error);
+    print_compact_optional_line(out, "error:", diagnostic.error);
 
     if (diagnostic.has_code_frame())
     {
@@ -432,7 +444,7 @@ namespace vix::cli::build
       out << "\n";
     }
 
-    print_optional_line(out, "hint:", diagnostic.hint);
+    print_compact_optional_line(out, "hint:", diagnostic.hint);
   }
 
   std::string format_build_location(

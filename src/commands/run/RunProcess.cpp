@@ -24,10 +24,13 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <iomanip>
+#include <sstream>
 
 #ifndef _WIN32
 #include <errno.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/select.h>
 #include <sys/types.h>
@@ -277,6 +280,42 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
+    std::size_t terminal_width() noexcept
+    {
+      struct winsize ws{};
+
+      if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+        return static_cast<std::size_t>(ws.ws_col);
+
+      return 120;
+    }
+
+    std::string format_seconds(long long milliseconds)
+    {
+      const double seconds = static_cast<double>(milliseconds) / 1000.0;
+
+      std::ostringstream out;
+      out.setf(std::ios::fixed);
+      out.precision(seconds >= 10.0 ? 1 : 2);
+      out << seconds << "s";
+
+      return out.str();
+    }
+
+    std::string truncate_terminal_line(const std::string &line, std::size_t width)
+    {
+      if (width == 0)
+        return "";
+
+      if (line.size() <= width)
+        return line;
+
+      if (width <= 3)
+        return std::string(width, '.');
+
+      return line.substr(0, width - 3) + "...";
+    }
+
     std::size_t utf8_safe_prefix_len(const std::string &s, std::size_t want)
     {
       if (want >= s.size())
@@ -385,13 +424,37 @@ namespace vix::commands::RunCommand::detail
 
     bool is_cmake_configure_cmd(const std::string &cmd) noexcept
     {
-      const bool isCmake = (cmd.find("cmake") != std::string::npos);
-      const bool isBuild = (cmd.find("--build") != std::string::npos);
-      const bool isPreset = (cmd.find("--preset") != std::string::npos);
-      const bool isDotDot = (cmd.find("cmake ..") != std::string::npos) ||
-                            (cmd.find("cmake  ..") != std::string::npos);
+      const bool hasCmake =
+          cmd.find("cmake") != std::string::npos;
 
-      return isCmake && !isBuild && (isPreset || isDotDot);
+      if (!hasCmake)
+        return false;
+
+      if (cmd.find("--build") != std::string::npos)
+        return false;
+
+      if (cmd.find("--install") != std::string::npos)
+        return false;
+
+      if (cmd.find("--preset") != std::string::npos)
+        return true;
+
+      if (cmd.find("cmake ..") != std::string::npos ||
+          cmd.find("cmake  ..") != std::string::npos)
+        return true;
+
+      const bool hasSource =
+          cmd.find(" -S ") != std::string::npos ||
+          cmd.find(" -S.") != std::string::npos ||
+          cmd.find(" -S\"") != std::string::npos ||
+          cmd.find(" -S'") != std::string::npos;
+
+      const bool hasBuild =
+          cmd.find(" -B ") != std::string::npos ||
+          cmd.find(" -B\"") != std::string::npos ||
+          cmd.find(" -B'") != std::string::npos;
+
+      return hasSource && hasBuild;
     }
 
     bool looks_like_error_or_warning(std::string_view line) noexcept
@@ -683,6 +746,7 @@ namespace vix::commands::RunCommand::detail
         while (true)
         {
           const std::size_t nl = data.find('\n', start);
+
           if (nl == std::string::npos)
           {
             carry = data.substr(start);
@@ -692,22 +756,12 @@ namespace vix::commands::RunCommand::detail
           std::string_view line(&data[start], (nl - start) + 1);
           start = nl + 1;
 
+          /*
+           * During CMake configure, Vix must never dump normal CMake traces.
+           * Only real errors and warnings are allowed to reach the terminal.
+           */
           if (looks_like_error_or_warning(line))
-          {
             out.append(line.data(), line.size());
-            continue;
-          }
-
-          if (line.rfind("-- ", 0) == 0)
-            continue;
-
-          if (line.find("Preset CMake variables:") != std::string_view::npos)
-            continue;
-
-          if (line.rfind("  CMAKE_", 0) == 0)
-            continue;
-
-          out.append(line.data(), line.size());
         }
 
         return out;
@@ -1134,7 +1188,22 @@ namespace vix::commands::RunCommand::detail
       std::string printable = chunk;
 
       if (cmakeConfigure)
+      {
         printable = cmakeNoise.filter(printable);
+
+        if (printable.empty())
+          return;
+
+        if (captureOnly || useSan)
+          return;
+
+        write_all(STDOUT_FILENO, printable.data(), printable.size());
+        printedSomething = true;
+        printedRealOutput = true;
+        result.printed_live = true;
+        lastPrintedChar = printable.back();
+        return;
+      }
 
       if (printable.empty())
         return;
@@ -1263,6 +1332,87 @@ namespace vix::commands::RunCommand::detail
     const auto startTime = std::chrono::steady_clock::now();
     bool didTimeout = false;
 
+    auto lastOutputTime = startTime;
+    auto lastHeartbeatTime = startTime;
+    bool heartbeatVisible = false;
+
+    auto heartbeat_env_enabled = [&]() -> bool
+    {
+      if (captureOnly)
+        return false;
+
+      if (passthroughRuntime)
+        return false;
+
+      if (!cmakeConfigure)
+        return false;
+
+      const char *runValue = vix::utils::vix_getenv("VIX_RUN_HEARTBEAT");
+      const char *buildValue = vix::utils::vix_getenv("VIX_BUILD_HEARTBEAT");
+
+      const char *value = runValue && *runValue ? runValue : buildValue;
+
+      if (!value || !*value)
+        return true;
+
+      std::string s(value);
+      for (char &c : s)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      if (s == "0" || s == "false" || s == "no" || s == "off")
+        return false;
+
+      return true;
+    }();
+
+    auto clear_heartbeat_line = [&]() -> void
+    {
+      if (!heartbeatVisible)
+        return;
+
+      const std::size_t width = terminal_width();
+
+      std::string clear;
+      clear += "\r";
+      clear.append(width, ' ');
+      clear += "\r";
+
+      write_all(STDOUT_FILENO, clear.data(), clear.size());
+      heartbeatVisible = false;
+    };
+
+    auto render_heartbeat_line = [&](long long elapsedMs) -> void
+    {
+      const std::size_t width = terminal_width();
+
+      std::string line;
+      line += "  ";
+      line += CYAN;
+      line += "configure";
+      line += RESET;
+      line += " still running... ";
+      line += GRAY;
+      line += "(" + format_seconds(elapsedMs) + ", checking/downloading dependencies)";
+      line += RESET;
+
+      std::string out;
+      out += "\r";
+      out.append(width, ' ');
+      out += "\r";
+      out += truncate_terminal_line(line, width);
+
+      write_all(STDOUT_FILENO, out.data(), out.size());
+      heartbeatVisible = true;
+    };
+
+    auto finish_heartbeat_line = [&]() -> void
+    {
+      if (!heartbeatVisible)
+        return;
+
+      clear_heartbeat_line();
+    };
+
     bool sentInt = false;
     bool sentTerm = false;
     bool sentKill = false;
@@ -1362,7 +1512,7 @@ namespace vix::commands::RunCommand::detail
       struct timeval tv;
       struct timeval *tv_ptr = nullptr;
 
-      if (spinnerActive || enableTimeout)
+      if (spinnerActive || enableTimeout || heartbeat_env_enabled)
       {
         tv.tv_sec = 0;
         tv.tv_usec = 100000;
@@ -1413,6 +1563,17 @@ namespace vix::commands::RunCommand::detail
           {
             if (!chunk.empty())
             {
+              const bool outputMayBePrinted =
+                  !cmakeConfigure || looks_like_error_or_warning(std::string_view(chunk));
+
+              if (outputMayBePrinted)
+              {
+                lastOutputTime = std::chrono::steady_clock::now();
+
+                if (heartbeatVisible && !captureOnly)
+                  clear_heartbeat_line();
+              }
+
               result.stdoutText += chunk;
 
               if (replayCapture)
@@ -1447,6 +1608,33 @@ namespace vix::commands::RunCommand::detail
         }
       }
 
+      if (heartbeat_env_enabled)
+      {
+        const auto now = std::chrono::steady_clock::now();
+
+        const auto silenceMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - lastOutputTime)
+                .count();
+
+        const auto heartbeatMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - lastHeartbeatTime)
+                .count();
+
+        if (silenceMs >= 2000 && heartbeatMs >= 1000)
+        {
+          lastHeartbeatTime = now;
+
+          const auto elapsedMs =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now - startTime)
+                  .count();
+
+          render_heartbeat_line(elapsedMs);
+        }
+      }
+
       int status = 0;
       const pid_t r = ::waitpid(pid, &status, WNOHANG);
       if (r == pid)
@@ -1476,6 +1664,9 @@ namespace vix::commands::RunCommand::detail
 
     if (didTimeout)
     {
+      if (!captureOnly)
+        finish_heartbeat_line();
+
       result.exitCode = 124;
       return result;
     }
@@ -1500,6 +1691,9 @@ namespace vix::commands::RunCommand::detail
       const char nl = '\n';
       write_all(STDOUT_FILENO, &nl, 1);
     }
+
+    if (!captureOnly)
+      finish_heartbeat_line();
 
     if (userInterrupted)
       result.exitCode = 130;

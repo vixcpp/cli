@@ -348,6 +348,25 @@ namespace vix::commands::RunCommand::detail
             if (pkg.contains("id") && pkg["id"].is_string())
               ordered.push_back(pkg["id"].get<std::string>());
           }
+
+          return ordered;
+        }
+
+        if (j.contains("dependencies") && j["dependencies"].is_array())
+        {
+          for (const auto &dep : j["dependencies"])
+          {
+            if (dep.is_string())
+            {
+              ordered.push_back(dep.get<std::string>());
+            }
+            else if (dep.is_object())
+            {
+              if (dep.contains("id") && dep["id"].is_string())
+                ordered.push_back(dep["id"].get<std::string>());
+            }
+          }
+
           return ordered;
         }
 
@@ -355,11 +374,31 @@ namespace vix::commands::RunCommand::detail
         {
           for (auto it = j["dependencies"].begin(); it != j["dependencies"].end(); ++it)
             ordered.push_back(it.key());
+
           return ordered;
         }
       }
 
       return ordered;
+    }
+
+    std::vector<std::string> lock_package_ids_to_aliases(
+        const std::vector<std::string> &packageIds)
+    {
+      std::vector<std::string> aliases;
+
+      for (const auto &id : packageIds)
+      {
+        if (id.empty())
+          continue;
+
+        append_unique_string(aliases, dep_id_to_cmake_alias(id));
+      }
+
+      std::sort(aliases.begin(), aliases.end());
+      aliases.erase(std::unique(aliases.begin(), aliases.end()), aliases.end());
+
+      return aliases;
     }
 
     std::vector<std::pair<std::string, std::string>> extract_dep_packages_from_include_dirs(
@@ -686,6 +725,32 @@ namespace vix::commands::RunCommand::detail
       return out;
     }
 
+    fs::path local_vix_deps_cmake_path(const fs::path &cppPath)
+    {
+      return cppPath.parent_path() / ".vix" / "vix_deps.cmake";
+    }
+
+    bool has_local_vix_deps_cmake(const fs::path &cppPath)
+    {
+      return fs::exists(local_vix_deps_cmake_path(cppPath));
+    }
+
+    void append_local_vix_deps_include(
+        std::string &s,
+        const fs::path &cppPath)
+    {
+      const fs::path depsCmake = local_vix_deps_cmake_path(cppPath);
+
+      if (!fs::exists(depsCmake))
+        return;
+
+      append_line(s, "# Local Vix registry dependencies");
+      append_line(s, "if (EXISTS " + cmake_quote(depsCmake.string()) + ")");
+      append_line(s, "  include(" + cmake_quote(depsCmake.string()) + ")");
+      append_line(s, "endif()");
+      append_line(s);
+    }
+
     std::string cmake_quote_raw(const std::string &p)
     {
       return "\"" + p + "\"";
@@ -811,6 +876,24 @@ namespace vix::commands::RunCommand::detail
       append_line(s, "set(CMAKE_CXX_STANDARD 20)");
       append_line(s, "set(CMAKE_CXX_STANDARD_REQUIRED ON)");
       append_line(s, "set(CMAKE_CXX_EXTENSIONS OFF)");
+      append_line(s);
+
+      append_line(s, "# Vix installed package roots");
+      append_line(s, "if(DEFINED ENV{VIX_ROOT} AND NOT \"$ENV{VIX_ROOT}\" STREQUAL \"\")");
+      append_line(s, "  list(PREPEND CMAKE_PREFIX_PATH \"$ENV{VIX_ROOT}\")");
+      append_line(s, "endif()");
+      append_line(s);
+
+      append_line(s, "if(DEFINED ENV{HOME} AND NOT \"$ENV{HOME}\" STREQUAL \"\")");
+      append_line(s, "  list(APPEND CMAKE_PREFIX_PATH \"$ENV{HOME}/.vix\")");
+      append_line(s, "  list(APPEND CMAKE_PREFIX_PATH \"$ENV{HOME}/.local\")");
+      append_line(s, "endif()");
+      append_line(s);
+
+      append_line(s, "if(DEFINED ENV{USERPROFILE} AND NOT \"$ENV{USERPROFILE}\" STREQUAL \"\")");
+      append_line(s, "  list(APPEND CMAKE_PREFIX_PATH \"$ENV{USERPROFILE}/.vix\")");
+      append_line(s, "  list(APPEND CMAKE_PREFIX_PATH \"$ENV{USERPROFILE}/.local\")");
+      append_line(s, "endif()");
       append_line(s);
 
       append_line(s, "if (NOT CMAKE_BUILD_TYPE)");
@@ -1156,7 +1239,17 @@ namespace vix::commands::RunCommand::detail
     append_sanitizer_options_block(s, feat);
 
     const ResolvedScriptDeps deps = resolve_script_deps(cppPath, cf);
-    append_dependency_subdirectories(s, deps.uniqueCmakeDeps);
+
+    const bool useLocalVixDepsCmake = has_local_vix_deps_cmake(cppPath);
+
+    if (useLocalVixDepsCmake)
+    {
+      append_local_vix_deps_include(s, cppPath);
+    }
+    else
+    {
+      append_dependency_subdirectories(s, deps.uniqueCmakeDeps);
+    }
 
     append_line(s, "add_executable(" + targetName + " " + cmake_quote(cppPath.string()) + ")");
     append_line(s, "set_target_properties(" + targetName + " PROPERTIES OUTPUT_NAME " + cmake_quote(outputName) + ")");
@@ -1164,7 +1257,17 @@ namespace vix::commands::RunCommand::detail
 
     append_target_include_directories(s, targetName, cf.includeDirs, false);
     append_target_include_directories(s, targetName, cf.systemIncludeDirs, true);
-    append_bridged_dep_links(s, targetName, deps.cmakeDepAliases);
+
+    std::vector<std::string> scriptDepAliases = deps.cmakeDepAliases;
+
+    if (useLocalVixDepsCmake)
+    {
+      const fs::path lockPath = cppPath.parent_path() / "vix.lock";
+      scriptDepAliases = lock_package_ids_to_aliases(
+          load_ordered_packages_from_lock(lockPath));
+    }
+
+    append_bridged_dep_links(s, targetName, scriptDepAliases);
     append_target_compile_definitions(s, targetName, cf.defines);
     append_target_compile_options(s, targetName, cf.compileOpts);
     append_target_link_directories(s, targetName, lf.libDirs);

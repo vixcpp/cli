@@ -101,6 +101,59 @@ namespace vix::commands::RunCommand::detail
       return state;
     }
 
+    bool project_has_registry_lock_dependencies(const fs::path &projectDir)
+    {
+      const fs::path lockPath = projectDir / "vix.lock";
+
+      if (!fs::exists(lockPath))
+        return false;
+
+      std::ifstream ifs(lockPath);
+      if (!ifs)
+        return false;
+
+      nlohmann::json lock;
+
+      try
+      {
+        ifs >> lock;
+      }
+      catch (...)
+      {
+        return false;
+      }
+
+      if (!lock.is_object())
+        return false;
+
+      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
+        return false;
+
+      return !lock["dependencies"].empty();
+    }
+
+    bool project_registry_deps_installed(const fs::path &projectDir)
+    {
+      const fs::path vixDir = projectDir / ".vix";
+      const fs::path depsDir = vixDir / "deps";
+      const fs::path depsCmake = vixDir / "vix_deps.cmake";
+
+      return fs::exists(depsDir) && fs::exists(depsCmake);
+    }
+
+    bool ensure_registry_deps_installed_if_needed(const fs::path &projectDir)
+    {
+      if (!project_has_registry_lock_dependencies(projectDir))
+        return true;
+
+      if (project_registry_deps_installed(projectDir))
+        return true;
+
+      error("Dependencies not installed");
+      hint("run: vix install");
+      return false;
+    }
+
     int prepare_script_options_common(Options &opt)
     {
       print_double_dash_warning_if_needed(opt);
@@ -108,11 +161,20 @@ namespace vix::commands::RunCommand::detail
       if (!ensure_script_exists(opt.cppFile))
         return 1;
 
+      const fs::path projectDir =
+          opt.cppFile.has_parent_path()
+              ? fs::absolute(opt.cppFile.parent_path()).lexically_normal()
+              : fs::current_path();
+
+      if (!ensure_registry_deps_installed_if_needed(projectDir))
+        return 1;
+
       if (opt.autoDeps != AutoDepsMode::None)
         apply_auto_deps_includes_from_deps_folder(opt, opt.cppFile.parent_path());
 
       return 0;
     }
+
     inline bool is_sigint_exit_code(int code) noexcept
     {
       return code == 130;

@@ -125,6 +125,17 @@ namespace vix::cli::util::manifest
       const Manifest &manifest)
   {
     json root = json::object();
+
+    if (fs::exists(manifestPath))
+    {
+      root = read_json_or_throw(manifestPath);
+
+      if (!root.is_object())
+      {
+        throw std::runtime_error("invalid vix.json: root must be an object");
+      }
+    }
+
     root["deps"] = json::array();
 
     for (const auto &dependency : manifest.dependencies)
@@ -159,15 +170,40 @@ namespace vix::cli::util::manifest
       throw std::runtime_error("manifest dependency requested version cannot be empty");
     }
 
-    Manifest manifest = read_manifest_or_throw(manifestPath);
+    json root = json::object();
+
+    if (fs::exists(manifestPath))
+    {
+      root = read_json_or_throw(manifestPath);
+
+      if (!root.is_object())
+      {
+        throw std::runtime_error("invalid vix.json: root must be an object");
+      }
+    }
+
+    if (!root.contains("deps"))
+    {
+      root["deps"] = json::array();
+    }
+
+    if (!root["deps"].is_array())
+    {
+      throw std::runtime_error("invalid vix.json: deps must be an array");
+    }
 
     bool updated = false;
 
-    for (auto &item : manifest.dependencies)
+    for (auto &item : root["deps"])
     {
-      if (item.id == dependency.id)
+      if (!item.is_object())
       {
-        item.requested = dependency.requested;
+        throw std::runtime_error("invalid vix.json: dependency entry must be an object");
+      }
+
+      if (item.value("id", "") == dependency.id)
+      {
+        item["version"] = dependency.requested;
         updated = true;
         break;
       }
@@ -175,9 +211,9 @@ namespace vix::cli::util::manifest
 
     if (!updated)
     {
-      manifest.dependencies.push_back(dependency);
+      root["deps"].push_back(dependency_to_json(dependency));
     }
 
-    write_manifest_or_throw(manifestPath, manifest);
+    write_json_or_throw(manifestPath, root);
   }
 }

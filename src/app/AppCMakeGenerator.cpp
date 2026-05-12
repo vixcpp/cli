@@ -1,0 +1,304 @@
+/**
+ *
+ *  @file AppCMakeGenerator.cpp
+ *  @author Gaspard Kirira
+ *
+ *  Copyright 2026, Gaspard Kirira. All rights reserved.
+ *  https://github.com/vixcpp/vix
+ *  Use of this source code is governed by a MIT license
+ *  that can be found in the License file.
+ *
+ *  Vix.cpp
+ *
+ *  CMake generator for simple vix.app projects.
+ *
+ */
+
+#include <vix/cli/app/AppCMakeGenerator.hpp>
+
+#include <fstream>
+#include <sstream>
+#include <system_error>
+
+namespace vix::cli::app
+{
+  namespace
+  {
+    static std::string cmake_quote(const std::string &value)
+    {
+      std::string out;
+      out.reserve(value.size() + 8);
+      out.push_back('"');
+
+      for (char c : value)
+      {
+        if (c == '\\')
+          out += "\\\\";
+        else if (c == '"')
+          out += "\\\"";
+        else
+          out.push_back(c);
+      }
+
+      out.push_back('"');
+      return out;
+    }
+
+    static std::string cmake_path(const fs::path &path)
+    {
+      return path.lexically_normal().generic_string();
+    }
+
+    static std::string cmake_quoted_path(const fs::path &path)
+    {
+      return cmake_quote(cmake_path(path));
+    }
+
+    static fs::path absolute_project_path(
+        const fs::path &projectDir,
+        const std::string &relativePath)
+    {
+      const fs::path path(relativePath);
+
+      if (path.is_absolute())
+        return path.lexically_normal();
+
+      return (projectDir / path).lexically_normal();
+    }
+
+    static int cpp_standard_number(const std::string &standard)
+    {
+      if (standard == "c++11" || standard == "cpp11" || standard == "11")
+        return 11;
+
+      if (standard == "c++14" || standard == "cpp14" || standard == "14")
+        return 14;
+
+      if (standard == "c++17" || standard == "cpp17" || standard == "17")
+        return 17;
+
+      if (standard == "c++20" || standard == "cpp20" || standard == "20")
+        return 20;
+
+      if (standard == "c++23" || standard == "cpp23" || standard == "23")
+        return 23;
+
+      if (standard == "c++26" || standard == "cpp26" || standard == "26")
+        return 26;
+
+      return 20;
+    }
+
+    static bool write_text_file_atomic(
+        const fs::path &path,
+        const std::string &content)
+    {
+      const fs::path parent = path.parent_path();
+
+      if (!parent.empty())
+      {
+        std::error_code ec;
+        fs::create_directories(parent, ec);
+      }
+
+      const fs::path tmp = path.string() + ".tmp";
+
+      {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+
+        if (!out)
+          return false;
+
+        out << content;
+
+        if (!out)
+          return false;
+      }
+
+      std::error_code ec;
+      fs::rename(tmp, path, ec);
+
+      if (!ec)
+        return true;
+
+      fs::remove(path, ec);
+      ec.clear();
+
+      fs::rename(tmp, path, ec);
+
+      return !ec;
+    }
+
+    static std::string cmake_target_command(AppTargetType type)
+    {
+      switch (type)
+      {
+      case AppTargetType::Executable:
+        return "add_executable";
+      case AppTargetType::StaticLibrary:
+        return "add_library";
+      case AppTargetType::SharedLibrary:
+        return "add_library";
+      default:
+        return "add_executable";
+      }
+    }
+
+    static std::string cmake_library_kind(AppTargetType type)
+    {
+      switch (type)
+      {
+      case AppTargetType::StaticLibrary:
+        return " STATIC";
+      case AppTargetType::SharedLibrary:
+        return " SHARED";
+      case AppTargetType::Executable:
+      default:
+        return "";
+      }
+    }
+
+    static void write_cmake_list(
+        std::ostringstream &out,
+        const std::string &command,
+        const std::string &targetName,
+        const std::vector<std::string> &values)
+    {
+      if (values.empty())
+        return;
+
+      out << command << "(" << targetName << " PRIVATE\n";
+
+      for (const std::string &value : values)
+        out << "  " << cmake_quote(value) << "\n";
+
+      out << ")\n\n";
+    }
+
+    static void write_cmake_path_list(
+        std::ostringstream &out,
+        const std::string &command,
+        const std::string &targetName,
+        const fs::path &projectDir,
+        const std::vector<std::string> &values)
+    {
+      if (values.empty())
+        return;
+
+      out << command << "(" << targetName << " PRIVATE\n";
+
+      for (const std::string &value : values)
+      {
+        const fs::path resolved = absolute_project_path(projectDir, value);
+        out << "  " << cmake_quoted_path(resolved) << "\n";
+      }
+
+      out << ")\n\n";
+    }
+  } // namespace
+
+  bool AppCMakeGenerateResult::success() const
+  {
+    return error.empty() &&
+           !sourceDir.empty() &&
+           !cmakeListsPath.empty();
+  }
+
+  std::string generate_app_cmake_lists_content(
+      const AppManifest &manifest,
+      const fs::path &projectDir)
+  {
+    const std::string targetName = manifest.name;
+    const int standard = cpp_standard_number(manifest.standard);
+
+    std::ostringstream out;
+
+    out << "# Auto-generated by Vix from vix.app\n";
+    out << "# Do not edit this file directly.\n\n";
+
+    out << "cmake_minimum_required(VERSION 3.24)\n\n";
+
+    out << "project("
+        << targetName
+        << " LANGUAGES CXX)\n\n";
+
+    out << "set(CMAKE_CXX_STANDARD "
+        << standard
+        << ")\n";
+
+    out << "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
+    out << "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
+
+    out << cmake_target_command(manifest.type)
+        << "("
+        << targetName
+        << cmake_library_kind(manifest.type)
+        << "\n";
+
+    for (const std::string &source : manifest.sources)
+    {
+      const fs::path resolved = absolute_project_path(projectDir, source);
+      out << "  " << cmake_quoted_path(resolved) << "\n";
+    }
+
+    out << ")\n\n";
+
+    write_cmake_path_list(
+        out,
+        "target_include_directories",
+        targetName,
+        projectDir,
+        manifest.includeDirs);
+
+    write_cmake_list(
+        out,
+        "target_compile_definitions",
+        targetName,
+        manifest.defines);
+
+    write_cmake_list(
+        out,
+        "target_link_libraries",
+        targetName,
+        manifest.links);
+
+    return out.str();
+  }
+
+  AppCMakeGenerateResult generate_app_cmake_project(
+      const AppManifest &manifest,
+      const fs::path &projectDir)
+  {
+    AppCMakeGenerateResult result;
+
+    if (!manifest.valid())
+    {
+      result.error = "Invalid vix.app manifest.";
+      return result;
+    }
+
+    const fs::path normalizedProjectDir =
+        fs::absolute(projectDir).lexically_normal();
+
+    result.sourceDir =
+        normalizedProjectDir / ".vix" / "generated" / "app";
+
+    result.cmakeListsPath = result.sourceDir / "CMakeLists.txt";
+
+    const std::string content =
+        generate_app_cmake_lists_content(
+            manifest,
+            normalizedProjectDir);
+
+    if (!write_text_file_atomic(result.cmakeListsPath, content))
+    {
+      result.error =
+          "Failed to write generated CMakeLists.txt: " +
+          result.cmakeListsPath.string();
+      return result;
+    }
+
+    return result;
+  }
+
+} // namespace vix::cli::app

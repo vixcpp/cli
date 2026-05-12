@@ -18,6 +18,7 @@
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/manifest/RunManifestMerge.hpp>
 #include <vix/cli/manifest/VixManifest.hpp>
+#include <vix/cli/app/AppProjectResolver.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -40,6 +41,7 @@
 
 using namespace vix::cli::style;
 namespace fs = std::filesystem;
+namespace app = vix::cli::app;
 
 namespace
 {
@@ -850,6 +852,221 @@ namespace
         vix::commands::RunCommand::detail::effective_timeout_sec(opt));
   }
 
+  int run_resolved_project(
+      const app::AppProjectResolveResult &resolved,
+      const Options &opt,
+      bool showUi)
+  {
+    using namespace vix::commands::RunCommand::detail;
+
+    const fs::path buildDir = resolved.userProjectDir / "build-ninja";
+    RunProgress progress(3, showUi);
+
+    {
+      std::error_code ec;
+      fs::create_directories(buildDir, ec);
+
+      if (ec)
+      {
+        error("Unable to create build directory: " + ec.message());
+        return 1;
+      }
+    }
+
+    const bool alreadyConfigured = has_cmake_cache(buildDir);
+
+    progress.phase_start("Configure project");
+
+    if (alreadyConfigured)
+    {
+      progress.phase_done("Configure project", "cache already present");
+    }
+    else
+    {
+      std::ostringstream oss;
+
+#ifdef _WIN32
+      oss << "cmd /C \"cmake"
+          << " --log-level=WARNING"
+          << " -S " << quote(resolved.cmakeSourceDir.string())
+          << " -B " << quote(buildDir.string())
+          << " -G Ninja"
+          << "\"";
+#else
+      oss << "cmake"
+          << " --log-level=WARNING"
+          << " -S " << quote(resolved.cmakeSourceDir.string())
+          << " -B " << quote(buildDir.string())
+          << " -G Ninja";
+#endif
+
+      const LiveRunResult cr = run_cmd_live_filtered_capture(
+          oss.str(),
+          "",
+          false,
+          0,
+          false);
+
+      const int code = cr.exitCode;
+
+      if (code != 0)
+      {
+        std::string log = cr.stderrText;
+
+        if (!cr.stdoutText.empty())
+          log += cr.stdoutText;
+
+        if (!log.empty())
+        {
+          const bool handled = vix::cli::ErrorHandler::printBuildErrors(
+              log,
+              resolved.cmakeListsPath,
+              "CMake configure failed");
+
+          if (!handled)
+            std::cout << log << "\n";
+        }
+
+        error("CMake configure failed.");
+        hint("Generated source directory: " + resolved.cmakeSourceDir.string());
+        hint("Build directory: " + buildDir.string());
+
+        return code != 0 ? code : 2;
+      }
+
+      progress.phase_done("Configure project", "completed");
+    }
+
+    progress.phase_start("Build project");
+
+    {
+      std::ostringstream oss;
+
+#ifdef _WIN32
+      oss << "cmd /C \"cmake --build "
+          << quote(buildDir.string());
+
+      if (!resolved.targetName.empty())
+        oss << " --target " << quote(resolved.targetName);
+
+      oss << " --";
+
+      if (opt.jobs > 0)
+        oss << " -j " << opt.jobs;
+
+      oss << "\"";
+#else
+      oss << "cmake --build "
+          << quote(buildDir.string());
+
+      if (!resolved.targetName.empty())
+        oss << " --target " << quote(resolved.targetName);
+
+      oss << " --";
+
+      if (opt.jobs > 0)
+        oss << " -j " << opt.jobs;
+
+      oss << " --quiet";
+#endif
+
+      clear_terminal_if_enabled();
+
+      int rawCode = 0;
+      const std::string buildLog =
+          run_and_capture_with_code(oss.str() + " 2>&1", rawCode);
+
+      const int buildExit = normalize_exit_code(rawCode);
+
+      if (buildExit == 130)
+      {
+        hint("ℹ Program interrupted by user (SIGINT).");
+        return 0;
+      }
+
+      if (buildExit != 0)
+      {
+        bool handled = false;
+
+        if (!buildLog.empty())
+        {
+          handled = vix::cli::ErrorHandler::printBuildErrors(
+              buildLog,
+              resolved.cmakeListsPath,
+              "Build failed");
+        }
+
+        if (!handled)
+        {
+          error("Build failed (exit code " + std::to_string(buildExit) + ").");
+
+          if (!buildLog.empty())
+            std::cout << buildLog << "\n";
+        }
+
+        return buildExit != 0 ? buildExit : 3;
+      }
+    }
+
+    progress.phase_done("Build project", "completed");
+    progress.phase_start("Run application");
+
+    const std::string exeName =
+        !resolved.targetName.empty()
+            ? resolved.targetName
+            : resolved.userProjectDir.filename().string();
+
+    auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
+
+    if (!exePathOpt)
+    {
+      const int testRc = run_test_binary_if_present(
+          buildDir,
+          opt.runArgs,
+          opt.cwd,
+          showUi);
+
+      if (testRc != -1)
+      {
+        progress.phase_done("Run application", "test executed");
+
+        if (showUi)
+          success("🏃 Test executed.");
+
+        return testRc;
+      }
+
+      error("Built executable not found for target: " + exeName);
+      hint("Resolved build directory: " + buildDir.string());
+
+      if (resolved.generated)
+        hint("Generated CMake source: " + resolved.cmakeSourceDir.string());
+
+      return 1;
+    }
+
+    const int runRc = run_executable_direct(
+        *exePathOpt,
+        opt,
+        "Execution failed",
+        effective_timeout_sec(opt));
+
+    if (runRc != 0)
+      return runRc;
+
+    progress.phase_done("Run application", "completed");
+
+    if (showUi)
+    {
+      if (resolved.generated)
+        success("🏃 Application started from vix.app.");
+      else
+        success("🏃 Application started.");
+    }
+
+    return 0;
+  }
+
   int run_project_with_presets(
       const fs::path &projectDir,
       const Options &opt,
@@ -1415,7 +1632,7 @@ namespace
       }
     }
 
-    if (fs::exists("CMakeLists.txt"))
+    if (fs::exists("CMakeLists.txt") || fs::exists("vix.app"))
     {
       t.kind = RunTargetKind::Project;
       t.path = fs::current_path();
@@ -1591,25 +1808,42 @@ namespace vix::commands::RunCommand
 
     case RunTargetKind::Project:
     {
-      const fs::path projectDir = target.path.empty()
-                                      ? fs::current_path()
-                                      : target.path;
+      const fs::path baseProjectDir = target.path.empty()
+                                          ? fs::current_path()
+                                          : target.path;
 
-      warn_if_env_file_missing(projectDir);
+      const app::AppProjectResolveResult resolved =
+          app::resolve_app_project(baseProjectDir);
+
+      if (!resolved.success())
+      {
+        error("Unable to resolve project.");
+        hint(resolved.error);
+        return 1;
+      }
+
+      warn_if_env_file_missing(resolved.userProjectDir);
 
       if (opt.watch)
       {
 #ifndef _WIN32
-        return run_project_watch(opt, projectDir);
+        if (resolved.generated)
+        {
+          hint("Watch mode for vix.app projects is not wired yet; running once.");
+        }
+        else
+        {
+          return run_project_watch(opt, resolved.cmakeSourceDir);
+        }
 #else
         hint("Project watch mode is not yet implemented on Windows; running once without auto-reload.");
 #endif
       }
 
-      if (has_presets(projectDir))
-        return run_project_with_presets(projectDir, opt, ui_enabled());
+      if (!resolved.generated && has_presets(resolved.cmakeSourceDir))
+        return run_project_with_presets(resolved.cmakeSourceDir, opt, ui_enabled());
 
-      return run_project_fallback(projectDir, opt, ui_enabled());
+      return run_resolved_project(resolved, opt, ui_enabled());
     }
 
     default:
@@ -1644,10 +1878,20 @@ namespace vix::commands::RunCommand
 #endif
     }
 
-    if (has_presets(projectDir))
-      return run_project_with_presets(projectDir, opt, showUi);
+    const app::AppProjectResolveResult resolved =
+        app::resolve_app_project(projectDir);
 
-    return run_project_fallback(projectDir, opt, showUi);
+    if (!resolved.success())
+    {
+      error("Unable to resolve project.");
+      hint(resolved.error);
+      return 1;
+    }
+
+    if (!resolved.generated && has_presets(resolved.cmakeSourceDir))
+      return run_project_with_presets(resolved.cmakeSourceDir, opt, showUi);
+
+    return run_resolved_project(resolved, opt, showUi);
   }
 
   int help()

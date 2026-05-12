@@ -21,6 +21,8 @@
 #include <vix/cli/build/BuildGraphExecutor.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/build/BuildContext.hpp>
+#include <vix/cli/app/AppManifest.hpp>
+#include <vix/cli/app/AppCMakeGenerator.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -58,6 +60,7 @@ namespace util = vix::cli::util;
 namespace build = vix::cli::build;
 namespace artifact_cache = vix::cli::cache;
 namespace run_detail = vix::commands::RunCommand::detail;
+namespace app = vix::cli::app;
 
 namespace vix::commands::BuildCommand
 {
@@ -869,41 +872,81 @@ namespace vix::commands::BuildCommand
         const fs::path &cwd)
     {
       fs::path base = cwd;
+
       if (!opt.dir.empty())
         base = fs::absolute(fs::path(opt.dir));
 
-      fs::path projectDir;
+      fs::path userProjectDir;
       const auto root = util::find_project_root(base);
 
       if (root)
       {
-        projectDir = *root;
+        userProjectDir = *root;
       }
-      else if (util::file_exists(base / "CMakeLists.txt"))
+      else if (util::file_exists(base / "CMakeLists.txt") ||
+               util::file_exists(base / "vix.app"))
       {
-        projectDir = base;
+        userProjectDir = base;
       }
       else
       {
         return std::nullopt;
       }
 
+      userProjectDir = fs::absolute(userProjectDir).lexically_normal();
+
+      fs::path cmakeSourceDir = userProjectDir;
+      const fs::path cmakeListsPath = userProjectDir / "CMakeLists.txt";
+      const fs::path appManifestPath = userProjectDir / "vix.app";
+
+      const bool hasCMakeLists = util::file_exists(cmakeListsPath);
+      const bool hasVixApp = util::file_exists(appManifestPath);
+
+      if (!hasCMakeLists && hasVixApp)
+      {
+        const app::AppManifestLoadResult loadResult =
+            app::load_app_manifest(appManifestPath);
+
+        if (!loadResult.success())
+        {
+          error("Failed to load vix.app.");
+          hint(loadResult.error);
+          return std::nullopt;
+        }
+
+        const app::AppCMakeGenerateResult generateResult =
+            app::generate_app_cmake_project(
+                loadResult.manifest,
+                userProjectDir);
+
+        if (!generateResult.success())
+        {
+          error("Failed to generate internal CMake project from vix.app.");
+          hint(generateResult.error);
+          return std::nullopt;
+        }
+
+        cmakeSourceDir = generateResult.sourceDir;
+      }
+
       const auto presetOpt = build::resolve_builtin_preset(opt.preset);
+
       if (!presetOpt)
         return std::nullopt;
 
       process::Plan plan;
-      plan.projectDir = fs::absolute(projectDir);
+      plan.projectDir = cmakeSourceDir;
       plan.preset = *presetOpt;
 
       plan.launcher = detect_launcher(opt);
       plan.fastLinkerFlag = detect_fast_linker_flag(opt);
-      plan.projectFingerprint = util::compute_cmake_config_fingerprint(plan.projectDir);
+      plan.projectFingerprint =
+          util::compute_cmake_config_fingerprint(plan.projectDir);
 
       if (!opt.targetTriple.empty())
-        plan.buildDir = plan.projectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
+        plan.buildDir = userProjectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
       else
-        plan.buildDir = plan.projectDir / plan.preset.buildDirName;
+        plan.buildDir = userProjectDir / plan.preset.buildDirName;
 
       plan.configureLog = plan.buildDir / "configure.log";
       plan.buildLog = plan.buildDir / "build.log";
@@ -913,6 +956,7 @@ namespace vix::commands::BuildCommand
       const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
       std::string toolchainContent;
+
       if (!opt.targetTriple.empty())
       {
         toolchainContent =
@@ -928,9 +972,9 @@ namespace vix::commands::BuildCommand
           globalPackagesFile);
 
       plan.signature = make_signature(plan, opt, toolchainContent);
+
       return plan;
     }
-
     static bool need_configure(const process::Options &opt, const process::Plan &plan)
     {
       if (!opt.useCache)

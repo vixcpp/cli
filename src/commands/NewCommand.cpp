@@ -349,8 +349,8 @@ namespace vix::commands::NewCommand
         << "  • Generates a ready-to-run Vix project\n"
         << "  • Sets up CMake, source structure, and config files\n"
         << "  • Creates a vix.json manifest\n"
-        << "  • For apps, includes default tasks and an empty deps list\n"
-        << "  • For libraries, includes package metadata and an empty deps list\n"
+        << "  • For apps, creates an executable target matching the project name\n"
+        << "  • For libraries, creates a header-only CMake interface target\n"
         << "  • Applies the selected template (app or library)\n\n"
 
         << "Options\n"
@@ -358,6 +358,17 @@ namespace vix::commands::NewCommand
         << "  --lib       Generate a header-only library\n"
         << "  -d, --dir   Base directory for project creation\n"
         << "  --force     Overwrite existing directory\n\n"
+
+        << "Application workflow\n"
+        << "  cd api/\n"
+        << "  vix build\n"
+        << "  vix run\n\n"
+
+        << "Library workflow\n"
+        << "  cd tree/\n"
+        << "  vix build --build-target all\n"
+        << "  vix build --build-target all -- -Dtree_BUILD_TESTS=ON\n"
+        << "  vix tests\n\n"
 
         << "Environment\n"
         << "  VIX_NONINTERACTIVE=1   Disable prompts\n"
@@ -368,6 +379,8 @@ namespace vix::commands::NewCommand
         << "  • Use 'vix add <pkg>' to add dependencies\n"
         << "  • Use 'vix install' to install from vix.lock\n"
         << "  • Use 'vix task <name>' to run generated tasks\n"
+        << "  • For header-only libraries, use '--build-target all' to build the generated project\n"
+        << "  • Tests for header-only libraries are disabled by default and must be enabled with CMake args\n"
         << "  • Designed for fast start with zero setup\n";
 
     return 0;

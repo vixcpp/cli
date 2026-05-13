@@ -28,6 +28,44 @@ namespace vix::commands::modules_cmd::commands
   namespace ui = vix::cli::util;
   using namespace vix::cli::style;
 
+  static constexpr const char *TEAL = "\033[38;5;35m";
+
+  static void sep()
+  {
+    std::cout << PAD << GRAY << "─────────────────────────────────────" << RESET << "\n";
+  }
+
+  static void section(const std::string &title)
+  {
+    std::cout << PAD << GRAY << title << RESET << "\n";
+  }
+
+  static void print_command_step(
+      int index,
+      const std::string &cmd,
+      const std::string &hint = "")
+  {
+    std::cout << PAD
+              << GRAY << index << RESET
+              << "  "
+              << CYAN << BOLD << cmd << RESET;
+
+    if (!hint.empty())
+      std::cout << "  " << GRAY << hint << RESET;
+
+    std::cout << "\n";
+  }
+
+  static void print_modules_banner(
+      const std::string &name,
+      const std::string &kind)
+  {
+    std::cout << PAD << TEAL << BOLD << "✔" << RESET
+              << "  " << TEAL << BOLD << name << RESET
+              << "  " << GRAY << kind << RESET
+              << "\n";
+  }
+
   bool cmd_init(const fs::path &root, bool patchRoot)
   {
     const fs::path modulesDir = root / "modules";
@@ -58,12 +96,19 @@ namespace vix::commands::modules_cmd::commands
       return false;
     }
 
-    ui::ok_line(std::cout, "Modules mode initialized");
-    ui::kv(std::cout, "modules", (root / "modules").string(), 10);
-    ui::kv(std::cout, "cmake", (root / "cmake" / "vix_modules.cmake").string(), 10);
+    print_modules_banner("modules", "initialized");
+    sep();
+
+    section("files");
+    print_command_step(1, "modules/", "module directory");
+    print_command_step(2, "cmake/vix_modules.cmake", "module loader");
+
     if (patchRoot)
-      ui::kv(std::cout, "patch", "root CMakeLists.txt updated (idempotent markers)", 10);
-    ui::warn_line(std::cout, "Next: vix modules add <name>");
+      print_command_step(3, "CMakeLists.txt", "patched");
+
+    sep();
+    section("next");
+    print_command_step(1, "vix modules add <name>", "create module");
 
     return true;
   }
@@ -148,20 +193,47 @@ namespace vix::commands::modules_cmd::commands
       return false;
     }
 
-    ui::ok_line(std::cout, "Module created");
-    ui::kv(std::cout, "name", normalized, 10);
-    ui::kv(std::cout, "target", cnt::module_alias_name(project, module), 10);
-    ui::kv(std::cout, "public", "modules/" + normalized + "/include/" + normalized + "/api.hpp", 10);
-    ui::kv(std::cout, "impl", "modules/" + normalized + "/src/" + normalized + ".cpp", 10);
+    print_modules_banner(normalized, "module");
+    sep();
 
-    ui::warn_line(std::cout, "Next steps (CMake):");
-    std::cout << "    " << GRAY << "• " << RESET
-              << "Include: " << YELLOW << BOLD << "#include <" << normalized << "/api.hpp>" << RESET << "\n";
+    section("files");
+    print_command_step(
+        1,
+        "modules/" + normalized + "/include/" + normalized + "/api.hpp",
+        "public header");
+
+    print_command_step(
+        2,
+        "modules/" + normalized + "/src/" + normalized + ".cpp",
+        "implementation");
+
+    print_command_step(
+        3,
+        "modules/" + normalized + "/CMakeLists.txt",
+        "target");
+
+    sep();
+    section("target");
+    print_command_step(1, cnt::module_alias_name(project, module), "CMake alias");
+
+    sep();
+    section("next");
+    print_command_step(
+        1,
+        "#include <" + normalized + "/api.hpp>",
+        "include");
+
     if (patchRootLink)
-      std::cout << "    " << GRAY << "• " << RESET
-                << "Root: " << GRAY
-                << "(auto-linked if main target is named like project(" << project << "))"
-                << RESET << "\n";
+    {
+      print_command_step(2, "vix build", "compile");
+    }
+    else
+    {
+      print_command_step(
+          2,
+          "target_link_libraries(" + project + " PRIVATE " + cnt::module_alias_name(project, module) + ")",
+          "link manually");
+    }
 
     return true;
   }

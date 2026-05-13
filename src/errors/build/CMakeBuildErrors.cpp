@@ -43,6 +43,48 @@ namespace vix::cli::errors::build
       return {};
     }
 
+    static bool handle_unknown_ninja_target(std::string_view log)
+    {
+      constexpr std::string_view marker = "ninja: error: unknown target '";
+
+      const std::size_t pos = log.find(marker);
+
+      if (pos == std::string_view::npos)
+        return false;
+
+      const std::size_t start = pos + marker.size();
+      const std::size_t end = log.find('\'', start);
+
+      std::string target = "unknown";
+
+      if (end != std::string_view::npos && end > start)
+        target = std::string(log.substr(start, end - start));
+
+      std::cerr << PAD
+                << RED << BOLD << "✖ Build target not found" << RESET
+                << "\n";
+
+      std::cerr << PAD
+                << CYAN << "target:" << RESET
+                << " "
+                << target
+                << "\n";
+
+      std::cerr << PAD
+                << YELLOW << "hint:" << RESET
+                << " "
+                << "This project does not define a CMake target named '"
+                << target
+                << "'.\n";
+
+      std::cerr << PAD
+                << "      "
+                << "Check your CMakeLists.txt or use --build-target with an existing target."
+                << "\n";
+
+      return true;
+    }
+
     bool contains(std::string_view log, std::string_view needle)
     {
       return log.find(needle) != std::string_view::npos;
@@ -570,6 +612,9 @@ namespace vix::cli::errors::build
 
   bool handleCMakeBuildError(std::string_view log)
   {
+    if (handle_unknown_ninja_target(log))
+      return true;
+
     if (handleCacheMismatch(log))
       return true;
 

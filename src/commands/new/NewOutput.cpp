@@ -73,8 +73,6 @@ namespace vix::commands::new_cmd::output
     print_command_step(1, "cd " + projName + "/", "enter project");
     print_command_step(2, "vix build", "compile");
     print_command_step(3, "vix run", "start app");
-
-    std::cout << "\n";
   }
 
   static void print_steps_lib(const std::string &projName)
@@ -82,10 +80,12 @@ namespace vix::commands::new_cmd::output
     section("next");
 
     print_command_step(1, "cd " + projName + "/", "enter project");
-    print_command_step(2, "vix build", "compile");
-    print_command_step(3, "vix tests", "run tests");
-
-    std::cout << "\n";
+    print_command_step(2, "vix build --build-target all", "compile");
+    print_command_step(
+        3,
+        "vix build --build-target all -- -D" + projName + "_BUILD_TESTS=ON",
+        "enable tests");
+    print_command_step(4, "vix tests", "run tests");
   }
 
   // ------------------------------------------------------------------

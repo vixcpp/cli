@@ -251,6 +251,12 @@ namespace vix::commands::new_cmd::templates
     readme += "```\n\n";
 
     readme += "## Tests\n\n";
+    readme += "Tests are disabled by default for header-only libraries.\n\n";
+    readme += "Enable them first:\n\n";
+    readme += "```bash\n";
+    readme += "vix build --build-target all -- -D" + name + "_BUILD_TESTS=ON\n";
+    readme += "```\n\n";
+    readme += "Then run:\n\n";
     readme += "```bash\n";
     readme += "vix tests\n";
     readme += "```\n\n";

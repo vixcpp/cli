@@ -113,7 +113,6 @@ namespace vix::commands::ModulesCommand
 
     if (opt.subcmd == "init")
     {
-      ui::section(std::cout, "Modules");
       return cmds::cmd_init(root, opt.patchRoot) ? 0 : 1;
     }
 
@@ -125,13 +124,12 @@ namespace vix::commands::ModulesCommand
         ui::warn_line(std::cout, "Usage: vix modules add <name>");
         return 1;
       }
-      ui::section(std::cout, "Modules");
+
       return cmds::cmd_add(root, project, opt.module, opt.patchLink) ? 0 : 1;
     }
 
     if (opt.subcmd == "check")
     {
-      ui::section(std::cout, "Modules");
       return cmds::cmd_check(root, project) ? 0 : 1;
     }
 

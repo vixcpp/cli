@@ -309,6 +309,27 @@ namespace vix::commands::RunCommand::detail
     }
 #endif
 
+#ifndef _WIN32
+    bool log_looks_like_runtime_crash(const LiveRunResult &rr, const std::string &log)
+    {
+      if (rr.terminatedBySignal)
+        return true;
+
+      if (log_looks_like_sanitizer_or_ub(log))
+        return true;
+
+      return log.find("Segmentation fault") != std::string::npos ||
+             log.find("segmentation fault") != std::string::npos ||
+             log.find("core dumped") != std::string::npos ||
+             log.find("Aborted") != std::string::npos ||
+             log.find("terminate called") != std::string::npos ||
+             log.find("std::terminate") != std::string::npos ||
+             log.find("double free") != std::string::npos ||
+             log.find("invalid pointer") != std::string::npos ||
+             log.find("stack smashing detected") != std::string::npos;
+    }
+#endif
+
     bool has_ccache()
     {
 #ifdef _WIN32
@@ -969,18 +990,21 @@ namespace vix::commands::RunCommand::detail
         {
           handled = handle_error_tip_block_vix(runtimeLog);
 
-          if (!handled)
+          const bool maybeRuntimeCrash =
+              !handled && log_looks_like_runtime_crash(rr, runtimeLog);
+
+          if (maybeRuntimeCrash)
           {
             handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
                 runtimeLog,
                 state.script,
                 "Script execution failed");
-          }
 
-          if (!handled &&
-              vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, state.script))
-          {
-            handled = true;
+            if (!handled &&
+                vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, state.script))
+            {
+              handled = true;
+            }
           }
 
           if (!handled && !rr.printed_live)

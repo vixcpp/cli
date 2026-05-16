@@ -654,6 +654,7 @@ namespace vix
 
     out << indent(2) << "Runtime and advanced:\n";
     docs("/cli/commands");
+    out << indent(3) << "agent              Run local AI agent commands\n";
     out << indent(3) << "p2p                Run P2P node/tools\n";
     out << indent(3) << "orm                Database migrations/status/rollback\n\n";
 
@@ -683,6 +684,7 @@ namespace vix
     out << indent(2) << "vix make:class User\n";
     out << indent(2) << "vix add @cnerium/app\n";
     out << indent(2) << "vix install\n";
+    out << indent(2) << "vix agent ask \"Explain Vix.cpp\" --model qwen2.5-coder:1.5b --timeout 120000\n";
     out << indent(2) << "vix help run\n\n";
 
     out << indent(1) << "Links:\n";

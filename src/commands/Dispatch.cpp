@@ -48,6 +48,7 @@
 #include <vix/cli/commands/CleanCommand.hpp>
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
+#include <vix/cli/commands/AgentCommand.hpp>
 
 #include <stdexcept>
 
@@ -108,6 +109,14 @@ namespace vix::cli::dispatch
          { return vix::commands::ReplayCommand::run(a); },
          []()
          { return vix::commands::ReplayCommand::help(); }});
+
+    add({"agent",
+         "AI",
+         "Run the local-first Vix AI agent",
+         [](const Args &a)
+         { return vix::commands::AgentCommand::run(a); },
+         []()
+         { return vix::commands::AgentCommand::help(); }});
 
     add({"check",
          "Project",

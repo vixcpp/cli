@@ -105,6 +105,7 @@ else()
   set(_VIX_P2P_DIR      "${_VIX_MODULES_DIR}/p2p")
   set(_VIX_SYNC_DIR     "${_VIX_MODULES_DIR}/sync")
   set(_VIX_CACHE_DIR    "${_VIX_MODULES_DIR}/cache")
+  set(_VIX_AGENT_DIR    "${_VIX_MODULES_DIR}/agent")
 
   set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
@@ -144,6 +145,10 @@ else()
 
     if (EXISTS "${_VIX_CACHE_DIR}/CMakeLists.txt" AND NOT TARGET vix::cache)
       add_subdirectory("${_VIX_CACHE_DIR}" "${CMAKE_BINARY_DIR}/_vix_cache")
+    endif()
+
+    if (EXISTS "${_VIX_AGENT_DIR}/CMakeLists.txt" AND NOT TARGET vix::ai_agent)
+      add_subdirectory("${_VIX_AGENT_DIR}" "${CMAKE_BINARY_DIR}/_vix_ai_agent")
     endif()
 
     if (EXISTS "${_VIX_P2P_DIR}/CMakeLists.txt" AND NOT TARGET vix::p2p)
@@ -186,6 +191,10 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::cache)
     endif()
 
+    if (TARGET vix::ai_agent)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ai_agent)
+    endif()
+
     if (TARGET vix::p2p)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::p2p)
     endif()
@@ -200,6 +209,7 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_AGENT_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
 
     if (_VIX_LOCAL_LINK_TARGETS)

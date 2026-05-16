@@ -49,6 +49,7 @@
 #include <vix/cli/commands/CleanCommand.hpp>
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
+#include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -282,6 +283,8 @@ namespace vix
     { return commands::ResetCommand::run(args); };
     commands_["task"] = [](auto args)
     { return commands::TaskCommand::run(args); };
+    commands_["agent"] = [](auto args)
+    { return commands::AgentCommand::run(args); };
 
     commands_["-h"] = [this](auto args)
     { return help(args); };

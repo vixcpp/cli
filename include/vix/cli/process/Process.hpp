@@ -223,9 +223,47 @@ namespace vix::cli::process
   struct Plan
   {
     /**
-     * @brief Root project directory containing the main CMakeLists.txt.
+     * @brief User project root directory.
+     *
+     * This is the real directory where the user runs Vix from.
+     * Build directories, exported binaries, local build state, and project
+     * input snapshots should be based on this path.
+     *
+     * For normal CMake projects, this is the same as cmakeSourceDir.
+     * For vix.app projects, this is the directory containing vix.app.
+     */
+    fs::path userProjectDir;
+
+    /**
+     * @brief CMake source directory passed to `cmake -S`.
+     *
+     * For normal CMake projects, this is the same as userProjectDir.
+     * For vix.app projects, this points to the generated internal CMake
+     * directory under `.vix/generated/app`.
+     */
+    fs::path cmakeSourceDir;
+
+    /**
+     * @brief Root project directory.
+     *
+     * Kept for backward compatibility with existing build code.
+     * New code should prefer userProjectDir or cmakeSourceDir depending on
+     * the operation being performed.
      */
     fs::path projectDir;
+
+    /**
+     * @brief Default target name used when --build-target is not provided.
+     *
+     * For normal CMake projects, this is usually the project directory name.
+     * For vix.app projects, this is the manifest `name`.
+     */
+    std::string defaultTargetName;
+
+    /**
+     * @brief True when the active CMake project was generated from vix.app.
+     */
+    bool generatedFromVixApp{false};
 
     /**
      * @brief Resolved embedded preset.

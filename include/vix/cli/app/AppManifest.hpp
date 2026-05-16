@@ -62,11 +62,71 @@ namespace vix::cli::app
       const std::string &value);
 
   /**
+   * @brief Package dependency declared in vix.app.
+   *
+   * Manifest syntax accepted by the parser:
+   * - "<name>"
+   * - "<name>:REQUIRED"
+   * - "<name>:COMPONENTS=a,b"
+   * - "<name>:COMPONENTS=a,b:REQUIRED"
+   *
+   * The order of `COMPONENTS=...` and `REQUIRED` does not matter.
+   * Whitespace around components is trimmed.
+   */
+  struct AppPackage
+  {
+    /**
+     * @brief Package name as passed to CMake `find_package`.
+     */
+    std::string name;
+
+    /**
+     * @brief Optional component list.
+     */
+    std::vector<std::string> components;
+
+    /**
+     * @brief True when the package must be marked REQUIRED.
+     */
+    bool required{false};
+  };
+
+  /**
+   * @brief Resource entry copied into the build output directory.
+   *
+   * Manifest syntax accepted by the parser:
+   * - "<src>"           copies `<src>` next to the built target,
+   *                     preserving the basename of `<src>`
+   * - "<src>=<dest>"    copies `<src>` to `<dest>` next to the
+   *                     built target
+   *
+   * Paths are interpreted relative to the user project directory.
+   */
+  struct AppResource
+  {
+    /**
+     * @brief Source path relative to the user project directory.
+     */
+    std::string source;
+
+    /**
+     * @brief Destination path relative to the runtime output
+     * directory of the target. May be empty to keep the source
+     * basename.
+     */
+    std::string destination;
+  };
+
+  /**
    * @brief Simple C++ application manifest.
    *
    * This structure represents the content of a vix.app file.
    * It is intentionally small and exists only as a user-friendly
    * layer above the internal generated CMake project.
+   *
+   * Backward compatibility:
+   * Manifests using only `name`, `type`, `standard`, `sources`,
+   * `include_dirs`, `defines` and `links` are still fully supported.
    */
   struct AppManifest
   {
@@ -84,9 +144,12 @@ namespace vix::cli::app
      * @brief C++ standard value.
      *
      * Example values:
+     * - c++11
+     * - c++14
      * - c++17
      * - c++20
      * - c++23
+     * - c++26
      */
     std::string standard{"c++20"};
 
@@ -109,6 +172,40 @@ namespace vix::cli::app
      * @brief CMake targets or libraries to link.
      */
     std::vector<std::string> links;
+
+    /**
+     * @brief Raw compile options forwarded to the compiler.
+     */
+    std::vector<std::string> compileOptions;
+
+    /**
+     * @brief Raw link options forwarded to the linker.
+     */
+    std::vector<std::string> linkOptions;
+
+    /**
+     * @brief CMake `target_compile_features` entries (for example
+     * `cxx_std_20`, `cxx_constexpr`).
+     */
+    std::vector<std::string> compileFeatures;
+
+    /**
+     * @brief External packages resolved with `find_package`.
+     */
+    std::vector<AppPackage> packages;
+
+    /**
+     * @brief Resources copied next to the built target.
+     */
+    std::vector<AppResource> resources;
+
+    /**
+     * @brief Optional output directory relative to the build tree.
+     *
+     * When set, the runtime, library and archive output directories
+     * of the generated target are pointed at this location.
+     */
+    std::string outputDir;
 
     /**
      * @brief Returns true when the manifest has the minimum valid fields.

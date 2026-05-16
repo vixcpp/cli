@@ -21,11 +21,16 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <unordered_set>
 
 namespace vix::cli::app
 {
   namespace
   {
+    // ---------------------------------------------------------------
+    // String helpers
+    // ---------------------------------------------------------------
+
     static std::string trim_copy(const std::string &value)
     {
       std::size_t begin = 0;
@@ -89,6 +94,37 @@ namespace vix::cli::app
 
       return s;
     }
+
+    static std::vector<std::string> split_by_comma(const std::string &value)
+    {
+      std::vector<std::string> out;
+      std::string current;
+
+      for (char c : value)
+      {
+        if (c == ',')
+        {
+          const std::string item = trim_copy(current);
+          if (!item.empty())
+            out.push_back(item);
+          current.clear();
+        }
+        else
+        {
+          current.push_back(c);
+        }
+      }
+
+      const std::string item = trim_copy(current);
+      if (!item.empty())
+        out.push_back(item);
+
+      return out;
+    }
+
+    // ---------------------------------------------------------------
+    // Line preprocessing
+    // ---------------------------------------------------------------
 
     static std::string strip_inline_comment(const std::string &line)
     {
@@ -209,6 +245,243 @@ namespace vix::cli::app
       return out;
     }
 
+    // ---------------------------------------------------------------
+    // Target name validation
+    //
+    // Accepts identifiers composed of letters, digits, '_' and '-'.
+    // The first character must be a letter or '_' to stay compatible
+    // with both CMake target names and typical executable/file names.
+    // ---------------------------------------------------------------
+
+    static bool is_valid_target_name(const std::string &name)
+    {
+      if (name.empty())
+        return false;
+
+      const unsigned char first = static_cast<unsigned char>(name.front());
+
+      if (!std::isalpha(first) && first != '_')
+        return false;
+
+      for (char c : name)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+
+        if (!std::isalnum(uc) && c != '_' && c != '-')
+          return false;
+      }
+
+      return true;
+    }
+
+    // ---------------------------------------------------------------
+    // Standard validation
+    // ---------------------------------------------------------------
+
+    static bool is_known_standard(const std::string &value)
+    {
+      static const std::unordered_set<std::string> known = {
+          "c++11", "cpp11", "11",
+          "c++14", "cpp14", "14",
+          "c++17", "cpp17", "17",
+          "c++20", "cpp20", "20",
+          "c++23", "cpp23", "23",
+          "c++26", "cpp26", "26"};
+
+      return known.find(lower_copy(value)) != known.end();
+    }
+
+    // ---------------------------------------------------------------
+    // Package parsing
+    //
+    // Accepted forms (case-insensitive for the option keywords):
+    //   "fmt"
+    //   "fmt:REQUIRED"
+    //   "Boost:COMPONENTS=system,filesystem"
+    //   "Boost:COMPONENTS=system,filesystem:REQUIRED"
+    //   "Boost:REQUIRED:COMPONENTS=system"
+    // ---------------------------------------------------------------
+
+    static bool parse_package_spec(
+        const std::string &raw,
+        AppPackage &out,
+        std::string &error)
+    {
+      const std::string spec = trim_copy(raw);
+
+      if (spec.empty())
+      {
+        error = "empty package specification";
+        return false;
+      }
+
+      const std::vector<std::string> parts = [&spec]()
+      {
+        std::vector<std::string> result;
+        std::string current;
+
+        for (char c : spec)
+        {
+          if (c == ':')
+          {
+            result.push_back(current);
+            current.clear();
+          }
+          else
+          {
+            current.push_back(c);
+          }
+        }
+
+        result.push_back(current);
+        return result;
+      }();
+
+      out.name = trim_copy(parts.front());
+
+      if (out.name.empty())
+      {
+        error = "package specification has an empty name: " + raw;
+        return false;
+      }
+
+      for (std::size_t i = 1; i < parts.size(); ++i)
+      {
+        const std::string segment = trim_copy(parts[i]);
+
+        if (segment.empty())
+        {
+          error = "empty option in package specification: " + raw;
+          return false;
+        }
+
+        const std::string lowered = lower_copy(segment);
+
+        if (lowered == "required")
+        {
+          out.required = true;
+          continue;
+        }
+
+        if (starts_with(lowered, "components"))
+        {
+          const auto eq = segment.find('=');
+
+          if (eq == std::string::npos)
+          {
+            error = "invalid 'components' clause in package specification: " + raw;
+            return false;
+          }
+
+          const std::string list = segment.substr(eq + 1);
+          out.components = split_by_comma(list);
+
+          if (out.components.empty())
+          {
+            error = "package '" + out.name +
+                    "' declares an empty components list";
+            return false;
+          }
+
+          continue;
+        }
+
+        error = "unknown package option '" + segment +
+                "' in: " + raw;
+        return false;
+      }
+
+      return true;
+    }
+
+    static bool parse_packages(
+        const std::vector<std::string> &values,
+        std::vector<AppPackage> &out,
+        std::string &error)
+    {
+      out.clear();
+      out.reserve(values.size());
+
+      for (const std::string &value : values)
+      {
+        AppPackage pkg;
+
+        if (!parse_package_spec(value, pkg, error))
+          return false;
+
+        out.push_back(std::move(pkg));
+      }
+
+      return true;
+    }
+
+    // ---------------------------------------------------------------
+    // Resource parsing
+    //
+    // Accepted forms:
+    //   "assets"               -> source = assets,      destination = ""
+    //   "data/icon.png=icon"   -> source = data/icon.png, destination = icon
+    // ---------------------------------------------------------------
+
+    static bool parse_resource_spec(
+        const std::string &raw,
+        AppResource &out,
+        std::string &error)
+    {
+      const std::string spec = trim_copy(raw);
+
+      if (spec.empty())
+      {
+        error = "empty resource specification";
+        return false;
+      }
+
+      const auto eq = spec.find('=');
+
+      if (eq == std::string::npos)
+      {
+        out.source = spec;
+        out.destination.clear();
+        return true;
+      }
+
+      out.source = trim_copy(spec.substr(0, eq));
+      out.destination = trim_copy(spec.substr(eq + 1));
+
+      if (out.source.empty())
+      {
+        error = "resource specification has an empty source: " + raw;
+        return false;
+      }
+
+      return true;
+    }
+
+    static bool parse_resources(
+        const std::vector<std::string> &values,
+        std::vector<AppResource> &out,
+        std::string &error)
+    {
+      out.clear();
+      out.reserve(values.size());
+
+      for (const std::string &value : values)
+      {
+        AppResource res;
+
+        if (!parse_resource_spec(value, res, error))
+          return false;
+
+        out.push_back(std::move(res));
+      }
+
+      return true;
+    }
+
+    // ---------------------------------------------------------------
+    // Field assignment
+    // ---------------------------------------------------------------
+
     static bool assign_scalar(
         AppManifest &manifest,
         const std::string &key,
@@ -220,6 +493,14 @@ namespace vix::cli::app
 
       if (normalizedKey == "name")
       {
+        if (!is_valid_target_name(normalizedValue))
+        {
+          error = "Invalid vix.app target name: '" + normalizedValue +
+                  "'. Allowed characters: letters, digits, '_' and '-'. "
+                  "The first character must be a letter or '_'.";
+          return false;
+        }
+
         manifest.name = normalizedValue;
         return true;
       }
@@ -230,7 +511,8 @@ namespace vix::cli::app
 
         if (!parsed)
         {
-          error = "Invalid vix.app target type: " + normalizedValue;
+          error = "Invalid vix.app target type: '" + normalizedValue +
+                  "'. Expected one of: executable, static, shared, library.";
           return false;
         }
 
@@ -240,11 +522,27 @@ namespace vix::cli::app
 
       if (normalizedKey == "standard")
       {
+        if (!is_known_standard(normalizedValue))
+        {
+          error = "Invalid or unsupported C++ standard in vix.app: '" +
+                  normalizedValue +
+                  "'. Expected one of: c++11, c++14, c++17, c++20, c++23, c++26.";
+          return false;
+        }
+
         manifest.standard = normalizedValue;
         return true;
       }
 
-      error = "Unknown scalar field in vix.app: " + key;
+      if (normalizedKey == "output_dir" ||
+          normalizedKey == "outputdir" ||
+          normalizedKey == "output")
+      {
+        manifest.outputDir = normalizedValue;
+        return true;
+      }
+
+      error = "Unknown scalar field in vix.app: '" + key + "'";
       return false;
     }
 
@@ -284,8 +582,70 @@ namespace vix::cli::app
         return true;
       }
 
-      error = "Unknown array field in vix.app: " + key;
+      if (normalizedKey == "compile_options" ||
+          normalizedKey == "compileoptions" ||
+          normalizedKey == "cxxflags")
+      {
+        manifest.compileOptions = values;
+        return true;
+      }
+
+      if (normalizedKey == "link_options" ||
+          normalizedKey == "linkoptions" ||
+          normalizedKey == "ldflags")
+      {
+        manifest.linkOptions = values;
+        return true;
+      }
+
+      if (normalizedKey == "compile_features" ||
+          normalizedKey == "compilefeatures" ||
+          normalizedKey == "features")
+      {
+        manifest.compileFeatures = values;
+        return true;
+      }
+
+      if (normalizedKey == "packages")
+      {
+        std::string parseError;
+
+        if (!parse_packages(values, manifest.packages, parseError))
+        {
+          error = "Invalid package syntax in vix.app: " + parseError;
+          return false;
+        }
+
+        return true;
+      }
+
+      if (normalizedKey == "resources")
+      {
+        std::string parseError;
+
+        if (!parse_resources(values, manifest.resources, parseError))
+        {
+          error = "Invalid resource syntax in vix.app: " + parseError;
+          return false;
+        }
+
+        return true;
+      }
+
+      error = "Unknown array field in vix.app: '" + key + "'";
       return false;
+    }
+
+    // ---------------------------------------------------------------
+    // Top-level parser
+    // ---------------------------------------------------------------
+
+    static std::string format_line_error(
+        std::size_t lineNumber,
+        const std::string &reason)
+    {
+      return "Invalid vix.app syntax at line " +
+             std::to_string(lineNumber) + ": " + reason;
     }
 
     static bool parse_manifest_text(
@@ -298,6 +658,7 @@ namespace vix::cli::app
 
       std::string activeArrayKey;
       std::vector<std::string> activeArrayValues;
+      std::size_t activeArrayStartLine = 0;
 
       std::size_t lineNumber = 0;
 
@@ -325,6 +686,7 @@ namespace vix::cli::app
 
             activeArrayKey.clear();
             activeArrayValues.clear();
+            activeArrayStartLine = 0;
             continue;
           }
 
@@ -343,9 +705,7 @@ namespace vix::cli::app
 
         if (pos == std::string::npos)
         {
-          error = "Invalid vix.app syntax at line " +
-                  std::to_string(lineNumber) +
-                  ": expected key = value";
+          error = format_line_error(lineNumber, "expected 'key = value'");
           return false;
         }
 
@@ -354,9 +714,7 @@ namespace vix::cli::app
 
         if (key.empty())
         {
-          error = "Invalid vix.app syntax at line " +
-                  std::to_string(lineNumber) +
-                  ": empty key";
+          error = format_line_error(lineNumber, "empty key");
           return false;
         }
 
@@ -364,11 +722,20 @@ namespace vix::cli::app
         {
           activeArrayKey = key;
           activeArrayValues.clear();
+          activeArrayStartLine = lineNumber;
           continue;
         }
 
         if (starts_with(value, "["))
         {
+          if (!ends_with(value, "]"))
+          {
+            error = format_line_error(
+                lineNumber,
+                "malformed inline array, missing closing ']'");
+            return false;
+          }
+
           if (!assign_array(
                   manifest,
                   key,
@@ -387,8 +754,9 @@ namespace vix::cli::app
 
       if (!activeArrayKey.empty())
       {
-        error = "Invalid vix.app syntax: missing closing ] for field " +
-                activeArrayKey;
+        error = "Invalid vix.app syntax: missing closing ']' for field '" +
+                activeArrayKey + "' (opened at line " +
+                std::to_string(activeArrayStartLine) + ")";
         return false;
       }
 
@@ -400,7 +768,8 @@ namespace vix::cli::app
 
       if (manifest.sources.empty())
       {
-        error = "Invalid vix.app: missing required field 'sources'";
+        error = "Invalid vix.app: missing required field 'sources' "
+                "(at least one source file is required)";
         return false;
       }
 
@@ -421,6 +790,10 @@ namespace vix::cli::app
       return out.str();
     }
   } // namespace
+
+  // -----------------------------------------------------------------
+  // Public API
+  // -----------------------------------------------------------------
 
   std::string to_string(AppTargetType type)
   {

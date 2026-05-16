@@ -1833,7 +1833,7 @@ namespace vix::commands::RunCommand
         }
         else
         {
-          return run_project_watch(opt, resolved.cmakeSourceDir);
+          return run_project_watch(opt, resolved.userProjectDir);
         }
 #else
         hint("Project watch mode is not yet implemented on Windows; running once without auto-reload.");
@@ -1912,8 +1912,9 @@ namespace vix::commands::RunCommand
 
     out << "Modes:\n";
     out << "  Project mode:\n";
-    out << "    • Finds a CMake project (auto or via --dir)\n";
-    out << "    • Uses CMake presets when available (recommended)\n\n";
+    out << "    • Finds a CMake project or vix.app project (auto or via --dir)\n";
+    out << "    • Uses CMake presets when available for normal CMake projects\n";
+    out << "    • Uses vix.app when no CMakeLists.txt exists\n\n";
 
     out << "  Script mode (.cpp):\n";
     out << "    • Compiles one .cpp file and runs it\n";
@@ -2005,6 +2006,9 @@ namespace vix::commands::RunCommand
     out << "  vix run\n";
     out << "  vix run api --args --port --args 8080\n";
     out << "  vix run --dir ./examples/blog\n\n";
+    out << "  # vix.app project mode\n";
+    out << "  vix run\n";
+    out << "  vix run --dir ./hello-vix-app\n\n";
 
     out << "  # Project mode + presets\n";
     out << "  vix run api --preset dev-ninja\n";

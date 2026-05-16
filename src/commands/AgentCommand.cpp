@@ -15,17 +15,26 @@
  */
 #include <vix/cli/commands/AgentCommand.hpp>
 
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <vix/ai/agent/agent.hpp>
+#include <vix/cli/Style.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 
 namespace vix::commands::AgentCommand
 {
   namespace
   {
+    namespace build = vix::cli::build;
+    namespace style = vix::cli::style;
+
     struct Options
     {
       std::string subcommand;
@@ -34,6 +43,8 @@ namespace vix::commands::AgentCommand
       std::string provider;
       std::string model;
       std::string model_url;
+
+      std::uint64_t timeout_ms{0};
 
       bool allow_process{false};
       bool allow_file_read{true};
@@ -77,6 +88,70 @@ namespace vix::commands::AgentCommand
       return true;
     }
 
+    [[nodiscard]] bool parse_uint64(
+        std::string_view value,
+        std::uint64_t &out)
+    {
+      if (value.empty())
+      {
+        return false;
+      }
+
+      for (char c : value)
+      {
+        if (c < '0' || c > '9')
+        {
+          return false;
+        }
+      }
+
+      try
+      {
+        out = static_cast<std::uint64_t>(
+            std::stoull(std::string(value)));
+      }
+      catch (...)
+      {
+        return false;
+      }
+
+      return true;
+    }
+
+    [[nodiscard]] bool read_uint64_value(
+        const std::vector<std::string> &args,
+        std::size_t &index,
+        std::uint64_t &out)
+    {
+      std::string value;
+
+      if (!read_value(args, index, value))
+      {
+        return false;
+      }
+
+      return parse_uint64(value, out);
+    }
+
+    [[nodiscard]] std::string format_timeout(std::uint64_t timeout_ms)
+    {
+      return std::to_string(timeout_ms) + "ms";
+    }
+
+    [[nodiscard]] std::string format_duration_ms(long long milliseconds)
+    {
+      std::ostringstream oss;
+
+      const double seconds =
+          static_cast<double>(milliseconds) / 1000.0;
+
+      oss.setf(std::ios::fixed);
+      oss.precision(seconds >= 10.0 ? 1 : 2);
+      oss << seconds << "s";
+
+      return oss.str();
+    }
+
     [[nodiscard]] bool parse_options(
         const std::vector<std::string> &args,
         Options &options)
@@ -89,7 +164,8 @@ namespace vix::commands::AgentCommand
 
       options.subcommand = args[0];
 
-      if (options.subcommand == "-h" || options.subcommand == "--help" ||
+      if (options.subcommand == "-h" ||
+          options.subcommand == "--help" ||
           options.subcommand == "help")
       {
         options.show_help = true;
@@ -102,6 +178,8 @@ namespace vix::commands::AgentCommand
       {
         return false;
       }
+
+      std::vector<std::string> positional;
 
       for (std::size_t i = 1; i < args.size(); ++i)
       {
@@ -147,6 +225,16 @@ namespace vix::commands::AgentCommand
           continue;
         }
 
+        if (arg == "--timeout")
+        {
+          if (!read_uint64_value(args, i, options.timeout_ms))
+          {
+            return false;
+          }
+
+          continue;
+        }
+
         if (arg == "--allow-process")
         {
           options.allow_process = true;
@@ -173,7 +261,11 @@ namespace vix::commands::AgentCommand
 
         if (arg == "--")
         {
-          options.input = join_args(args, i + 1);
+          for (std::size_t j = i + 1; j < args.size(); ++j)
+          {
+            positional.push_back(args[j]);
+          }
+
           break;
         }
 
@@ -182,33 +274,52 @@ namespace vix::commands::AgentCommand
           return false;
         }
 
-        if (options.subcommand == "analyze" || options.subcommand == "scan")
+        positional.push_back(arg);
+      }
+
+      if (options.subcommand == "ask")
+      {
+        if (positional.empty())
         {
-          options.workspace = arg;
-
-          if (i + 1 < args.size())
-          {
-            options.input = join_args(args, i + 1);
-          }
-
-          break;
+          return false;
         }
 
-        options.input = join_args(args, i);
-        break;
+        options.input = join_args(positional, 0);
+        return true;
       }
 
-      if (options.subcommand == "ask" && options.input.empty())
+      if (options.subcommand == "analyze")
       {
-        return false;
+        if (!positional.empty())
+        {
+          options.workspace = positional[0];
+
+          if (positional.size() > 1)
+          {
+            options.input = join_args(positional, 1);
+          }
+        }
+
+        if (options.input.empty())
+        {
+          options.input =
+              "Analyze this project and explain the most important parts.";
+        }
+
+        return true;
       }
 
-      if (options.subcommand == "analyze" && options.input.empty())
+      if (options.subcommand == "scan")
       {
-        options.input = "Analyze this project and explain the most important parts.";
+        if (!positional.empty())
+        {
+          options.workspace = positional[0];
+        }
+
+        return true;
       }
 
-      return true;
+      return false;
     }
 
     [[nodiscard]] vix::ai::agent::AgentConfig make_config(
@@ -229,6 +340,11 @@ namespace vix::commands::AgentCommand
       if (!options.model_url.empty())
       {
         config.model_url = options.model_url;
+      }
+
+      if (options.timeout_ms > 0)
+      {
+        config.timeout_ms = options.timeout_ms;
       }
 
       config.allow_file_read = options.allow_file_read;
@@ -252,18 +368,142 @@ namespace vix::commands::AgentCommand
       return config;
     }
 
+    void print_agent_header(
+        const std::string &action,
+        const Options &options,
+        const vix::ai::agent::AgentConfig &config)
+    {
+      std::vector<std::pair<std::string, std::string>> meta;
+
+      meta.emplace_back("provider", config.provider);
+      meta.emplace_back("model", config.model);
+      meta.emplace_back("timeout", format_timeout(config.timeout_ms));
+      meta.emplace_back("workspace", options.workspace);
+
+      if (!config.model_url.empty())
+      {
+        meta.emplace_back("endpoint", config.model_url);
+      }
+
+      build::print_task_header_full(
+          std::cout,
+          action,
+          "agent",
+          "",
+          meta);
+    }
+
+    void print_agent_progress(bool success)
+    {
+      const std::string status = success ? "done" : "failed";
+      const char *line_color = success ? style::CYAN : style::RED;
+      const char *status_color = success ? style::GREEN : style::RED;
+
+      std::cout << "  "
+                << line_color
+                << "agent"
+                << style::RESET
+                << " "
+                << line_color
+                << "[============================]"
+                << style::RESET
+                << " "
+                << status_color
+                << status
+                << style::RESET
+                << "\n";
+    }
+
+    void print_agent_response(
+        const vix::ai::agent::AgentResponse &response)
+    {
+      if (!response.text.empty())
+      {
+        std::cout << "\n";
+        std::cout << response.text << "\n";
+      }
+
+      if (!response.run_id.empty() ||
+          response.from_cache ||
+          !response.tools.empty())
+      {
+        std::cout << "\n";
+        std::cout << "  "
+                  << style::CYAN
+                  << "details:"
+                  << style::RESET
+                  << "\n";
+      }
+
+      if (!response.run_id.empty())
+      {
+        std::cout << "    "
+                  << style::GRAY
+                  << "run id: "
+                  << style::RESET
+                  << response.run_id
+                  << "\n";
+      }
+
+      if (response.from_cache)
+      {
+        std::cout << "    "
+                  << style::GRAY
+                  << "cache: "
+                  << style::RESET
+                  << style::GREEN
+                  << "hit"
+                  << style::RESET
+                  << "\n";
+      }
+
+      if (!response.tools.empty())
+      {
+        std::cout << "    "
+                  << style::GRAY
+                  << "tools: "
+                  << style::RESET
+                  << response.tools.size()
+                  << "\n";
+
+        for (const auto &tool : response.tools)
+        {
+          std::cout << "      "
+                    << (tool.ok ? style::GREEN : style::RED)
+                    << (tool.ok ? "✔ " : "✖ ")
+                    << style::RESET
+                    << tool.name
+                    << "\n";
+        }
+      }
+    }
+
     [[nodiscard]] int run_scan(const Options &options)
     {
       auto config = make_config(options);
+
+      print_agent_header("Scanning", options, config);
+
+      const auto start = std::chrono::steady_clock::now();
 
       auto workspace =
           vix::ai::agent::AgentWorkspace::open(options.workspace, config);
 
       if (!workspace)
       {
-        std::cerr << "Agent workspace error: "
-                  << workspace.error().message()
-                  << '\n';
+        const auto end = std::chrono::steady_clock::now();
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                end - start)
+                .count();
+
+        print_agent_progress(false);
+        build::print_task_failure_timed(
+            std::cout,
+            "Agent workspace error",
+            ms);
+
+        style::error(std::string(workspace.error().message()));
         return 1;
       }
 
@@ -272,26 +512,89 @@ namespace vix::commands::AgentCommand
 
       auto scan = scanner.scan();
 
+      const auto end = std::chrono::steady_clock::now();
+      const auto ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              end - start)
+              .count();
+
       if (!scan)
       {
-        std::cerr << "Agent scan error: "
-                  << scan.error().message()
-                  << '\n';
+        print_agent_progress(false);
+        build::print_task_failure_timed(
+            std::cout,
+            "Agent scan failed",
+            ms);
+
+        style::error(std::string(scan.error().message()));
         return 1;
       }
 
-      std::cout << "Workspace: " << scan.value().root << '\n';
-      std::cout << "Files: " << scan.value().files.size() << '\n';
-      std::cout << "Skipped: " << scan.value().skipped << '\n';
-      std::cout << "Truncated: "
-                << (scan.value().truncated ? "yes" : "no")
-                << "\n\n";
+      print_agent_progress(true);
+      build::print_task_success_timed(
+          std::cout,
+          "Scanned workspace",
+          ms);
 
-      for (const auto &file : scan.value().files)
+      std::cout << "\n";
+      std::cout << "  "
+                << style::CYAN
+                << "summary:"
+                << style::RESET
+                << "\n";
+
+      std::cout << "    "
+                << style::GRAY
+                << "workspace: "
+                << style::RESET
+                << scan.value().root
+                << "\n";
+
+      std::cout << "    "
+                << style::GRAY
+                << "files: "
+                << style::RESET
+                << scan.value().files.size()
+                << "\n";
+
+      std::cout << "    "
+                << style::GRAY
+                << "skipped: "
+                << style::RESET
+                << scan.value().skipped
+                << "\n";
+
+      std::cout << "    "
+                << style::GRAY
+                << "truncated: "
+                << style::RESET
+                << (scan.value().truncated ? "yes" : "no")
+                << "\n";
+
+      if (!scan.value().files.empty())
       {
-        std::cout << "- " << file.relative_path
-                  << " (" << file.size << " bytes)"
-                  << '\n';
+        std::cout << "\n";
+        std::cout << "  "
+                  << style::CYAN
+                  << "files:"
+                  << style::RESET
+                  << "\n";
+
+        for (const auto &file : scan.value().files)
+        {
+          std::cout << "    "
+                    << style::GRAY
+                    << "• "
+                    << style::RESET
+                    << file.relative_path
+                    << " "
+                    << style::GRAY
+                    << "("
+                    << file.size
+                    << " bytes)"
+                    << style::RESET
+                    << "\n";
+        }
       }
 
       return 0;
@@ -307,11 +610,17 @@ namespace vix::commands::AgentCommand
 
       if (err)
       {
-        std::cerr << "Agent config error: "
-                  << err.message()
-                  << '\n';
+        style::error("Agent config error: " +
+                     std::string(err.message()));
         return 1;
       }
+
+      const std::string action =
+          mode == vix::ai::agent::AgentRequestMode::Analyze
+              ? "Analyzing"
+              : "Asking";
+
+      print_agent_header(action, options, config);
 
       vix::ai::agent::Agent agent(config);
 
@@ -320,48 +629,67 @@ namespace vix::commands::AgentCommand
       request.input = options.input;
       request.mode = mode;
 
+      if (mode == vix::ai::agent::AgentRequestMode::Analyze)
+      {
+        request.context =
+            "You are analyzing a local C++ project.\n"
+            "The user wants a real explanation of the project architecture.\n"
+            "Do not return example JSON.\n"
+            "Do not invent unrelated technologies.\n"
+            "Explain what this repository appears to contain, based on the scanned workspace and available project files.\n"
+            "Focus on modules, folders, build system, CLI commands, runtime components, and how the pieces fit together.\n";
+      }
+
       request.allow_tools = true;
       request.allow_file_read = options.allow_file_read;
       request.allow_process = options.allow_process;
       request.allow_file_write = options.allow_file_write;
       request.use_cache = options.use_cache;
+      request.timeout_ms = config.timeout_ms;
+
+      const auto start = std::chrono::steady_clock::now();
 
       auto response = agent.run(request);
 
+      const auto end = std::chrono::steady_clock::now();
+      const auto ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              end - start)
+              .count();
+
       if (!response)
       {
-        std::cerr << "Agent error: "
-                  << response.error().message()
-                  << '\n';
+        print_agent_progress(false);
+
+        build::print_task_failure_timed(
+            std::cout,
+            "Agent request failed",
+            ms);
+
+        std::cout << "\n";
+        style::error(std::string(response.error().message()));
+
+        if (config.provider == "ollama")
+        {
+          style::hint(
+              "If the model is slow on CPU, try a smaller prompt or `--timeout 300000`.");
+          style::hint(
+              "For a lighter local demo, run `ollama pull qwen2.5-coder:1.5b`.");
+          style::hint(
+              "Then use `--model qwen2.5-coder:1.5b`.");
+        }
+
         return 1;
       }
 
-      std::cout << response.value().text << '\n';
+      print_agent_progress(true);
 
-      if (!response.value().run_id.empty())
-      {
-        std::cout << "\nRun id: " << response.value().run_id << '\n';
-      }
+      build::print_task_success_timed(
+          std::cout,
+          "Completed agent request",
+          ms);
 
-      if (response.value().from_cache)
-      {
-        std::cout << "From cache: yes\n";
-      }
-
-      if (!response.value().tools.empty())
-      {
-        std::cout << "Tools used: "
-                  << response.value().tools.size()
-                  << '\n';
-
-        for (const auto &tool : response.value().tools)
-        {
-          std::cout << "- " << tool.name
-                    << " "
-                    << (tool.ok ? "ok" : "failed")
-                    << '\n';
-        }
-      }
+      print_agent_response(response.value());
 
       return 0;
     }
@@ -373,23 +701,30 @@ namespace vix::commands::AgentCommand
         << "Usage:\n"
         << "  vix agent ask <prompt> [options]\n"
         << "  vix agent analyze [workspace] [prompt] [options]\n"
-        << "  vix agent scan [workspace]\n"
+        << "  vix agent scan [workspace] [options]\n"
         << "\n"
         << "Options:\n"
-        << "  -w, --workspace <path>   Workspace directory\n"
-        << "      --provider <name>    Model provider, default from VIX_AGENT_PROVIDER or ollama\n"
-        << "      --model <name>       Model name, default from VIX_AGENT_MODEL or llama3\n"
-        << "      --model-url <url>    Model endpoint, default from VIX_AGENT_MODEL_URL\n"
-        << "      --allow-process      Allow safe command.run tool\n"
-        << "      --no-file-read       Disable workspace file reading\n"
-        << "      --no-cache           Disable cache\n"
-        << "      --no-memory          Disable run history\n"
+        << "  -w, --workspace <path>     Workspace directory\n"
+        << "      --provider <name>      Model provider, default from VIX_AGENT_PROVIDER or ollama\n"
+        << "      --model <name>         Model name, default from VIX_AGENT_MODEL or llama3\n"
+        << "      --model-url <url>      Model endpoint, default from VIX_AGENT_MODEL_URL\n"
+        << "      --timeout <ms>         Model request timeout in milliseconds\n"
+        << "      --allow-process        Allow safe command.run tool\n"
+        << "      --no-file-read         Disable workspace file reading\n"
+        << "      --no-cache             Disable cache\n"
+        << "      --no-memory            Disable run history and memory persistence\n"
         << "\n"
         << "Examples:\n"
         << "  vix agent ask \"Explain Vix.cpp in simple words\"\n"
+        << "  vix agent ask \"Explain Vix.cpp\" --timeout 120000\n"
+        << "  vix agent ask \"Explain this code\" --model qwen2.5-coder:1.5b --timeout 120000\n"
         << "  vix agent analyze .\n"
         << "  vix agent scan .\n"
-        << "  vix agent ask \"Run vix tests if useful\" --allow-process\n";
+        << "  vix agent ask \"Run vix tests if useful\" --allow-process\n"
+        << "\n"
+        << "Ollama demo:\n"
+        << "  ollama pull qwen2.5-coder:1.5b\n"
+        << "  vix agent ask \"Explain Vix.cpp\" --model qwen2.5-coder:1.5b --timeout 120000\n";
 
     return 0;
   }

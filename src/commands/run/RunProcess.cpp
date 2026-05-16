@@ -722,11 +722,33 @@ namespace vix::commands::RunCommand::detail
 
       const std::string trimmed = rtrim_copy(chunk);
 
-      return trimmed == ">" ||
-             trimmed == "$" ||
-             trimmed == "#" ||
-             trimmed == ">>>" ||
-             trimmed == "...";
+      if (trimmed.empty())
+        return false;
+
+      if (trimmed == ">" ||
+          trimmed == "$" ||
+          trimmed == "#" ||
+          trimmed == ">>>" ||
+          trimmed == "...")
+      {
+        return true;
+      }
+
+      if (trimmed.size() <= 160)
+      {
+        const char last = trimmed.back();
+
+        if (last == ':' ||
+            last == '?' ||
+            last == '>' ||
+            last == '$' ||
+            last == '#')
+        {
+          return true;
+        }
+      }
+
+      return false;
     }
 
     struct CMakeNoiseFilter

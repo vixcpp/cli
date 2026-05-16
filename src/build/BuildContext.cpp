@@ -61,6 +61,9 @@ namespace vix::cli::build
     if (!opt.buildTarget.empty())
       return opt.buildTarget;
 
+    if (!plan.defaultTargetName.empty())
+      return plan.defaultTargetName;
+
     return plan.projectDir.filename().string();
   }
 
@@ -71,9 +74,11 @@ namespace vix::cli::build
     if (!opt.buildTarget.empty())
       return opt.buildTarget;
 
+    if (!plan.defaultTargetName.empty())
+      return plan.defaultTargetName;
+
     return plan.projectDir.filename().string();
   }
-
   fs::path default_project_executable_path(
       const process::Options &opt,
       const process::Plan &plan)

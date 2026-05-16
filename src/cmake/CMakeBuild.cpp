@@ -138,11 +138,16 @@ namespace vix::cli::build
     std::vector<std::string> argv;
     argv.reserve(32);
 
+    const fs::path cmakeSourceDir =
+        !plan.cmakeSourceDir.empty()
+            ? plan.cmakeSourceDir
+            : plan.projectDir;
+
     argv.push_back("cmake");
     argv.push_back(opt.cmakeVerbose ? "--log-level=VERBOSE" : "--log-level=WARNING");
 
     argv.push_back("-S");
-    argv.push_back(plan.projectDir.string());
+    argv.push_back(cmakeSourceDir.string());
     argv.push_back("-B");
     argv.push_back(plan.buildDir.string());
     argv.push_back("-G");
@@ -175,7 +180,12 @@ namespace vix::cli::build
     std::string target = opt.buildTarget;
 
     if (target.empty())
-      target = plan.projectDir.filename().string();
+    {
+      if (!plan.defaultTargetName.empty())
+        target = plan.defaultTargetName;
+      else
+        target = plan.projectDir.filename().string();
+    }
 
     if (!target.empty())
     {

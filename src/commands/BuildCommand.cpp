@@ -292,7 +292,10 @@ namespace vix::commands::BuildCommand
         const std::string &toolchainContent)
     {
       artifact_cache::Artifact a;
-      a.package = sanitize_cache_component(plan.projectDir.filename().string());
+      a.package = sanitize_cache_component(
+          !plan.defaultTargetName.empty()
+              ? plan.defaultTargetName
+              : plan.projectDir.filename().string());
       a.version = "local";
       a.target = sanitize_cache_component(
           opt.targetTriple.empty() ? detect_native_target_triple() : opt.targetTriple);
@@ -896,6 +899,9 @@ namespace vix::commands::BuildCommand
       userProjectDir = fs::absolute(userProjectDir).lexically_normal();
 
       fs::path cmakeSourceDir = userProjectDir;
+      std::string defaultTargetName = userProjectDir.filename().string();
+      bool generatedFromVixApp = false;
+
       const fs::path cmakeListsPath = userProjectDir / "CMakeLists.txt";
       const fs::path appManifestPath = userProjectDir / "vix.app";
 
@@ -927,6 +933,8 @@ namespace vix::commands::BuildCommand
         }
 
         cmakeSourceDir = generateResult.sourceDir;
+        defaultTargetName = loadResult.manifest.name;
+        generatedFromVixApp = true;
       }
 
       const auto presetOpt = build::resolve_builtin_preset(opt.preset);
@@ -935,13 +943,17 @@ namespace vix::commands::BuildCommand
         return std::nullopt;
 
       process::Plan plan;
-      plan.projectDir = cmakeSourceDir;
+      plan.userProjectDir = userProjectDir;
+      plan.cmakeSourceDir = cmakeSourceDir;
+      plan.projectDir = userProjectDir;
+      plan.defaultTargetName = defaultTargetName;
+      plan.generatedFromVixApp = generatedFromVixApp;
       plan.preset = *presetOpt;
 
       plan.launcher = detect_launcher(opt);
       plan.fastLinkerFlag = detect_fast_linker_flag(opt);
       plan.projectFingerprint =
-          util::compute_cmake_config_fingerprint(plan.projectDir);
+          util::compute_cmake_config_fingerprint(plan.cmakeSourceDir);
 
       if (!opt.targetTriple.empty())
         plan.buildDir = userProjectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
@@ -1031,12 +1043,15 @@ namespace vix::commands::BuildCommand
     static std::optional<fs::path> resolve_main_executable(
         const fs::path &buildDir,
         const fs::path &projectDir,
-        const std::string &buildTarget)
+        const std::string &buildTarget,
+        const std::string &defaultTargetName)
     {
       const std::string preferredBase =
           !buildTarget.empty()
               ? buildTarget
-              : projectDir.filename().string();
+              : (!defaultTargetName.empty()
+                     ? defaultTargetName
+                     : projectDir.filename().string());
 
       const std::string preferredName = platform_executable_name(preferredBase);
 
@@ -1258,7 +1273,12 @@ namespace vix::commands::BuildCommand
       if (!opt.outPath.empty())
         return fs::absolute(fs::path(opt.outPath));
 
-      return plan.buildDir / platform_executable_name(plan.projectDir.filename().string());
+      const std::string target =
+          !plan.defaultTargetName.empty()
+              ? plan.defaultTargetName
+              : plan.projectDir.filename().string();
+
+      return plan.buildDir / platform_executable_name(target);
     }
 
     static bool file_exists_regular(const fs::path &path)
@@ -1608,7 +1628,7 @@ namespace vix::commands::BuildCommand
 
       if (opt.exportBin)
       {
-        const fs::path dest = plan.projectDir / outputBinary.filename();
+        const fs::path dest = plan.userProjectDir / outputBinary.filename();
 
         if (!export_built_binary(outputBinary, dest, opt.quiet))
           return 1;
@@ -1672,7 +1692,7 @@ namespace vix::commands::BuildCommand
         {
           try
           {
-            clean_local_build_dirs(plan_.projectDir, opt_.targetTriple, opt_.quiet);
+            clean_local_build_dirs(plan_.userProjectDir, opt_.targetTriple, opt_.quiet);
           }
           catch (const std::exception &)
           {
@@ -1766,7 +1786,7 @@ namespace vix::commands::BuildCommand
 
         std::vector<artifact_cache::ProjectInput> projectInputs =
             artifact_cache::ArtifactCache::snapshot_project_inputs(
-                plan_.projectDir,
+                plan_.userProjectDir,
                 previousState ? &previousState->inputs : nullptr);
 
         const bool buildStateHit =
@@ -1787,14 +1807,14 @@ namespace vix::commands::BuildCommand
         }
 
         build::BuildGraphConfig graphConfig;
-        graphConfig.projectDir = plan_.projectDir;
+        graphConfig.projectDir = plan_.userProjectDir;
         graphConfig.buildDir = plan_.buildDir;
         graphConfig.objectDir = plan_.buildDir / ".vix" / "obj";
         graphConfig.compiler = "c++";
         graphConfig.buildFingerprint = plan_.signature;
 
-        graphConfig.includeDirs.push_back((plan_.projectDir / "include").string());
-        graphConfig.includeDirs.push_back((plan_.projectDir / "src").string());
+        graphConfig.includeDirs.push_back((plan_.userProjectDir / "include").string());
+        graphConfig.includeDirs.push_back((plan_.userProjectDir / "src").string());
 
         graphConfig.flags.push_back("-Wall");
         graphConfig.flags.push_back("-Wextra");
@@ -1927,7 +1947,15 @@ namespace vix::commands::BuildCommand
         if (debug_build_details_enabled() && !opt_.quiet)
         {
           out.print("  Using project directory:\n");
-          out.print("    • " + plan_.projectDir.string() + "\n\n");
+          out.print("    • " + plan_.userProjectDir.string() + "\n");
+
+          if (plan_.generatedFromVixApp)
+          {
+            out.print("  Using generated CMake source:\n");
+            out.print("    • " + plan_.cmakeSourceDir.string() + "\n");
+          }
+
+          out.print("\n");
         }
 
         if (!opt_.targetTriple.empty())
@@ -1952,7 +1980,7 @@ namespace vix::commands::BuildCommand
 
           if (verboseMode && !opt_.quiet)
           {
-            out.print("Configuring " + plan_.projectDir.filename().string() +
+            out.print("Configuring " + build::default_build_target_name(opt_, plan_) +
                       " (" + display_build_profile(plan_) + ")\n");
 
             if (debug_build_details_enabled())
@@ -1988,7 +2016,7 @@ namespace vix::commands::BuildCommand
             const std::string log = util::read_text_file_or_empty(plan_.configureLog);
             const bool handled = vix::cli::ErrorHandler::printBuildErrors(
                 log,
-                plan_.projectDir / "CMakeLists.txt",
+                plan_.cmakeSourceDir / "CMakeLists.txt",
                 "CMake configure failed");
 
             if (!opt_.quiet && !handled)
@@ -2044,8 +2072,9 @@ namespace vix::commands::BuildCommand
 
           const auto exeOpt = resolve_main_executable(
               plan_.buildDir,
-              plan_.projectDir,
-              opt_.buildTarget);
+              plan_.userProjectDir,
+              opt_.buildTarget,
+              plan_.defaultTargetName);
 
           if (exeOpt)
             lastBinary = exeOpt->string();
@@ -2142,7 +2171,7 @@ namespace vix::commands::BuildCommand
             const std::string log = util::read_text_file_or_empty(plan_.buildLog);
             const bool handled = vix::cli::ErrorHandler::printBuildErrors(
                 log,
-                plan_.projectDir / "CMakeLists.txt",
+                plan_.cmakeSourceDir / "CMakeLists.txt",
                 "Build failed");
 
             if (!opt_.quiet && !handled)
@@ -2161,8 +2190,9 @@ namespace vix::commands::BuildCommand
 
           const auto exeOpt = resolve_main_executable(
               plan_.buildDir,
-              plan_.projectDir,
-              opt_.buildTarget);
+              plan_.userProjectDir,
+              opt_.buildTarget,
+              plan_.defaultTargetName);
 
           if (exeOpt)
             lastBinary = exeOpt->string();
@@ -2230,8 +2260,9 @@ namespace vix::commands::BuildCommand
         {
           const auto exeOpt = resolve_main_executable(
               plan_.buildDir,
-              plan_.projectDir,
-              opt_.buildTarget);
+              plan_.userProjectDir,
+              opt_.buildTarget,
+              plan_.defaultTargetName);
 
           if (!exeOpt)
           {
@@ -2243,7 +2274,7 @@ namespace vix::commands::BuildCommand
           fs::path dest;
           if (opt_.exportBin)
           {
-            dest = plan_.projectDir / exeOpt->filename();
+            dest = plan_.userProjectDir / exeOpt->filename();
           }
           else
           {

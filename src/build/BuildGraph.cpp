@@ -844,6 +844,7 @@ namespace vix::cli::build
       task.id = compile_task_id_for_source(sourcePath);
       task.workingDirectory = entry.directory;
       task.logFile = dependencyPath;
+      task.commandHash = command_hash_for_argv(task.command);
 
       add_task(task);
 
@@ -1128,6 +1129,33 @@ namespace vix::cli::build
 
   bool BuildGraph::task_is_dirty(const BuildTask &task) const
   {
+    if (task.kind == BuildTaskKind::Compile)
+    {
+      for (const auto &inputId : task.inputs)
+      {
+        const BuildNode *node = find_node(inputId);
+
+        if (!node)
+          return true;
+
+        if (node->dirty() || node->missing())
+          return true;
+      }
+
+      for (const auto &outputId : task.outputs)
+      {
+        const BuildNode *node = find_node(outputId);
+
+        if (!node)
+          return true;
+
+        if (node->missing())
+          return true;
+      }
+
+      return false;
+    }
+
     for (const auto &inputId : task.inputs)
     {
       const BuildNode *node = find_node(inputId);

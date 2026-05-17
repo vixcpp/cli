@@ -25,9 +25,12 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <cctype>
+#include <cstdlib>
 
 #include <vix/cli/build/DependencyFile.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
+#include <vix/cli/cmake/CMakeBuild.hpp>
 
 namespace vix::cli::build
 {
@@ -326,6 +329,38 @@ namespace vix::cli::build
 
       return task;
     }
+
+    static bool graph_debug_logs_enabled()
+    {
+      const char *level = std::getenv("VIX_LOG_LEVEL");
+
+      if (!level || !*level)
+        return false;
+
+      std::string value(level);
+
+      for (char &c : value)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+      return value == "debug" || value == "trace";
+    }
+
+    static void graph_log(
+        const BuildGraphExecutorOptions &options,
+        const std::string &message)
+    {
+      if (options.quiet)
+        return;
+
+      if (!options.verbose)
+        return;
+
+      if (!graph_debug_logs_enabled())
+        return;
+
+      std::cout << "  " << message << "\n";
+      std::cout.flush();
+    }
   } // namespace
 
   BuildGraphExecutor::BuildGraphExecutor(BuildGraphExecutorOptions options)
@@ -343,6 +378,10 @@ namespace vix::cli::build
     BuildGraphExecutorResult result;
     result.target = options_.target;
 
+    graph_log(
+        options_,
+        "graph: starting target executor for `" + options_.target + "`");
+
     if (options_.target.empty())
     {
       result.ok = false;
@@ -350,6 +389,8 @@ namespace vix::cli::build
       result.output = "Missing graph build target.\n";
       return result;
     }
+
+    graph_log(options_, "graph: resolving target task");
 
     const BuildTask *targetTask =
         find_target_task(graph, options_.target);
@@ -362,7 +403,17 @@ namespace vix::cli::build
       return result;
     }
 
+    graph_log(
+        options_,
+        "graph: target task resolved: " + targetTask->id);
+
+    graph_log(options_, "graph: building output-to-task map");
+
     const auto outputToTask = make_output_to_task_map(graph);
+
+    graph_log(
+        options_,
+        "graph: collecting task closure");
 
     std::unordered_set<std::string> selected;
     collect_task_closure(
@@ -373,14 +424,50 @@ namespace vix::cli::build
 
     result.selectedTasks = selected.size();
 
+    graph_log(
+        options_,
+        "graph: selected " + std::to_string(result.selectedTasks) + " tasks");
+
+    graph_log(
+        options_,
+        "graph: collecting compile tasks");
+
     const std::vector<BuildTask> compileTasks =
         selected_compile_tasks(graph, selected);
+
+    graph_log(
+        options_,
+        "graph: selected " + std::to_string(compileTasks.size()) +
+            " compile tasks");
+
+    graph_log(
+        options_,
+        "graph: checking dirty compile tasks");
 
     const std::vector<BuildTask> dirtyCompileTasks =
         dirty_tasks_only(graph, compileTasks);
 
     result.selectedCompileTasks = compileTasks.size();
     result.dirtyCompileTasks = dirtyCompileTasks.size();
+
+    graph_log(
+        options_,
+        "graph: dirty compile tasks: " +
+            std::to_string(result.dirtyCompileTasks));
+
+    if (result.dirtyCompileTasks > 128)
+    {
+      result.ok = false;
+      result.exitCode = 2;
+      result.output =
+          "Graph target has too many dirty compile tasks: " +
+          std::to_string(result.dirtyCompileTasks) +
+          " dirty tasks from " +
+          std::to_string(result.selectedCompileTasks) +
+          " selected compile tasks. Falling back to Ninja.\n";
+
+      return result;
+    }
 
     if (!dirtyCompileTasks.empty())
     {
@@ -396,7 +483,7 @@ namespace vix::cli::build
 
       BuildSchedulerOptions schedulerOptions;
       schedulerOptions.jobs = options_.jobs;
-      schedulerOptions.quiet = options_.quiet;
+      schedulerOptions.quiet = true;
       schedulerOptions.stopOnFirstFailure = true;
 
       BuildScheduler scheduler(schedulerOptions);
@@ -406,6 +493,10 @@ namespace vix::cli::build
           scheduler.run(
               [&](BuildTask &task)
               {
+                graph_log(
+                    options_,
+                    "graph: compile " + task.id);
+
                 return run_cached_compile_task(
                     graph,
                     objectCache,
@@ -415,32 +506,84 @@ namespace vix::cli::build
       result.executedCompileTasks = compileResult.done;
       result.skippedCompileTasks = compileResult.skipped;
 
+      for (const BuildTaskResult &taskResult : compileResult.results)
+      {
+        if (!taskResult.output.empty())
+          result.output += taskResult.output;
+      }
+
       if (!compileResult.success())
       {
         result.ok = false;
         result.exitCode = 1;
+        return result;
+      }
+    }
+    else
+    {
+      graph_log(options_, "graph: no dirty compile tasks");
+    }
 
-        for (const BuildTaskResult &taskResult : compileResult.results)
+    if (dirtyCompileTasks.empty())
+    {
+      bool outputsExist = true;
+
+      for (const std::string &outputId : targetTask->outputs)
+      {
+        const BuildNode *node = graph.find_node(outputId);
+
+        if (!node || node->missing())
         {
-          if (!taskResult.output.empty())
-            result.output += taskResult.output;
+          outputsExist = false;
+          break;
         }
+      }
+
+      if (outputsExist)
+      {
+        result.ok = true;
+        result.exitCode = 0;
+        result.executedCompileTasks = 0;
+        result.skippedCompileTasks = result.selectedCompileTasks;
+        result.output += "Graph target is up to date.\n";
+
+        graph_log(options_, "graph: target outputs exist, skipping ninja");
 
         return result;
       }
     }
+
+    graph_log(
+        options_,
+        "graph: running ninja target `" + options_.target + "`");
 
     BuildTask ninjaTargetTask =
         make_ninja_target_task(
             options_.buildDir,
             options_.target);
 
-    BuildTaskResult linkResult =
-        BuildScheduler::execute_command_task(ninjaTargetTask);
+    const process::ExecResult ninjaResult =
+        run_process_live_to_log(
+            ninjaTargetTask.command,
+            {},
+            options_.buildDir / "build.log",
+            options_.quiet,
+            /*cmakeVerbose=*/false,
+            /*progressOnly=*/false);
 
-    result.output += linkResult.output;
-    result.exitCode = linkResult.exitCode;
-    result.ok = linkResult.exitCode == 0;
+    result.exitCode = ninjaResult.exitCode;
+    result.ok = ninjaResult.exitCode == 0;
+
+    graph_log(
+        options_,
+        "graph: ninja target finished with exit code " +
+            std::to_string(result.exitCode));
+
+    if (!result.ok)
+    {
+      result.output += "Ninja target failed: " + options_.target + "\n";
+      result.output += ninjaResult.displayCommand + "\n";
+    }
 
     return result;
   }

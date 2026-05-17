@@ -116,17 +116,17 @@ namespace vix::commands::BuildCommand
       const char *value = std::getenv("VIX_GRAPH_EXECUTOR");
 
       if (!value || !*value)
-        return false;
+        return true;
 
       std::string s(value);
 
       for (char &c : s)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
-      return s == "1" ||
-             s == "true" ||
-             s == "yes" ||
-             s == "on";
+      return !(s == "0" ||
+               s == "false" ||
+               s == "no" ||
+               s == "off");
     }
 
     static bool can_use_target_graph_executor(
@@ -141,6 +141,9 @@ namespace vix::commands::BuildCommand
         return false;
 
       if (opt.clean)
+        return false;
+
+      if (opt.buildTarget == "all")
         return false;
 
       if (!opt.targetTriple.empty())
@@ -1419,6 +1422,101 @@ namespace vix::commands::BuildCommand
       return value == "debug" || value == "trace";
     }
 
+    static bool looks_like_compiler_warning(const std::string &line)
+    {
+      return line.find(": warning:") != std::string::npos ||
+             line.find(" warning: ") != std::string::npos;
+    }
+
+    static void print_graph_warnings_modern(const std::string &output)
+    {
+      std::istringstream in(output);
+      std::string line;
+
+      std::vector<std::string> warnings;
+
+      while (std::getline(in, line))
+      {
+        if (looks_like_compiler_warning(line))
+          warnings.push_back(line);
+      }
+
+      if (warnings.empty())
+        return;
+
+      std::cout << "  " << YELLOW << "warning" << RESET
+                << " " << warnings.size()
+                << " compiler warning"
+                << (warnings.size() > 1 ? "s" : "")
+                << "\n";
+
+      for (const std::string &warningLine : warnings)
+      {
+        std::cout << "    " << GRAY << "• " << RESET
+                  << warningLine << "\n";
+      }
+
+      std::cout << "\n";
+    }
+
+    static build::BuildGraph make_build_graph_after_configure(
+        const process::Options &opt,
+        const process::Plan &plan,
+        std::size_t &importedCompileCommands,
+        std::size_t &importedNinjaTasks,
+        build::BuildGraphScanResult &scan)
+    {
+      build::BuildGraphConfig graphConfig;
+      graphConfig.projectDir = plan.userProjectDir;
+      graphConfig.buildDir = plan.buildDir;
+      graphConfig.objectDir = plan.buildDir / ".vix" / "obj";
+      graphConfig.compiler = "c++";
+      graphConfig.buildFingerprint = plan.signature;
+
+      graphConfig.includeDirs.push_back((plan.userProjectDir / "include").string());
+      graphConfig.includeDirs.push_back((plan.userProjectDir / "src").string());
+
+      graphConfig.flags.push_back("-Wall");
+      graphConfig.flags.push_back("-Wextra");
+
+      build::BuildGraph graph(graphConfig);
+
+      scan = graph.scan_project();
+
+      const fs::path compileCommandsPath =
+          build::default_compile_commands_path(plan.buildDir);
+
+      importedCompileCommands =
+          graph.load_compile_commands(compileCommandsPath);
+
+      const fs::path buildNinjaPath =
+          build::default_build_ninja_path(plan.buildDir);
+
+      importedNinjaTasks =
+          graph.load_ninja_build(buildNinjaPath);
+
+      graph.load_dependency_files();
+
+      const fs::path graphPath =
+          build::BuildGraph::default_graph_path(plan.buildDir);
+
+      const auto previousGraph =
+          build::BuildGraph::load(graphPath);
+
+      graph.propagate_dirty();
+
+      if (previousGraph)
+        graph.mark_clean_from_previous(*previousGraph);
+      else
+        graph.mark_all_dirty();
+
+      graph.propagate_dirty();
+
+      (void)opt;
+
+      return graph;
+    }
+
     static std::vector<fs::path> graph_object_paths(const build::BuildGraph &graph)
     {
       std::vector<fs::path> objects;
@@ -1673,6 +1771,7 @@ namespace vix::commands::BuildCommand
       int run()
       {
         const fs::path cwd = fs::current_path();
+        const auto commandStart = std::chrono::steady_clock::now();
 
         if (opt_.singleCpp)
           return run_single_cpp_build();
@@ -1686,13 +1785,17 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = *planOpt;
-        const fs::path globalPackagesFile = plan_.buildDir / "vix-global-packages.cmake";
+        const fs::path globalPackagesFile =
+            plan_.buildDir / "vix-global-packages.cmake";
 
         if (opt_.clean)
         {
           try
           {
-            clean_local_build_dirs(plan_.userProjectDir, opt_.targetTriple, opt_.quiet);
+            clean_local_build_dirs(
+                plan_.userProjectDir,
+                opt_.targetTriple,
+                opt_.quiet);
           }
           catch (const std::exception &)
           {
@@ -1716,7 +1819,8 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        if (plan_.fastLinkerFlag && *plan_.fastLinkerFlag == "-fuse-ld=lld" &&
+        if (plan_.fastLinkerFlag &&
+            *plan_.fastLinkerFlag == "-fuse-ld=lld" &&
             !util::executable_on_path("ld.lld"))
         {
           if (!opt_.quiet)
@@ -1724,10 +1828,12 @@ namespace vix::commands::BuildCommand
             hint("Requested lld but 'ld.lld' is missing -> falling back to default linker.");
             hint("Install optional speedup: sudo apt install -y lld");
           }
+
           plan_.fastLinkerFlag.reset();
         }
 
-        if (plan_.fastLinkerFlag && *plan_.fastLinkerFlag == "-fuse-ld=mold" &&
+        if (plan_.fastLinkerFlag &&
+            *plan_.fastLinkerFlag == "-fuse-ld=mold" &&
             !util::executable_on_path("mold"))
         {
           if (!opt_.quiet)
@@ -1735,6 +1841,7 @@ namespace vix::commands::BuildCommand
             hint("Requested mold but 'mold' is missing -> falling back to default linker.");
             hint("Install optional speedup: sudo apt install -y mold");
           }
+
           plan_.fastLinkerFlag.reset();
         }
 
@@ -1747,7 +1854,9 @@ namespace vix::commands::BuildCommand
             globalPackagesFile);
 
         if (!opt_.targetTriple.empty())
-          tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
+          tc = build::toolchain_contents_for_triple(
+              opt_.targetTriple,
+              opt_.sysroot);
 
         plan_.signature = make_signature(plan_, opt_, tc);
 #endif
@@ -1757,7 +1866,8 @@ namespace vix::commands::BuildCommand
           const std::string gcc = opt_.targetTriple + "-gcc";
           const std::string gxx = opt_.targetTriple + "-g++";
 
-          if (!util::executable_on_path(gcc) || !util::executable_on_path(gxx))
+          if (!util::executable_on_path(gcc) ||
+              !util::executable_on_path(gxx))
           {
             error("Cross toolchain not found on PATH for target: " + opt_.targetTriple);
             hint("Install the cross compiler and ensure binaries exist:");
@@ -1772,8 +1882,10 @@ namespace vix::commands::BuildCommand
           if (!util::ensure_dir(plan_.buildDir, err))
           {
             error("Unable to create build directory: " + plan_.buildDir.string());
+
             if (!err.empty())
               hint(err);
+
             return 1;
           }
         }
@@ -1806,131 +1918,30 @@ namespace vix::commands::BuildCommand
                artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
         }
 
-        build::BuildGraphConfig graphConfig;
-        graphConfig.projectDir = plan_.userProjectDir;
-        graphConfig.buildDir = plan_.buildDir;
-        graphConfig.objectDir = plan_.buildDir / ".vix" / "obj";
-        graphConfig.compiler = "c++";
-        graphConfig.buildFingerprint = plan_.signature;
-
-        graphConfig.includeDirs.push_back((plan_.userProjectDir / "include").string());
-        graphConfig.includeDirs.push_back((plan_.userProjectDir / "src").string());
-
-        graphConfig.flags.push_back("-Wall");
-        graphConfig.flags.push_back("-Wextra");
-
-        build::BuildGraph graph(graphConfig);
-
-        const fs::path graphPath =
-            build::BuildGraph::default_graph_path(plan_.buildDir);
-
-        const auto previousGraph =
-            build::BuildGraph::load(graphPath);
-
-        const auto scan = graph.scan_project();
-
-        const fs::path compileCommandsPath =
-            build::default_compile_commands_path(plan_.buildDir);
-
-        const std::size_t importedCompileCommands =
-            graph.load_compile_commands(compileCommandsPath);
-
-        const fs::path buildNinjaPath =
-            build::default_build_ninja_path(plan_.buildDir);
-
-        const std::size_t importedNinjaTasks =
-            graph.load_ninja_build(buildNinjaPath);
-
-        graph.load_dependency_files();
-
-        graph.propagate_dirty();
-
-        if (previousGraph)
+        if (opt_.fast &&
+            buildStateHit &&
+            !opt_.exportBin &&
+            opt_.outPath.empty())
         {
-          graph.mark_clean_from_previous(*previousGraph);
-        }
-        else
-        {
-          graph.mark_all_dirty();
-        }
+          const auto ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - commandStart)
+                  .count();
 
-        graph.propagate_dirty();
-
-        if (debug_build_details_enabled() && !opt_.quiet)
-        {
-          step("build graph: " +
-               std::to_string(scan.sources) + " sources, " +
-               std::to_string(scan.headers) + " headers, " +
-               std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
-               std::to_string(importedCompileCommands) + " imported commands, " +
-               std::to_string(importedNinjaTasks) + " ninja tasks");
-        }
-
-        if (can_use_target_graph_executor(
-                opt_,
-                importedCompileCommands,
-                importedNinjaTasks))
-        {
-          build::BuildGraphExecutorOptions executorOptions;
-          executorOptions.buildDir = plan_.buildDir;
-          executorOptions.target = build::default_graph_target_name(opt_, plan_);
-          executorOptions.jobs = opt_.jobs;
-          executorOptions.quiet = opt_.quiet;
-          executorOptions.verbose = verboseMode;
-
-          build::BuildGraphExecutor executor(executorOptions);
-
-          const build::BuildGraphExecutorResult graphResult =
-              executor.run_target(graph);
-
-          if (graphResult.ok)
+          if (!opt_.quiet)
           {
-            if (!graph.save(graphPath) && !opt_.quiet)
-              hint("Warning: unable to write Vix build graph");
+            std::cout << "Checking "
+                      << build::default_build_target_name(opt_, plan_)
+                      << " ("
+                      << display_build_profile(plan_)
+                      << ")\n";
 
-            if (!opt_.quiet)
-            {
-              util::ok_line(
-                  std::cout,
-                  "Graph target: " + graphResult.target);
-
-              util::ok_line(
-                  std::cout,
-                  "Compiled " + std::to_string(graphResult.dirtyCompileTasks) +
-                      " dirty files from " +
-                      std::to_string(graphResult.selectedCompileTasks) +
-                      " selected compile tasks");
-
-              util::ok_line(std::cout, "Done");
-            }
-
-            return 0;
+            std::cout << PAD << GREEN << "✔ Up to date in " << RESET
+                      << util::format_seconds(ms)
+                      << "\n";
           }
 
-          if (verboseMode && !opt_.quiet)
-          {
-            hint("Graph target executor skipped: " + graphResult.output);
-          }
-        }
-
-        if (graph_executor_enabled() && can_use_graph_build(opt_, plan_, scan))
-        {
-          return run_graph_build(
-              graph,
-              graphPath,
-              opt_,
-              plan_,
-              projectArtifact,
-              projectInputs,
-              verboseMode);
-        }
-
-        if (debug_build_details_enabled() && !opt_.quiet)
-        {
-          if (artifact_cache::ArtifactCache::exists(projectArtifact))
-            step("artifact cache: hit -> " + projectArtifact.root.string());
-          else
-            step("artifact cache: miss -> " + projectArtifact.root.string());
+          return 0;
         }
 
         const auto globalPackages = build::load_global_packages();
@@ -1946,6 +1957,11 @@ namespace vix::commands::BuildCommand
 
         if (debug_build_details_enabled() && !opt_.quiet)
         {
+          if (artifact_cache::ArtifactCache::exists(projectArtifact))
+            step("artifact cache: hit -> " + projectArtifact.root.string());
+          else
+            step("artifact cache: miss -> " + projectArtifact.root.string());
+
           out.print("  Using project directory:\n");
           out.print("    • " + plan_.userProjectDir.string() + "\n");
 
@@ -1960,7 +1976,10 @@ namespace vix::commands::BuildCommand
 
         if (!opt_.targetTriple.empty())
         {
-          tc = build::toolchain_contents_for_triple(opt_.targetTriple, opt_.sysroot);
+          tc = build::toolchain_contents_for_triple(
+              opt_.targetTriple,
+              opt_.sysroot);
+
           projectArtifact = make_project_artifact(plan_, opt_, tc);
 
           if (!write_if_different(plan_.toolchainFile, tc))
@@ -2013,11 +2032,14 @@ namespace vix::commands::BuildCommand
           {
             out.discard();
 
-            const std::string log = util::read_text_file_or_empty(plan_.configureLog);
-            const bool handled = vix::cli::ErrorHandler::printBuildErrors(
-                log,
-                plan_.cmakeSourceDir / "CMakeLists.txt",
-                "CMake configure failed");
+            const std::string log =
+                util::read_text_file_or_empty(plan_.configureLog);
+
+            const bool handled =
+                vix::cli::ErrorHandler::printBuildErrors(
+                    log,
+                    plan_.cmakeSourceDir / "CMakeLists.txt",
+                    "CMake configure failed");
 
             if (!opt_.quiet && !handled)
             {
@@ -2063,6 +2085,131 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        std::size_t importedCompileCommands = 0;
+        std::size_t importedNinjaTasks = 0;
+        build::BuildGraphScanResult scan{};
+
+        build::BuildGraph graph =
+            make_build_graph_after_configure(
+                opt_,
+                plan_,
+                importedCompileCommands,
+                importedNinjaTasks,
+                scan);
+
+        const fs::path graphPath =
+            build::BuildGraph::default_graph_path(plan_.buildDir);
+
+        if (debug_build_details_enabled() && !opt_.quiet)
+        {
+          step("build graph: " +
+               std::to_string(scan.sources) + " sources, " +
+               std::to_string(scan.headers) + " headers, " +
+               std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
+               std::to_string(importedCompileCommands) + " imported commands, " +
+               std::to_string(importedNinjaTasks) + " ninja tasks");
+        }
+
+        if (can_use_target_graph_executor(
+                opt_,
+                importedCompileCommands,
+                importedNinjaTasks))
+        {
+          build::BuildGraphExecutorOptions executorOptions;
+          executorOptions.buildDir = plan_.buildDir;
+          executorOptions.target = build::default_graph_target_name(opt_, plan_);
+          executorOptions.jobs = opt_.jobs;
+          executorOptions.quiet = opt_.quiet;
+          executorOptions.verbose = verboseMode;
+
+          build::BuildGraphExecutor executor(executorOptions);
+
+          const build::BuildGraphExecutorResult graphResult =
+              executor.run_target(graph);
+
+          if (graphResult.ok)
+          {
+            if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
+              hint("Warning: unable to persist artifact cache metadata");
+
+            std::string lastBinary;
+
+            const auto exeOpt = resolve_main_executable(
+                plan_.buildDir,
+                plan_.userProjectDir,
+                opt_.buildTarget,
+                plan_.defaultTargetName);
+
+            if (exeOpt)
+              lastBinary = exeOpt->string();
+
+            const auto state =
+                artifact_cache::ArtifactCache::make_build_state(
+                    plan_.signature,
+                    plan_.projectFingerprint,
+                    projectArtifact.root.string(),
+                    lastBinary,
+                    opt_.buildTarget,
+                    plan_.preset.name,
+                    plan_.preset.buildType,
+                    projectArtifact.target,
+                    projectArtifact.compiler,
+                    projectInputs);
+
+            if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+                !opt_.quiet)
+            {
+              hint("Warning: unable to write Vix build state");
+            }
+
+            if (!graph.save(graphPath) && !opt_.quiet)
+              hint("Warning: unable to write Vix build graph");
+
+            if (!opt_.quiet)
+            {
+              print_graph_warnings_modern(graphResult.output);
+
+              if (configuredThisRun)
+                util::ok_line(std::cout, "Configured");
+
+              util::ok_line(
+                  std::cout,
+                  "Graph target: " + graphResult.target);
+
+              if (graphResult.dirtyCompileTasks == 0)
+              {
+                util::ok_line(std::cout, "Up to date");
+              }
+              else
+              {
+                util::ok_line(
+                    std::cout,
+                    "Compiled " + std::to_string(graphResult.dirtyCompileTasks) +
+                        " dirty files");
+              }
+
+              util::ok_line(std::cout, "Done");
+            }
+
+            return 0;
+          }
+
+          if (verboseMode && !opt_.quiet)
+            hint("Graph target executor fallback: " + graphResult.output);
+        }
+
+        if (graph_executor_enabled() && can_use_graph_build(opt_, plan_, scan))
+        {
+          return run_graph_build(
+              graph,
+              graphPath,
+              opt_,
+              plan_,
+              projectArtifact,
+              projectInputs,
+              verboseMode);
+        }
+
         if (opt_.fast && build::ninja_is_up_to_date(opt_, plan_))
         {
           if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
@@ -2079,17 +2226,18 @@ namespace vix::commands::BuildCommand
           if (exeOpt)
             lastBinary = exeOpt->string();
 
-          const auto state = artifact_cache::ArtifactCache::make_build_state(
-              plan_.signature,
-              plan_.projectFingerprint,
-              projectArtifact.root.string(),
-              lastBinary,
-              opt_.buildTarget,
-              plan_.preset.name,
-              plan_.preset.buildType,
-              projectArtifact.target,
-              projectArtifact.compiler,
-              projectInputs);
+          const auto state =
+              artifact_cache::ArtifactCache::make_build_state(
+                  plan_.signature,
+                  plan_.projectFingerprint,
+                  projectArtifact.root.string(),
+                  lastBinary,
+                  opt_.buildTarget,
+                  plan_.preset.name,
+                  plan_.preset.buildType,
+                  projectArtifact.target,
+                  projectArtifact.compiler,
+                  projectInputs);
 
           if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
               !opt_.quiet)
@@ -2098,14 +2246,13 @@ namespace vix::commands::BuildCommand
           }
 
           if (!graph.save(graphPath) && !opt_.quiet)
-          {
             hint("Warning: unable to write Vix build graph");
-          }
 
           if (!opt_.quiet)
           {
             if (configuredThisRun)
               util::ok_line(std::cout, "Configured");
+
             util::ok_line(std::cout, "Up to date");
             util::ok_line(std::cout, "Done");
           }
@@ -2168,11 +2315,14 @@ namespace vix::commands::BuildCommand
           {
             out.discard();
 
-            const std::string log = util::read_text_file_or_empty(plan_.buildLog);
-            const bool handled = vix::cli::ErrorHandler::printBuildErrors(
-                log,
-                plan_.cmakeSourceDir / "CMakeLists.txt",
-                "Build failed");
+            const std::string log =
+                util::read_text_file_or_empty(plan_.buildLog);
+
+            const bool handled =
+                vix::cli::ErrorHandler::printBuildErrors(
+                    log,
+                    plan_.cmakeSourceDir / "CMakeLists.txt",
+                    "Build failed");
 
             if (!opt_.quiet && !handled)
             {
@@ -2197,17 +2347,18 @@ namespace vix::commands::BuildCommand
           if (exeOpt)
             lastBinary = exeOpt->string();
 
-          const auto state = artifact_cache::ArtifactCache::make_build_state(
-              plan_.signature,
-              plan_.projectFingerprint,
-              projectArtifact.root.string(),
-              lastBinary,
-              opt_.buildTarget,
-              plan_.preset.name,
-              plan_.preset.buildType,
-              projectArtifact.target,
-              projectArtifact.compiler,
-              projectInputs);
+          const auto state =
+              artifact_cache::ArtifactCache::make_build_state(
+                  plan_.signature,
+                  plan_.projectFingerprint,
+                  projectArtifact.root.string(),
+                  lastBinary,
+                  opt_.buildTarget,
+                  plan_.preset.name,
+                  plan_.preset.buildType,
+                  projectArtifact.target,
+                  projectArtifact.compiler,
+                  projectInputs);
 
           if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
               !opt_.quiet)
@@ -2215,8 +2366,14 @@ namespace vix::commands::BuildCommand
             hint("Warning: unable to write Vix build state");
           }
 
-          const std::string buildLog = util::read_text_file_or_empty(plan_.buildLog);
-          const std::size_t builtTargets = count_built_targets_from_log(buildLog);
+          if (!graph.save(graphPath) && !opt_.quiet)
+            hint("Warning: unable to write Vix build graph");
+
+          const std::string buildLog =
+              util::read_text_file_or_empty(plan_.buildLog);
+
+          const std::size_t builtTargets =
+              count_built_targets_from_log(buildLog);
 
           if (opt_.quiet)
           {
@@ -2272,14 +2429,11 @@ namespace vix::commands::BuildCommand
           }
 
           fs::path dest;
+
           if (opt_.exportBin)
-          {
             dest = plan_.userProjectDir / exeOpt->filename();
-          }
           else
-          {
             dest = fs::absolute(fs::path(opt_.outPath));
-          }
 
           if (!export_built_binary(*exeOpt, dest, opt_.quiet))
             return 1;

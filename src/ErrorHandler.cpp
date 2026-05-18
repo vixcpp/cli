@@ -30,6 +30,8 @@
 #include <unordered_set>
 #include <vector>
 #include <fstream>
+#include <cstdlib>
+#include <cctype>
 
 #include <vix/cli/Style.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
@@ -102,11 +104,47 @@ namespace
   {
     const std::string &message = err.message;
 
+    if (message.find("No such file or directory") != std::string::npos ||
+        message.find("file not found") != std::string::npos)
+    {
+      return "Check that the header exists and that its directory is listed in include_dirs, target_include_directories, or your compiler include paths.";
+    }
+
+    if (message.find("fatal error:") != std::string::npos &&
+        message.find("#include") != std::string::npos)
+    {
+      return "A header could not be found. Check the include path or the header name.";
+    }
+
     if (message.find("use of undeclared identifier 'std'") != std::string::npos)
+    {
       return "Include the required standard header before using std names.";
+    }
+
+    if (message.find("use of undeclared identifier") != std::string::npos)
+    {
+      return "Declare the symbol before use, include the right header, or check the namespace.";
+    }
+
+    if (message.find("was not declared in this scope") != std::string::npos)
+    {
+      return "Declare the symbol before use, include the right header, or move the function definition above the call.";
+    }
+
+    if (message.find("does not name a type") != std::string::npos)
+    {
+      return "Check that the type is declared before use and that the correct header is included.";
+    }
 
     if (message.find("expected ';'") != std::string::npos)
+    {
       return "Add the missing semicolon, often on the previous line.";
+    }
+
+    if (message.find("expected primary-expression") != std::string::npos)
+    {
+      return "Check the expression syntax near this location, especially missing operators, parentheses, or variables.";
+    }
 
     if (message.find("no matching function for call to") != std::string::npos)
     {
@@ -120,11 +158,15 @@ namespace
       return "Check argument types, overloads, const qualifiers, and references.";
     }
 
-    if (message.find("was not declared in this scope") != std::string::npos)
-      return "Declare the symbol before use, include the right header, or move the function definition above the call.";
+    if (message.find("undefined reference to") != std::string::npos)
+    {
+      return "A symbol is declared but not linked. Check missing .cpp files, libraries, or target_link_libraries.";
+    }
 
     if (message.find("defined but not used") != std::string::npos)
+    {
       return "Remove the unused function or mark it intentionally unused.";
+    }
 
     return {};
   }
@@ -302,7 +344,22 @@ namespace vix::cli
 
       print_hint("run with --verbose to inspect the full build output");
 
-      if (!cleanedLog.empty())
+      const bool debugOutput = []()
+      {
+        const char *level = std::getenv("VIX_LOG_LEVEL");
+
+        if (!level || !*level)
+          return false;
+
+        std::string value(level);
+
+        for (char &c : value)
+          c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        return value == "debug" || value == "trace";
+      }();
+
+      if (debugOutput && !cleanedLog.empty())
       {
         std::cerr << "\n"
                   << GRAY
@@ -314,6 +371,10 @@ namespace vix::cli
 
         if (cleanedLog.back() != '\n')
           std::cerr << "\n";
+      }
+      else
+      {
+        print_hint("run with VIX_LOG_LEVEL=debug to inspect the full compiler output");
       }
 
       return false;

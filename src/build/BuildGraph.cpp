@@ -507,6 +507,16 @@ namespace vix::cli::build
         return BuildNodeKind::Config;
       }
 
+      /*
+       * Utility/phony/generated outputs are intentionally imported as Config.
+       *
+       * They are useful as graph dependencies, but they are not safe direct
+       * Graph Executor targets yet. BuildGraphExecutor will reject them and
+       * fallback to CMake/Ninja.
+       */
+      if (edge.kind == NinjaEdgeKind::Utility)
+        return BuildNodeKind::Config;
+
       return BuildNodeKind::Unknown;
     }
 
@@ -592,12 +602,23 @@ namespace vix::cli::build
       if (!edge.valid())
         return false;
 
+      /*
+       * Compile commands are imported from compile_commands.json because that
+       * gives Vix the exact compiler argv, working directory and object output.
+       */
       if (edge.kind == NinjaEdgeKind::Compile)
         return false;
 
       if (edge.kind == NinjaEdgeKind::Unknown)
         return false;
 
+      /*
+       * Import Link/Archive/Copy/Install/Utility edges.
+       *
+       * The executor will decide later if a target is safe to execute through
+       * Graph Executor. Importing the DAG is useful even when execution falls
+       * back to CMake/Ninja.
+       */
       return true;
     }
   } // namespace
@@ -863,6 +884,16 @@ namespace vix::cli::build
 
     std::size_t imported = 0;
 
+    std::unordered_map<std::string, std::string> outputToTask;
+
+    for (const auto &kv : tasks_)
+    {
+      const BuildTask &task = kv.second;
+
+      for (const std::string &outputId : task.outputs)
+        outputToTask[outputId] = task.id;
+    }
+
     for (const NinjaEdge &edge : ninjaBuild->edges)
     {
       if (!should_import_ninja_edge(edge))
@@ -881,11 +912,10 @@ namespace vix::cli::build
       task.workingDirectory = ninjaBuild->directory;
 
       /*
-       * Do not expand Ninja rule commands here.
+       * We intentionally delegate non-compile Ninja edges back to Ninja.
        *
-       * build.ninja is already a complete execution graph. For now we import
-       * the DAG structure only. Execution remains delegated to Ninja/CMake until
-       * Vix has a full Ninja variable expander and target-aware executor.
+       * Vix imports the DAG and target metadata here, but does not yet expand
+       * Ninja variables or reimplement every CMake-generated build rule.
        */
       task.command = {
           "ninja",
@@ -895,7 +925,9 @@ namespace vix::cli::build
 
       task.commandHash = command_hash_for_argv(task.command);
 
-      for (const fs::path &input : edge.explicitInputs)
+      std::vector<std::string> inputNodeIds;
+
+      auto import_input = [&](const fs::path &input)
       {
         const BuildNodeKind inputKind = node_kind_from_ninja_input(input);
 
@@ -903,36 +935,29 @@ namespace vix::cli::build
 
         /*
          * Keep Ninja import cheap.
-         * scan_project() and load_dependency_files() already hash real project
-         * inputs where needed. Ninja edges may reference many generated files.
+         * Real source/header hashes are provided by scan_project() and .d files.
+         * Ninja can reference many generated/internal files.
          */
         inputNode.hash.clear();
 
         add_node(inputNode);
+
         task.add_input(inputNode.id);
-      }
+        inputNodeIds.push_back(inputNode.id);
+
+        const auto producerIt = outputToTask.find(inputNode.id);
+        if (producerIt != outputToTask.end())
+          task.add_dependency(producerIt->second);
+      };
+
+      for (const fs::path &input : edge.explicitInputs)
+        import_input(input);
 
       for (const fs::path &input : edge.implicitInputs)
-      {
-        const BuildNodeKind inputKind = node_kind_from_ninja_input(input);
-
-        BuildNode inputNode = make_file_build_node(inputKind, input);
-        inputNode.hash.clear();
-
-        add_node(inputNode);
-        task.add_input(inputNode.id);
-      }
+        import_input(input);
 
       for (const fs::path &input : edge.orderOnlyInputs)
-      {
-        const BuildNodeKind inputKind = node_kind_from_ninja_input(input);
-
-        BuildNode inputNode = make_file_build_node(inputKind, input);
-        inputNode.hash.clear();
-
-        add_node(inputNode);
-        task.add_input(inputNode.id);
-      }
+        import_input(input);
 
       for (const fs::path &output : edge.outputs)
       {
@@ -945,7 +970,7 @@ namespace vix::cli::build
         BuildNode outputNode = make_file_build_node(outputKind, output);
         outputNode.hash.clear();
 
-        for (const auto &inputId : task.inputs)
+        for (const auto &inputId : inputNodeIds)
           outputNode.add_dependency(inputId);
 
         add_node(outputNode);
@@ -956,6 +981,10 @@ namespace vix::cli::build
         continue;
 
       add_task(task);
+
+      for (const std::string &outputId : task.outputs)
+        outputToTask[outputId] = task.id;
+
       ++imported;
     }
 

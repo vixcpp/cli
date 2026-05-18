@@ -1106,8 +1106,15 @@ namespace vix::cli::cache
       const std::string &signature,
       const std::string &projectFingerprint,
       const std::string &buildTarget,
+      const std::string &preset,
+      const std::string &buildType,
+      const std::string &target,
+      const std::string &compiler,
       const std::vector<ProjectInput> &currentInputs)
   {
+    if (state.schemaVersion != 2)
+      return false;
+
     if (state.signature != signature)
       return false;
 
@@ -1117,16 +1124,61 @@ namespace vix::cli::cache
     if (state.buildTarget != buildTarget)
       return false;
 
+    if (state.preset != preset)
+      return false;
+
+    if (state.buildType != buildType)
+      return false;
+
+    if (state.target != target)
+      return false;
+
+    if (state.compiler != compiler)
+      return false;
+
     const std::string currentInputFingerprint =
         compute_inputs_fingerprint(currentInputs);
 
     if (state.inputsFingerprint != currentInputFingerprint)
       return false;
 
-    if (!state.lastBinary.empty() && !util::file_exists(state.lastBinary))
+    if (state.lastBinary.empty())
       return false;
 
-    if (!state.artifactRoot.empty() && !util::dir_exists(state.artifactRoot))
+    const fs::path lastBinaryPath = fs::path(state.lastBinary);
+
+    std::error_code ec;
+
+    if (!fs::exists(lastBinaryPath, ec) || ec)
+      return false;
+
+    if (!fs::is_regular_file(lastBinaryPath, ec) || ec)
+      return false;
+
+#ifdef _WIN32
+    if (lastBinaryPath.extension() != ".exe")
+      return false;
+#else
+    const auto perms = fs::status(lastBinaryPath, ec).permissions();
+
+    if (ec)
+      return false;
+
+    using pr = fs::perms;
+
+    const bool executable =
+        (perms & pr::owner_exec) != pr::none ||
+        (perms & pr::group_exec) != pr::none ||
+        (perms & pr::others_exec) != pr::none;
+
+    if (!executable)
+      return false;
+#endif
+
+    if (state.artifactRoot.empty())
+      return false;
+
+    if (!util::dir_exists(state.artifactRoot))
       return false;
 
     return true;

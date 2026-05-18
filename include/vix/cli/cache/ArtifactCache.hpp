@@ -281,6 +281,10 @@ namespace vix::cli::cache
         const std::string &signature,
         const std::string &projectFingerprint,
         const std::string &buildTarget,
+        const std::string &preset,
+        const std::string &buildType,
+        const std::string &target,
+        const std::string &compiler,
         const std::vector<ProjectInput> &currentInputs);
 
     /**

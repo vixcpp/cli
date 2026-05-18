@@ -83,21 +83,36 @@ namespace vix::cli::build
       return out;
     }
 
+    static bool is_real_graph_target_task(const BuildTask &task)
+    {
+      return task.kind == BuildTaskKind::Link ||
+             task.kind == BuildTaskKind::Archive;
+    }
+
+    static bool node_is_real_graph_output(const BuildNode &node)
+    {
+      return node.kind == BuildNodeKind::Executable ||
+             node.kind == BuildNodeKind::Library;
+    }
+
     static const BuildTask *find_target_task(
         const BuildGraph &graph,
         const std::string &target)
     {
+      const BuildTask *match = nullptr;
+      std::size_t matches = 0;
+
       for (const auto &kv : graph.tasks())
       {
         const BuildTask &task = kv.second;
 
-        if (task.kind != BuildTaskKind::Link &&
-            task.kind != BuildTaskKind::Archive &&
-            task.kind != BuildTaskKind::Copy &&
-            task.kind != BuildTaskKind::Generate)
-        {
+        /*
+         * Safe V1:
+         *   Link/Archive -> Graph Executor can handle target closure.
+         *   Copy/Install/Generate/Utility/phony -> fallback CMake/Ninja.
+         */
+        if (!is_real_graph_target_task(task))
           continue;
-        }
 
         for (const std::string &outputId : task.outputs)
         {
@@ -105,12 +120,21 @@ namespace vix::cli::build
           if (!node)
             continue;
 
-          if (same_target_name(node->path, target))
-            return &task;
+          if (!node_is_real_graph_output(*node))
+            continue;
+
+          if (!same_target_name(node->path, target))
+            continue;
+
+          match = &task;
+          ++matches;
         }
       }
 
-      return nullptr;
+      if (matches != 1)
+        return nullptr;
+
+      return match;
     }
 
     static void collect_task_closure(
@@ -192,6 +216,26 @@ namespace vix::cli::build
       }
 
       return out;
+    }
+
+    static bool graph_has_dirty_project_inputs(const BuildGraph &graph)
+    {
+      for (const auto &kv : graph.nodes())
+      {
+        const BuildNode &node = kv.second;
+
+        if (!(node.dirty() || node.missing()))
+          continue;
+
+        if (node.kind == BuildNodeKind::Source ||
+            node.kind == BuildNodeKind::Header ||
+            node.kind == BuildNodeKind::Config)
+        {
+          return true;
+        }
+      }
+
+      return false;
     }
 
     static bool collect_compile_task_paths(
@@ -399,7 +443,10 @@ namespace vix::cli::build
     {
       result.ok = false;
       result.exitCode = 2;
-      result.output = "Unable to resolve graph target: " + options_.target + "\n";
+      result.output =
+          "Unable to resolve a unique real graph output target: " +
+          options_.target +
+          "\n";
       return result;
     }
 
@@ -449,6 +496,7 @@ namespace vix::cli::build
 
     result.selectedCompileTasks = compileTasks.size();
     result.dirtyCompileTasks = dirtyCompileTasks.size();
+    bool delegatedToNinjaBecauseDirtyProjectInput = false;
 
     graph_log(
         options_,
@@ -526,6 +574,9 @@ namespace vix::cli::build
 
     if (dirtyCompileTasks.empty())
     {
+      const bool hasDirtyProjectInputs =
+          graph_has_dirty_project_inputs(graph);
+
       bool outputsExist = true;
 
       for (const std::string &outputId : targetTask->outputs)
@@ -539,7 +590,7 @@ namespace vix::cli::build
         }
       }
 
-      if (outputsExist)
+      if (outputsExist && !hasDirtyProjectInputs)
       {
         result.ok = true;
         result.exitCode = 0;
@@ -550,6 +601,15 @@ namespace vix::cli::build
         graph_log(options_, "graph: target outputs exist, skipping ninja");
 
         return result;
+      }
+
+      if (hasDirtyProjectInputs)
+      {
+        delegatedToNinjaBecauseDirtyProjectInput = true;
+
+        graph_log(
+            options_,
+            "graph: dirty project input detected, delegating target to ninja");
       }
     }
 
@@ -573,6 +633,11 @@ namespace vix::cli::build
 
     result.exitCode = ninjaResult.exitCode;
     result.ok = ninjaResult.exitCode == 0;
+
+    if (result.ok && delegatedToNinjaBecauseDirtyProjectInput)
+    {
+      result.dirtyCompileTasks = 1;
+    }
 
     graph_log(
         options_,

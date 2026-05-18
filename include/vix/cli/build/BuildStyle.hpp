@@ -67,6 +67,37 @@ namespace vix::cli::build
     bool has_code_frame() const;
   };
 
+  enum class BuildWarningKind
+  {
+    Unknown,
+    UnusedFunction,
+    UnusedVariable,
+    UnusedParameter,
+    ShadowedVariable,
+    DeprecatedDeclaration,
+    SignCompare,
+    Conversion,
+    Reorder,
+    MissingFieldInitializer
+  };
+
+  struct BuildWarning
+  {
+    fs::path file;
+    std::size_t line{0};
+    std::size_t column{0};
+
+    BuildWarningKind kind{BuildWarningKind::Unknown};
+
+    std::string symbol;
+    std::string message;
+    std::string hint;
+    std::string flag;
+    std::string raw;
+
+    bool has_location() const;
+  };
+
   struct BuildProgress
   {
     std::string target;
@@ -162,6 +193,25 @@ namespace vix::cli::build
       std::ostream &out,
       const std::string &message,
       long long milliseconds);
+
+  std::optional<BuildWarning> parse_build_warning(
+      const std::string &text);
+
+  void print_build_warnings_summary(
+      std::ostream &out,
+      const std::vector<BuildWarning> &warnings,
+      std::size_t total);
+
+  std::optional<BuildWarning> parse_build_warning(
+      const std::string &text);
+
+  BuildWarning humanize_build_warning(
+      BuildWarning warning);
+
+  void print_build_warnings_summary(
+      std::ostream &out,
+      const std::vector<BuildWarning> &warnings,
+      std::size_t total);
 
 } // namespace vix::cli::build
 

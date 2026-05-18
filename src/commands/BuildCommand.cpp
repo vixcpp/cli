@@ -1693,33 +1693,31 @@ namespace vix::commands::BuildCommand
       if (total == 0)
         return;
 
-      const std::vector<std::string> warnings =
+      const std::vector<std::string> warningLines =
           collect_compiler_warnings(output, 5);
 
-      std::cout << "  " << YELLOW << "warning" << RESET
-                << " " << total
-                << " compiler warning"
-                << (total > 1 ? "s" : "")
-                << "\n";
+      std::vector<build::BuildWarning> warnings;
+      warnings.reserve(warningLines.size());
 
-      for (const std::string &warningLine : warnings)
+      for (const std::string &line : warningLines)
       {
-        std::cout << "    " << GRAY << "• " << RESET
-                  << warningLine << "\n";
+        const auto parsed = build::parse_build_warning(line);
+
+        if (parsed)
+        {
+          warnings.push_back(*parsed);
+          continue;
+        }
+
+        build::BuildWarning warning;
+        warning.raw = line;
+        warnings.push_back(warning);
       }
 
-      if (total > warnings.size())
-      {
-        std::cout << "    " << GRAY << "• "
-                  << (total - warnings.size())
-                  << " more warning"
-                  << ((total - warnings.size()) > 1 ? "s" : "")
-                  << " hidden"
-                  << RESET
-                  << "\n";
-      }
-
-      std::cout << "\n";
+      build::print_build_warnings_summary(
+          std::cout,
+          warnings,
+          total);
     }
 
     static void print_graph_warnings_modern(const std::string &output)
@@ -2185,7 +2183,9 @@ namespace vix::commands::BuildCommand
         return linkCode;
 
       if (!store_project_target_artifact(projectArtifact, opt, plan) && !opt.quiet)
-        hint("Warning: unable to store target artifact");
+        build::print_build_warning(
+            std::cout,
+            "Unable to store target artifact");
 
       const auto state =
           artifact_cache::ArtifactCache::make_build_state(
@@ -2248,36 +2248,32 @@ namespace vix::commands::BuildCommand
       return "dev";
     }
 
-    static void print_clean_build_header(
+    static void print_vix_build_header(
         const std::string &action,
         const process::Options &opt,
         const process::Plan &plan)
     {
-      std::cout << action
-                << " "
-                << build::default_build_target_name(opt, plan)
-                << " ("
-                << display_build_profile(plan)
-                << ")\n";
+      build::print_task_header_full(
+          std::cout,
+          action,
+          build::default_build_target_name(opt, plan),
+          display_build_profile(plan),
+          {});
     }
 
-    static void print_clean_success(const std::string &message)
+    static void print_vix_build_success(const std::string &message)
     {
-      util::ok_line(std::cout, message);
+      build::print_build_success(std::cout, message);
     }
 
-    static void print_clean_success_timed(
+    static void print_vix_build_success_timed(
         const std::string &message,
         long long milliseconds)
     {
-      std::cout << PAD
-                << GREEN
-                << "✔ "
-                << message
-                << " in "
-                << RESET
-                << util::format_seconds(milliseconds)
-                << "\n";
+      build::print_task_success_timed(
+          std::cout,
+          message,
+          milliseconds);
     }
 
     static bool can_use_native_vix_app_build(
@@ -2513,7 +2509,7 @@ namespace vix::commands::BuildCommand
       }
 
       if (!opt.quiet)
-        print_clean_build_header("Building", opt, plan);
+        print_vix_build_header("Building", opt, plan);
 
       build::ObjectCache objectCache(plan.buildDir);
 
@@ -2681,8 +2677,8 @@ namespace vix::commands::BuildCommand
                 std::chrono::steady_clock::now() - commandStart)
                 .count();
 
-        print_clean_success("Native vix.app");
-        print_clean_success_timed("Done", ms);
+        print_vix_build_success("Native vix.app");
+        print_vix_build_success_timed("Done", ms);
       }
 
       return 0;
@@ -2898,8 +2894,8 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
-            print_clean_build_header("Checking", opt_, plan_);
-            print_clean_success_timed("Up to date", ms);
+            print_vix_build_header("Checking", opt_, plan_);
+            print_vix_build_success_timed("Up to date", ms);
           }
 
           return 0;
@@ -3103,9 +3099,9 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
-            print_clean_build_header("Restoring", opt_, plan_);
-            print_clean_success("Artifact cache hit");
-            print_clean_success("Done");
+            print_vix_build_header("Restoring", opt_, plan_);
+            print_vix_build_success("Artifact cache hit");
+            print_vix_build_success("Done");
           }
 
           return 0;
@@ -3145,7 +3141,9 @@ namespace vix::commands::BuildCommand
           if (graphResult.ok)
           {
             if (!store_project_target_artifact(projectArtifact, opt_, plan_) && !opt_.quiet)
-              hint("Warning: unable to store target artifact");
+              build::print_build_warning(
+                  std::cout,
+                  "Unable to store target artifact");
 
             std::string lastBinary;
 
@@ -3182,27 +3180,27 @@ namespace vix::commands::BuildCommand
 
             if (!opt_.quiet)
             {
-              print_clean_build_header("Building", opt_, plan_);
+              print_vix_build_header("Building", opt_, plan_);
 
               print_graph_warnings_modern(graphResult.output);
 
               if (configuredThisRun)
-                print_clean_success("Configured");
+                print_vix_build_success("Configured");
 
-              print_clean_success("Graph target: " + graphResult.target);
+              print_vix_build_success("Graph target: " + graphResult.target);
 
               if (graphResult.dirtyCompileTasks == 0)
               {
-                print_clean_success("Up to date");
+                print_vix_build_success("Up to date");
               }
               else
               {
-                print_clean_success(
+                print_vix_build_success(
                     "Compiled " + std::to_string(graphResult.dirtyCompileTasks) +
                     " dirty files");
               }
 
-              print_clean_success("Done");
+              print_vix_build_success("Done");
             }
 
             return 0;
@@ -3299,7 +3297,9 @@ namespace vix::commands::BuildCommand
           }
 
           if (!store_project_target_artifact(projectArtifact, opt_, plan_) && !opt_.quiet)
-            hint("Warning: unable to store target artifact");
+            build::print_build_warning(
+                std::cout,
+                "Unable to store target artifact");
 
           std::string lastBinary;
 
@@ -3523,79 +3523,98 @@ namespace vix::commands::BuildCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix build [options] -- [cmake args...]\n\n";
+    out << "  vix build [source.cpp] [options] -- [cmake args...]\n\n";
 
     out << "Description:\n";
-    out << "  Configure and build a CMake project using embedded Vix presets.\n";
-    out << "  Ultra-fast loops:\n";
-    out << "    • No shell/tee overhead (spawn + pipe)\n";
-    out << "    • Strong signature cache (tool versions + cmake file hashes)\n";
-    out << "    • Optional fast no-op exit via Ninja dry-run (--fast)\n";
-    out << "    • Auto sccache/ccache + mold/lld (auto)\n";
-    out << "    • Prepare reusable global artifact metadata cache\n\n";
+    out << "  Configure and build a C++ project with Vix.\n";
+    out << "  Works with CMake projects, vix.app projects, and single C++ files.\n\n";
 
-    out << "Presets (embedded):\n";
-    out << "  dev        -> Ninja + Debug   (build-dev)\n";
-    out << "  dev-ninja  -> Ninja + Debug   (build-ninja)\n";
-    out << "  release    -> Ninja + Release (build-release)\n\n";
+    out << "Core features:\n";
+    out << "  • Embedded build presets\n";
+    out << "  • Fast no-op detection\n";
+    out << "  • Target-aware builds\n";
+    out << "  • Artifact cache\n";
+    out << "  • Object cache\n";
+    out << "  • Graph-based incremental builds when safe\n";
+    out << "  • Auto ccache/sccache launcher\n";
+    out << "  • Auto mold/lld linker\n";
+    out << "  • Human-readable compiler errors and warnings\n\n";
+
+    out << "Presets:\n";
+    out << "  dev        Debug build in build-dev\n";
+    out << "  dev-ninja  Debug build in build-ninja\n";
+    out << "  release    Release build in build-release\n\n";
 
     out << "Options:\n";
-    out << "  --bin                 Export the built executable to the project root\n";
-    out << "  --out <path>          Export the built executable to a specific path\n";
-    out << "  --preset <name>       Preset to use (dev, dev-ninja, release)\n";
-    out << "  --target <triple>     Cross-compilation target triple (auto toolchain)\n";
-    out << "  --sysroot <path>      Sysroot for cross toolchain (optional)\n";
-    out << "  --static              Request static linking (VIX_LINK_STATIC=ON)\n";
-    out << "  --with-sqlite         Enable SQLite support (VIX_DB_USE_SQLITE=ON)\n";
-    out << "  --with-mysql          Enable MySQL support (VIX_DB_USE_MYSQL=ON)\n";
-    out << "  -j, --jobs <n>        Parallel build jobs (default: CPU count, clamped)\n";
-    out << "  --clean               Remove local build directories and reconfigure from scratch\n";
-    out << "  --no-cache            Disable signature cache shortcut\n";
-    out << "  --fast                Fast loop: if Ninja says up-to-date, exit immediately\n";
-    out << "  --linker <mode>       auto|default|mold|lld (auto prefers mold then lld)\n";
-    out << "  --launcher <mode>     auto|none|sccache|ccache (auto prefers sccache)\n";
-    out << "  --no-status           Disable NINJA_STATUS progress format\n";
-    out << "  --no-up-to-date       Disable Ninja dry-run up-to-date detection\n";
-    out << "  -d, --dir <path>      Project directory (where CMakeLists.txt lives)\n";
-    out << "  -q, --quiet           Minimal output (still logs to files)\n";
-    out << "  -v, --verbose         Show detailed configure and build summary\n";
-    out << "  --targets             List detected cross toolchains on PATH\n";
-    out << "  --cmake-verbose       Show raw CMake configure output (no summary filtering)\n";
-    out << "  --build-target <name> Build a specific CMake target (default: project directory name, ex: vix)\n";
-    out << "  -h, --help            Show this help\n\n";
+    out << "  --preset <name>          Use a build preset: dev, dev-ninja, release\n";
+    out << "  --build-target <name>    Build a specific CMake target, for example all or vix\n";
+    out << "  -j, --jobs <n>           Number of parallel build jobs\n";
+    out << "  -d, --dir <path>         Project directory\n";
+    out << "  --clean                  Remove local build directories and configure again\n";
+    out << "  --fast                   Exit early when Ninja says the build is already up to date\n";
+    out << "  --no-cache               Disable Vix cache shortcuts\n";
+    out << "  --no-status              Disable Ninja progress status\n";
+    out << "  --no-up-to-date          Disable Ninja dry-run up-to-date detection\n";
+    out << "  -q, --quiet              Minimal output\n";
+    out << "  -v, --verbose            Show detailed build information\n";
+    out << "  --cmake-verbose          Show raw CMake configure output\n";
+    out << "  -h, --help               Show this help\n\n";
+
+    out << "Output:\n";
+    out << "  --bin                    Export the built executable to the project root\n";
+    out << "  --out <path>             Export the built executable to a specific path\n\n";
+
+    out << "Tooling:\n";
+    out << "  --launcher <mode>        Compiler launcher: auto, none, sccache, ccache\n";
+    out << "  --linker <mode>          Linker mode: auto, default, mold, lld\n\n";
+
+    out << "Cross-compilation:\n";
+    out << "  --target <triple>        Cross-compilation target triple\n";
+    out << "  --sysroot <path>         Sysroot for the cross toolchain\n";
+    out << "  --targets                List detected cross toolchains on PATH\n\n";
+
+    out << "Linking and dependencies:\n";
+    out << "  --static                 Request static linking\n";
+    out << "  --with-sqlite            Enable SQLite support\n";
+    out << "  --with-mysql             Enable MySQL support\n\n";
 
     out << "Environment variables:\n";
-    out << "  VIX_BUILD_HEARTBEAT=0 Disable configure/build heartbeat\n";
-    out << "  VIX_BUILD_HEARTBEAT=1 Force heartbeat when no output is produced\n\n";
+    out << "  VIX_BUILD_HEARTBEAT=0    Disable configure/build heartbeat\n";
+    out << "  VIX_BUILD_HEARTBEAT=1    Force heartbeat when no output is produced\n";
+    out << "  VIX_GRAPH_EXECUTOR=0     Disable graph target executor\n";
+    out << "  VIX_LOG_LEVEL=debug      Show deeper diagnostic output\n\n";
 
     out << "Examples:\n";
     out << "  vix build\n";
+    out << "  vix build -v\n";
+    out << "  vix build --fast\n";
+    out << "  vix build --clean\n";
+    out << "  vix build --preset release\n";
+    out << "  vix build --build-target all\n";
+    out << "  vix build --build-target vix -v\n";
+    out << "  vix build -j 8\n";
+    out << "  vix build --launcher ccache --linker mold\n";
     out << "  vix build --with-sqlite\n";
     out << "  vix build --with-mysql\n";
-    out << "  vix build --preset release --with-sqlite\n";
-    out << "  vix build --preset dev-ninja --with-mysql\n";
-    out << "  vix build --verbose\n";
-    out << "  vix build --fast\n";
-    out << "  vix build --preset release\n";
     out << "  vix build --preset release --static\n";
-    out << "  vix build --launcher sccache --linker mold\n";
     out << "  vix build --target aarch64-linux-gnu\n";
     out << "  vix build --preset release --target aarch64-linux-gnu\n";
-    out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
     out << "  vix build --bin\n";
-    out << "  vix build --out dist/runner\n";
+    out << "  vix build --out dist/app\n";
+    out << "  vix build main.cpp\n";
     out << "  vix build main.cpp --bin\n";
     out << "  vix build main.cpp --out app\n";
     out << "  vix build main.cpp --with-sqlite --out app\n";
     out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
-    out << "  vix build main.cpp --target aarch64-linux-gnu --out app\n";
-    out << "  VIX_BUILD_HEARTBEAT=1 vix build\n";
-    out << "  vix build --build-target all\n";
-    out << "  vix build -j 8\n\n";
+    out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n\n";
 
     out << "Logs:\n";
-    out << "  build-dev*/configure.log\n";
-    out << "  build-dev*/build.log\n\n";
+    out << "  build-dev/configure.log\n";
+    out << "  build-dev/build.log\n";
+    out << "  build-ninja/configure.log\n";
+    out << "  build-ninja/build.log\n";
+    out << "  build-release/configure.log\n";
+    out << "  build-release/build.log\n\n";
 
     return 0;
   }

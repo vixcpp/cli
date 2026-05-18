@@ -129,6 +129,98 @@ namespace vix::cli::build
           << value
           << "\n";
     }
+
+    static std::string trim_copy(std::string value)
+    {
+      while (!value.empty() &&
+             std::isspace(static_cast<unsigned char>(value.front())) != 0)
+      {
+        value.erase(value.begin());
+      }
+
+      while (!value.empty() &&
+             std::isspace(static_cast<unsigned char>(value.back())) != 0)
+      {
+        value.pop_back();
+      }
+
+      return value;
+    }
+
+    static std::string extract_warning_flag(const std::string &message)
+    {
+      static const std::regex flagRe(R"(\[(-W[^\]]+)\])");
+
+      std::smatch match;
+
+      if (!std::regex_search(message, match, flagRe))
+        return {};
+
+      return match[1].str();
+    }
+
+    static std::string strip_warning_flag(std::string message)
+    {
+      static const std::regex flagRe(R"(\s*\[-W[^\]]+\]\s*$)");
+      return trim_copy(std::regex_replace(message, flagRe, ""));
+    }
+
+    static std::string shorten_cpp_signature(std::string value)
+    {
+      const std::size_t paren = value.find('(');
+
+      if (paren != std::string::npos)
+        value = value.substr(0, paren);
+
+      const std::string anonymous = "{anonymous}::";
+      const std::size_t anonymousPos = value.find(anonymous);
+
+      if (anonymousPos != std::string::npos)
+        value = value.substr(anonymousPos + anonymous.size());
+
+      const std::size_t ns = value.rfind("::");
+
+      if (ns != std::string::npos)
+        value = value.substr(ns + 2);
+
+      if (!value.empty() && value.front() == '\'' && value.back() == '\'')
+        value = value.substr(1, value.size() - 2);
+
+      if (!value.empty() && value.front() == '‘' && value.back() == '’')
+        value = value.substr(3, value.size() > 6 ? value.size() - 6 : value.size());
+
+      return trim_copy(value);
+    }
+
+    static std::string extract_quoted_symbol(const std::string &message)
+    {
+      {
+        const std::size_t start = message.find("‘");
+        const std::size_t end = message.find("’", start + 1);
+
+        if (start != std::string::npos &&
+            end != std::string::npos &&
+            end > start)
+        {
+          return message.substr(start + std::string("‘").size(),
+                                end - (start + std::string("‘").size()));
+        }
+      }
+
+      {
+        const std::size_t start = message.find('\'');
+        const std::size_t end = message.find('\'', start + 1);
+
+        if (start != std::string::npos &&
+            end != std::string::npos &&
+            end > start)
+        {
+          return message.substr(start + 1, end - start - 1);
+        }
+      }
+
+      return {};
+    }
   } // namespace
 
   void print_build_header_full(
@@ -598,6 +690,233 @@ namespace vix::cli::build
         << " after "
         << oss.str()
         << "s\n";
+  }
+
+  bool BuildWarning::has_location() const
+  {
+    return !file.empty();
+  }
+
+  std::optional<BuildWarning> parse_build_warning(
+      const std::string &text)
+  {
+    static const std::regex pattern(
+        R"(([^:\n\r]+):([0-9]+):([0-9]+):\s+warning:\s+(.+))");
+
+    std::smatch match;
+
+    if (!std::regex_search(text, match, pattern))
+      return std::nullopt;
+
+    BuildWarning warning;
+    warning.file = fs::path(match[1].str());
+
+    try
+    {
+      warning.line = static_cast<std::size_t>(
+          std::stoull(match[2].str()));
+
+      warning.column = static_cast<std::size_t>(
+          std::stoull(match[3].str()));
+    }
+    catch (...)
+    {
+      return std::nullopt;
+    }
+
+    warning.message = match[4].str();
+    warning.raw = text;
+
+    return humanize_build_warning(std::move(warning));
+  }
+
+  void print_build_warnings_summary(
+      std::ostream &out,
+      const std::vector<BuildWarning> &warnings,
+      std::size_t total)
+  {
+    if (total == 0)
+      return;
+
+    out << "  "
+        << colorize(style::YELLOW, "warning")
+        << " "
+        << colorize(style::BOLD, std::to_string(total))
+        << " compiler warning"
+        << (total > 1 ? "s" : "")
+        << "\n";
+
+    const std::size_t shown = warnings.size();
+
+    for (const BuildWarning &warning : warnings)
+    {
+      out << "    "
+          << colorize(style::YELLOW, "•")
+          << " ";
+
+      if (warning.has_location())
+      {
+        out << colorize(style::CYAN, warning.file.filename().string());
+
+        if (warning.line > 0)
+        {
+          out << style::GRAY
+              << ":"
+              << warning.line;
+
+          if (warning.column > 0)
+            out << ":" << warning.column;
+
+          out << style::RESET;
+        }
+
+        out << "\n";
+      }
+
+      out << "      "
+          << (warning.message.empty() ? warning.raw : warning.message)
+          << "\n";
+
+      if (!warning.hint.empty())
+      {
+        out << "      "
+            << colorize(style::GRAY, "hint:")
+            << " "
+            << warning.hint
+            << "\n";
+      }
+    }
+
+    if (total > shown)
+    {
+      out << "    "
+          << colorize(style::GRAY, "• ")
+          << colorize(
+                 style::GRAY,
+                 std::to_string(total - shown) +
+                     " more warning" +
+                     ((total - shown) > 1 ? "s" : "") +
+                     " hidden")
+          << "\n";
+    }
+
+    out << "    "
+        << colorize(style::GRAY, "hint:")
+        << " run with "
+        << colorize(style::CYAN, "--verbose")
+        << " for full compiler output"
+        << "\n\n";
+  }
+
+  BuildWarning humanize_build_warning(BuildWarning warning)
+  {
+    const std::string message = warning.message;
+    warning.flag = extract_warning_flag(message);
+
+    const std::string cleanMessage = strip_warning_flag(message);
+    const std::string quoted = extract_quoted_symbol(cleanMessage);
+
+    if (cleanMessage.find("defined but not used") != std::string::npos)
+    {
+      warning.kind = BuildWarningKind::UnusedFunction;
+      warning.symbol = shorten_cpp_signature(quoted);
+      warning.message =
+          warning.symbol.empty()
+              ? "unused function"
+              : "unused function: " + warning.symbol;
+      warning.hint = "remove it, use it, or mark it [[maybe_unused]]";
+      return warning;
+    }
+
+    if (cleanMessage.find("unused variable") != std::string::npos)
+    {
+      warning.kind = BuildWarningKind::UnusedVariable;
+      warning.symbol = shorten_cpp_signature(quoted);
+      warning.message =
+          warning.symbol.empty()
+              ? "unused variable"
+              : "unused variable: " + warning.symbol;
+      warning.hint = "remove it or mark it [[maybe_unused]]";
+      return warning;
+    }
+
+    if (cleanMessage.find("unused parameter") != std::string::npos)
+    {
+      warning.kind = BuildWarningKind::UnusedParameter;
+      warning.symbol = shorten_cpp_signature(quoted);
+      warning.message =
+          warning.symbol.empty()
+              ? "unused parameter"
+              : "unused parameter: " + warning.symbol;
+      warning.hint = "remove the parameter name or mark it [[maybe_unused]]";
+      return warning;
+    }
+
+    if (cleanMessage.find("shadows a previous local") != std::string::npos ||
+        cleanMessage.find("declaration of") != std::string::npos &&
+            cleanMessage.find("shadows") != std::string::npos)
+    {
+      warning.kind = BuildWarningKind::ShadowedVariable;
+      warning.symbol = shorten_cpp_signature(quoted);
+      warning.message =
+          warning.symbol.empty()
+              ? "variable shadows another variable"
+              : "variable shadows another variable: " + warning.symbol;
+      warning.hint = "rename the inner variable to avoid confusion";
+      return warning;
+    }
+
+    if (cleanMessage.find("deprecated") != std::string::npos)
+    {
+      warning.kind = BuildWarningKind::DeprecatedDeclaration;
+      warning.symbol = shorten_cpp_signature(quoted);
+      warning.message =
+          warning.symbol.empty()
+              ? "deprecated API used"
+              : "deprecated API used: " + warning.symbol;
+      warning.hint = "replace it with the recommended API";
+      return warning;
+    }
+
+    if (warning.flag == "-Wsign-compare")
+    {
+      warning.kind = BuildWarningKind::SignCompare;
+      warning.message = "comparison mixes signed and unsigned values";
+      warning.hint = "use matching integer types before comparing";
+      return warning;
+    }
+
+    if (warning.flag == "-Wconversion")
+    {
+      warning.kind = BuildWarningKind::Conversion;
+      warning.message = "implicit conversion may change the value";
+      warning.hint = "use an explicit cast or a safer target type";
+      return warning;
+    }
+
+    if (warning.flag == "-Wreorder")
+    {
+      warning.kind = BuildWarningKind::Reorder;
+      warning.message = "constructor initializes members in a different order";
+      warning.hint = "match the initializer list order with the class field order";
+      return warning;
+    }
+
+    if (warning.flag == "-Wmissing-field-initializers")
+    {
+      warning.kind = BuildWarningKind::MissingFieldInitializer;
+      warning.message = "some fields are not initialized";
+      warning.hint = "initialize all fields explicitly";
+      return warning;
+    }
+
+    warning.kind = BuildWarningKind::Unknown;
+    warning.message = cleanMessage;
+    warning.hint = warning.flag.empty()
+                       ? "review this compiler warning"
+                       : "review this compiler warning: " + warning.flag;
+
+    return warning;
   }
 
 } // namespace vix::cli::build

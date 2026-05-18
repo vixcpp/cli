@@ -30,6 +30,7 @@ namespace vix::cli::build
   {
     static constexpr std::uint64_t FNV_OFFSET = 1469598103934665603ull;
     static constexpr std::uint64_t FNV_PRIME = 1099511628211ull;
+    static constexpr const char *BUILD_GRAPH_MAGIC = "vix-build-graph";
 
     static std::uint64_t fnv_mix(
         std::uint64_t h,
@@ -1269,7 +1270,7 @@ namespace vix::cli::build
   bool BuildGraph::save(const fs::path &path) const
   {
     std::ostringstream out;
-    out << "vix-build-graph-v1\n";
+    out << BUILD_GRAPH_MAGIC << "\n";
     out << "project=" << escape_field(config_.projectDir.string()) << "\n";
     out << "build=" << escape_field(config_.buildDir.string()) << "\n";
     out << "object=" << escape_field(config_.objectDir.string()) << "\n";
@@ -1326,7 +1327,7 @@ namespace vix::cli::build
     if (!std::getline(in, magic))
       return std::nullopt;
 
-    if (magic != "vix-build-graph-v1")
+    if (magic != BUILD_GRAPH_MAGIC)
       return std::nullopt;
 
     BuildGraph graph;

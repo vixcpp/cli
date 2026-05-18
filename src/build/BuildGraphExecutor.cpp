@@ -83,21 +83,36 @@ namespace vix::cli::build
       return out;
     }
 
+    static bool is_real_graph_target_task(const BuildTask &task)
+    {
+      return task.kind == BuildTaskKind::Link ||
+             task.kind == BuildTaskKind::Archive;
+    }
+
+    static bool node_is_real_graph_output(const BuildNode &node)
+    {
+      return node.kind == BuildNodeKind::Executable ||
+             node.kind == BuildNodeKind::Library;
+    }
+
     static const BuildTask *find_target_task(
         const BuildGraph &graph,
         const std::string &target)
     {
+      const BuildTask *match = nullptr;
+      std::size_t matches = 0;
+
       for (const auto &kv : graph.tasks())
       {
         const BuildTask &task = kv.second;
 
-        if (task.kind != BuildTaskKind::Link &&
-            task.kind != BuildTaskKind::Archive &&
-            task.kind != BuildTaskKind::Copy &&
-            task.kind != BuildTaskKind::Generate)
-        {
+        /*
+         * Safe V1:
+         *   Link/Archive -> Graph Executor can handle target closure.
+         *   Copy/Install/Generate/Utility/phony -> fallback CMake/Ninja.
+         */
+        if (!is_real_graph_target_task(task))
           continue;
-        }
 
         for (const std::string &outputId : task.outputs)
         {
@@ -105,12 +120,21 @@ namespace vix::cli::build
           if (!node)
             continue;
 
-          if (same_target_name(node->path, target))
-            return &task;
+          if (!node_is_real_graph_output(*node))
+            continue;
+
+          if (!same_target_name(node->path, target))
+            continue;
+
+          match = &task;
+          ++matches;
         }
       }
 
-      return nullptr;
+      if (matches != 1)
+        return nullptr;
+
+      return match;
     }
 
     static void collect_task_closure(
@@ -399,7 +423,10 @@ namespace vix::cli::build
     {
       result.ok = false;
       result.exitCode = 2;
-      result.output = "Unable to resolve graph target: " + options_.target + "\n";
+      result.output =
+          "Unable to resolve a unique real graph output target: " +
+          options_.target +
+          "\n";
       return result;
     }
 

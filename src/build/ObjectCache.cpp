@@ -22,6 +22,7 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <cstdlib>
 
 #include <vix/cli/build/DependencyFile.hpp>
 
@@ -31,6 +32,20 @@ namespace vix::cli::build
   {
     static constexpr std::uint64_t FNV_OFFSET = 1469598103934665603ull;
     static constexpr std::uint64_t FNV_PRIME = 1099511628211ull;
+
+    static fs::path global_object_cache_root()
+    {
+#ifdef _WIN32
+      const char *home = std::getenv("USERPROFILE");
+#else
+      const char *home = std::getenv("HOME");
+#endif
+
+      if (home && *home)
+        return fs::path(home) / ".vix" / "cache" / "objects";
+
+      return fs::current_path() / ".vix" / "cache" / "objects";
+    }
 
     static std::uint64_t fnv_mix(
         std::uint64_t h,
@@ -350,10 +365,22 @@ namespace vix::cli::build
   }
 
   ObjectCache::ObjectCache(fs::path buildDir)
-      : root_(std::move(buildDir))
   {
-    root_ = root_ / ".vix" / "objects";
-    root_ = root_.lexically_normal();
+    (void)buildDir;
+
+    /*
+     * The object cache must survive build directory deletion.
+     *
+     * Old layout:
+     *   <build-dir>/.vix/objects
+     *
+     * New layout:
+     *   ~/.vix/cache/objects
+     *
+     * This makes warm object cache builds possible even after:
+     *   rm -rf build-ninja
+     */
+    root_ = global_object_cache_root();
   }
 
   const fs::path &ObjectCache::root() const

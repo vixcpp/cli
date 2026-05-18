@@ -103,6 +103,11 @@ namespace vix::cli::process
     bool verbose = false;
 
     /**
+     * @brief Explains why Vix rebuilds files or targets.
+     */
+    bool explain = false;
+
+    /**
      * @brief Optional project directory passed with `--dir`.
      */
     std::string dir;

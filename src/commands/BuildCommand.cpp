@@ -23,6 +23,7 @@
 #include <vix/cli/build/BuildContext.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/app/AppCMakeGenerator.hpp>
+#include <vix/cli/app/AppProjectResolver.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -129,6 +130,11 @@ namespace vix::commands::BuildCommand
                s == "off");
     }
 
+    static bool is_all_build_target(const std::string &target)
+    {
+      return target.empty() || target == "all";
+    }
+
     static bool can_use_target_graph_executor(
         const process::Options &opt,
         const std::size_t importedCompileCommands,
@@ -143,7 +149,7 @@ namespace vix::commands::BuildCommand
       if (opt.clean)
         return false;
 
-      if (opt.buildTarget == "all")
+      if (is_all_build_target(opt.buildTarget))
         return false;
 
       if (!opt.targetTriple.empty())
@@ -258,9 +264,12 @@ namespace vix::commands::BuildCommand
         const std::string &toolchainContent)
     {
       std::ostringstream oss;
+
       oss << "project=" << plan.projectDir.string() << "\n";
       oss << "preset=" << plan.preset.name << "\n";
       oss << "buildType=" << plan.preset.buildType << "\n";
+      oss << "buildTarget=" << opt.buildTarget << "\n";
+      oss << "defaultTargetName=" << plan.defaultTargetName << "\n";
       oss << "projectFingerprint=" << plan.projectFingerprint << "\n";
       oss << "targetTriple=" << opt.targetTriple << "\n";
       oss << "sysroot=" << opt.sysroot << "\n";
@@ -270,22 +279,64 @@ namespace vix::commands::BuildCommand
 
       if (plan.fastLinkerFlag)
         oss << "fastLinkerFlag=" << *plan.fastLinkerFlag << "\n";
+
       if (plan.launcher)
         oss << "launcherTool=" << *plan.launcher << "\n";
 
       oss << "vars:\n";
       oss << util::signature_join(plan.cmakeVars);
 
+      oss << "rawCMakeArgs:\n";
+      for (const auto &arg : opt.cmakeArgs)
+        oss << arg << "\n";
+
       if (!toolchainContent.empty())
       {
         oss << "toolchain:\n";
         oss << toolchainContent;
+
         if (toolchainContent.back() != '\n')
           oss << "\n";
       }
 
       const std::string payload = oss.str();
       const std::uint64_t h = util::fnv1a64_str(payload, LOCAL_FNV_OFFSET);
+
+      return util::hex64(h);
+    }
+
+    static std::string make_object_cache_build_fingerprint(
+        const process::Plan &plan,
+        const process::Options &opt)
+    {
+      std::ostringstream oss;
+
+      oss << "signature=" << plan.signature << "\n";
+      oss << "preset=" << plan.preset.name << "\n";
+      oss << "buildType=" << plan.preset.buildType << "\n";
+      oss << "targetTriple="
+          << (opt.targetTriple.empty() ? detect_native_target_triple() : opt.targetTriple)
+          << "\n";
+      oss << "compiler=" << detect_compiler_identity() << "\n";
+      oss << "linker=" << static_cast<int>(opt.linker) << "\n";
+      oss << "launcher=" << static_cast<int>(opt.launcher) << "\n";
+
+      if (plan.launcher)
+        oss << "launcherTool=" << *plan.launcher << "\n";
+
+      if (plan.fastLinkerFlag)
+        oss << "fastLinkerFlag=" << *plan.fastLinkerFlag << "\n";
+
+      oss << "cmakeVars:\n";
+      oss << util::signature_join(plan.cmakeVars);
+
+      oss << "rawCMakeArgs:\n";
+      for (const auto &arg : opt.cmakeArgs)
+        oss << arg << "\n";
+
+      const std::string payload = oss.str();
+      const std::uint64_t h = util::fnv1a64_str(payload, LOCAL_FNV_OFFSET);
+
       return util::hex64(h);
     }
 
@@ -322,6 +373,141 @@ namespace vix::commands::BuildCommand
       return artifact_cache::ArtifactCache::write_manifest(a);
     }
 
+    static bool can_use_target_artifact_cache(const process::Options &opt)
+    {
+      if (!opt.useCache)
+        return false;
+
+      if (opt.clean)
+        return false;
+
+      if (opt.exportBin || !opt.outPath.empty())
+        return false;
+
+      if (is_all_build_target(opt.buildTarget))
+        return false;
+
+      if (!opt.cmakeArgs.empty())
+        return false;
+
+      if (!opt.targetTriple.empty())
+        return false;
+
+      if (opt.withSqlite || opt.withMySql)
+        return false;
+
+      if (opt.linkStatic)
+        return false;
+
+      return true;
+    }
+
+    static fs::path artifact_target_binary_path(
+        const artifact_cache::Artifact &artifact,
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      const std::string target =
+          build::default_build_target_name(opt, plan);
+
+      return artifact.root / "bin" / platform_executable_name(target);
+    }
+
+    static bool copy_executable_file(
+        const fs::path &source,
+        const fs::path &destination)
+    {
+      std::error_code ec;
+
+      if (!fs::exists(source, ec) || ec)
+        return false;
+
+      if (!fs::is_regular_file(source, ec) || ec)
+        return false;
+
+      const fs::path parent = destination.parent_path();
+
+      if (!parent.empty())
+      {
+        fs::create_directories(parent, ec);
+
+        if (ec)
+          return false;
+      }
+
+      fs::copy_file(
+          source,
+          destination,
+          fs::copy_options::overwrite_existing,
+          ec);
+
+      if (ec)
+        return false;
+
+#ifndef _WIN32
+      const auto perms = fs::status(source, ec).permissions();
+
+      if (!ec)
+      {
+        fs::permissions(
+            destination,
+            perms,
+            fs::perm_options::replace,
+            ec);
+      }
+#endif
+
+      return true;
+    }
+
+    static bool restore_project_target_artifact(
+        const artifact_cache::Artifact &artifact,
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      const fs::path cachedBinary =
+          artifact_target_binary_path(artifact, opt, plan);
+
+      const fs::path destination =
+          build::default_project_executable_path(opt, plan);
+
+      if (!copy_executable_file(cachedBinary, destination))
+        return false;
+
+      if (!persist_project_artifact(artifact))
+        return false;
+
+      write_last_binary(destination);
+
+      return true;
+    }
+
+    static bool store_project_target_artifact(
+        const artifact_cache::Artifact &artifact,
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      const auto exeOpt = resolve_main_executable(
+          plan.buildDir,
+          plan.userProjectDir,
+          opt.buildTarget,
+          plan.defaultTargetName);
+
+      if (!exeOpt)
+        return false;
+
+      if (!artifact_cache::ArtifactCache::ensure_layout(artifact))
+        return false;
+
+      const fs::path cachedBinary =
+          artifact_target_binary_path(artifact, opt, plan);
+
+      if (!copy_executable_file(*exeOpt, cachedBinary))
+        return false;
+
+      return artifact_cache::ArtifactCache::write_manifest(artifact);
+    }
+
     static process::Options parse_args_or_exit(
         const std::vector<std::string> &args,
         int &exitCode)
@@ -348,6 +534,10 @@ namespace vix::commands::BuildCommand
         else if (a == "--verbose" || a == "-v")
         {
           o.verbose = true;
+        }
+        else if (a == "--explain")
+        {
+          o.explain = true;
         }
         else if (a == "--preset")
         {
@@ -1422,13 +1612,31 @@ namespace vix::commands::BuildCommand
       return value == "debug" || value == "trace";
     }
 
+    static void print_debug_command_if_enabled(
+        const process::ExecResult &result)
+    {
+      if (!debug_build_details_enabled())
+        return;
+
+      if (result.displayCommand.empty())
+        return;
+
+      std::cerr << GRAY
+                << "command: "
+                << RESET
+                << result.displayCommand
+                << "\n";
+    }
+
     static bool looks_like_compiler_warning(const std::string &line)
     {
       return line.find(": warning:") != std::string::npos ||
              line.find(" warning: ") != std::string::npos;
     }
 
-    static void print_graph_warnings_modern(const std::string &output)
+    static std::vector<std::string> collect_compiler_warnings(
+        const std::string &output,
+        std::size_t maxWarnings = 5)
     {
       std::istringstream in(output);
       std::string line;
@@ -1437,17 +1645,48 @@ namespace vix::commands::BuildCommand
 
       while (std::getline(in, line))
       {
-        if (looks_like_compiler_warning(line))
-          warnings.push_back(line);
+        if (!looks_like_compiler_warning(line))
+          continue;
+
+        warnings.push_back(line);
+
+        if (warnings.size() >= maxWarnings)
+          break;
       }
 
-      if (warnings.empty())
+      return warnings;
+    }
+
+    static std::size_t count_compiler_warnings(const std::string &output)
+    {
+      std::istringstream in(output);
+      std::string line;
+
+      std::size_t count = 0;
+
+      while (std::getline(in, line))
+      {
+        if (looks_like_compiler_warning(line))
+          ++count;
+      }
+
+      return count;
+    }
+
+    static void print_compiler_warnings_summary(const std::string &output)
+    {
+      const std::size_t total = count_compiler_warnings(output);
+
+      if (total == 0)
         return;
 
+      const std::vector<std::string> warnings =
+          collect_compiler_warnings(output, 5);
+
       std::cout << "  " << YELLOW << "warning" << RESET
-                << " " << warnings.size()
+                << " " << total
                 << " compiler warning"
-                << (warnings.size() > 1 ? "s" : "")
+                << (total > 1 ? "s" : "")
                 << "\n";
 
       for (const std::string &warningLine : warnings)
@@ -1456,7 +1695,205 @@ namespace vix::commands::BuildCommand
                   << warningLine << "\n";
       }
 
+      if (total > warnings.size())
+      {
+        std::cout << "    " << GRAY << "• "
+                  << (total - warnings.size())
+                  << " more warning"
+                  << ((total - warnings.size()) > 1 ? "s" : "")
+                  << " hidden"
+                  << RESET
+                  << "\n";
+      }
+
       std::cout << "\n";
+    }
+
+    static void print_graph_warnings_modern(const std::string &output)
+    {
+      print_compiler_warnings_summary(output);
+    }
+
+    static std::string explain_display_path(const fs::path &path)
+    {
+      if (path.empty())
+        return "<unknown>";
+
+      return path.filename().string();
+    }
+
+    static bool node_metadata_changed(
+        const build::BuildNode &current,
+        const build::BuildNode &previous)
+    {
+      if (current.hash != previous.hash)
+        return true;
+
+      if (current.size != previous.size)
+        return true;
+
+      if (current.mtime != previous.mtime)
+        return true;
+
+      if (current.state != previous.state)
+        return true;
+
+      return false;
+    }
+
+    static std::string explain_node_change(
+        const build::BuildNode &current,
+        const build::BuildNode *previous)
+    {
+      if (!previous)
+        return "new input detected";
+
+      if (current.state == build::BuildNodeState::Missing)
+        return "input is missing";
+
+      if (previous->state == build::BuildNodeState::Missing &&
+          current.state != build::BuildNodeState::Missing)
+      {
+        return "input was restored";
+      }
+
+      if (current.hash != previous->hash)
+        return "content hash changed";
+
+      if (current.size != previous->size)
+        return "file size changed";
+
+      if (current.mtime != previous->mtime)
+        return "file timestamp changed";
+
+      if (current.state != previous->state)
+        return "node state changed";
+
+      return "";
+    }
+
+    static std::string explain_task_rebuild_reason(
+        const build::BuildGraph &graph,
+        const build::BuildGraph *previousGraph,
+        const build::BuildTask &task)
+    {
+      if (!previousGraph)
+        return "no previous build graph";
+
+      const build::BuildTask *previousTask =
+          previousGraph->find_task(task.id);
+
+      if (!previousTask)
+        return "new build task";
+
+      if (task.commandHash != previousTask->commandHash)
+        return "compiler command changed";
+
+      for (const std::string &outputId : task.outputs)
+      {
+        const build::BuildNode *outputNode = graph.find_node(outputId);
+
+        if (!outputNode)
+          continue;
+
+        if (!file_exists_regular(outputNode->path))
+          return "output file is missing";
+      }
+
+      for (const std::string &inputId : task.inputs)
+      {
+        const build::BuildNode *currentNode = graph.find_node(inputId);
+
+        if (!currentNode)
+          continue;
+
+        const build::BuildNode *previousNode =
+            previousGraph->find_node(inputId);
+
+        const std::string changeReason =
+            explain_node_change(*currentNode, previousNode);
+
+        if (changeReason.empty())
+          continue;
+
+        if (currentNode->kind == build::BuildNodeKind::Source)
+          return "source file changed";
+
+        if (currentNode->kind == build::BuildNodeKind::Header)
+          return explain_display_path(currentNode->path) + " changed";
+
+        if (currentNode->kind == build::BuildNodeKind::Config)
+          return "build configuration changed";
+
+        return changeReason;
+      }
+
+      return "dependency changed";
+    }
+
+    static void print_rebuild_explanation(
+        const build::BuildGraph &graph,
+        const build::BuildGraph *previousGraph,
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      const std::vector<build::BuildTask> dirtyTasks =
+          graph.dirty_compile_tasks();
+
+      if (dirtyTasks.empty())
+      {
+        std::cout << "No rebuild required\n";
+        return;
+      }
+
+      bool printedAny = false;
+
+      for (const build::BuildTask &task : dirtyTasks)
+      {
+        fs::path sourcePath;
+
+        for (const std::string &inputId : task.inputs)
+        {
+          const build::BuildNode *node = graph.find_node(inputId);
+
+          if (!node)
+            continue;
+
+          if (node->kind == build::BuildNodeKind::Source)
+          {
+            sourcePath = node->path;
+            break;
+          }
+        }
+
+        if (sourcePath.empty())
+          continue;
+
+        const std::string reason =
+            explain_task_rebuild_reason(
+                graph,
+                previousGraph,
+                task);
+
+        std::cout << "Rebuilding "
+                  << explain_display_path(sourcePath)
+                  << "\n";
+
+        std::cout << "  reason: "
+                  << reason
+                  << "\n\n";
+
+        printedAny = true;
+      }
+
+      if (printedAny)
+      {
+        std::cout << "Relinking "
+                  << build::default_build_target_name(opt, plan)
+                  << "\n";
+
+        std::cout << "  reason: object file changed\n\n";
+      }
     }
 
     static build::BuildGraph make_build_graph_after_configure(
@@ -1471,7 +1908,8 @@ namespace vix::commands::BuildCommand
       graphConfig.buildDir = plan.buildDir;
       graphConfig.objectDir = plan.buildDir / ".vix" / "obj";
       graphConfig.compiler = "c++";
-      graphConfig.buildFingerprint = plan.signature;
+      graphConfig.buildFingerprint =
+          make_object_cache_build_fingerprint(plan, opt);
 
       graphConfig.includeDirs.push_back((plan.userProjectDir / "include").string());
       graphConfig.includeDirs.push_back((plan.userProjectDir / "src").string());
@@ -1699,8 +2137,8 @@ namespace vix::commands::BuildCommand
       if (linkCode != 0)
         return linkCode;
 
-      if (!persist_project_artifact(projectArtifact) && !opt.quiet)
-        hint("Warning: unable to persist artifact cache metadata");
+      if (!store_project_target_artifact(projectArtifact, opt, plan) && !opt.quiet)
+        hint("Warning: unable to store target artifact");
 
       const auto state =
           artifact_cache::ArtifactCache::make_build_state(
@@ -1763,6 +2201,446 @@ namespace vix::commands::BuildCommand
       return "dev";
     }
 
+    static void print_clean_build_header(
+        const std::string &action,
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      std::cout << action
+                << " "
+                << build::default_build_target_name(opt, plan)
+                << " ("
+                << display_build_profile(plan)
+                << ")\n";
+    }
+
+    static void print_clean_success(const std::string &message)
+    {
+      util::ok_line(std::cout, message);
+    }
+
+    static void print_clean_success_timed(
+        const std::string &message,
+        long long milliseconds)
+    {
+      std::cout << PAD
+                << GREEN
+                << "✔ "
+                << message
+                << " in "
+                << RESET
+                << util::format_seconds(milliseconds)
+                << "\n";
+    }
+
+    static bool can_use_native_vix_app_build(
+        const process::Options &opt,
+        const app::AppManifest &manifest)
+    {
+      if (!opt.useCache)
+        return false;
+
+      if (opt.clean)
+        return false;
+
+      if (!opt.targetTriple.empty())
+        return false;
+
+      if (!opt.cmakeArgs.empty())
+        return false;
+
+      if (opt.withSqlite || opt.withMySql)
+        return false;
+
+      if (opt.linkStatic)
+        return false;
+
+      if (!opt.buildTarget.empty() && opt.buildTarget != manifest.name)
+        return false;
+
+      if (manifest.type != app::AppTargetType::Executable)
+        return false;
+
+      if (!manifest.links.empty())
+        return false;
+
+      if (!manifest.packages.empty())
+        return false;
+
+      if (!manifest.resources.empty())
+        return false;
+
+      if (!manifest.compileFeatures.empty())
+        return false;
+
+      if (manifest.sources.empty())
+        return false;
+
+      return true;
+    }
+
+    static fs::path native_vix_app_build_dir(
+        const fs::path &projectDir,
+        const process::Options &opt)
+    {
+      if (opt.preset == "release")
+        return projectDir / ".vix" / "native" / "release";
+
+      return projectDir / ".vix" / "native" / "dev";
+    }
+
+    static fs::path native_vix_app_output_path(
+        const fs::path &projectDir,
+        const fs::path &buildDir,
+        const app::AppManifest &manifest)
+    {
+      if (!manifest.outputDir.empty())
+        return projectDir / manifest.outputDir / platform_executable_name(manifest.name);
+
+      return buildDir / platform_executable_name(manifest.name);
+    }
+
+    static std::string native_cpp_standard_flag(const std::string &standard)
+    {
+      if (standard == "c++11" || standard == "cpp11" || standard == "11")
+        return "-std=c++11";
+
+      if (standard == "c++14" || standard == "cpp14" || standard == "14")
+        return "-std=c++14";
+
+      if (standard == "c++17" || standard == "cpp17" || standard == "17")
+        return "-std=c++17";
+
+      if (standard == "c++20" || standard == "cpp20" || standard == "20")
+        return "-std=c++20";
+
+      if (standard == "c++23" || standard == "cpp23" || standard == "23")
+        return "-std=c++23";
+
+      if (standard == "c++26" || standard == "cpp26" || standard == "26")
+        return "-std=c++26";
+
+      return "-std=c++20";
+    }
+
+    static std::vector<std::string> native_vix_app_compile_command(
+        const fs::path &projectDir,
+        const fs::path &source,
+        const fs::path &object,
+        const app::AppManifest &manifest,
+        const process::Plan &plan)
+    {
+      std::vector<std::string> command;
+
+      command.push_back("c++");
+      command.push_back(native_cpp_standard_flag(manifest.standard));
+
+      if (plan.preset.buildType == "Release")
+      {
+        command.push_back("-O2");
+        command.push_back("-DNDEBUG");
+      }
+      else
+      {
+        command.push_back("-g");
+        command.push_back("-O0");
+      }
+
+      command.push_back("-MMD");
+      command.push_back("-MP");
+
+      const fs::path dependencyFile =
+          build::dependency_file_for_object(object);
+
+      command.push_back("-MF");
+      command.push_back(dependencyFile.string());
+
+      for (const std::string &dir : manifest.includeDirs)
+      {
+        command.push_back("-I");
+        command.push_back((projectDir / dir).lexically_normal().string());
+      }
+
+      for (const std::string &define : manifest.defines)
+        command.push_back("-D" + define);
+
+      for (const std::string &option : manifest.compileOptions)
+        command.push_back(option);
+
+      command.push_back("-c");
+      command.push_back((projectDir / source).lexically_normal().string());
+
+      command.push_back("-o");
+      command.push_back(object.string());
+
+      return command;
+    }
+
+    static std::vector<std::string> native_vix_app_link_command(
+        const std::vector<fs::path> &objects,
+        const fs::path &outputBinary,
+        const app::AppManifest &manifest,
+        const process::Plan &plan)
+    {
+      std::vector<std::string> command;
+
+      command.push_back("c++");
+
+      if (plan.fastLinkerFlag)
+        command.push_back(*plan.fastLinkerFlag);
+
+      for (const fs::path &object : objects)
+        command.push_back(object.string());
+
+      for (const std::string &option : manifest.linkOptions)
+        command.push_back(option);
+
+      command.push_back("-o");
+      command.push_back(outputBinary.string());
+
+      return command;
+    }
+
+    static int run_native_vix_app_build(
+        const process::Options &opt,
+        const fs::path &projectDir,
+        const app::AppManifest &manifest,
+        const std::chrono::steady_clock::time_point &commandStart)
+    {
+      const auto presetOpt = build::resolve_builtin_preset(opt.preset);
+
+      if (!presetOpt)
+      {
+        error("Unknown preset: " + opt.preset);
+        return 2;
+      }
+
+      process::Plan plan;
+      plan.userProjectDir = projectDir;
+      plan.projectDir = projectDir;
+      plan.cmakeSourceDir = projectDir;
+      plan.defaultTargetName = manifest.name;
+      plan.generatedFromVixApp = false;
+      plan.preset = *presetOpt;
+      plan.buildDir = native_vix_app_build_dir(projectDir, opt);
+      plan.launcher = detect_launcher(opt);
+      plan.fastLinkerFlag = detect_fast_linker_flag(opt);
+
+      std::string err;
+
+      if (!util::ensure_dir(plan.buildDir, err))
+      {
+        error("Unable to create native vix.app build directory: " + plan.buildDir.string());
+
+        if (!err.empty())
+          hint(err);
+
+        return 1;
+      }
+
+      const fs::path objectDir = plan.buildDir / "obj";
+
+      if (!util::ensure_dir(objectDir, err))
+      {
+        error("Unable to create native vix.app object directory: " + objectDir.string());
+
+        if (!err.empty())
+          hint(err);
+
+        return 1;
+      }
+
+      const fs::path outputBinary =
+          native_vix_app_output_path(projectDir, plan.buildDir, manifest);
+
+      if (!outputBinary.parent_path().empty() &&
+          !util::ensure_dir(outputBinary.parent_path(), err))
+      {
+        error("Unable to create native vix.app output directory: " +
+              outputBinary.parent_path().string());
+
+        if (!err.empty())
+          hint(err);
+
+        return 1;
+      }
+
+      if (!opt.quiet)
+        print_clean_build_header("Building", opt, plan);
+
+      build::ObjectCache objectCache(plan.buildDir);
+
+      if (!objectCache.ensure_layout())
+      {
+        error("Unable to initialize Vix object cache.");
+        return 1;
+      }
+
+      build::BuildGraphConfig graphConfig;
+      graphConfig.projectDir = projectDir;
+      graphConfig.buildDir = plan.buildDir;
+      graphConfig.objectDir = objectDir;
+      graphConfig.compiler = "c++";
+      graphConfig.buildFingerprint =
+          make_object_cache_build_fingerprint(plan, opt);
+
+      build::BuildGraph graph(graphConfig);
+
+      build::BuildSchedulerOptions schedulerOptions;
+      schedulerOptions.jobs = opt.jobs;
+      schedulerOptions.quiet = opt.quiet;
+      schedulerOptions.stopOnFirstFailure = true;
+
+      build::BuildScheduler scheduler(schedulerOptions);
+
+      std::vector<fs::path> objectPaths;
+      objectPaths.reserve(manifest.sources.size());
+
+      for (const std::string &sourceString : manifest.sources)
+      {
+        const fs::path sourceRel(sourceString);
+        const fs::path sourcePath =
+            (projectDir / sourceRel).lexically_normal();
+
+        if (!fs::exists(sourcePath))
+        {
+          error("Source file not found: " + sourcePath.string());
+          return 1;
+        }
+
+        std::string objectName =
+            sourceRel.lexically_normal().generic_string();
+
+        for (char &c : objectName)
+        {
+          const unsigned char uc = static_cast<unsigned char>(c);
+
+          if (!(std::isalnum(uc) || c == '.' || c == '_' || c == '-'))
+            c = '_';
+        }
+
+        const fs::path objectPath =
+            objectDir / (objectName + ".o");
+
+        objectPaths.push_back(objectPath);
+
+        build::BuildNode sourceNode =
+            build::make_file_build_node(
+                build::BuildNodeKind::Source,
+                sourcePath);
+
+        build::BuildNode objectNode =
+            build::make_file_build_node(
+                build::BuildNodeKind::Object,
+                objectPath);
+
+        const std::vector<std::string> command =
+            native_vix_app_compile_command(
+                projectDir,
+                sourceRel,
+                objectPath,
+                manifest,
+                plan);
+
+        build::BuildTask task =
+            build::make_compile_task(
+                sourceNode.id,
+                objectNode.id,
+                command,
+                projectDir);
+
+        graph.add_node(sourceNode);
+        graph.add_node(objectNode);
+        graph.add_task(task);
+        scheduler.add_task(task);
+      }
+
+      const build::BuildSchedulerResult result =
+          scheduler.run(
+              [&](build::BuildTask &task)
+              {
+                return run_cached_graph_compile_task(
+                    graph,
+                    objectCache,
+                    task);
+              });
+
+      if (!result.success())
+      {
+        for (const auto &taskResult : result.results)
+        {
+          if (!taskResult.output.empty())
+            std::cerr << taskResult.output;
+        }
+
+        return 1;
+      }
+
+      const std::vector<std::string> linkCommand =
+          native_vix_app_link_command(
+              objectPaths,
+              outputBinary,
+              manifest,
+              plan);
+
+      std::string linkOutput;
+
+      const process::ExecResult linkResult =
+          build::run_process_capture(
+              linkCommand,
+              {},
+              linkOutput);
+
+      if (linkResult.exitCode != 0)
+      {
+        error("Native vix.app link failed.");
+
+        if (!linkOutput.empty())
+          std::cerr << linkOutput;
+
+        return linkResult.exitCode == 0 ? 1 : linkResult.exitCode;
+      }
+
+#ifndef _WIN32
+      std::error_code ec;
+      fs::permissions(
+          outputBinary,
+          fs::perms::owner_exec |
+              fs::perms::group_exec |
+              fs::perms::others_exec,
+          fs::perm_options::add,
+          ec);
+#endif
+
+      write_last_binary(outputBinary);
+
+      if (opt.exportBin || !opt.outPath.empty())
+      {
+        fs::path dest;
+
+        if (opt.exportBin)
+          dest = projectDir / outputBinary.filename();
+        else
+          dest = fs::absolute(fs::path(opt.outPath));
+
+        if (!export_built_binary(outputBinary, dest, opt.quiet))
+          return 1;
+      }
+
+      if (!opt.quiet)
+      {
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - commandStart)
+                .count();
+
+        print_clean_success("Native vix.app");
+        print_clean_success_timed("Done", ms);
+      }
+
+      return 0;
+    }
+
     class BuildCommand
     {
     public:
@@ -1776,6 +2654,42 @@ namespace vix::commands::BuildCommand
         if (opt_.singleCpp)
           return run_single_cpp_build();
 
+        {
+          fs::path base = cwd;
+
+          if (!opt_.dir.empty())
+            base = fs::absolute(fs::path(opt_.dir));
+
+          const app::AppProjectResolveResult project =
+              app::resolve_app_project(base);
+
+          if (project.success() &&
+              project.kind == app::AppProjectKind::VixApp)
+          {
+            const app::AppManifestLoadResult loadResult =
+                app::load_app_manifest(project.appManifestPath);
+
+            if (!loadResult.success())
+            {
+              error("Failed to load vix.app.");
+              hint(loadResult.error);
+              return 1;
+            }
+
+            if (can_use_native_vix_app_build(opt_, loadResult.manifest))
+            {
+              return run_native_vix_app_build(
+                  opt_,
+                  project.userProjectDir,
+                  loadResult.manifest,
+                  commandStart);
+            }
+
+            if (debug_build_details_enabled() && !opt_.quiet)
+              hint("Native vix.app fallback: generated CMake path");
+          }
+        }
+
         const auto planOpt = make_plan(opt_, cwd);
         if (!planOpt)
         {
@@ -1785,6 +2699,7 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = *planOpt;
+
         const fs::path globalPackagesFile =
             plan_.buildDir / "vix-global-packages.cmake";
 
@@ -1854,9 +2769,11 @@ namespace vix::commands::BuildCommand
             globalPackagesFile);
 
         if (!opt_.targetTriple.empty())
+        {
           tc = build::toolchain_contents_for_triple(
               opt_.targetTriple,
               opt_.sysroot);
+        }
 
         plan_.signature = make_signature(plan_, opt_, tc);
 #endif
@@ -1910,6 +2827,10 @@ namespace vix::commands::BuildCommand
                 plan_.signature,
                 plan_.projectFingerprint,
                 opt_.buildTarget,
+                plan_.preset.name,
+                plan_.preset.buildType,
+                projectArtifact.target,
+                projectArtifact.compiler,
                 projectInputs);
 
         if (buildStateHit && debug_build_details_enabled() && !opt_.quiet)
@@ -1918,8 +2839,7 @@ namespace vix::commands::BuildCommand
                artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
         }
 
-        if (opt_.fast &&
-            buildStateHit &&
+        if (buildStateHit &&
             !opt_.exportBin &&
             opt_.outPath.empty())
         {
@@ -1930,15 +2850,8 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
-            std::cout << "Checking "
-                      << build::default_build_target_name(opt_, plan_)
-                      << " ("
-                      << display_build_profile(plan_)
-                      << ")\n";
-
-            std::cout << PAD << GREEN << "✔ Up to date in " << RESET
-                      << util::format_seconds(ms)
-                      << "\n";
+            print_clean_build_header("Checking", opt_, plan_);
+            print_clean_success_timed("Up to date", ms);
           }
 
           return 0;
@@ -2026,7 +2939,7 @@ namespace vix::commands::BuildCommand
               plan_.configureLog,
               (opt_.quiet || !verboseMode),
               opt_.cmakeVerbose,
-              /*progressOnly=*/false);
+              false);
 
           if (r.exitCode != 0)
           {
@@ -2041,10 +2954,12 @@ namespace vix::commands::BuildCommand
                     plan_.cmakeSourceDir / "CMakeLists.txt",
                     "CMake configure failed");
 
-            if (!opt_.quiet && !handled)
+            if (!opt_.quiet)
             {
-              util::log_hint_if(opt_.quiet, "Command:");
-              step(r.displayCommand);
+              if (!handled)
+                hint("run with VIX_LOG_LEVEL=debug to inspect the configure command");
+
+              print_debug_command_if_enabled(r);
             }
 
             return (r.exitCode == 0) ? 2 : r.exitCode;
@@ -2110,6 +3025,58 @@ namespace vix::commands::BuildCommand
                std::to_string(importedNinjaTasks) + " ninja tasks");
         }
 
+        if (can_use_target_artifact_cache(opt_) &&
+            restore_project_target_artifact(projectArtifact, opt_, plan_))
+        {
+          if (!graph.save(graphPath) && !opt_.quiet)
+            hint("Warning: unable to write Vix build graph");
+
+          const fs::path restoredBinary =
+              build::default_project_executable_path(opt_, plan_);
+
+          const auto state =
+              artifact_cache::ArtifactCache::make_build_state(
+                  plan_.signature,
+                  plan_.projectFingerprint,
+                  projectArtifact.root.string(),
+                  restoredBinary.string(),
+                  opt_.buildTarget,
+                  plan_.preset.name,
+                  plan_.preset.buildType,
+                  projectArtifact.target,
+                  projectArtifact.compiler,
+                  projectInputs);
+
+          if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+              !opt_.quiet)
+          {
+            hint("Warning: unable to write Vix build state");
+          }
+
+          if (!opt_.quiet)
+          {
+            print_clean_build_header("Restoring", opt_, plan_);
+            print_clean_success("Artifact cache hit");
+            print_clean_success("Done");
+          }
+
+          return 0;
+        }
+
+        std::optional<build::BuildGraph> previousGraphForExplain;
+
+        if (opt_.explain)
+        {
+          previousGraphForExplain =
+              build::BuildGraph::load(graphPath);
+
+          print_rebuild_explanation(
+              graph,
+              previousGraphForExplain ? &*previousGraphForExplain : nullptr,
+              opt_,
+              plan_);
+        }
+
         if (can_use_target_graph_executor(
                 opt_,
                 importedCompileCommands,
@@ -2129,8 +3096,8 @@ namespace vix::commands::BuildCommand
 
           if (graphResult.ok)
           {
-            if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
-              hint("Warning: unable to persist artifact cache metadata");
+            if (!store_project_target_artifact(projectArtifact, opt_, plan_) && !opt_.quiet)
+              hint("Warning: unable to store target artifact");
 
             std::string lastBinary;
 
@@ -2167,34 +3134,33 @@ namespace vix::commands::BuildCommand
 
             if (!opt_.quiet)
             {
+              print_clean_build_header("Building", opt_, plan_);
+
               print_graph_warnings_modern(graphResult.output);
 
               if (configuredThisRun)
-                util::ok_line(std::cout, "Configured");
+                print_clean_success("Configured");
 
-              util::ok_line(
-                  std::cout,
-                  "Graph target: " + graphResult.target);
+              print_clean_success("Graph target: " + graphResult.target);
 
               if (graphResult.dirtyCompileTasks == 0)
               {
-                util::ok_line(std::cout, "Up to date");
+                print_clean_success("Up to date");
               }
               else
               {
-                util::ok_line(
-                    std::cout,
+                print_clean_success(
                     "Compiled " + std::to_string(graphResult.dirtyCompileTasks) +
-                        " dirty files");
+                    " dirty files");
               }
 
-              util::ok_line(std::cout, "Done");
+              print_clean_success("Done");
             }
 
             return 0;
           }
 
-          if (verboseMode && !opt_.quiet)
+          if (debug_build_details_enabled() && !opt_.quiet)
             hint("Graph target executor fallback: " + graphResult.output);
         }
 
@@ -2208,56 +3174,6 @@ namespace vix::commands::BuildCommand
               projectArtifact,
               projectInputs,
               verboseMode);
-        }
-
-        if (opt_.fast && build::ninja_is_up_to_date(opt_, plan_))
-        {
-          if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
-            hint("Warning: unable to persist artifact cache metadata");
-
-          std::string lastBinary;
-
-          const auto exeOpt = resolve_main_executable(
-              plan_.buildDir,
-              plan_.userProjectDir,
-              opt_.buildTarget,
-              plan_.defaultTargetName);
-
-          if (exeOpt)
-            lastBinary = exeOpt->string();
-
-          const auto state =
-              artifact_cache::ArtifactCache::make_build_state(
-                  plan_.signature,
-                  plan_.projectFingerprint,
-                  projectArtifact.root.string(),
-                  lastBinary,
-                  opt_.buildTarget,
-                  plan_.preset.name,
-                  plan_.preset.buildType,
-                  projectArtifact.target,
-                  projectArtifact.compiler,
-                  projectInputs);
-
-          if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
-              !opt_.quiet)
-          {
-            hint("Warning: unable to write Vix build state");
-          }
-
-          if (!graph.save(graphPath) && !opt_.quiet)
-            hint("Warning: unable to write Vix build graph");
-
-          if (!opt_.quiet)
-          {
-            if (configuredThisRun)
-              util::ok_line(std::cout, "Configured");
-
-            util::ok_line(std::cout, "Up to date");
-            util::ok_line(std::cout, "Done");
-          }
-
-          return 0;
         }
 
         {
@@ -2300,9 +3216,9 @@ namespace vix::commands::BuildCommand
               argv,
               env,
               plan_.buildLog,
-              /*quiet=*/opt_.quiet,
-              /*cmakeVerbose=*/opt_.cmakeVerbose,
-              /*progressOnly=*/progressOnly);
+              opt_.quiet,
+              opt_.cmakeVerbose,
+              progressOnly);
 
           const auto ms =
               std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -2324,17 +3240,18 @@ namespace vix::commands::BuildCommand
                     plan_.cmakeSourceDir / "CMakeLists.txt",
                     "Build failed");
 
-            if (!opt_.quiet && !handled)
+            if (!opt_.quiet)
             {
-              util::log_hint_if(opt_.quiet, "Command:");
-              step(r.displayCommand);
-            }
+              if (!handled)
+                hint("run with VIX_LOG_LEVEL=debug to inspect the build command");
 
+              print_debug_command_if_enabled(r);
+            }
             return (r.exitCode == 0) ? 3 : r.exitCode;
           }
 
-          if (!persist_project_artifact(projectArtifact) && !opt_.quiet)
-            hint("Warning: unable to persist artifact cache metadata");
+          if (!store_project_target_artifact(projectArtifact, opt_, plan_) && !opt_.quiet)
+            hint("Warning: unable to store target artifact");
 
           std::string lastBinary;
 
@@ -2371,6 +3288,9 @@ namespace vix::commands::BuildCommand
 
           const std::string buildLog =
               util::read_text_file_or_empty(plan_.buildLog);
+
+          if (!opt_.quiet)
+            print_compiler_warnings_summary(buildLog);
 
           const std::size_t builtTargets =
               count_built_targets_from_log(buildLog);
@@ -2425,6 +3345,7 @@ namespace vix::commands::BuildCommand
           {
             error("Unable to resolve the main executable to export.");
             hint("Use --build-target <name> if your project produces multiple executables.");
+            hint("Run: vix build --build-target <target> -v");
             return 1;
           }
 

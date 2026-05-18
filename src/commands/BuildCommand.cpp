@@ -3524,68 +3524,96 @@ namespace vix::commands::BuildCommand
     out << "  dev-ninja  Debug build in build-ninja\n";
     out << "  release    Release build in build-release\n\n";
 
-    out << "Options:\n";
-    out << "  --preset <name>          Use a build preset: dev, dev-ninja, release\n";
-    out << "  --build-target <name>    Build a specific CMake target, for example all or vix\n";
-    out << "  -j, --jobs <n>           Number of parallel build jobs\n";
-    out << "  -d, --dir <path>         Project directory\n";
-    out << "  --clean                  Remove local build directories and configure again\n";
-    out << "  --fast                   Exit early when Ninja says the build is already up to date\n";
-    out << "  --no-cache               Disable Vix cache shortcuts\n";
-    out << "  --no-status              Disable Ninja progress status\n";
-    out << "  --no-up-to-date          Disable Ninja dry-run up-to-date detection\n";
-    out << "  -q, --quiet              Minimal output\n";
-    out << "  -v, --verbose            Show detailed build information\n";
-    out << "  --cmake-verbose          Show raw CMake configure output\n";
-    out << "  -h, --help               Show this help\n\n";
+    out << "Project:\n";
+    out << "  [source.cpp]              Build one C++ source file directly\n";
+    out << "  -d, --dir <path>          Project directory\n";
+    out << "  --dir=<path>              Same as --dir <path>\n\n";
+
+    out << "Build:\n";
+    out << "  --preset <name>           Use a preset: dev, dev-ninja, release\n";
+    out << "  --preset=<name>           Same as --preset <name>\n";
+    out << "  --build-target <name>     Build a specific CMake target\n";
+    out << "  --build-target=<name>     Same as --build-target <name>\n";
+    out << "  -j, --jobs <n>            Number of parallel build jobs\n";
+    out << "  --jobs=<n>                Same as --jobs <n>\n";
+    out << "  --clean                   Remove local build directories and configure again\n";
+    out << "  --fast                    Use fast no-op detection when possible\n";
+    out << "  --explain                 Explain why files or targets rebuild\n";
+    out << "  --no-cache                Disable Vix cache shortcuts\n";
+    out << "  --no-status               Disable Ninja progress status\n";
+    out << "  --no-up-to-date           Disable Ninja dry-run up-to-date detection\n\n";
 
     out << "Output:\n";
-    out << "  --bin                    Export the built executable to the project root\n";
-    out << "  --out <path>             Export the built executable to a specific path\n\n";
+    out << "  --bin                     Export the built executable to the project root\n";
+    out << "  --out <path>              Export the built executable to a specific path\n";
+    out << "  --out=<path>              Same as --out <path>\n\n";
 
     out << "Tooling:\n";
-    out << "  --launcher <mode>        Compiler launcher: auto, none, sccache, ccache\n";
-    out << "  --linker <mode>          Linker mode: auto, default, mold, lld\n\n";
+    out << "  --launcher <mode>         Compiler launcher: auto, none, sccache, ccache\n";
+    out << "  --launcher=<mode>         Same as --launcher <mode>\n";
+    out << "  --linker <mode>           Linker mode: auto, default, mold, lld\n";
+    out << "  --linker=<mode>           Same as --linker <mode>\n\n";
 
     out << "Cross-compilation:\n";
-    out << "  --target <triple>        Cross-compilation target triple\n";
-    out << "  --sysroot <path>         Sysroot for the cross toolchain\n";
-    out << "  --targets                List detected cross toolchains on PATH\n\n";
+    out << "  --target <triple>         Cross-compilation target triple\n";
+    out << "  --target=<triple>         Same as --target <triple>\n";
+    out << "  --sysroot <path>          Sysroot for the cross toolchain\n";
+    out << "  --sysroot=<path>          Same as --sysroot <path>\n";
+    out << "  --targets                 List detected cross toolchains on PATH\n\n";
 
     out << "Linking and dependencies:\n";
-    out << "  --static                 Request static linking\n";
-    out << "  --with-sqlite            Enable SQLite support\n";
-    out << "  --with-mysql             Enable MySQL support\n\n";
+    out << "  --static                  Request static linking\n";
+    out << "  --with-sqlite             Enable SQLite support\n";
+    out << "  --with-mysql              Enable MySQL support\n\n";
+
+    out << "Logs and output:\n";
+    out << "  -q, --quiet               Minimal output\n";
+    out << "  -v, --verbose             Show detailed build information\n";
+    out << "  --cmake-verbose           Show raw CMake configure output\n";
+    out << "  -h, --help                Show this help\n\n";
+
+    out << "CMake passthrough:\n";
+    out << "  -- [cmake args...]        Pass extra arguments to CMake configure\n\n";
 
     out << "Environment variables:\n";
-    out << "  VIX_BUILD_HEARTBEAT=0    Disable configure/build heartbeat\n";
-    out << "  VIX_BUILD_HEARTBEAT=1    Force heartbeat when no output is produced\n";
-    out << "  VIX_GRAPH_EXECUTOR=0     Disable graph target executor\n";
-    out << "  VIX_LOG_LEVEL=debug      Show deeper diagnostic output\n\n";
+    out << "  VIX_BUILD_HEARTBEAT=0     Disable configure/build heartbeat\n";
+    out << "  VIX_BUILD_HEARTBEAT=1     Force heartbeat when no output is produced\n";
+    out << "  VIX_GRAPH_EXECUTOR=0      Disable graph target executor\n";
+    out << "  VIX_LOG_LEVEL=debug       Show deeper diagnostic output\n";
+    out << "  VIX_LOG_LEVEL=trace       Show trace-level diagnostic output\n\n";
 
     out << "Examples:\n";
     out << "  vix build\n";
     out << "  vix build -v\n";
     out << "  vix build --fast\n";
     out << "  vix build --clean\n";
+    out << "  vix build --explain\n";
     out << "  vix build --preset release\n";
+    out << "  vix build --preset=release\n";
     out << "  vix build --build-target all\n";
     out << "  vix build --build-target vix -v\n";
+    out << "  vix build --build-target=vix\n";
     out << "  vix build -j 8\n";
+    out << "  vix build --jobs=8\n";
     out << "  vix build --launcher ccache --linker mold\n";
+    out << "  vix build --launcher=ccache --linker=mold\n";
     out << "  vix build --with-sqlite\n";
     out << "  vix build --with-mysql\n";
     out << "  vix build --preset release --static\n";
     out << "  vix build --target aarch64-linux-gnu\n";
-    out << "  vix build --preset release --target aarch64-linux-gnu\n";
+    out << "  vix build --target=aarch64-linux-gnu\n";
+    out << "  vix build --sysroot /opt/sysroot\n";
+    out << "  vix build --targets\n";
     out << "  vix build --bin\n";
     out << "  vix build --out dist/app\n";
+    out << "  vix build --out=dist/app\n";
     out << "  vix build main.cpp\n";
     out << "  vix build main.cpp --bin\n";
     out << "  vix build main.cpp --out app\n";
     out << "  vix build main.cpp --with-sqlite --out app\n";
     out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
-    out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n\n";
+    out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
+    out << "  VIX_GRAPH_EXECUTOR=0 vix build --build-target vix\n\n";
 
     out << "Logs:\n";
     out << "  build-dev/configure.log\n";

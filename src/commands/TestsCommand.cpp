@@ -1471,45 +1471,63 @@ namespace vix::commands::TestsCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix tests [path] [options]\n\n";
+    out << "  vix tests [path] [options] [-- ctest args...]\n\n";
 
     out << "Description:\n";
-    out << "  Run project tests.\n";
-    out << "  Native test runner is preferred.\n";
-    out << "  CTest is used as a fallback or when raw CTest args are passed.\n";
-    out << "  Build directory is resolved from CMakePresets.json (binaryDir).\n\n";
+    out << "  Build, discover, and run project tests.\n";
+    out << "  Vix first tries a native test runner, then falls back to CTest.\n";
+    out << "  If test sources exist but tests are not configured yet, Vix can prepare\n";
+    out << "  the test build automatically before running them.\n\n";
 
-    out << "Tests flags:\n";
+    out << "Project:\n";
+    out << "  [path]                    Project directory, default: current directory\n\n";
+
+    out << "Test options:\n";
     out << "  --watch                   Watch files and re-run tests on changes\n";
-    out << "  --run                     Run runtime check after tests (tests + runtime)\n";
-    out << "  --list                    List matching tests\n";
-    out << "  --test <name|regex>        Run tests matching a name or regex\n";
-    out << "  -R <name|regex>            Alias for --test\n";
-    out << "  --fail-fast               Stop on first failure\n";
-    out << "  --raw                     Show raw internal test runner output\n\n";
+    out << "  --list                    List discovered tests without running them\n";
+    out << "  --test <name|regex>       Run tests matching a name or regex\n";
+    out << "  --test=<name|regex>       Same as --test <name|regex>\n";
+    out << "  -R <name|regex>           Alias for --test <name|regex>\n";
+    out << "  --fail-fast               Stop on first failing test\n";
+    out << "  --raw                     Show raw test runner or CTest output\n\n";
+
+    out << "Runtime check:\n";
+    out << "  --run                     Run runtime checks after tests pass\n\n";
+
+    out << "Build and preset forwarding:\n";
+    out << "  --preset <name>           Use a build preset, default: dev-ninja\n";
+    out << "  --preset=<name>           Same as --preset <name>\n";
+    out << "  --build-target <name>     Build target used while preparing tests\n";
+    out << "  --build-target=<name>     Same as --build-target <name>\n\n";
 
     out << "CTest passthrough:\n";
-    out << "  Use `--` to pass raw arguments to ctest.\n";
-    out << "  Passing raw CTest args forces CTest mode.\n";
-    out << "  Example: vix tests -- --output-on-failure -R MySuite\n\n";
-
-    out << "Notes:\n";
-    out << "  - Preset is taken from forwarded args (e.g. --preset release)\n";
-    out << "    or defaults to dev-ninja.\n";
-    out << "  - If tests are not configured yet, `vix check --tests` is used.\n";
-    out << "  - All other options supported by `vix check` can still be forwarded.\n\n";
+    out << "  -- [args...]              Pass raw arguments to CTest\n";
+    out << "                            Passing raw CTest args forces CTest mode\n\n";
 
     out << "Examples:\n";
     out << "  vix tests\n";
+    out << "  vix tests --list\n";
     out << "  vix tests --watch\n";
     out << "  vix tests --run\n";
     out << "  vix tests ./examples/blog\n";
     out << "  vix tests --preset release\n";
+    out << "  vix tests --test tree.basic\n";
+    out << "  vix tests --test=tree.basic\n";
+    out << "  vix tests -R tree.basic\n";
+    out << "  vix tests --fail-fast\n";
+    out << "  vix tests --raw\n";
+    out << "  vix tests -- --output-on-failure\n";
     out << "  vix tests -- --output-on-failure -R MySuite\n\n";
-    out << "  vix tests --test kv_test_segment\n";
-    out << "  vix tests -R kv_test_segment\n";
+
+    out << "Behavior:\n";
+    out << "  native runner             Preferred when a test executable is found\n";
+    out << "  CTest                     Used as fallback or when CTest args are passed\n";
+    out << "  tests/ directory          Used to detect whether tests should be prepared\n";
+    out << "  --list                    Shows clean test names instead of raw CTest paths\n\n";
 
     out << "See also:\n";
+    out << "  vix build --build-target all\n";
+    out << "  vix dev\n";
     out << "  vix check --tests\n";
 
     return 0;

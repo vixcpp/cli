@@ -1802,157 +1802,128 @@ namespace vix::commands::RunCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix run [name|file.cpp|manifest.vix|binary|runtime] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
+    out << "  vix run [target] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
 
-    out << "What it does:\n";
-    out << "  Build + run a Vix.cpp app or execute a runtime target.\n";
-    out << "  This command supports:\n";
-    out << "    1) project name     (vix run api)\n";
-    out << "    2) single script    (vix run main.cpp)\n";
-    out << "    3) manifest file    (vix run app.vix)\n";
-    out << "    4) binary           (vix run ./app)\n";
-    out << "    5) runtime targets  (docker://, ssh://, http://)\n\n";
+    out << "Description:\n";
+    out << "  Build and run a C++ target with Vix.\n";
+    out << "  Works with CMake projects, vix.app projects, single C++ files,\n";
+    out << "  .vix manifests, binaries, and runtime targets.\n\n";
 
-    out << "Modes:\n";
-    out << "  Project mode:\n";
-    out << "    • Finds a CMake project or vix.app project (auto or via --dir)\n";
-    out << "    • Uses CMake presets when available for normal CMake projects\n";
-    out << "    • Uses vix.app when no CMakeLists.txt exists\n\n";
+    out << "Targets:\n";
+    out << "  current project             vix run\n";
+    out << "  project directory/name      vix run api\n";
+    out << "  single C++ file             vix run main.cpp\n";
+    out << "  manifest file               vix run app.vix\n";
+    out << "  binary                      vix run ./app\n";
+    out << "  Docker image                vix run docker://nginx\n";
+    out << "  container image             vix run container://nginx\n";
+    out << "  SSH target                  vix run ssh://user@host\n";
+    out << "  HTTP target                 vix run http://example.com\n\n";
 
-    out << "  Script mode (.cpp):\n";
-    out << "    • Compiles one .cpp file and runs it\n";
-    out << "    • Everything after `--` is compiler/linker flags (NOT runtime args)\n";
-    out << "    • Use `--run` to pass runtime args (argv) to the script\n\n";
+    out << "Project options:\n";
+    out << "  -d, --dir <path>            Project directory\n";
+    out << "  --dir=<path>                Same as --dir <path>\n";
+    out << "  --preset <name>             Configure/build preset, default: dev-ninja\n";
+    out << "  --preset=<name>             Same as --preset <name>\n";
+    out << "  --run-preset <name>         Run preset name\n";
+    out << "  --run-preset=<name>         Same as --run-preset <name>\n";
+    out << "  -j, --jobs <n>              Number of parallel build jobs\n";
+    out << "  --jobs=<n>                  Same as --jobs <n>\n";
+    out << "  --clean                     Clean/reconfigure before running\n";
+    out << "  --replay                    Record this run under .vix/runs/\n\n";
 
-    out << "  Manifest mode (.vix):\n";
-    out << "    • Loads a .vix file then merges CLI options on top\n";
-    out << "    • If [app].kind=\"project\", it behaves like project mode\n";
-    out << "    • If [app].kind=\"script\", it behaves like script mode\n\n";
+    out << "Runtime arguments and environment:\n";
+    out << "  --cwd <path>                Run the program from this working directory\n";
+    out << "  --cwd=<path>                Same as --cwd <path>\n";
+    out << "  --env <K=V>                 Add or override one environment variable\n";
+    out << "  --env=<K=V>                 Same as --env <K=V>\n";
+    out << "  --args <value>              Add one runtime argument, repeatable\n";
+    out << "  --args=<value>              Same as --args <value>\n";
+    out << "  --run <args...>             Runtime args for script mode\n\n";
 
-    out << "  Runtime targets:\n";
-    out << "    • docker://image         Run container via Docker\n";
-    out << "    • container://image      Alias for docker://\n";
-    out << "    • ssh://user@host        Execute remote command via SSH\n";
-    out << "    • http://url             Fetch URL via curl\n\n";
+    out << "Watch mode:\n";
+    out << "  --watch                     Rebuild and restart on file changes\n";
+    out << "  --reload                    Alias for --watch\n";
+    out << "  --force-server              Treat the program as a long-running server\n";
+    out << "  --force-script              Treat the program as a short-lived script\n\n";
 
-    out << "    • After a runtime target, all arguments are forwarded automatically\n";
-    out << "      to the underlying runtime.\n";
-    out << "      Example:\n";
-    out << "        vix run docker://nginx -p 8080:80\n\n";
-
-    out << "Most common mistakes:\n";
-    out << "  1) Passing runtime args after `--` (wrong)\n";
-    out << "     vix run main.cpp -- --port 8080\n";
-    out << "     # `--port` is treated as a compiler flag.\n\n";
-
-    out << "  2) Correct way: use `--run` for runtime args\n";
-    out << "     vix run main.cpp --run --port 8080\n";
-    out << "     # Alternative: repeatable --args\n";
-    out << "     # vix run main.cpp --args --port --args 8080\n\n";
-
-    out << "  3) Runtime targets do NOT require --run\n";
-    out << "     vix run docker://nginx -p 8080:80\n\n";
-
-    out << "Options:\n";
-    out << "  -d, --dir <path>              Project directory (default: auto-detect)\n";
-    out << "  --preset <name>               Configure preset (default: dev-ninja)\n";
-    out << "  --run-preset <name>           Build preset for target 'run'\n";
-    out << "  -j, --jobs <n>                Parallel build jobs\n";
-    out << "  --clear <auto|always|never>   Clear terminal before runtime output (default: auto)\n";
-    out << "  --no-clear                    Alias for --clear=never\n\n";
-    out << "  --replay          Record this run under .vix/runs/ for vix replay\n";
-
-    out << "Runtime options (argv / env):\n";
-    out << "  --cwd <path>                  Run the program with this working directory\n";
-    out << "  --env <K=V>                   Add/override one env var (repeatable)\n";
-    out << "  --args <value>                Add one runtime argument (repeatable)\n\n";
-    out << "  --run <args...>               Runtime args for script mode (everything after is argv)\n";
-
-    out << "Watch / lifecycle:\n";
-    out << "  --watch, --reload             Rebuild and restart on file changes\n";
-    out << "  --force-server                Treat as long-lived (server-like)\n";
-    out << "  --force-script                Treat as short-lived (script-like)\n\n";
-
-    out << "Script mode extras:\n";
-    out << "  --auto-deps                   Auto-add -I from ./.vix/deps/*/include\n";
-    out << "  --auto-deps=local             Same as --auto-deps\n";
-    out << "  --auto-deps=up                Also search deps in parent folders (future/optional)\n";
-    out << "  --san                         Enable ASan and UBSan\n";
-    out << "  --ubsan                       Enable UBSan only\n";
-    out << "  --tsan                        Enable ThreadSanitizer only\n";
-    out << "  --with-sqlite                 Enable SQLite support for script mode\n";
-    out << "  --with-mysql                  Enable MySQL support for script mode\n\n";
-    out << "  --local-cache                 Use local .vix-scripts instead of global cache\n";
+    out << "Script mode:\n";
+    out << "  --auto-deps                 Auto-add includes from .vix/deps/*/include\n";
+    out << "  --auto-deps=local           Same as --auto-deps\n";
+    out << "  --auto-deps=up              Search deps in parent folders too\n";
+    out << "  --san                       Enable ASan and UBSan\n";
+    out << "  --ubsan                     Enable UBSan only\n";
+    out << "  --tsan                      Enable ThreadSanitizer only\n";
+    out << "  --with-sqlite               Enable SQLite support\n";
+    out << "  --with-mysql                Enable MySQL support\n";
+    out << "  --local-cache               Use local .vix-scripts cache\n\n";
 
     out << "Documentation:\n";
-    out << "  --docs                        Enable OpenAPI/docs for this run (sets VIX_DOCS=1)\n";
-    out << "  --no-docs                     Keep OpenAPI/docs disabled (sets VIX_DOCS=0)\n";
-    out << "  --docs=<0|1|true|false>       Explicitly control OpenAPI/docs\n\n";
+    out << "  --docs                      Enable OpenAPI/docs for this run\n";
+    out << "  --no-docs                   Disable OpenAPI/docs for this run\n";
+    out << "  --docs=<0|1|true|false>     Explicitly control OpenAPI/docs\n\n";
 
-    out << "Logging:\n";
-    out << "  --log-level <level>           trace | debug | info | warn | error | critical | off\n";
-    out << "  --verbose                     Alias for --log-level=debug\n";
-    out << "  -q, --quiet                   Alias for --log-level=warn\n";
-    out << "  --log-format <kv|json|json-pretty>\n";
-    out << "                               Maps to VIX_LOG_FORMAT (default: kv)\n";
-    out << "  --log-color <auto|always|never>\n";
-    out << "                               Maps to VIX_COLOR (NO_COLOR disables colors)\n";
-    out << "  --no-color                    Alias for --log-color=never\n\n";
+    out << "Output and logging:\n";
+    out << "  --clear <auto|always|never> Clear terminal before runtime output\n";
+    out << "  --clear=<auto|always|never> Same as --clear <mode>\n";
+    out << "  --no-clear                  Alias for --clear=never\n";
+    out << "  --log-level <level>         trace, debug, info, warn, error, critical, off\n";
+    out << "  --log-level=<level>         Same as --log-level <level>\n";
+    out << "  --verbose                   Alias for --log-level=debug\n";
+    out << "  -q, --quiet                 Alias for --log-level=warn\n";
+    out << "  --log-format <format>       kv, json, json-pretty\n";
+    out << "  --log-format=<format>       Same as --log-format <format>\n";
+    out << "  --log-color <mode>          auto, always, never\n";
+    out << "  --log-color=<mode>          Same as --log-color <mode>\n";
+    out << "  --no-color                  Alias for --log-color=never\n";
+    out << "  -h, --help                  Show this help\n\n";
 
-    out << "Compiler/linker flags (script mode only):\n";
-    out << "  Use `--` to stop parsing Vix options and forward flags to the compiler.\n";
-    out << "  Example:\n";
-    out << "    vix run main.cpp -- -O2 -DNDEBUG -lssl -lcrypto\n\n";
+    out << "Compiler/linker flags:\n";
+    out << "  -- [flags...]               In script mode, pass flags to the compiler\n";
+    out << "                              Example: vix run main.cpp -- -O2 -lssl\n\n";
+
+    out << "Important:\n";
+    out << "  For script runtime args, use --run or --args.\n";
+    out << "  Everything after -- is treated as compiler/linker flags.\n\n";
 
     out << "Examples:\n";
-    out << "  # Project mode (auto-detect)\n";
     out << "  vix run\n";
-    out << "  vix run api --args --port --args 8080\n";
-    out << "  vix run --dir ./examples/blog\n\n";
-    out << "  # vix.app project mode\n";
-    out << "  vix run\n";
-    out << "  vix run --dir ./hello-vix-app\n\n";
-
-    out << "  # Project mode + presets\n";
-    out << "  vix run api --preset dev-ninja\n";
-    out << "  vix run api --preset dev-ninja --run-preset run-dev-ninja\n\n";
-
-    out << "  # Watch mode\n";
+    out << "  vix run api\n";
+    out << "  vix run --dir ./examples/blog\n";
+    out << "  vix run --preset release\n";
+    out << "  vix run --clean\n";
+    out << "  vix run --watch\n";
+    out << "  vix run --reload\n";
     out << "  vix run --watch api\n";
-    out << "  vix run --force-server --watch api\n\n";
-
-    out << "  # Script mode (.cpp)\n";
-    out << "  vix run main.cpp --cwd ./data --args --config --args config.json\n";
-    out << "  vix run main.cpp --run hello 123 test\n";
+    out << "  vix run --force-server --watch api\n";
+    out << "  vix run api --args --port --args 8080\n";
+    out << "  vix run api --cwd ./runtime\n";
+    out << "  vix run api --env PORT=8080\n";
+    out << "  vix run api --replay\n";
+    out << "  vix run main.cpp\n";
+    out << "  vix run main.cpp --run hello 123\n";
+    out << "  vix run main.cpp --args hello --args 123\n";
     out << "  vix run main.cpp --with-sqlite\n";
     out << "  vix run main.cpp --with-mysql\n";
-    out << "  vix run main.cpp -- -O2 -DNDEBUG --run hello 123\n";
-    out << "  vix run main.cpp -- -lssl -lcrypto\n\n";
-    out << "  vix run api --replay\n";
-    out << "  vix run main.cpp --replay\n";
-
-    out << "  # Runtime targets\n";
-    out << "  vix run docker://nginx\n";
-    out << "  vix run docker://nginx -p 8080:80\n";
-    out << "  vix run ssh://localhost echo hello\n";
-    out << "  vix run http://example.com\n\n";
-
-    out << "  # Manifest mode (.vix)\n";
+    out << "  vix run main.cpp --san\n";
+    out << "  vix run main.cpp -- -O2 -DNDEBUG\n";
     out << "  vix run app.vix\n";
     out << "  vix run app.vix --args --port --args 8080\n";
-    out << "  vix dev app.vix\n\n";
-
-    out << "  # Umbrella repo examples\n";
+    out << "  vix run ./app\n";
+    out << "  vix run docker://nginx -p 8080:80\n";
+    out << "  vix run ssh://localhost echo hello\n";
+    out << "  vix run http://example.com\n";
     out << "  vix run example main\n";
     out << "  vix run example now_server\n\n";
 
-    out << "Environment:\n";
-    out << "  VIX_DOCS        0|1\n";
-    out << "  VIX_LOG_LEVEL   trace|debug|info|warn|error|critical|off\n";
-    out << "  VIX_LOG_FORMAT  kv|json|json-pretty\n";
-    out << "  VIX_COLOR       auto|always|never\n";
-    out << "  VIX_STDOUT_MODE line\n";
-    out << "  VIX_CLI_CLEAR   auto|always|never\n\n";
+    out << "Environment variables:\n";
+    out << "  VIX_DOCS                    0 or 1\n";
+    out << "  VIX_LOG_LEVEL               trace, debug, info, warn, error, critical, off\n";
+    out << "  VIX_LOG_FORMAT              kv, json, json-pretty\n";
+    out << "  VIX_COLOR                   auto, always, never\n";
+    out << "  VIX_STDOUT_MODE             line\n";
+    out << "  VIX_CLI_CLEAR               auto, always, never\n";
+    out << "  VIX_SHOW_ENV_HINT=1         Show .env hint when .env.example exists\n\n";
 
     return 0;
   }

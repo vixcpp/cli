@@ -777,6 +777,123 @@ namespace
     return fs::exists(buildDir / "CTestTestfile.cmake", ec) && !ec;
   }
 
+  static bool has_test_sources(const fs::path &projectDir)
+  {
+    const fs::path testsDir = projectDir / "tests";
+
+    std::error_code ec;
+
+    if (!fs::exists(testsDir, ec) || ec)
+      return false;
+
+    if (!fs::is_directory(testsDir, ec) || ec)
+      return false;
+
+    for (fs::recursive_directory_iterator it(
+             testsDir,
+             fs::directory_options::skip_permission_denied,
+             ec),
+         end;
+         it != end;
+         it.increment(ec))
+    {
+      if (ec)
+        continue;
+
+      if (!it->is_regular_file(ec))
+        continue;
+
+      const std::string ext = it->path().extension().string();
+
+      if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c")
+        return true;
+    }
+
+    return false;
+  }
+
+  static std::string sanitize_cmake_var_component(std::string value)
+  {
+    for (char &c : value)
+    {
+      const unsigned char ch = static_cast<unsigned char>(c);
+
+      if (!std::isalnum(ch) && c != '_')
+        c = '_';
+    }
+
+    if (value.empty())
+      return "PROJECT";
+
+    return value;
+  }
+
+  static std::string project_tests_option_name(const fs::path &projectDir)
+  {
+    return sanitize_cmake_var_component(projectDir.filename().string()) +
+           "_BUILD_TESTS";
+  }
+
+  static int build_project_tests(
+      const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    const std::string presetName = resolve_preset_name(opt);
+    const std::string testsOption = project_tests_option_name(opt.projectDir);
+
+    std::vector<std::string> argv;
+
+    argv.push_back("vix");
+    argv.push_back("build");
+    argv.push_back("--build-target");
+    argv.push_back("all");
+
+    if (!presetName.empty())
+    {
+      argv.push_back("--preset");
+      argv.push_back(presetName);
+    }
+
+    argv.push_back("--");
+    argv.push_back("-DBUILD_TESTING=ON");
+    argv.push_back("-D" + testsOption + "=ON");
+
+    build::print_task_header_full(
+        std::cout,
+        "Preparing tests",
+        "all",
+        display_preset_name(presetName),
+        {});
+
+    const auto start = std::chrono::steady_clock::now();
+    const TestExecResult result = run_in_dir_capture(opt.projectDir, argv);
+    const auto end = std::chrono::steady_clock::now();
+
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+            .count();
+
+    if (result.code == 0)
+    {
+      build::print_task_success_timed(
+          std::cout,
+          "Tests configured",
+          ms);
+
+      return 0;
+    }
+
+    build::print_task_failure_timed(
+        std::cout,
+        "Failed to configure tests",
+        ms);
+
+    if (!result.output.empty())
+      std::cout << "\n"
+                << result.output << "\n";
+
+    return result.code == 0 ? 1 : result.code;
+  }
+
   static bool should_force_ctest(const vix::commands::TestsCommand::detail::Options &opt)
   {
     if (!opt.ctestArgs.empty())
@@ -814,6 +931,61 @@ namespace
 
     value.erase(0, i);
     return value;
+  }
+
+  static std::vector<std::string> parse_ctest_list_output(
+      const std::string &output)
+  {
+    std::vector<std::string> tests;
+
+    std::istringstream in(output);
+    std::string line;
+
+    while (std::getline(in, line))
+    {
+      const std::string trimmed = trim_copy(line);
+
+      const std::string marker = "Test #";
+      const std::size_t markerPos = trimmed.find(marker);
+
+      if (markerPos == std::string::npos)
+        continue;
+
+      const std::size_t colon = trimmed.find(':', markerPos);
+      if (colon == std::string::npos)
+        continue;
+
+      std::string name = trim_copy(trimmed.substr(colon + 1));
+
+      if (!name.empty())
+        tests.push_back(name);
+    }
+
+    return tests;
+  }
+
+  static void print_listed_tests(
+      const std::vector<std::string> &tests)
+  {
+    if (tests.empty())
+    {
+      std::cout << "\n";
+      hint("No tests matched the current filter.");
+      return;
+    }
+
+    std::cout << "\n";
+    std::cout << "  " << CYAN << "tests" << RESET << "\n";
+
+    for (const std::string &test : tests)
+    {
+      std::cout << "    "
+                << GRAY << "• " << RESET
+                << test
+                << "\n";
+    }
+
+    std::cout << "\n";
   }
 
   static bool starts_with_test_result_line(const std::string &line)
@@ -1073,9 +1245,7 @@ namespace
 
     if (!ctest_file_exists(buildDir))
     {
-      error("No tests available.");
-      hint("Tests were not generated in the existing build directory.");
-      return 1;
+      return 2;
     }
 
     std::vector<std::string> argv;
@@ -1106,6 +1276,24 @@ namespace
 
     if (ok)
     {
+      if (opt.list)
+      {
+        const std::vector<std::string> tests =
+            parse_ctest_list_output(result.output);
+
+        print_listed_tests(tests);
+
+        build::print_task_success_timed(
+            std::cout,
+            "Listed " +
+                std::to_string(tests.size()) +
+                " test" +
+                (tests.size() == 1 ? "" : "s"),
+            ms);
+
+        return 0;
+      }
+
       build::print_task_success_timed(
           std::cout,
           passed_tests_message(result),
@@ -1142,17 +1330,49 @@ namespace
 
   static int run_tests_once(const vix::commands::TestsCommand::detail::Options &opt)
   {
-    if (should_force_ctest(opt))
+    auto run_available_tests = [&]() -> int
+    {
+      if (should_force_ctest(opt))
+        return run_ctest(opt);
+
+      const int nativeCode = run_native_tests(opt);
+      if (nativeCode == 0)
+        return 0;
+
+      if (nativeCode != 2)
+        return nativeCode;
+
       return run_ctest(opt);
+    };
 
-    const int nativeCode = run_native_tests(opt);
-    if (nativeCode == 0)
-      return 0;
+    int code = run_available_tests();
 
-    if (nativeCode != 2)
-      return nativeCode;
+    if (code != 2)
+      return code;
 
-    return run_ctest(opt);
+    if (!has_test_sources(opt.projectDir))
+    {
+      error("No tests available.");
+      hint("No test source files were found in the tests directory.");
+      return 1;
+    }
+
+    const int buildCode = build_project_tests(opt);
+
+    if (buildCode != 0)
+      return buildCode;
+
+    code = run_available_tests();
+
+    if (code != 2)
+      return code;
+
+    error("No tests available.");
+    hint("Tests were found, but no runnable test target was generated.");
+    hint("Check that your CMakeLists.txt enables tests when " +
+         project_tests_option_name(opt.projectDir) + "=ON.");
+
+    return 1;
   }
 } // namespace
 

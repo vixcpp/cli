@@ -93,14 +93,16 @@ namespace
       return;
 
     const fs::path envExample = projectDir / ".env.example";
-    if (fs::exists(envExample, ec) && !ec)
-    {
-      hint(".env not found.");
-      step("cp .env.example .env");
+    if (!fs::exists(envExample, ec) || ec)
       return;
-    }
+
+    const char *showEnvHint = std::getenv("VIX_SHOW_ENV_HINT");
+
+    if (!showEnvHint || std::string(showEnvHint) != "1")
+      return;
 
     hint(".env not found.");
+    step("cp .env.example .env");
   }
 
   std::string to_dep_folder_name(const std::string &pkg)
@@ -289,6 +291,89 @@ namespace
       return otherCandidates.front();
 
     return std::nullopt;
+  }
+
+  static int build_project_with_vix_build(
+      const fs::path &projectDir,
+      const Options &opt,
+      fs::path &outExecutable)
+  {
+    namespace detail = vix::commands::RunCommand::detail;
+
+    const std::string projectName = projectDir.filename().string();
+    const fs::path buildDir = projectDir / "build-ninja";
+
+    std::ostringstream cmd;
+
+#ifdef _WIN32
+    cmd << "cmd /C \"cd /D "
+        << detail::quote(projectDir.string())
+        << " && vix build --build-target "
+        << detail::quote(projectName);
+#else
+    cmd << "cd "
+        << detail::quote(projectDir.string())
+        << " && vix build --build-target "
+        << detail::quote(projectName);
+#endif
+
+    if (!opt.preset.empty())
+      cmd << " --preset " << detail::quote(opt.preset);
+
+    if (opt.jobs > 0)
+      cmd << " -j " << opt.jobs;
+
+    if (opt.verbose)
+      cmd << " -v";
+
+    if (opt.quiet)
+      cmd << " -q";
+
+    if (opt.clean)
+      cmd << " --clean";
+
+    if (opt.withSqlite)
+      cmd << " --with-sqlite";
+
+    if (opt.withMySql)
+      cmd << " --with-mysql";
+
+#ifdef _WIN32
+    cmd << "\"";
+#endif
+
+    const int rawCode =
+        detail::run_cmd_live_filtered(
+            cmd.str(),
+            "Building project");
+
+    const int buildExit =
+        detail::normalize_exit_code(rawCode);
+
+    if (buildExit == 130)
+    {
+      hint("Program interrupted by user.");
+      return 0;
+    }
+
+    if (buildExit != 0)
+      return buildExit;
+
+    auto exePath =
+        resolve_runnable_executable(
+            buildDir,
+            projectName);
+
+    if (!exePath)
+    {
+      error("Built executable not found for project: " + projectName);
+      hint("Resolved build directory: " + buildDir.string());
+      hint("If your executable has another name, use the project target name as the folder name for now.");
+      return 1;
+    }
+
+    outExecutable = *exePath;
+    return 0;
   }
 
   void apply_manifest_auto_deps_includes(Options &opt, const fs::path &manifestFile)
@@ -1074,215 +1159,33 @@ namespace
   {
     using namespace vix::commands::RunCommand::detail;
 
-    const std::string configurePreset =
-        choose_configure_preset_smart(projectDir, opt.preset);
+    (void)showUi;
 
-    const std::string buildPreset =
-        default_build_preset_for_configure(configurePreset);
+    fs::path exePath;
 
-    const auto runPresetOpt =
-        try_choose_run_preset(projectDir, configurePreset, opt.runPreset);
-    (void)runPresetOpt;
+    const int buildCode =
+        build_project_with_vix_build(
+            projectDir,
+            opt,
+            exePath);
 
-    const fs::path buildDir =
-        resolve_build_dir_smart(projectDir, configurePreset);
+    if (buildCode != 0)
+      return buildCode;
 
-    const bool alreadyConfigured = has_cmake_cache(buildDir);
-    RunProgress progress(3, showUi);
+    const int runCode =
+        run_executable_direct(
+            exePath,
+            opt,
+            "Execution failed",
+            effective_timeout_sec(opt));
 
-    progress.phase_start("Configure project (preset: " + configurePreset + ")");
-    if (alreadyConfigured)
+    if (runCode == 130)
     {
-      progress.phase_done("Configure project", "cache already present");
-    }
-    else
-    {
-      std::string cmd;
-#ifdef _WIN32
-      cmd = "cmd /C \"cd /D " + quote(projectDir.string()) +
-            " && cmake --preset " + quote(configurePreset) + "\"";
-#else
-      cmd = "cd " + quote(projectDir.string()) +
-            " && cmake --log-level=WARNING --preset " + quote(configurePreset);
-#endif
-
-      const LiveRunResult cr = run_cmd_live_filtered_capture(
-          cmd,
-          "",
-          false,
-          0,
-          false);
-
-      const int code = cr.exitCode;
-      if (code != 0)
-      {
-        std::string log = cr.stderrText;
-        if (!cr.stdoutText.empty())
-          log += cr.stdoutText;
-
-        if (!log.empty())
-          std::cout << log << "\n";
-
-        error("CMake configure failed with preset '" + configurePreset + "'.");
-        hint("Run the same command manually to inspect the error:");
-        step("cd " + projectDir.string());
-        step("cmake --preset " + configurePreset);
-        return code != 0 ? code : 2;
-      }
-
-      progress.phase_done("Configure project", "completed");
+      hint("Program interrupted by user.");
+      return 0;
     }
 
-    progress.phase_start("Build project (preset: " + buildPreset + ")");
-
-#ifdef _WIN32
-    {
-      std::ostringstream oss;
-      oss << "cmd /C \"cd /D " << quote(projectDir.string())
-          << " && set VIX_STDOUT_MODE=line"
-          << " && set VIX_MODE=" << (opt.watch ? "dev" : "run")
-          << " && cmake --build --preset " << quote(buildPreset);
-
-      if (opt.jobs > 0)
-        oss << " -- -j " << opt.jobs;
-
-      oss << "\"";
-
-      const int buildCode =
-          run_cmd_live_filtered(oss.str(), "Building (preset \"" + buildPreset + "\")");
-
-      const int buildExit = normalize_exit_code(buildCode);
-      if (buildExit == 130)
-      {
-        hint("ℹ Program interrupted by user (SIGINT).");
-        return 0;
-      }
-
-      if (buildExit != 0)
-      {
-        error("Build failed (preset '" + buildPreset + "') (exit code " +
-              std::to_string(buildExit) + ").");
-        hint("Run the same command manually:");
-        step("cd " + projectDir.string());
-        step("cmake --build --preset " + buildPreset);
-        return buildExit;
-      }
-    }
-#else
-    {
-      std::ostringstream oss;
-      oss << "cd " << quote(projectDir.string())
-          << " && VIX_STDOUT_MODE=line"
-          << " VIX_MODE=" << (opt.watch ? "dev" : "run")
-          << " cmake --build --preset " << quote(buildPreset)
-          << " --";
-
-      if (opt.jobs > 0)
-        oss << " -j " << opt.jobs;
-
-      if (configurePreset.find("ninja") != std::string::npos ||
-          buildPreset.find("ninja") != std::string::npos)
-      {
-        oss << " --quiet";
-      }
-
-      const std::string buildCmd = oss.str();
-
-      clear_terminal_if_enabled();
-
-      int rawCode = 0;
-      std::string log = run_and_capture_with_code(buildCmd + " 2>&1", rawCode);
-      const int buildExit = normalize_exit_code(rawCode);
-
-      if (buildExit == 130)
-      {
-        hint("ℹ Program interrupted by user (SIGINT).");
-        return 0;
-      }
-
-      if (buildExit != 0)
-      {
-        bool handled = false;
-
-        if (!log.empty())
-        {
-          handled = vix::cli::ErrorHandler::printBuildErrors(
-              log,
-              projectDir,
-              "Build failed (preset '" + buildPreset + "')");
-        }
-        else
-        {
-          error("Build failed (preset '" + buildPreset + "') (exit code " +
-                std::to_string(buildExit) + ").");
-        }
-
-        if (!handled)
-        {
-          hint("Run the same command manually:");
-          step("cd " + projectDir.string());
-          step("cmake --build --preset " + buildPreset);
-        }
-
-        return buildExit != 0 ? buildExit : 2;
-      }
-    }
-#endif
-
-    progress.phase_done("Build project", "completed");
-    progress.phase_start("Run application");
-
-    const std::string exeName = projectDir.filename().string();
-    auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
-
-    if (!exePathOpt)
-    {
-      error("Built executable not found for project: " + exeName);
-      hint("Resolved build directory: " + buildDir.string());
-      hint("No runnable application target could be resolved automatically.");
-      hint("If your executable uses a custom output path or custom target name, add a manifest field to specify it.");
-      return 1;
-    }
-
-    fs::path exePath = *exePathOpt;
-
-    if (!fs::exists(exePath))
-    {
-      const int testRc = run_test_binary_if_present(
-          buildDir,
-          opt.runArgs,
-          opt.cwd,
-          showUi);
-
-      if (testRc != -1)
-      {
-        progress.phase_done("Run application", "test executed");
-        if (showUi)
-          success("🏃 Test executed (library project).");
-        return testRc;
-      }
-
-      error("Built executable not found: " + exePath.string());
-      hint("This looks like a library project. Use: vix tests");
-      hint("Resolved build directory: " + buildDir.string());
-      hint("If your binary name differs from the folder name, adjust it or add a manifest field to specify target.");
-      return 1;
-    }
-
-    const int runRc = run_executable_direct(
-        exePath,
-        opt,
-        "Execution failed",
-        effective_timeout_sec(opt));
-
-    if (runRc != 0)
-      return runRc;
-
-    progress.phase_done("Run application", "completed");
-    if (showUi)
-      success("🏃 Application started (preset: " + buildPreset + ").");
-
-    return 0;
+    return runCode;
   }
 
   int run_project_fallback(

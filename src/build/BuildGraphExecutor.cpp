@@ -387,8 +387,6 @@ namespace vix::cli::build
 
       task.command = {
           "ninja",
-          "-C",
-          buildDir.string(),
           target};
 
       return task;

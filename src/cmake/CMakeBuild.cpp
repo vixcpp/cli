@@ -177,20 +177,10 @@ namespace vix::cli::build
     if (jobs <= 0)
       jobs = default_jobs();
 
-    std::string target = opt.buildTarget;
-
-    if (target.empty())
-    {
-      if (!plan.defaultTargetName.empty())
-        target = plan.defaultTargetName;
-      else
-        target = plan.projectDir.filename().string();
-    }
-
-    if (!target.empty())
+    if (!opt.buildTarget.empty() && opt.buildTarget != "all")
     {
       argv.push_back("--target");
-      argv.push_back(target);
+      argv.push_back(opt.buildTarget);
     }
 
     argv.push_back("--");

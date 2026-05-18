@@ -53,6 +53,42 @@ namespace vix::commands::RunCommand::dev
       out << in.rdbuf();
       return out.str();
     }
+
+    std::string make_vix_dev_build_command(
+        const DevRebuilderOptions &options)
+    {
+      const detail::Options &opt = options.runOptions;
+
+      std::ostringstream oss;
+
+#ifndef _WIN32
+      oss << "cd "
+          << detail::quote(options.projectDir.string())
+          << " && vix build"
+          << " --build-target all"
+          << " --fast";
+#else
+      oss << "cd /D "
+          << detail::quote(options.projectDir.string())
+          << " && vix build"
+          << " --build-target all"
+          << " --fast";
+#endif
+
+      if (opt.jobs > 0)
+        oss << " -j " << opt.jobs;
+
+      if (opt.verbose)
+        oss << " -v";
+
+      if (opt.withSqlite)
+        oss << " --with-sqlite";
+
+      if (opt.withMySql)
+        oss << " --with-mysql";
+
+      return oss.str();
+    }
   } // namespace
 
   DevRebuilder::DevRebuilder(DevRebuilderOptions options)
@@ -83,34 +119,25 @@ namespace vix::commands::RunCommand::dev
   DevRebuilderResult DevRebuilder::rebuild() const
   {
     DevRebuilderResult result;
+    result.built = true;
 
-    if (!options_.quiet)
+    std::string buildCmd = make_vix_dev_build_command(options_);
+
+#ifndef _WIN32
+    std::vector<std::string> argv = {
+        "sh",
+        "-lc",
+        buildCmd};
+#else
+    std::vector<std::string> argv = {
+        "cmd",
+        "/C",
+        buildCmd};
+#endif
+
     {
-      std::cout << CYAN << BOLD << "Compiling " << RESET
-                << CYAN << BOLD << options_.targetName << RESET
-                << GRAY << " (dev)" << RESET
-                << "\n"
-                << std::flush;
-    }
-
-    std::vector<std::string> argv;
-    argv.push_back("cmake");
-    argv.push_back("--build");
-    argv.push_back(options_.buildDir.string());
-    argv.push_back("--target");
-    argv.push_back(options_.targetName);
-
-    argv.push_back("--");
-
-    const int jobs =
-        options_.runOptions.jobs > 0
-            ? options_.runOptions.jobs
-            : static_cast<int>(std::thread::hardware_concurrency());
-
-    if (jobs > 0)
-    {
-      argv.push_back("-j");
-      argv.push_back(std::to_string(jobs));
+      std::error_code ec;
+      fs::create_directories(options_.buildDir, ec);
     }
 
     const fs::path logPath = options_.buildDir / "dev-build.log";
@@ -131,6 +158,7 @@ namespace vix::commands::RunCommand::dev
       const std::string log = read_text_file_or_empty(logPath);
 
       bool handled = false;
+
       if (!log.empty())
       {
         handled = vix::cli::ErrorHandler::printBuildErrors(
@@ -145,17 +173,13 @@ namespace vix::commands::RunCommand::dev
       return result;
     }
 
+    result.message = "Build completed.";
     return result;
   }
-
   DevRebuilderResult DevRebuilder::reconfigure_and_rebuild() const
   {
     if (!options_.quiet)
       info("Configuration change detected.");
-
-    DevRebuilderResult configured = run_configure_command();
-    if (!configured.ok)
-      return configured;
 
     return rebuild();
   }

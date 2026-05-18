@@ -127,7 +127,7 @@ namespace vix::commands::RunCommand::dev
                 << GREEN << "✔" << RESET
                 << " Started"
                 << GRAY << " pid=" << pid << RESET
-                << "\n\n";
+                << "\n";
     }
 
     void print_dev_reload_header(const DevDetectedChange &change)
@@ -200,29 +200,6 @@ namespace vix::commands::RunCommand::dev
       }
       else
       {
-        const DevRebuilderResult configureResult = rebuilder_.ensure_configured();
-
-        if (!configureResult.ok)
-        {
-          hint("Fix the errors, save your files, and Vix will rebuild automatically.");
-
-          fileIndex_.refresh();
-
-          while (true)
-          {
-            std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
-            if (!changes.empty())
-            {
-              pendingChangeKind_ = DevChangeKind::ReconfigureAndRebuild;
-              break;
-            }
-
-            std::this_thread::sleep_for(options_.pollInterval);
-          }
-
-          continue;
-        }
-
         rebuildResult = rebuilder_.rebuild();
       }
 
@@ -254,15 +231,51 @@ namespace vix::commands::RunCommand::dev
 
       if (!exePath)
       {
-        result.exitCode = 1;
-        result.message = "Dev executable not found for target: " + options_.targetName;
+        if (!fileIndexReady)
+        {
+          fileIndex_.refresh();
+          fileIndexReady = true;
+        }
 
-        error(result.message);
-        hint("Build directory: " + options_.buildDir.string());
-        hint("Make sure your CMakeLists.txt defines an executable target named '" + options_.targetName + "'.");
-        return result;
+        if (!options_.quiet)
+        {
+          success("Library built.");
+          hint("No runnable executable found. Watching for changes.");
+          hint("Use `vix tests` to run the test suite.");
+        }
+
+        while (true)
+        {
+          std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
+
+          if (!changes.empty())
+          {
+            DevChangeKind kind = DevChangeKind::Ignore;
+
+            for (const auto &change : changes)
+            {
+              if (!change.valid())
+                continue;
+
+              if (change.kind == DevChangeKind::ReconfigureAndRebuild)
+              {
+                kind = DevChangeKind::ReconfigureAndRebuild;
+                break;
+              }
+
+              if (kind == DevChangeKind::Ignore)
+                kind = change.kind;
+            }
+
+            pendingChangeKind_ = kind;
+            break;
+          }
+
+          std::this_thread::sleep_for(options_.pollInterval);
+        }
+
+        continue;
       }
-
       if (!fileIndexReady)
       {
         fileIndex_.refresh();

@@ -1433,43 +1433,11 @@ namespace vix::commands::BuildCommand
         const process::Plan &plan,
         const build::BuildGraphScanResult &scan)
     {
-      if (!opt.useCache)
-        return false;
+      (void)opt;
+      (void)plan;
+      (void)scan;
 
-      if (opt.clean)
-        return false;
-
-      if (!opt.targetTriple.empty())
-        return false;
-
-      if (!opt.buildTarget.empty())
-        return false;
-
-      if (!opt.cmakeArgs.empty())
-        return false;
-
-      if (opt.withSqlite || opt.withMySql)
-        return false;
-
-      if (opt.linkStatic)
-        return false;
-
-      if (scan.sources == 0)
-        return false;
-
-      if (scan.sources > 64)
-        return false;
-
-      if (fs::exists(plan.projectDir / "modules"))
-        return false;
-
-      if (fs::exists(plan.projectDir / "examples"))
-        return false;
-
-      if (fs::exists(plan.projectDir / "unittests"))
-        return false;
-
-      return true;
+      return false;
     }
 
     static fs::path graph_output_binary_path(
@@ -2182,10 +2150,14 @@ namespace vix::commands::BuildCommand
       if (linkCode != 0)
         return linkCode;
 
-      if (!store_project_target_artifact(projectArtifact, opt, plan) && !opt.quiet)
-        build::print_build_warning(
+      if (!store_project_target_artifact(projectArtifact, opt, plan) &&
+          !opt.quiet &&
+          opt.verbose)
+      {
+        build::print_build_info(
             std::cout,
-            "Unable to store target artifact");
+            "Artifact cache store skipped");
+      }
 
       const auto state =
           artifact_cache::ArtifactCache::make_build_state(
@@ -3140,10 +3112,14 @@ namespace vix::commands::BuildCommand
 
           if (graphResult.ok)
           {
-            if (!store_project_target_artifact(projectArtifact, opt_, plan_) && !opt_.quiet)
-              build::print_build_warning(
+            if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
+                !opt_.quiet &&
+                opt_.verbose)
+            {
+              build::print_build_info(
                   std::cout,
-                  "Unable to store target artifact");
+                  "Artifact cache store skipped");
+            }
 
             std::string lastBinary;
 
@@ -3296,11 +3272,14 @@ namespace vix::commands::BuildCommand
             return (r.exitCode == 0) ? 3 : r.exitCode;
           }
 
-          if (!store_project_target_artifact(projectArtifact, opt_, plan_) && !opt_.quiet)
-            build::print_build_warning(
+          if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
+              !opt_.quiet &&
+              opt_.verbose)
+          {
+            build::print_build_info(
                 std::cout,
-                "Unable to store target artifact");
-
+                "Artifact cache store skipped");
+          }
           std::string lastBinary;
 
           const auto exeOpt = resolve_main_executable(

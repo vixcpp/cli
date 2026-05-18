@@ -818,9 +818,9 @@ namespace vix::cli::build
 
     out << "    "
         << colorize(style::GRAY, "hint:")
-        << " run with "
-        << colorize(style::CYAN, "--verbose")
-        << " for full compiler output"
+        << " run "
+        << colorize(style::CYAN, "vix build --warnings")
+        << " to view all warnings"
         << "\n\n";
   }
 

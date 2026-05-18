@@ -552,6 +552,106 @@ namespace vix::commands::BuildCommand
         {
           o.explain = true;
         }
+        else if (a == "--warnings")
+        {
+          o.warnings = true;
+        }
+        else if (a == "--warning-check")
+        {
+          o.warningCheck = true;
+        }
+        else if (a == "--page")
+        {
+          auto v = util::take_value(args, i);
+          if (!v)
+          {
+            error("Missing value for --page <n>");
+            exitCode = 2;
+            return o;
+          }
+
+          try
+          {
+            const int page = std::stoi(std::string(*v));
+            if (page <= 0)
+              throw std::runtime_error("invalid page");
+
+            o.warningsPage = static_cast<std::size_t>(page);
+            o.warningsPageSet = true;
+          }
+          catch (...)
+          {
+            error("Invalid integer for --page: " + std::string(*v));
+            exitCode = 2;
+            return o;
+          }
+        }
+        else if (a.rfind("--page=", 0) == 0)
+        {
+          const std::string v = a.substr(std::string("--page=").size());
+
+          try
+          {
+            const int page = std::stoi(v);
+            if (page <= 0)
+              throw std::runtime_error("invalid page");
+
+            o.warningsPage = static_cast<std::size_t>(page);
+            o.warningsPageSet = true;
+          }
+          catch (...)
+          {
+            error("Invalid integer for --page: " + v);
+            exitCode = 2;
+            return o;
+          }
+        }
+        else if (a == "--limit")
+        {
+          auto v = util::take_value(args, i);
+          if (!v)
+          {
+            error("Missing value for --limit <n>");
+            exitCode = 2;
+            return o;
+          }
+
+          try
+          {
+            const int limit = std::stoi(std::string(*v));
+            if (limit <= 0)
+              throw std::runtime_error("invalid limit");
+
+            o.warningsLimit = static_cast<std::size_t>(limit);
+            o.warningsLimitSet = true;
+          }
+          catch (...)
+          {
+            error("Invalid integer for --limit: " + std::string(*v));
+            exitCode = 2;
+            return o;
+          }
+        }
+        else if (a.rfind("--limit=", 0) == 0)
+        {
+          const std::string v = a.substr(std::string("--limit=").size());
+
+          try
+          {
+            const int limit = std::stoi(v);
+            if (limit <= 0)
+              throw std::runtime_error("invalid limit");
+
+            o.warningsLimit = static_cast<std::size_t>(limit);
+            o.warningsLimitSet = true;
+          }
+          catch (...)
+          {
+            error("Invalid integer for --limit: " + v);
+            exitCode = 2;
+            return o;
+          }
+        }
         else if (a == "--preset")
         {
           auto v = util::take_value(args, i);
@@ -867,6 +967,14 @@ namespace vix::commands::BuildCommand
         }
       }
 
+      if ((o.warningsPageSet || o.warningsLimitSet) && !o.warnings)
+      {
+        error("--page and --limit can only be used with --warnings");
+        hint("Try: vix build --warnings --page 2 --limit 10");
+        exitCode = 2;
+        return o;
+      }
+
       return o;
     }
 
@@ -921,6 +1029,68 @@ namespace vix::commands::BuildCommand
 
       return std::nullopt;
 #endif
+    }
+
+    static std::string warning_check_cxx_compiler()
+    {
+      const char *cxx = std::getenv("CXX");
+
+      if (cxx && *cxx)
+        return cxx;
+
+      if (util::executable_on_path("clang++"))
+        return "clang++";
+
+      if (util::executable_on_path("g++"))
+        return "g++";
+
+      return "c++";
+    }
+
+    static std::optional<std::string> warning_check_c_compiler(
+        const std::string &cxxCompiler)
+    {
+      const char *cc = std::getenv("CC");
+
+      if (cc && *cc)
+        return std::string(cc);
+
+      if (cxxCompiler == "clang++" && util::executable_on_path("clang"))
+        return std::string("clang");
+
+      if (cxxCompiler == "g++" && util::executable_on_path("gcc"))
+        return std::string("gcc");
+
+      return std::nullopt;
+    }
+
+    static bool warning_check_uses_clang(const std::string &compiler)
+    {
+      return compiler.find("clang") != std::string::npos;
+    }
+
+    static std::string warning_check_cxx_flags(
+        const std::string &compiler)
+    {
+      std::string flags =
+          "-Wall "
+          "-Wextra "
+          "-Wpedantic "
+          "-Wshadow "
+          "-Wconversion "
+          "-Wsign-conversion "
+          "-Wformat=2 "
+          "-Wold-style-cast "
+          "-Woverloaded-virtual";
+
+      if (warning_check_uses_clang(compiler))
+      {
+        flags +=
+            " -Wlogical-op-parentheses"
+            " -Wunreachable-code";
+      }
+
+      return flags;
     }
 
     static bool has_cmake_cache(const fs::path &buildDir)
@@ -979,6 +1149,24 @@ namespace vix::commands::BuildCommand
 
       vars.emplace_back("CMAKE_BUILD_TYPE", p.buildType);
       vars.emplace_back("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
+
+      if (opt.warningCheck)
+      {
+        const std::string cxxCompiler = warning_check_cxx_compiler();
+        const std::optional<std::string> cCompiler =
+            warning_check_c_compiler(cxxCompiler);
+
+        vars.emplace_back("VIX_ENABLE_WARNINGS", "ON");
+        vars.emplace_back(
+            "CMAKE_CXX_FLAGS",
+            warning_check_cxx_flags(cxxCompiler));
+
+        if (!std::getenv("CXX"))
+          vars.emplace_back("CMAKE_CXX_COMPILER", cxxCompiler);
+
+        if (!std::getenv("CC") && cCompiler)
+          vars.emplace_back("CMAKE_C_COMPILER", *cCompiler);
+      }
 
       if (!opt.targetTriple.empty())
         vars.emplace_back("CMAKE_TOOLCHAIN_FILE", toolchainFile.string());
@@ -1045,6 +1233,7 @@ namespace vix::commands::BuildCommand
       oss << "sysroot=" << opt.sysroot << "\n";
       oss << "fast=" << (opt.fast ? "1" : "0") << "\n";
       oss << "useCache=" << (opt.useCache ? "1" : "0") << "\n";
+      oss << "warningCheck=" << (opt.warningCheck ? "1" : "0") << "\n";
       oss << "linker=" << static_cast<int>(opt.linker) << "\n";
       oss << "launcher=" << static_cast<int>(opt.launcher) << "\n";
       oss << "verbose=" << (opt.verbose ? "1" : "0") << "\n";
@@ -1688,6 +1877,131 @@ namespace vix::commands::BuildCommand
           total);
     }
 
+    static std::vector<build::BuildWarning> collect_all_build_warnings(
+        const std::string &output)
+    {
+      std::istringstream in(output);
+      std::string line;
+
+      std::vector<build::BuildWarning> warnings;
+
+      while (std::getline(in, line))
+      {
+        if (!looks_like_compiler_warning(line))
+          continue;
+
+        const auto parsed = build::parse_build_warning(line);
+
+        if (parsed)
+        {
+          warnings.push_back(*parsed);
+          continue;
+        }
+
+        build::BuildWarning warning;
+        warning.raw = line;
+        warnings.push_back(warning);
+      }
+
+      return warnings;
+    }
+
+    static std::string display_build_profile(const process::Plan &plan)
+    {
+      if (plan.preset.buildType == "Release")
+        return "release";
+
+      return "dev";
+    }
+
+    static int print_last_build_warnings(
+        const process::Options &opt,
+        const process::Plan &plan)
+    {
+      const std::string log =
+          util::read_text_file_or_empty(plan.buildLog);
+
+      if (log.empty())
+      {
+        error("No build log found.");
+        hint("Run `vix build` first.");
+        return 1;
+      }
+
+      const std::vector<build::BuildWarning> warnings =
+          collect_all_build_warnings(log);
+
+      if (warnings.empty())
+      {
+        build::print_task_header_full(
+            std::cout,
+            "Warnings",
+            build::default_build_target_name(opt, plan),
+            display_build_profile(plan),
+            {});
+
+        build::print_build_success(
+            std::cout,
+            "No compiler warnings found");
+
+        return 0;
+      }
+
+      build::print_task_header_full(
+          std::cout,
+          "Warnings",
+          build::default_build_target_name(opt, plan),
+          display_build_profile(plan),
+          {});
+
+      const std::size_t total = warnings.size();
+      const std::size_t limit = opt.warningsLimit == 0 ? 10 : opt.warningsLimit;
+      const std::size_t page = opt.warningsPage == 0 ? 1 : opt.warningsPage;
+
+      const std::size_t start = (page - 1) * limit;
+
+      if (start >= total)
+      {
+        error("Warnings page is out of range.");
+        hint("Total warnings: " + std::to_string(total));
+        hint("Last page: " + std::to_string((total + limit - 1) / limit));
+        return 1;
+      }
+
+      const std::size_t end = std::min(start + limit, total);
+
+      std::vector<build::BuildWarning> pageWarnings;
+      pageWarnings.reserve(end - start);
+
+      for (std::size_t i = start; i < end; ++i)
+        pageWarnings.push_back(warnings[i]);
+
+      build::print_build_warnings_summary(
+          std::cout,
+          pageWarnings,
+          total);
+
+      const std::size_t lastPage = (total + limit - 1) / limit;
+
+      build::print_build_success(
+          std::cout,
+          "Listed warnings " +
+              std::to_string(start + 1) +
+              "-" +
+              std::to_string(end) +
+              " of " +
+              std::to_string(total));
+
+      if (page < lastPage)
+      {
+        hint("Next page: vix build --warnings --page " +
+             std::to_string(page + 1) +
+             " --limit " +
+             std::to_string(limit));
+      }
+      return 0;
+    }
+
     static void print_graph_warnings_modern(const std::string &output)
     {
       print_compiler_warnings_summary(output);
@@ -2212,14 +2526,6 @@ namespace vix::commands::BuildCommand
       return 0;
     }
 
-    static std::string display_build_profile(const process::Plan &plan)
-    {
-      if (plan.preset.buildType == "Release")
-        return "release";
-
-      return "dev";
-    }
-
     static void print_vix_build_header(
         const std::string &action,
         const process::Options &opt,
@@ -2691,7 +2997,8 @@ namespace vix::commands::BuildCommand
               return 1;
             }
 
-            if (can_use_native_vix_app_build(opt_, loadResult.manifest))
+            if (!opt_.warnings &&
+                can_use_native_vix_app_build(opt_, loadResult.manifest))
             {
               return run_native_vix_app_build(
                   opt_,
@@ -2714,6 +3021,13 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = *planOpt;
+
+        if (opt_.warnings)
+        {
+          return print_last_build_warnings(
+              opt_,
+              plan_);
+        }
 
         const fs::path globalPackagesFile =
             plan_.buildDir / "vix-global-packages.cmake";
@@ -3539,6 +3853,10 @@ namespace vix::commands::BuildCommand
     out << "  --clean                   Remove local build directories and configure again\n";
     out << "  --fast                    Use fast no-op detection when possible\n";
     out << "  --explain                 Explain why files or targets rebuild\n";
+    out << "  --warnings                Show warnings from the last build log\n";
+    out << "  --warning-check           Build with strong compiler warnings enabled\n";
+    out << "  --page <n>                Warning page to display with --warnings, default: 1\n";
+    out << "  --limit <n>               Warnings per page with --warnings, default: 10\n";
     out << "  --no-cache                Disable Vix cache shortcuts\n";
     out << "  --no-status               Disable Ninja progress status\n";
     out << "  --no-up-to-date           Disable Ninja dry-run up-to-date detection\n\n";
@@ -3588,6 +3906,11 @@ namespace vix::commands::BuildCommand
     out << "  vix build --fast\n";
     out << "  vix build --clean\n";
     out << "  vix build --explain\n";
+    out << "  vix build --warnings\n";
+    out << "  vix build --warning-check --build-target all -v --clean\n";
+    out << "  vix build --warnings --page 2\n";
+    out << "  vix build --warnings --limit 50\n";
+    out << "  vix build --warnings --page 3 --limit 20\n";
     out << "  vix build --preset release\n";
     out << "  vix build --preset=release\n";
     out << "  vix build --build-target all\n";

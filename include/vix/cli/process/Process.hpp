@@ -165,6 +165,14 @@ namespace vix::cli::process
 
     bool singleCpp = false;
     fs::path cppFile;
+
+    bool warnings{false};
+    std::size_t warningsPage{1};
+    std::size_t warningsLimit{10};
+    bool warningsPageSet{false};
+    bool warningsLimitSet{false};
+
+    bool warningCheck{false};
   };
 
   /**

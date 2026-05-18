@@ -67,6 +67,25 @@ namespace vix::cli::build
       return false;
     }
 
+    static BuildGraphExecutorResult make_failed_result(
+        const BuildGraphExecutorOptions &options,
+        BuildGraphExecutorStatus status,
+        int exitCode,
+        const std::string &reason)
+    {
+      BuildGraphExecutorResult result;
+      result.ok = false;
+      result.status = status;
+      result.target = options.target;
+      result.reason = reason;
+      result.exitCode = exitCode;
+
+      if (!reason.empty())
+        result.output = reason + "\n";
+
+      return result;
+    }
+
     static std::unordered_map<std::string, std::string>
     make_output_to_task_map(const BuildGraph &graph)
     {
@@ -107,9 +126,10 @@ namespace vix::cli::build
         const BuildTask &task = kv.second;
 
         /*
-         * Safe V1:
-         *   Link/Archive -> Graph Executor can handle target closure.
-         *   Copy/Install/Generate/Utility/phony -> fallback CMake/Ninja.
+         * Production policy:
+         * Only real link/archive targets are executed through the graph path.
+         * Generated, phony, copy and install targets are delegated to Ninja because
+         * Ninja remains the authoritative executor for complex build semantics.
          */
         if (!is_real_graph_target_task(task))
           continue;
@@ -374,6 +394,64 @@ namespace vix::cli::build
       return task;
     }
 
+    static BuildGraphExecutorResult run_ninja_target_fallback(
+        const BuildGraphExecutorOptions &options,
+        BuildGraphExecutorStatus status,
+        const std::string &reason)
+    {
+      if (!options.allowNinjaFallback)
+      {
+        return make_failed_result(
+            options,
+            status,
+            2,
+            reason);
+      }
+
+      BuildGraphExecutorResult result;
+      result.target = options.target;
+      result.status = BuildGraphExecutorStatus::DelegatedToNinja;
+      result.reason = reason;
+      result.usedNinja = true;
+      result.usedFallback = true;
+
+      BuildTask ninjaTargetTask =
+          make_ninja_target_task(
+              options.buildDir,
+              options.target);
+
+      const process::ExecResult ninjaResult =
+          run_process_live_to_log(
+              ninjaTargetTask.command,
+              {},
+              options.buildDir / "build.log",
+              options.quiet,
+              /*cmakeVerbose=*/false,
+              /*progressOnly=*/false);
+
+      result.exitCode = ninjaResult.exitCode;
+
+      if (!reason.empty())
+        result.output = reason + "\n";
+
+      if (ninjaResult.producedOutput && !ninjaResult.capturedFirstLine.empty())
+        result.output += ninjaResult.capturedFirstLine + "\n";
+
+      if (ninjaResult.exitCode == 0)
+      {
+        result.ok = true;
+        return result;
+      }
+
+      result.ok = false;
+      result.status = BuildGraphExecutorStatus::NinjaFailed;
+
+      if (!ninjaResult.displayCommand.empty())
+        result.output += ninjaResult.displayCommand + "\n";
+
+      return result;
+    }
+
     static bool graph_debug_logs_enabled()
     {
       const char *level = std::getenv("VIX_LOG_LEVEL");
@@ -441,13 +519,10 @@ namespace vix::cli::build
 
     if (!targetTask)
     {
-      result.ok = false;
-      result.exitCode = 2;
-      result.output =
-          "Unable to resolve a unique real graph output target: " +
-          options_.target +
-          "\n";
-      return result;
+      return run_ninja_target_fallback(
+          options_,
+          BuildGraphExecutorStatus::UnsupportedTarget,
+          "Unable to resolve a unique graph output target: " + options_.target);
     }
 
     graph_log(
@@ -503,18 +578,17 @@ namespace vix::cli::build
         "graph: dirty compile tasks: " +
             std::to_string(result.dirtyCompileTasks));
 
-    if (result.dirtyCompileTasks > 128)
+    if (options_.maxGraphDirtyCompileTasks > 0 &&
+        result.dirtyCompileTasks > options_.maxGraphDirtyCompileTasks)
     {
-      result.ok = false;
-      result.exitCode = 2;
-      result.output =
+      return run_ninja_target_fallback(
+          options_,
+          BuildGraphExecutorStatus::DelegatedToNinja,
           "Graph target has too many dirty compile tasks: " +
-          std::to_string(result.dirtyCompileTasks) +
-          " dirty tasks from " +
-          std::to_string(result.selectedCompileTasks) +
-          " selected compile tasks. Falling back to Ninja.\n";
-
-      return result;
+              std::to_string(result.dirtyCompileTasks) +
+              " dirty tasks from " +
+              std::to_string(result.selectedCompileTasks) +
+              " selected compile tasks. Delegating to Ninja.");
     }
 
     if (!dirtyCompileTasks.empty())

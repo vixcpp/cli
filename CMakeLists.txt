@@ -78,6 +78,18 @@ function(vix_append_if_exists out_var path_value)
 endfunction()
 
 # ----------------------------------------------------
+# Reply module
+# - The CLI REPL command depends on vix::reply.
+# - Load it before umbrella/core short-circuit branches.
+# ----------------------------------------------------
+get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+set(_VIX_REPLY_DIR "${_VIX_MODULES_DIR}/reply")
+
+if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
+  add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
+endif()
+
+# ----------------------------------------------------
 # Link dependencies
 # Priority:
 # 1) umbrella targets already present
@@ -88,9 +100,17 @@ if (TARGET vix::vix)
   message(STATUS "[cli] Using umbrella target vix::vix")
   target_link_libraries(vix_cli PRIVATE vix::vix)
 
+  if (TARGET vix::reply)
+    target_link_libraries(vix_cli PRIVATE vix::reply)
+  endif()
+
 elseif (TARGET vix::core)
   message(STATUS "[cli] Using umbrella target vix::core")
   target_link_libraries(vix_cli PRIVATE vix::core)
+
+  if (TARGET vix::reply)
+    target_link_libraries(vix_cli PRIVATE vix::reply)
+  endif()
 
 else()
   get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
@@ -99,7 +119,6 @@ else()
   set(_VIX_UTILS_DIR    "${_VIX_MODULES_DIR}/utils")
   set(_VIX_ASYNC_DIR    "${_VIX_MODULES_DIR}/async")
   set(_VIX_JSON_DIR     "${_VIX_MODULES_DIR}/json")
-  set(_VIX_REPLY_DIR   "${_VIX_MODULES_DIR}/reply")
   set(_VIX_TEMPLATE_DIR "${_VIX_MODULES_DIR}/template")
   set(_VIX_NET_DIR      "${_VIX_MODULES_DIR}/net")
   set(_VIX_CRYPTO_DIR   "${_VIX_MODULES_DIR}/crypto")

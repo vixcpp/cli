@@ -183,11 +183,27 @@ namespace vix::cli::build
       if (ns != std::string::npos)
         value = value.substr(ns + 2);
 
-      if (!value.empty() && value.front() == '\'' && value.back() == '\'')
+      if (value.size() >= 2 &&
+          value.front() == '\'' &&
+          value.back() == '\'')
+      {
         value = value.substr(1, value.size() - 2);
+      }
 
-      if (!value.empty() && value.front() == '‘' && value.back() == '’')
-        value = value.substr(3, value.size() > 6 ? value.size() - 6 : value.size());
+      const std::string leftQuote = "‘";
+      const std::string rightQuote = "’";
+
+      if (value.size() >= leftQuote.size() + rightQuote.size() &&
+          value.rfind(leftQuote, 0) == 0 &&
+          value.compare(
+              value.size() - rightQuote.size(),
+              rightQuote.size(),
+              rightQuote) == 0)
+      {
+        value = value.substr(
+            leftQuote.size(),
+            value.size() - leftQuote.size() - rightQuote.size());
+      }
 
       return trim_copy(value);
     }
@@ -853,8 +869,8 @@ namespace vix::cli::build
     }
 
     if (cleanMessage.find("shadows a previous local") != std::string::npos ||
-        cleanMessage.find("declaration of") != std::string::npos &&
-            cleanMessage.find("shadows") != std::string::npos)
+        (cleanMessage.find("declaration of") != std::string::npos &&
+         cleanMessage.find("shadows") != std::string::npos))
     {
       warning.kind = BuildWarningKind::ShadowedVariable;
       warning.symbol = shorten_cpp_signature(quoted);

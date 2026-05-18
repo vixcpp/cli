@@ -218,6 +218,26 @@ namespace vix::cli::build
       return out;
     }
 
+    static bool graph_has_dirty_project_inputs(const BuildGraph &graph)
+    {
+      for (const auto &kv : graph.nodes())
+      {
+        const BuildNode &node = kv.second;
+
+        if (!(node.dirty() || node.missing()))
+          continue;
+
+        if (node.kind == BuildNodeKind::Source ||
+            node.kind == BuildNodeKind::Header ||
+            node.kind == BuildNodeKind::Config)
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
     static bool collect_compile_task_paths(
         const BuildGraph &graph,
         const BuildTask &task,
@@ -476,6 +496,7 @@ namespace vix::cli::build
 
     result.selectedCompileTasks = compileTasks.size();
     result.dirtyCompileTasks = dirtyCompileTasks.size();
+    bool delegatedToNinjaBecauseDirtyProjectInput = false;
 
     graph_log(
         options_,
@@ -553,6 +574,9 @@ namespace vix::cli::build
 
     if (dirtyCompileTasks.empty())
     {
+      const bool hasDirtyProjectInputs =
+          graph_has_dirty_project_inputs(graph);
+
       bool outputsExist = true;
 
       for (const std::string &outputId : targetTask->outputs)
@@ -566,7 +590,7 @@ namespace vix::cli::build
         }
       }
 
-      if (outputsExist)
+      if (outputsExist && !hasDirtyProjectInputs)
       {
         result.ok = true;
         result.exitCode = 0;
@@ -577,6 +601,15 @@ namespace vix::cli::build
         graph_log(options_, "graph: target outputs exist, skipping ninja");
 
         return result;
+      }
+
+      if (hasDirtyProjectInputs)
+      {
+        delegatedToNinjaBecauseDirtyProjectInput = true;
+
+        graph_log(
+            options_,
+            "graph: dirty project input detected, delegating target to ninja");
       }
     }
 
@@ -600,6 +633,11 @@ namespace vix::cli::build
 
     result.exitCode = ninjaResult.exitCode;
     result.ok = ninjaResult.exitCode == 0;
+
+    if (result.ok && delegatedToNinjaBecauseDirtyProjectInput)
+    {
+      result.dirtyCompileTasks = 1;
+    }
 
     graph_log(
         options_,

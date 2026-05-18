@@ -69,6 +69,16 @@ namespace vix::commands::BuildCommand
   {
     static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
 
+    static std::string platform_executable_name(const std::string &name);
+
+    static void write_last_binary(const fs::path &path);
+
+    static std::optional<fs::path> resolve_main_executable(
+        const fs::path &buildDir,
+        const fs::path &projectDir,
+        const std::string &buildTarget,
+        const std::string &defaultTargetName);
+
     struct DeferredConsole
     {
       bool enabled{false};
@@ -376,6 +386,9 @@ namespace vix::commands::BuildCommand
     static bool can_use_target_artifact_cache(const process::Options &opt)
     {
       if (!opt.useCache)
+        return false;
+
+      if (opt.explain)
         return false;
 
       if (opt.clean)
@@ -1722,6 +1735,27 @@ namespace vix::commands::BuildCommand
       return path.filename().string();
     }
 
+    static bool graph_has_dirty_project_inputs_for_explain(
+        const build::BuildGraph &graph)
+    {
+      for (const auto &kv : graph.nodes())
+      {
+        const build::BuildNode &node = kv.second;
+
+        if (!(node.dirty() || node.missing()))
+          continue;
+
+        if (node.kind == build::BuildNodeKind::Source ||
+            node.kind == build::BuildNodeKind::Header ||
+            node.kind == build::BuildNodeKind::Config)
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
     static bool node_metadata_changed(
         const build::BuildNode &current,
         const build::BuildNode &previous)
@@ -1842,6 +1876,19 @@ namespace vix::commands::BuildCommand
 
       if (dirtyTasks.empty())
       {
+        if (graph_has_dirty_project_inputs_for_explain(graph))
+        {
+          std::cout << "Project input changed\n";
+          std::cout << "  reason: dependency changed, delegating target to Ninja\n\n";
+
+          std::cout << "Relinking "
+                    << build::default_build_target_name(opt, plan)
+                    << "\n";
+
+          std::cout << "  reason: target may depend on changed input\n\n";
+          return;
+        }
+
         std::cout << "No rebuild required\n";
         return;
       }
@@ -2840,6 +2887,7 @@ namespace vix::commands::BuildCommand
         }
 
         if (buildStateHit &&
+            !opt_.explain &&
             !opt_.exportBin &&
             opt_.outPath.empty())
         {

@@ -74,6 +74,14 @@ namespace
     std::string output;
   };
 
+  struct CTestItem
+  {
+    std::string name;
+    std::string status;
+    std::string duration;
+    bool passed{false};
+  };
+
   static int default_test_jobs()
   {
     unsigned int hc = std::thread::hardware_concurrency();
@@ -381,23 +389,11 @@ namespace
         meta);
   }
 
-  static void print_tests_progress(bool success)
+  static void print_tests_separator()
   {
-    const std::string status = success ? "done" : "failed";
-    const char *lineColor = success ? CYAN : RED;
-    const char *statusColor = success ? GREEN : RED;
-
     std::cout << "  "
-              << lineColor
-              << "tests"
-              << RESET
-              << " "
-              << lineColor
-              << "[============================]"
-              << RESET
-              << " "
-              << statusColor
-              << status
+              << GRAY
+              << "─────────────────────────────────────"
               << RESET
               << "\n";
   }
@@ -896,6 +892,12 @@ namespace
 
   static bool should_force_ctest(const vix::commands::TestsCommand::detail::Options &opt)
   {
+    if (opt.list)
+      return true;
+
+    if (opt.raw)
+      return true;
+
     if (!opt.ctestArgs.empty())
       return true;
 
@@ -933,6 +935,114 @@ namespace
     return value;
   }
 
+  static std::string extract_ctest_duration(const std::string &line)
+  {
+    const std::string marker = " sec";
+    const auto secPos = line.rfind(marker);
+
+    if (secPos == std::string::npos)
+      return {};
+
+    std::size_t end = secPos;
+    while (end > 0 && std::isspace(static_cast<unsigned char>(line[end - 1])))
+      --end;
+
+    std::size_t begin = end;
+    while (begin > 0 && !std::isspace(static_cast<unsigned char>(line[begin - 1])))
+      --begin;
+
+    if (begin >= end)
+      return {};
+
+    return line.substr(begin, end - begin) + "s";
+  }
+
+  static std::vector<CTestItem> parse_ctest_run_output(
+      const std::string &output)
+  {
+    std::vector<CTestItem> tests;
+
+    std::istringstream in(output);
+    std::string line;
+
+    while (std::getline(in, line))
+    {
+      const std::string trimmed = trim_copy(line);
+
+      const std::string marker = "Test #";
+      const std::size_t markerPos = trimmed.find(marker);
+
+      if (markerPos == std::string::npos)
+        continue;
+
+      const std::size_t colon = trimmed.find(':', markerPos);
+      if (colon == std::string::npos)
+        continue;
+
+      std::string rest = trim_copy(trimmed.substr(colon + 1));
+
+      const bool passed = rest.find(" Passed") != std::string::npos;
+      const bool failed = rest.find("***Failed") != std::string::npos;
+      const bool skipped = rest.find("Skipped") != std::string::npos ||
+                           rest.find("Not Run") != std::string::npos;
+
+      if (!passed && !failed && !skipped)
+        continue;
+
+      std::size_t nameEnd = rest.find("...");
+      if (nameEnd == std::string::npos)
+      {
+        nameEnd = rest.find(" Passed");
+        if (nameEnd == std::string::npos)
+          nameEnd = rest.find("***Failed");
+        if (nameEnd == std::string::npos)
+          nameEnd = rest.find("Skipped");
+        if (nameEnd == std::string::npos)
+          nameEnd = rest.find("Not Run");
+      }
+
+      CTestItem item;
+      item.name = trim_copy(rest.substr(0, nameEnd));
+      item.passed = passed;
+      item.status = passed ? "passed" : (failed ? "failed" : "skipped");
+      item.duration = extract_ctest_duration(trimmed);
+
+      if (!item.name.empty())
+        tests.push_back(item);
+    }
+
+    return tests;
+  }
+
+  static void print_ctest_items(
+      const std::vector<CTestItem> &tests)
+  {
+    if (tests.empty())
+      return;
+
+    print_tests_separator();
+
+    for (const CTestItem &test : tests)
+    {
+      const char *statusColor = test.passed ? GREEN : RED;
+      const char *mark = test.passed ? "✓" : "✖";
+
+      std::cout << "  "
+                << statusColor << mark << RESET
+                << " "
+                << statusColor << BOLD << "unit" << RESET
+                << " "
+                << test.name;
+
+      if (!test.duration.empty())
+        std::cout << " " << GRAY << test.duration << RESET;
+
+      std::cout << "\n";
+    }
+
+    std::cout << "\n";
+  }
+
   static std::vector<std::string> parse_ctest_list_output(
       const std::string &output)
   {
@@ -967,14 +1077,14 @@ namespace
   static void print_listed_tests(
       const std::vector<std::string> &tests)
   {
+    print_tests_separator();
+
     if (tests.empty())
     {
-      std::cout << "\n";
       hint("No tests matched the current filter.");
       return;
     }
 
-    std::cout << "\n";
     std::cout << "  " << CYAN << "tests" << RESET << "\n";
 
     for (const std::string &test : tests)
@@ -1146,8 +1256,6 @@ namespace
 
     if (verbose)
     {
-      const auto failures = parse_test_failures(result.output);
-
       if (!failures.empty())
       {
         std::cout << "  " << CYAN << "details:" << RESET << "\n";
@@ -1205,8 +1313,6 @@ namespace
 
     const bool ok = result.code == 0;
 
-    print_tests_progress(ok);
-
     if (ok)
     {
       build::print_task_success_timed(std::cout, "Passed tests", ms);
@@ -1244,13 +1350,15 @@ namespace
     }
 
     if (!ctest_file_exists(buildDir))
-    {
       return 2;
-    }
 
     std::vector<std::string> argv;
     argv.push_back("ctest");
-    argv.push_back("--output-on-failure");
+
+    if (opt.list)
+      argv.push_back("-N");
+    else
+      argv.push_back("--output-on-failure");
 
     if (!has_ctest_parallel_arg(opt.ctestArgs))
     {
@@ -1261,8 +1369,6 @@ namespace
     for (const auto &a : opt.ctestArgs)
       argv.push_back(a);
 
-    print_test_header(opt);
-
     const auto start = std::chrono::steady_clock::now();
     const TestExecResult result = run_in_dir_capture(buildDir, argv);
     const auto end = std::chrono::steady_clock::now();
@@ -1272,26 +1378,50 @@ namespace
 
     const bool ok = result.code == 0;
 
-    print_tests_progress(ok);
+    if (ok && opt.list)
+    {
+      const std::vector<std::string> tests =
+          parse_ctest_list_output(result.output);
+
+      if (tests.empty() && has_test_sources(opt.projectDir))
+        return 2;
+
+      print_test_header(opt);
+      print_listed_tests(tests);
+
+      build::print_task_success_timed(
+          std::cout,
+          "Listed " +
+              std::to_string(tests.size()) +
+              " test" +
+              (tests.size() == 1 ? "" : "s"),
+          ms);
+
+      return 0;
+    }
+
+    print_test_header(opt);
 
     if (ok)
     {
-      if (opt.list)
+      const std::vector<CTestItem> tests =
+          parse_ctest_run_output(result.output);
+
+      if (tests.empty() &&
+          has_test_sources(opt.projectDir) &&
+          result.output.find("No tests were found") != std::string::npos)
       {
-        const std::vector<std::string> tests =
-            parse_ctest_list_output(result.output);
+        return 2;
+      }
 
-        print_listed_tests(tests);
-
-        build::print_task_success_timed(
-            std::cout,
-            "Listed " +
-                std::to_string(tests.size()) +
-                " test" +
-                (tests.size() == 1 ? "" : "s"),
-            ms);
-
-        return 0;
+      if (opt.raw)
+      {
+        std::cout << "\n";
+        std::cout << result.output;
+      }
+      else
+      {
+        print_ctest_items(tests);
       }
 
       build::print_task_success_timed(
@@ -1327,15 +1457,19 @@ namespace
 
     return result.code;
   }
-
   static int run_tests_once(const vix::commands::TestsCommand::detail::Options &opt)
   {
     auto run_available_tests = [&]() -> int
     {
-      if (should_force_ctest(opt))
+      const std::string presetName = resolve_preset_name(opt);
+      const fs::path buildDir =
+          resolve_build_dir_from_preset(opt.projectDir, presetName);
+
+      if (ctest_file_exists(buildDir))
         return run_ctest(opt);
 
       const int nativeCode = run_native_tests(opt);
+
       if (nativeCode == 0)
         return 0;
 

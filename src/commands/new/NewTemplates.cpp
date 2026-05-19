@@ -101,7 +101,7 @@ namespace vix::commands::new_cmd::templates
   std::string make_readme_app(const std::string &projectName)
   {
     std::string readme;
-    readme.reserve(8000);
+    readme.reserve(7000);
 
     readme += "# " + projectName + "\n\n";
     readme += "Minimal Vix.cpp application.\n\n";
@@ -115,16 +115,25 @@ namespace vix::commands::new_cmd::templates
     readme += "```\n\n";
 
     readme += "Then open:\n\n";
-    readme += "```\n";
+    readme += "```txt\n";
     readme += "http://localhost:8080\n";
     readme += "```\n\n";
 
+    readme += "## Project manifest\n\n";
+    readme += "This project uses `vix.app` as its build manifest.\n\n";
+    readme += "`vix.app` describes the application target, sources, include directories, ";
+    readme += "compiler options, link options, packages, resources and output directory.\n\n";
+
+    readme += "Vix generates the internal CMake project automatically under `.vix/generated/app/`.\n";
+    readme += "You do not need to write a `CMakeLists.txt` for a simple app.\n\n";
+
     readme += "## Dependencies\n\n";
-    readme += "This project uses a `vix.json` manifest.\n\n";
+    readme += "This project also uses `vix.json` for package metadata, tasks and dependencies.\n\n";
     readme += "Workflow:\n\n";
-    readme += "- `vix add <pkg>` → add dependency\n";
-    readme += "- `vix install` → install dependencies\n";
-    readme += "- `vix.lock` → ensures reproducible builds\n\n";
+    readme += "- `vix add <pkg>` adds a dependency\n";
+    readme += "- `vix install` installs dependencies\n";
+    readme += "- `vix.lock` keeps installs reproducible\n\n";
+
     readme += "Example:\n\n";
     readme += "```bash\n";
     readme += "vix add gk/json@^1.0.0\n";
@@ -150,6 +159,7 @@ namespace vix::commands::new_cmd::templates
     readme += "```bash\n";
     readme += "cp .env.example .env\n";
     readme += "```\n\n";
+
     readme += "Example:\n\n";
     readme += "```env\n";
     readme += "SERVER_PORT=8080\n";
@@ -180,9 +190,10 @@ namespace vix::commands::new_cmd::templates
 
     readme += "## Environment mapping\n\n";
     readme += "Vix maps config keys to environment variables:\n\n";
-    readme += "- `server.port` → `SERVER_PORT`\n";
-    readme += "- `database.default.host` → `DATABASE_DEFAULT_HOST`\n";
-    readme += "- `database.default.name` → `DATABASE_DEFAULT_NAME`\n\n";
+    readme += "- `server.port` maps to `SERVER_PORT`\n";
+    readme += "- `database.default.host` maps to `DATABASE_DEFAULT_HOST`\n";
+    readme += "- `database.default.name` maps to `DATABASE_DEFAULT_NAME`\n\n";
+
     readme += "This keeps the C++ API clean and environment-driven.\n\n";
 
     readme += "## Environment layers\n\n";
@@ -226,6 +237,7 @@ namespace vix::commands::new_cmd::templates
     readme += "- `vix.lock` stores exact resolved versions for reproducible installs\n";
     readme += "- `vix add` updates both `vix.json` and `vix.lock`\n";
     readme += "- `vix install` installs dependencies from `vix.lock`\n\n";
+
     readme += "Example:\n\n";
     readme += "```bash\n";
     readme += "vix add gk/json@^1.0.0\n";
@@ -237,15 +249,18 @@ namespace vix::commands::new_cmd::templates
     readme += "```bash\n";
     readme += "vix build\n";
     readme += "```\n\n";
+
     readme += "Build with tests enabled:\n\n";
     readme += "```bash\n";
     readme += "vix build -- -D" + name + "_BUILD_TESTS=ON\n";
     readme += "```\n\n";
+
     readme += "Build with examples enabled:\n\n";
     readme += "```bash\n";
     readme += "vix build -- -D" + name + "_BUILD_EXAMPLES=ON\n";
     readme += "```\n\n";
-    readme += "Build tests + examples:\n\n";
+
+    readme += "Build tests and examples:\n\n";
     readme += "```bash\n";
     readme += "vix build -- -D" + name + "_BUILD_TESTS=ON -D" + name + "_BUILD_EXAMPLES=ON\n";
     readme += "```\n\n";
@@ -256,14 +271,15 @@ namespace vix::commands::new_cmd::templates
     readme += "```bash\n";
     readme += "vix build --build-target all -- -D" + name + "_BUILD_TESTS=ON\n";
     readme += "```\n\n";
+
     readme += "Then run:\n\n";
     readme += "```bash\n";
     readme += "vix tests\n";
     readme += "```\n\n";
 
     readme += "## Notes\n\n";
-    readme += "- Uses embedded Vix CMake presets (dev, dev-ninja, release)\n";
-    readme += "- Automatically configures and builds (no manual cmake needed)\n";
+    readme += "- Uses embedded Vix CMake presets for library builds\n";
+    readme += "- Automatically configures and builds with Vix\n";
     readme += "- Pass extra CMake flags after `--`\n";
     readme += "- Edit `vix.json` metadata before publishing the package\n";
 
@@ -313,12 +329,14 @@ namespace vix::commands::new_cmd::templates
       json += "        \"CMAKE_BUILD_TYPE\": \"Debug\",\n";
       json += "        \"CMAKE_EXPORT_COMPILE_COMMANDS\": \"ON\",\n";
       json += "        \"VIX_ENABLE_SANITIZERS\": \"ON\"";
+
       if (f.orm)
         json += ",\n        \"VIX_USE_ORM\": \"ON\"";
       if (f.static_rt)
         json += ",\n        \"VIX_LINK_STATIC\": \"ON\"";
       if (f.full_static)
         json += ",\n        \"VIX_LINK_FULL_STATIC\": \"ON\"";
+
       json += "\n      }\n";
       json += "    }";
     }
@@ -332,12 +350,14 @@ namespace vix::commands::new_cmd::templates
     json += "      \"cacheVariables\": {\n";
     json += "        \"CMAKE_BUILD_TYPE\": \"Release\",\n";
     json += "        \"CMAKE_EXPORT_COMPILE_COMMANDS\": \"ON\"";
+
     if (f.orm)
       json += ",\n        \"VIX_USE_ORM\": \"ON\"";
     if (f.static_rt)
       json += ",\n        \"VIX_LINK_STATIC\": \"ON\"";
     if (f.full_static)
       json += ",\n        \"VIX_LINK_FULL_STATIC\": \"ON\"";
+
     json += "\n      }\n";
     json += "    },\n";
     json += "    {\n";
@@ -348,21 +368,23 @@ namespace vix::commands::new_cmd::templates
     json += "      \"binaryDir\": \"build-msvc\",\n";
     json += "      \"cacheVariables\": {\n";
     json += "        \"CMAKE_CONFIGURATION_TYPES\": \"Release\"";
+
     if (f.orm)
       json += ",\n        \"VIX_USE_ORM\": \"ON\"";
+
     json += "\n      }\n";
     json += "    }\n";
     json += "  ],\n\n";
 
     json += "  \"buildPresets\": [\n";
     json += "    { \"name\": \"build-ninja\", \"displayName\": \"Build (ALL, Ninja Debug)\", \"configurePreset\": \"dev-ninja\" }";
+
     if (f.sanitizers)
       json += ",\n    { \"name\": \"build-ninja-san\", \"displayName\": \"Build (ALL, Ninja Debug, ASan+UBSan)\", \"configurePreset\": \"dev-ninja-san\" }";
-    json += ",\n    { \"name\": \"build-release\", \"displayName\": \"Build (ALL, Ninja Release)\", \"configurePreset\": \"release\" },\n";
-    json += "    { \"name\": \"run-dev-ninja\", \"displayName\": \"Run (target=run, Ninja Debug)\", \"configurePreset\": \"dev-ninja\", \"targets\": [\"run\"] },\n";
-    json += "    { \"name\": \"run-release\", \"displayName\": \"Run (target=run, Ninja Release)\", \"configurePreset\": \"release\", \"targets\": [\"run\"] },\n";
-    json += "    { \"name\": \"build-msvc\", \"displayName\": \"Build (ALL, MSVC)\", \"configurePreset\": \"dev-msvc\", \"configuration\": \"Release\" },\n";
-    json += "    { \"name\": \"run-msvc\", \"displayName\": \"Run (target=run, MSVC)\", \"configurePreset\": \"dev-msvc\", \"configuration\": \"Release\", \"targets\": [\"run\"] }\n";
+
+    json += ",\n";
+    json += "    { \"name\": \"build-release\", \"displayName\": \"Build (ALL, Ninja Release)\", \"configurePreset\": \"release\" },\n";
+    json += "    { \"name\": \"build-msvc\", \"displayName\": \"Build (ALL, MSVC)\", \"configurePreset\": \"dev-msvc\", \"configuration\": \"Release\" }\n";
     json += "  ]\n";
     json += "}\n";
 
@@ -415,51 +437,119 @@ namespace vix::commands::new_cmd::templates
   }
 
   // ------------------------------------------------------------------
-  // Project manifest (.vix) generators
+  // vix.app generators
   // ------------------------------------------------------------------
 
   std::string make_project_manifest_app(const std::string &name, const FeaturesSelection &f)
   {
     std::string s;
-    s.reserve(800);
+    s.reserve(1600);
 
-    s += "version = 1\n\n";
-    s += "[app]\n";
-    s += "kind = \"project\"\n";
-    s += "dir = \".\"\n";
+    s += "# Vix application manifest\n";
+    s += "# This file is read by Vix and converted to an internal CMake project.\n";
+    s += "# The generated CMakeLists.txt lives under .vix/generated/app/.\n\n";
+
     s += "name = \"" + name + "\"\n";
-    s += "entry = \"src/main.cpp\"\n\n";
-    s += "[build]\n";
-    s += "preset = \"dev-ninja\"\n";
-    s += "run_preset = \"run-dev-ninja\"\n";
+    s += "type = \"executable\"\n";
+    s += "standard = \"c++20\"\n\n";
 
-    if (f.orm || f.sanitizers || f.static_rt || f.full_static)
+    s += "sources = [\n";
+    s += "  \"src/main.cpp\",\n";
+    s += "]\n\n";
+
+    s += "include_dirs = [\n";
+    s += "  \"src\",\n";
+    s += "]\n\n";
+
+    s += "defines = [\n";
+
+    if (f.orm)
+      s += "  \"VIX_USE_ORM=1\",\n";
+    if (f.sanitizers)
+      s += "  \"VIX_SANITIZERS=1\",\n";
+    if (f.static_rt)
+      s += "  \"VIX_LINK_STATIC=1\",\n";
+    if (f.full_static)
+      s += "  \"VIX_LINK_FULL_STATIC=1\",\n";
+
+    s += "]\n\n";
+
+    s += "compile_options = [\n";
+    s += "  \"$<$<CXX_COMPILER_ID:MSVC>:/W4>\",\n";
+    s += "  \"$<$<CXX_COMPILER_ID:MSVC>:/permissive->\",\n";
+    s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wall>\",\n";
+    s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wextra>\",\n";
+    s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-Wpedantic>\",\n";
+
+    if (f.sanitizers)
     {
-      s += "\n[features]\n";
-      if (f.orm)
-        s += "orm = true\n";
-      if (f.sanitizers)
-        s += "sanitizers = true\n";
-      if (f.static_rt)
-        s += "static_rt = true\n";
-      if (f.full_static)
-        s += "full_static = true\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g3>\",\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-omit-frame-pointer>\",\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-O1>\",\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>\",\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fno-sanitize-recover=undefined>\",\n";
     }
+
+    s += "]\n\n";
+
+    s += "link_options = [\n";
+
+    if (f.sanitizers)
+    {
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g>\",\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-fsanitize=address,undefined>\",\n";
+    }
+
+    if (f.full_static)
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-static>\",\n";
+    else if (f.static_rt)
+    {
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-static-libstdc++>\",\n";
+      s += "  \"$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-static-libgcc>\",\n";
+    }
+
+    s += "]\n\n";
+
+    s += "compile_features = [\n";
+    s += "  \"cxx_std_20\",\n";
+    s += "]\n\n";
+
+    s += "packages = [\n";
+    s += "  \"vix\",\n";
+    s += "]\n\n";
+
+    s += "links = [\n";
+    s += "  \"vix::vix\",\n";
+
+    if (f.orm)
+      s += "  \"vix::orm\",\n";
+
+    s += "]\n\n";
+
+    s += "resources = [\n";
+    s += "  \".env=.env\",\n";
+    s += "]\n\n";
+
+    s += "output_dir = \"bin\"\n";
 
     return s;
   }
 
   std::string make_project_manifest_lib(const std::string &name)
   {
-    return "version = 1\n\n"
-           "[app]\n"
-           "kind = \"project\"\n"
-           "dir = \".\"\n"
-           "name = \"" +
-           name + "\"\n"
-                  "entry = \"tests/test_basic.cpp\"\n\n"
-                  "[build]\n"
-                  "preset = \"dev-ninja\"\n";
+    std::string s;
+    s.reserve(1200);
+
+    s += "version = 1\n\n";
+    s += "[app]\n";
+    s += "kind = \"project\"\n";
+    s += "dir = \".\"\n";
+    s += "name = \"" + name + "\"\n";
+    s += "entry = \"tests/test_basic.cpp\"\n\n";
+    s += "[build]\n";
+    s += "preset = \"dev-ninja\"\n";
+
+    return s;
   }
 
   // ------------------------------------------------------------------
@@ -590,161 +680,17 @@ namespace vix::commands::new_cmd::templates
   // CMakeLists.txt generators
   // ------------------------------------------------------------------
 
-  std::string make_cmakelists_app(const std::string &projectName, const FeaturesSelection &f)
+  std::string make_cmakelists_app(const std::string &projectName, const FeaturesSelection &)
   {
     std::string s;
-    s.reserve(16000);
+    s.reserve(800);
 
-    s += "cmake_minimum_required(VERSION 3.20)\n";
+    s += "# This file is intentionally minimal.\n";
+    s += "# New Vix applications should use vix.app instead of a handwritten CMakeLists.txt.\n";
+    s += "# Project: " + projectName + "\n\n";
+    s += "cmake_minimum_required(VERSION 3.24)\n";
     s += "project(" + projectName + " LANGUAGES CXX)\n\n";
-    s += "set(CMAKE_CXX_STANDARD 20)\n";
-    s += "set(CMAKE_CXX_STANDARD_REQUIRED ON)\n";
-    s += "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
-
-    if (f.orm)
-      s += "option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm in install)\" ON)\n";
-    if (f.sanitizers)
-      s += "option(VIX_ENABLE_SANITIZERS \"Enable ASan/UBSan (dev only)\" ON)\n";
-    if (f.static_rt)
-      s += "option(VIX_LINK_STATIC \"Static libstdc++/libgcc\" ON)\n";
-    if (f.full_static)
-      s += "option(VIX_LINK_FULL_STATIC \"Full static link (-static). Prefer musl.\" ON)\n";
-    if (f.orm || f.sanitizers || f.static_rt || f.full_static)
-      s += "\n";
-
-    s += "# ------------------------------------------------------\n";
-    s += "# Core Vix runtime\n";
-    s += "# ------------------------------------------------------\n";
-    s += "find_package(vix QUIET CONFIG)\n";
-    s += "if (NOT vix_FOUND)\n";
-    s += "  find_package(Vix CONFIG REQUIRED)\n";
-    s += "endif()\n\n";
-
-    s += "# ------------------------------------------------------\n";
-    s += "# Local registry packages installed with: vix install\n";
-    s += "# ------------------------------------------------------\n";
-    s += "# If you add packages from the Vix registry, they are wired\n";
-    s += "# through .vix/vix_deps.cmake. This file creates the imported\n";
-    s += "# targets for local project dependencies.\n";
-    s += "#\n";
-    s += "# Example:\n";
-    s += "#   vix add @cnerium/app\n";
-    s += "#   vix install\n";
-    s += "#\n";
-    s += "# Then uncomment the links you need below.\n";
-    s += "if (EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/.vix/vix_deps.cmake\")\n";
-    s += "  include(\"${CMAKE_CURRENT_SOURCE_DIR}/.vix/vix_deps.cmake\")\n";
-    s += "endif()\n\n";
-
-    s += "# ------------------------------------------------------\n";
-    s += "# Helpers\n";
-    s += "# ------------------------------------------------------\n";
-    s += "function(vix_link_optional_targets tgt)\n";
-    s += "  foreach(dep IN LISTS ARGN)\n";
-    s += "    if (TARGET ${dep})\n";
-    s += "      target_link_libraries(${tgt} PRIVATE ${dep})\n";
-    s += "    endif()\n";
-    s += "  endforeach()\n";
-    s += "endfunction()\n\n";
-
-    if (f.static_rt || f.full_static)
-    {
-      s += "function(vix_apply_static_link_flags tgt)\n";
-      s += "  if (MSVC)\n";
-      s += "    return()\n";
-      s += "  endif()\n";
-      if (f.full_static)
-      {
-        s += "  if (VIX_LINK_FULL_STATIC)\n";
-        s += "    target_link_options(${tgt} PRIVATE -static)\n";
-        s += "    target_compile_definitions(${tgt} PRIVATE VIX_LINK_FULL_STATIC=1)\n";
-        s += "  endif()\n";
-      }
-      else
-      {
-        s += "  if (VIX_LINK_STATIC)\n";
-        s += "    target_link_options(${tgt} PRIVATE -static-libstdc++ -static-libgcc)\n";
-        s += "    target_compile_definitions(${tgt} PRIVATE VIX_LINK_STATIC=1)\n";
-        s += "  endif()\n";
-      }
-      s += "endfunction()\n\n";
-    }
-
-    s += "# ------------------------------------------------------\n";
-    s += "# Main executable\n";
-    s += "# ------------------------------------------------------\n";
-    s += "add_executable(" + projectName + " src/main.cpp)\n";
-    s += "target_link_libraries(" + projectName + " PRIVATE vix::vix)\n\n";
-
-    s += "# Add local registry libraries here.\n";
-    s += "# vix_link_optional_targets(" + projectName + "\n";
-    s += "#   cnerium::app\n";
-    s += "#   cnerium::http\n";
-    s += "#   cnerium::json\n";
-    s += "# )\n\n";
-
-    s += "if (MSVC)\n";
-    s += "  target_compile_options(" + projectName + " PRIVATE /W4 /permissive-)\n";
-    s += "else()\n";
-    s += "  target_compile_options(" + projectName + " PRIVATE -Wall -Wextra -Wpedantic)\n";
-    s += "endif()\n\n";
-
-    if (f.orm)
-    {
-      s += "if (VIX_USE_ORM)\n";
-      s += "  if (TARGET vix::orm)\n";
-      s += "    target_link_libraries(" + projectName + " PRIVATE vix::orm)\n";
-      s += "    target_compile_definitions(" + projectName + " PRIVATE VIX_USE_ORM=1)\n";
-      s += "  else()\n";
-      s += "    message(FATAL_ERROR \"VIX_USE_ORM=ON but vix::orm target is not available in this Vix install\")\n";
-      s += "  endif()\n";
-      s += "endif()\n\n";
-    }
-
-    if (f.static_rt || f.full_static)
-      s += "vix_apply_static_link_flags(" + projectName + ")\n\n";
-
-    if (f.sanitizers)
-    {
-      s += "if (VIX_ENABLE_SANITIZERS AND NOT MSVC)\n";
-      s += "  target_compile_options(" + projectName + " PRIVATE -g3 -fno-omit-frame-pointer -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined)\n";
-      s += "  target_link_options(" + projectName + " PRIVATE -g -fsanitize=address,undefined)\n";
-      s += "  target_compile_definitions(" + projectName + " PRIVATE VIX_SANITIZERS=1 VIX_ASAN=1 VIX_UBSAN=1)\n";
-      s += "endif()\n\n";
-    }
-
-    s += "# ------------------------------------------------------\n";
-    s += "# Tests\n";
-    s += "# ------------------------------------------------------\n";
-    s += "include(CTest)\n";
-    s += "enable_testing()\n\n";
-
-    s += "add_executable(" + projectName + "_basic_test tests/test_basic.cpp)\n";
-    s += "target_link_libraries(" + projectName + "_basic_test PRIVATE vix::vix)\n\n";
-
-    s += "# vix_link_optional_targets(" + projectName + "_basic_test\n";
-    s += "#   cnerium::app\n";
-    s += "# )\n\n";
-
-    s += "if (MSVC)\n";
-    s += "  target_compile_options(" + projectName + "_basic_test PRIVATE /W4 /permissive-)\n";
-    s += "else()\n";
-    s += "  target_compile_options(" + projectName + "_basic_test PRIVATE -Wall -Wextra -Wpedantic)\n";
-    s += "endif()\n\n";
-
-    if (f.static_rt || f.full_static)
-      s += "vix_apply_static_link_flags(" + projectName + "_basic_test)\n\n";
-
-    s += "add_test(NAME " + projectName + ".basic COMMAND " + projectName + "_basic_test)\n\n";
-
-    s += "# ------------------------------------------------------\n";
-    s += "# Convenience target\n";
-    s += "# ------------------------------------------------------\n";
-    s += "add_custom_target(run\n";
-    s += "  COMMAND $<TARGET_FILE:" + projectName + ">\n";
-    s += "  DEPENDS " + projectName + "\n";
-    s += "  USES_TERMINAL\n";
-    s += ")\n";
+    s += "message(FATAL_ERROR \"This app was generated for vix.app. Run Vix from the project root and remove this fallback CMakeLists.txt if it was generated by mistake.\")\n";
 
     return s;
   }

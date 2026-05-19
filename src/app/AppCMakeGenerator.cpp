@@ -283,9 +283,23 @@ namespace vix::cli::app
       out << "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
     }
 
+    static bool is_vix_package(const AppPackage &pkg)
+    {
+      const std::string name = lower_copy(pkg.name);
+      return name == "vix";
+    }
+
     static bool is_threads_package(const AppPackage &pkg)
     {
       return lower_copy(pkg.name) == "threads";
+    }
+
+    static void emit_vix_package(std::ostringstream &out)
+    {
+      out << "find_package(vix QUIET CONFIG)\n";
+      out << "if (NOT vix_FOUND)\n";
+      out << "  find_package(Vix CONFIG REQUIRED)\n";
+      out << "endif()\n";
     }
 
     static void emit_packages(
@@ -304,6 +318,12 @@ namespace vix::cli::app
 
       for (const AppPackage &pkg : packages)
       {
+        if (is_vix_package(pkg))
+        {
+          emit_vix_package(out);
+          continue;
+        }
+
         if (is_threads_package(pkg))
         {
           // Threads is special: this hint must be set before
@@ -495,6 +515,108 @@ namespace vix::cli::app
 
       out << "\n";
     }
+
+    static void emit_tests(
+        std::ostringstream &out,
+        const AppManifest &manifest,
+        const std::string &targetName,
+        const fs::path &projectDir)
+    {
+      const fs::path testSource =
+          absolute_project_path(projectDir, "tests/test_basic.cpp");
+
+      std::error_code ec;
+      if (!fs::exists(testSource, ec) || !fs::is_regular_file(testSource, ec))
+        return;
+
+      const std::string testTarget = targetName + "_basic_test";
+
+      out << "# Tests declared by Vix app scaffold\n";
+      out << "include(CTest)\n";
+      out << "enable_testing()\n\n";
+
+      out << "option("
+          << targetName
+          << "_BUILD_TESTS \"Build tests for "
+          << targetName
+          << "\" OFF)\n\n";
+
+      out << "if(" << targetName << "_BUILD_TESTS)\n";
+      out << "  add_executable(" << testTarget << "\n";
+      out << "    " << cmake_quoted_path(testSource) << "\n";
+      out << "  )\n\n";
+
+      if (!manifest.includeDirs.empty())
+      {
+        out << "  target_include_directories(" << testTarget << " PRIVATE\n";
+
+        for (const std::string &value : manifest.includeDirs)
+        {
+          const fs::path resolved = absolute_project_path(projectDir, value);
+          out << "    " << cmake_quoted_path(resolved) << "\n";
+        }
+
+        out << "  )\n\n";
+      }
+
+      if (!manifest.defines.empty())
+      {
+        out << "  target_compile_definitions(" << testTarget << " PRIVATE\n";
+
+        for (const std::string &value : manifest.defines)
+          out << "    " << cmake_quote(value) << "\n";
+
+        out << "  )\n\n";
+      }
+
+      if (!manifest.compileOptions.empty())
+      {
+        out << "  target_compile_options(" << testTarget << " PRIVATE\n";
+
+        for (const std::string &value : manifest.compileOptions)
+          out << "    " << value << "\n";
+
+        out << "  )\n\n";
+      }
+
+      if (!manifest.linkOptions.empty())
+      {
+        out << "  target_link_options(" << testTarget << " PRIVATE\n";
+
+        for (const std::string &value : manifest.linkOptions)
+          out << "    " << value << "\n";
+
+        out << "  )\n\n";
+      }
+
+      if (!manifest.compileFeatures.empty())
+      {
+        out << "  target_compile_features(" << testTarget << " PRIVATE\n";
+
+        for (const std::string &value : manifest.compileFeatures)
+          out << "    " << value << "\n";
+
+        out << "  )\n\n";
+      }
+
+      if (!manifest.links.empty())
+      {
+        out << "  target_link_libraries(" << testTarget << " PRIVATE\n";
+
+        for (const std::string &value : manifest.links)
+          out << "    " << value << "\n";
+
+        out << "  )\n\n";
+      }
+
+      out << "  add_test(NAME "
+          << targetName
+          << ".basic COMMAND "
+          << testTarget
+          << ")\n";
+
+      out << "endif()\n\n";
+    }
   } // namespace
 
   // -----------------------------------------------------------------
@@ -530,6 +652,7 @@ namespace vix::cli::app
     emit_links(out, manifest, targetName);
     emit_output_dir(out, manifest, targetName);
     emit_resources(out, manifest, targetName, projectDir);
+    emit_tests(out, manifest, targetName, projectDir);
 
     return out.str();
   }

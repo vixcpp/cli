@@ -284,12 +284,204 @@ namespace vix::commands
           label,
           path_with_state(path));
     }
+
+    struct ParsedArgs
+    {
+      bool globalMode{false};
+      std::string packageId;
+    };
+
+    static fs::path project_lock_path()
+    {
+      return fs::current_path() / "vix.lock";
+    }
+
+    static ParsedArgs parse_args(const std::vector<std::string> &args)
+    {
+      ParsedArgs parsed;
+
+      for (const auto &arg : args)
+      {
+        if (arg == "-g" || arg == "--global")
+        {
+          parsed.globalMode = true;
+          continue;
+        }
+
+        if (parsed.packageId.empty())
+          parsed.packageId = arg;
+      }
+
+      return parsed;
+    }
+
+    static json read_json_or_throw(const fs::path &p)
+    {
+      std::ifstream in(p);
+      if (!in)
+        throw std::runtime_error("cannot open: " + p.string());
+
+      json j;
+      in >> j;
+      return j;
+    }
+
+    static const json *get_packages_array(const json &root)
+    {
+      if (root.is_array())
+        return &root;
+
+      if (root.is_object() && root.contains("packages") && root["packages"].is_array())
+        return &root["packages"];
+
+      if (root.is_object() && root.contains("dependencies") && root["dependencies"].is_array())
+        return &root["dependencies"];
+
+      return nullptr;
+    }
+
+    static std::string package_version(const json &pkg)
+    {
+      if (pkg.contains("version") && pkg["version"].is_string())
+        return pkg["version"].get<std::string>();
+
+      if (pkg.contains("tag") && pkg["tag"].is_string())
+      {
+        std::string tag = pkg["tag"].get<std::string>();
+        if (!tag.empty() && tag.front() == 'v')
+          tag.erase(tag.begin());
+        return tag;
+      }
+
+      return {};
+    }
+
+    static std::string package_repo(const json &pkg)
+    {
+      if (!pkg.contains("repo"))
+        return {};
+
+      if (pkg["repo"].is_string())
+        return pkg["repo"].get<std::string>();
+
+      if (pkg["repo"].is_object())
+        return pkg["repo"].value("url", "");
+
+      return {};
+    }
+
+    static const json *find_package_by_id(const json &packages, const std::string &id)
+    {
+      for (const auto &pkg : packages)
+      {
+        if (pkg.value("id", "") == id)
+          return &pkg;
+      }
+
+      return nullptr;
+    }
+
+    static void print_package_info(const json &pkg, bool globalMode)
+    {
+      const std::string id = pkg.value("id", "");
+      const std::string version = package_version(pkg);
+      const std::string commit = pkg.value("commit", "");
+      const std::string repo = package_repo(pkg);
+      const std::string type = pkg.value("type", "");
+      const std::string include = pkg.value("include", "");
+      const std::string installedPath = pkg.value("installed_path", "");
+
+      vix::cli::util::section(std::cout, globalMode ? "Global package" : "Project package");
+
+      if (!id.empty())
+        vix::cli::util::kv(std::cout, "id", id);
+
+      if (!version.empty())
+        vix::cli::util::kv(std::cout, "version", version);
+
+      if (!commit.empty())
+        vix::cli::util::kv(std::cout, "commit", commit);
+
+      if (!repo.empty())
+        vix::cli::util::kv(std::cout, "repo", repo);
+
+      if (!type.empty())
+        vix::cli::util::kv(std::cout, "type", type);
+
+      if (!include.empty())
+        vix::cli::util::kv(std::cout, "include", include);
+
+      if (!installedPath.empty())
+        vix::cli::util::kv(std::cout, "path", installedPath);
+
+      vix::cli::util::one_line_spacer(std::cout);
+      vix::cli::util::ok_line(std::cout, "Package info loaded");
+    }
+
+    static int print_package_info_from_file(
+        const fs::path &path,
+        const std::string &packageId,
+        bool globalMode)
+    {
+      if (!is_regular_file_path(path))
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            globalMode ? "global package manifest not found" : "project lock file not found");
+        return 1;
+      }
+
+      json root;
+      try
+      {
+        root = read_json_or_throw(path);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("failed to read package data: ") + ex.what());
+        return 1;
+      }
+
+      const json *packages = get_packages_array(root);
+      if (!packages)
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            globalMode ? "invalid global manifest" : "invalid project lock file");
+        return 1;
+      }
+
+      const json *pkg = find_package_by_id(*packages, packageId);
+      if (!pkg)
+      {
+        vix::cli::util::err_line(std::cerr, "package not found: " + packageId);
+        return 1;
+      }
+
+      print_package_info(*pkg, globalMode);
+      return 0;
+    }
   }
 
   int InfoCommand::run(const std::vector<std::string> &args)
   {
-    if (!args.empty())
-      return help();
+    const ParsedArgs parsed = parse_args(args);
+
+    if (!parsed.packageId.empty())
+    {
+      if (parsed.globalMode)
+      {
+        return print_package_info_from_file(
+            global_manifest_path(),
+            parsed.packageId,
+            true);
+      }
+
+      return print_package_info_from_file(
+          project_lock_path(),
+          parsed.packageId,
+          false);
+    }
 
     const fs::path root = vix_root();
     const fs::path registry = registry_index_dir();
@@ -364,12 +556,26 @@ namespace vix::commands
   {
     std::cout
         << "vix info\n"
-        << "Show Vix environment, paths, caches, and local state.\n\n"
+        << "Show Vix environment, package details, paths, caches, and local state.\n\n"
 
         << "Usage\n"
-        << "  vix info\n\n"
+        << "  vix info\n"
+        << "  vix info [@]namespace/name\n"
+        << "  vix info -g [@]namespace/name\n"
+        << "  vix info --global [@]namespace/name\n\n"
 
-        << "What it shows\n"
+        << "Examples\n"
+        << "  vix info\n"
+        << "  vix info softadastra/json\n"
+        << "  vix info -g softadastra/json\n"
+        << "  vix info -g @softadastra/json\n\n"
+
+        << "What happens\n"
+        << "  • vix info shows the local Vix environment\n"
+        << "  • vix info <package> shows details for a project dependency from vix.lock\n"
+        << "  • vix info -g <package> shows details for a globally installed package\n\n"
+
+        << "Environment info\n"
         << "  • Vix version\n"
         << "  • Vix root path\n"
         << "  • Registry index path and state\n"
@@ -380,7 +586,20 @@ namespace vix::commands
         << "  • Number of package directories in store/git\n"
         << "  • Number of cached commits in store/git\n"
         << "  • Disk usage of store/git\n"
-        << "  • Disk usage of build artifact cache\n";
+        << "  • Disk usage of build artifact cache\n\n"
+
+        << "Package info\n"
+        << "  • Package id\n"
+        << "  • Version\n"
+        << "  • Commit\n"
+        << "  • Repository\n"
+        << "  • Type\n"
+        << "  • Include directory\n"
+        << "  • Installed path, when available\n\n"
+
+        << "Notes\n"
+        << "  • Project package info is read from ./vix.lock\n"
+        << "  • Global package info is read from ~/.vix/global/installed.json\n";
 
     return 0;
   }

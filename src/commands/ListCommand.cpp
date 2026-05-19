@@ -137,38 +137,18 @@ namespace vix::commands
         const json &d,
         bool globalMode)
     {
+      (void)globalMode;
+
       const std::string id = d.value("id", "");
       const std::string ver = dep_version(d);
-      const std::string commit = d.value("commit", "");
 
-      std::string repo;
-      if (d.contains("repo"))
-      {
-        if (d["repo"].is_object())
-          repo = d["repo"].value("url", "");
-        else if (d["repo"].is_string())
-          repo = d["repo"].get<std::string>();
-      }
+      if (id.empty())
+        return;
 
-      vix::cli::util::dep_line(std::cout, id, ver, commit, repo);
-
-      if (globalMode)
-      {
-        const std::string type = d.value("type", "");
-        const std::string include = d.value("include", "");
-        const std::string installedPath = d.value("installed_path", "");
-
-        if (!type.empty())
-          vix::cli::util::kv(std::cout, "type", type);
-
-        if (!include.empty())
-          vix::cli::util::kv(std::cout, "include", include);
-
-        if (!installedPath.empty())
-          vix::cli::util::kv(std::cout, "path", installedPath);
-      }
-
-      std::cout << "\n";
+      if (!ver.empty())
+        std::cout << id << "@" << ver << "\n";
+      else
+        std::cout << id << "\n";
     }
 
   } // namespace
@@ -179,10 +159,7 @@ namespace vix::commands
 
     if (parsed.globalMode)
     {
-      vix::cli::util::section(std::cout, "Global packages");
-
       const fs::path p = global_manifest_path();
-      vix::cli::util::kv(std::cout, "manifest", p.string());
 
       if (!fs::exists(p))
       {
@@ -215,14 +192,9 @@ namespace vix::commands
         return 0;
       }
 
-      std::cout << "\n";
-
       for (const auto &pkg : pkgs)
         print_dep_block(pkg, true);
 
-      vix::cli::util::ok_line(
-          std::cout,
-          "Found " + std::to_string(pkgs.size()) + " global package(s).");
       return 0;
     }
 

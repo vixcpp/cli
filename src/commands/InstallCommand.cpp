@@ -1171,58 +1171,13 @@ namespace vix::commands
 
       fs::create_directories(global_pkgs_dir());
 
-      bool printedHeader = false;
       bool didWork = false;
-      fs::path rootInstalledPath;
-
-      auto print_header_once = [&]()
-      {
-        if (!printedHeader)
-        {
-          vix::cli::util::section(std::cout, "Installing global package");
-          vix::cli::util::one_line_spacer(std::cout);
-          printedHeader = true;
-        }
-      };
 
       for (auto &dep : ordered)
       {
-        const fs::path dst = global_pkg_dir(dep.id, dep.commit);
-
-        const bool checkoutExistedBefore = fs::exists(dep.checkout);
-        const bool linkExistedBefore = fs::exists(dst);
-
-        try
-        {
-          ensure_symlink_or_copy_dir(dep.checkout, dst);
-        }
-        catch (const std::exception &ex)
-        {
-          vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
-          return 1;
-        }
-
-        dep.linkDir = dst;
-        save_global_install(dep, dst);
-
-        if (!checkoutExistedBefore || !linkExistedBefore)
-        {
-          print_header_once();
-          didWork = true;
-
-          std::cout << "  " << CYAN << "•" << RESET << " "
-                    << CYAN << BOLD << dep.id << RESET
-                    << GRAY << "@" << RESET
-                    << YELLOW << BOLD << dep.version << RESET
-                    << "  "
-                    << GRAY << "installed globally" << RESET
-                    << "\n";
-        }
-
-        if (dep.id == ordered.back().id)
-        {
-          // rien
-        }
+        dep.linkDir = dep.checkout;
+        save_global_install(dep, dep.checkout);
+        didWork = true;
       }
 
       std::optional<DepResolved> rootOpt;
@@ -1242,22 +1197,18 @@ namespace vix::commands
         return 1;
       }
 
-      const auto rootIt = resolvedById.find(rootOpt->id);
-      if (rootIt != resolvedById.end())
-        rootInstalledPath = global_pkg_dir(rootIt->second.id, rootIt->second.commit);
-      else
-        rootInstalledPath = global_pkg_dir(rootOpt->id, rootOpt->commit);
+      const auto finalIt = resolvedById.find(rootOpt->id);
 
-      if (!didWork)
+      if (finalIt != resolvedById.end())
       {
-        vix::cli::util::ok_line(std::cout, "Global package already up to date");
+        vix::cli::util::ok_line(
+            std::cout,
+            finalIt->second.id + "@" + finalIt->second.version + " installed globally");
       }
-
-      vix::cli::util::one_line_spacer(std::cout);
-      vix::cli::util::ok_line(std::cout, "Global package ready");
-      vix::cli::util::info(std::cout, "Installed into: " + rootInstalledPath.string());
-      vix::cli::util::info(std::cout, "Manifest updated: " + global_manifest_path().string());
-      vix::cli::util::info(std::cout, std::to_string(ordered.size()) + " package(s) available globally");
+      else
+      {
+        vix::cli::util::ok_line(std::cout, "Global package installed");
+      }
 
       return 0;
     }

@@ -42,6 +42,7 @@ namespace vix::commands::new_cmd::generator
     std::string name = p.filename().string();
     if (name.empty())
       name = "app";
+
     return name;
   }
 
@@ -60,6 +61,7 @@ namespace vix::commands::new_cmd::generator
     fs::directory_iterator it(p, ec);
     if (ec)
       return false;
+
     return it == fs::directory_iterator{};
   }
 
@@ -67,18 +69,24 @@ namespace vix::commands::new_cmd::generator
   {
     std::error_code ec;
     fs::create_directories(p, ec);
+
     if (ec)
     {
       err = ec.message();
       return false;
     }
+
     return true;
   }
 
-  bool write_text_file(const fs::path &p, const std::string &content, std::string &err)
+  bool write_text_file(
+      const fs::path &p,
+      const std::string &content,
+      std::string &err)
   {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
+
     if (ec)
     {
       err = ec.message();
@@ -92,12 +100,14 @@ namespace vix::commands::new_cmd::generator
       return false;
     }
 
-    out.write(content.data(), (std::streamsize)content.size());
+    out.write(content.data(), static_cast<std::streamsize>(content.size()));
+
     if (!out.good())
     {
       err = "write failed";
       return false;
     }
+
     return true;
   }
 
@@ -116,35 +126,31 @@ namespace vix::commands::new_cmd::generator
 
     if (!ensure_dir(srcDir, err))
       return false;
+
     if (!ensure_dir(testsDir, err))
       return false;
 
     if (!write_text_file(srcDir / "main.cpp", tpl::kMainCpp, err))
       return false;
+
     if (!write_text_file(testsDir / "test_basic.cpp", tpl::kBasicTestCpp_App, err))
       return false;
+
     if (!write_text_file(projectDir / ".env.example", tpl::kEnvExample, err))
       return false;
-    if (!write_text_file(projectDir / ".env", tpl::kEnvExample, err))
-      return false;
 
-    if (!write_text_file(projectDir / "CMakeLists.txt",
-                         tpl::make_cmakelists_app(projName, features), err))
+    if (!write_text_file(projectDir / ".env", tpl::kEnvExample, err))
       return false;
 
     if (!write_text_file(projectDir / "README.md",
                          tpl::make_readme_app(projName), err))
       return false;
 
-    if (!write_text_file(projectDir / "CMakePresets.json",
-                         tpl::make_cmake_presets_json_app(features), err))
-      return false;
-
     if (!write_text_file(projectDir / "vix.json",
                          tpl::make_vix_json_app(projName), err))
       return false;
 
-    if (!write_text_file(projectDir / (projName + ".vix"),
+    if (!write_text_file(projectDir / "vix.app",
                          tpl::make_project_manifest_app(projName, features), err))
       return false;
 
@@ -166,8 +172,10 @@ namespace vix::commands::new_cmd::generator
 
     if (!ensure_dir(includeDir, err))
       return false;
+
     if (!ensure_dir(testsDir, err))
       return false;
+
     if (!ensure_dir(examplesDir, err))
       return false;
 
@@ -214,13 +222,17 @@ namespace vix::commands::new_cmd::generator
   // Post-generation output
   // ------------------------------------------------------------------
 
-  void print_next_steps_app(const fs::path &projectDir, const std::string &projName)
+  void print_next_steps_app(
+      const fs::path &projectDir,
+      const std::string &projName)
   {
     FeaturesSelection features{};
     out::print_creation_app(projectDir, projName, features);
   }
 
-  void print_next_steps_lib(const fs::path &projectDir, const std::string &projName)
+  void print_next_steps_lib(
+      const fs::path &projectDir,
+      const std::string &projName)
   {
     out::print_creation_lib(projectDir, projName);
   }

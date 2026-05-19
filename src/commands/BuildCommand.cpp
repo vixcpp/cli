@@ -1177,8 +1177,7 @@ namespace vix::commands::BuildCommand
       if (!opt.targetTriple.empty())
         vars.emplace_back("VIX_TARGET_TRIPLE", opt.targetTriple);
 
-      if (!globalPackagesFile.empty())
-        vars.emplace_back("CMAKE_PROJECT_TOP_LEVEL_INCLUDES", globalPackagesFile.string());
+      (void)globalPackagesFile;
 
       if (launcher && !launcher->empty())
       {
@@ -3187,17 +3186,6 @@ namespace vix::commands::BuildCommand
           return 0;
         }
 
-        const auto globalPackages = build::load_global_packages();
-        const std::string globalPackagesCMake =
-            build::make_global_packages_cmake(globalPackages);
-
-        if (!write_if_different(globalPackagesFile, globalPackagesCMake))
-        {
-          error("Failed to write global packages file: " + globalPackagesFile.string());
-          hint("Check filesystem permissions.");
-          return 1;
-        }
-
         if (debug_build_details_enabled() && !opt_.quiet)
         {
           if (artifact_cache::ArtifactCache::exists(projectArtifact))
@@ -3318,7 +3306,7 @@ namespace vix::commands::BuildCommand
           else if (verboseMode)
           {
             out.print(PAD + std::string(GREEN) + "✔ Configured in " + RESET +
-                      util::format_seconds(ms) + "\n\n");
+                      util::format_seconds(ms) + "\n");
           }
         }
         else

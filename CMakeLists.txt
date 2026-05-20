@@ -135,10 +135,6 @@ else()
   if (_LOCAL_LAYOUT_OK)
     message(STATUS "[cli] Building inside Vix repo -> resolving local sibling modules")
 
-    if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND NOT TARGET vix::core)
-      add_subdirectory("${_VIX_CORE_DIR}" "${CMAKE_BINARY_DIR}/_vix_core")
-    endif()
-
     if (EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt" AND NOT TARGET vix::utils)
       add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
     endif()
@@ -157,6 +153,10 @@ else()
 
     if (EXISTS "${_VIX_TEMPLATE_DIR}/CMakeLists.txt" AND NOT TARGET vix::template)
       add_subdirectory("${_VIX_TEMPLATE_DIR}" "${CMAKE_BINARY_DIR}/_vix_template")
+    endif()
+
+    if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND NOT TARGET vix::core)
+      add_subdirectory("${_VIX_CORE_DIR}" "${CMAKE_BINARY_DIR}/_vix_core")
     endif()
 
     if (EXISTS "${_VIX_NET_DIR}/CMakeLists.txt" AND NOT TARGET vix::net)

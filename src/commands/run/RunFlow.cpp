@@ -28,6 +28,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <iostream>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -1019,6 +1020,44 @@ namespace vix::commands::RunCommand::detail
     }
 
     return cwd;
+  }
+
+  bool project_has_vue_frontend(const fs::path &projectDir)
+  {
+    const fs::path manifest = projectDir / "vix.json";
+
+    std::error_code ec;
+    if (!fs::exists(manifest, ec) || ec)
+      return false;
+
+    std::ifstream in(manifest);
+    if (!in)
+      return false;
+
+    std::string content(
+        (std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+
+    return content.find("\"template\"") != std::string::npos &&
+           content.find("\"vue\"") != std::string::npos &&
+           content.find("\"frontend\"") != std::string::npos;
+  }
+
+  void print_vue_fullstack_banner()
+  {
+    std::cout << "\n"
+              << "  " << CYAN << BOLD << "Vix app running" << RESET << "\n\n"
+
+              << "  " << GRAY << "Backend" << RESET << "\n"
+              << "    " << CYAN << "Vix" << RESET << ": http://localhost:8080\n\n"
+
+              << "  " << GRAY << "Frontend" << RESET << "\n"
+              << "    " << CYAN << "Vue" << RESET << ": run "
+              << BOLD << "cd frontend && npm run dev" << RESET << "\n"
+              << "    " << GRAY << "URL" << RESET << ": http://localhost:5173\n\n"
+
+              << "  " << GRAY << "API" << RESET << "\n"
+              << "    /api -> Vix backend\n\n";
   }
 
   void apply_log_level_env(const Options &opt)

@@ -136,6 +136,7 @@ WAF_MODE=basic
   // ------------------------------------------------------------------
 
   std::string make_readme_app(const std::string &projectName);
+  std::string make_readme_vue_app(const std::string &projectName);
   std::string make_readme_lib(const std::string &name);
 
   // ------------------------------------------------------------------
@@ -158,6 +159,17 @@ WAF_MODE=basic
 
   std::string make_vix_json_app(const std::string &name);
   std::string make_vix_json_lib(const std::string &name);
+  std::string make_vix_json_vue_app(const std::string &name);
+
+  // ------------------------------------------------------------------
+  // Vue frontend generators
+  // ------------------------------------------------------------------
+
+  std::string make_vue_package_json(const std::string &projectName);
+  std::string make_vue_index_html(const std::string &projectName);
+  std::string make_vue_vite_config();
+  std::string make_vue_main_js();
+  std::string make_vue_app_vue();
 
   // ------------------------------------------------------------------
   // CMakeLists.txt generators

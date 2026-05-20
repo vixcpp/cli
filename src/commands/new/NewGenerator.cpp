@@ -219,6 +219,56 @@ namespace vix::commands::new_cmd::generator
   }
 
   // ------------------------------------------------------------------
+  // Vue + Vix app project scaffold
+  // ------------------------------------------------------------------
+
+  bool generate_vue_project(
+      const fs::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features,
+      std::string &err)
+  {
+    if (!generate_app_project(projectDir, projName, features, err))
+      return false;
+
+    const fs::path frontendDir = projectDir / "frontend";
+    const fs::path frontendSrcDir = frontendDir / "src";
+
+    if (!ensure_dir(frontendSrcDir, err))
+      return false;
+
+    if (!write_text_file(frontendDir / "package.json",
+                         tpl::make_vue_package_json(projName), err))
+      return false;
+
+    if (!write_text_file(frontendDir / "index.html",
+                         tpl::make_vue_index_html(projName), err))
+      return false;
+
+    if (!write_text_file(frontendDir / "vite.config.js",
+                         tpl::make_vue_vite_config(), err))
+      return false;
+
+    if (!write_text_file(frontendSrcDir / "main.js",
+                         tpl::make_vue_main_js(), err))
+      return false;
+
+    if (!write_text_file(frontendSrcDir / "App.vue",
+                         tpl::make_vue_app_vue(), err))
+      return false;
+
+    if (!write_text_file(projectDir / "README.md",
+                         tpl::make_readme_vue_app(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "vix.json",
+                         tpl::make_vix_json_vue_app(projName), err))
+      return false;
+
+    return true;
+  }
+
+  // ------------------------------------------------------------------
   // Post-generation output
   // ------------------------------------------------------------------
 
@@ -228,6 +278,13 @@ namespace vix::commands::new_cmd::generator
   {
     FeaturesSelection features{};
     out::print_creation_app(projectDir, projName, features);
+  }
+
+  void print_next_steps_vue(
+      const fs::path &projectDir,
+      const std::string &projName)
+  {
+    out::print_creation_vue(projectDir, projName);
   }
 
   void print_next_steps_lib(

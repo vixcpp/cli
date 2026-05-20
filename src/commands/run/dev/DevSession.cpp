@@ -28,6 +28,7 @@
 #include <utility>
 #include <optional>
 #include <algorithm>
+#include <fstream>
 
 #ifndef _WIN32
 #include <signal.h>
@@ -186,7 +187,33 @@ namespace vix::commands::RunCommand::dev
 #else
     DevSessionResult result;
 
+    struct FrontendGuard
+    {
+      DevSession *session{nullptr};
+
+      ~FrontendGuard()
+      {
+        if (session)
+          session->stop_vue_frontend();
+      }
+    };
+
+    FrontendGuard frontendGuard{this};
+
     print_dev_header(options_);
+
+    const bool vueFrontend = has_vue_frontend();
+
+    if (vueFrontend)
+    {
+      const int frontendCode = start_vue_frontend();
+      if (frontendCode != 0)
+      {
+        result.exitCode = frontendCode;
+        result.message = "Failed to start Vue frontend.";
+        return result;
+      }
+    }
 
     bool fileIndexReady = false;
 
@@ -558,6 +585,105 @@ namespace vix::commands::RunCommand::dev
 
     return std::nullopt;
   }
+
+#ifndef _WIN32
+  bool DevSession::has_vue_frontend() const
+  {
+    const fs::path manifest = options_.projectDir / "vix.json";
+
+    std::error_code ec;
+    if (!fs::exists(manifest, ec) || ec)
+      return false;
+
+    std::ifstream in(manifest);
+    if (!in)
+      return false;
+
+    std::string content(
+        (std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+
+    return content.find("\"template\"") != std::string::npos &&
+           content.find("\"vue\"") != std::string::npos &&
+           content.find("\"frontend\"") != std::string::npos &&
+           fs::exists(options_.projectDir / "frontend" / "package.json", ec) &&
+           !ec;
+  }
+#endif
+
+#ifndef _WIN32
+  int DevSession::start_vue_frontend()
+  {
+    if (!has_vue_frontend())
+      return 0;
+
+    if (vueFrontendPid_ > 0)
+      return 0;
+
+    const fs::path frontendDir = options_.projectDir / "frontend";
+
+    pid_t pid = ::fork();
+
+    if (pid < 0)
+    {
+      error("Failed to fork() for Vue dev server.");
+      return 1;
+    }
+
+    if (pid == 0)
+    {
+      if (::chdir(frontendDir.string().c_str()) != 0)
+      {
+        std::cerr << "[vix][vue] chdir failed: " << std::strerror(errno) << "\n";
+        _exit(127);
+      }
+
+      ::setenv("VIX_FRONTEND", "vue", 1);
+
+      execlp("npm", "npm", "run", "dev", static_cast<char *>(nullptr));
+
+      std::cerr << "[vix][vue] failed to start npm run dev: "
+                << std::strerror(errno) << "\n";
+
+      _exit(127);
+    }
+
+    vueFrontendPid_ = static_cast<int>(pid);
+
+    if (!options_.quiet)
+    {
+      std::cout << "  "
+                << GREEN << "✔" << RESET
+                << " Vue dev server"
+                << GRAY << " pid=" << vueFrontendPid_ << RESET
+                << "\n";
+    }
+
+    return 0;
+  }
+#endif
+
+#ifndef _WIN32
+  void DevSession::stop_vue_frontend()
+  {
+    if (vueFrontendPid_ <= 0)
+      return;
+
+    const pid_t pid = static_cast<pid_t>(vueFrontendPid_);
+
+    if (::kill(pid, SIGINT) != 0)
+    {
+      vueFrontendPid_ = -1;
+      return;
+    }
+
+    int status = 0;
+    (void)::waitpid(pid, &status, 0);
+
+    vueFrontendPid_ = -1;
+  }
+#endif
+
 #ifndef _WIN32
   int DevSession::run_child_once(const fs::path &exePath)
   {

@@ -90,6 +90,7 @@ cmake --build build -j$(nproc)
 
 - Documentation: https://docs.vixcpp.com/
 - CLI documentation: https://docs.vixcpp.com/cli/
+- Engineering notes: https://blog.vixcpp.com/
 - Registry: https://registry.vixcpp.com/
 - GitHub: https://github.com/vixcpp/vix
 

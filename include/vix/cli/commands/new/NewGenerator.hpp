@@ -53,6 +53,13 @@ namespace vix::commands::new_cmd::generator
       const FeaturesSelection &features,
       std::string &err);
 
+  /// Generates all files for a Vue + Vix Application project under projectDir.
+  bool generate_vue_project(
+      const fs::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features,
+      std::string &err);
+
   /// Generates all files for a header-only Library project under projectDir.
   bool generate_lib_project(
       const fs::path &projectDir,
@@ -64,6 +71,7 @@ namespace vix::commands::new_cmd::generator
   // ------------------------------------------------------------------
 
   void print_next_steps_app(const fs::path &projectDir, const std::string &projName);
+  void print_next_steps_vue(const fs::path &projectDir, const std::string &projName);
   void print_next_steps_lib(const fs::path &projectDir, const std::string &projName);
 
 } // namespace vix::commands::new_cmd::generator

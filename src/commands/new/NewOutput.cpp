@@ -75,6 +75,16 @@ namespace vix::commands::new_cmd::output
     print_command_step(3, "vix run", "start app");
   }
 
+  static void print_steps_vue(const std::string &projName)
+  {
+    section("next");
+
+    print_command_step(1, "cd " + projName + "/", "enter project");
+    print_command_step(2, "cd frontend && npm install", "install Vue dependencies");
+    print_command_step(3, "vix run", "start Vix backend");
+    print_command_step(4, "cd frontend && npm run dev", "start Vue frontend");
+  }
+
   static void print_steps_lib(const std::string &projName)
   {
     section("next");
@@ -100,6 +110,15 @@ namespace vix::commands::new_cmd::output
     print_banner(projName, "application");
     sep();
     print_steps_app(projName);
+  }
+
+  void print_creation_vue(
+      const std::filesystem::path & /*projectDir*/,
+      const std::string &projName)
+  {
+    print_banner(projName, "Vue + Vix application");
+    sep();
+    print_steps_vue(projName);
   }
 
   void print_creation_lib(

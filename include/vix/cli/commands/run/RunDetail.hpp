@@ -166,6 +166,8 @@ namespace vix::commands::RunCommand::detail
     bool localCache = false;
     bool devMode{false};
     bool replay = false;
+
+    bool fullstackVue = false;
   };
 
   /**
@@ -506,6 +508,9 @@ namespace vix::commands::RunCommand::detail
   std::optional<fs::path> choose_project_dir(
       const Options &opt,
       const fs::path &cwd);
+
+  bool project_has_vue_frontend(const fs::path &projectDir);
+  void print_vue_fullstack_banner();
 
   // ===========================================================================
   // Process / command execution

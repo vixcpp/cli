@@ -33,6 +33,11 @@ namespace vix::commands::new_cmd::output
       const std::string &projName,
       const FeaturesSelection &features);
 
+  /// Full creation summary for a Vue + Vix Application project.
+  void print_creation_vue(
+      const std::filesystem::path &projectDir,
+      const std::string &projName);
+
   /// Full creation summary for a Library project.
   void print_creation_lib(
       const std::filesystem::path &projectDir,

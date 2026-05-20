@@ -14,11 +14,11 @@
 
 namespace vix::commands::new_cmd
 {
-
   enum class TemplateKind
   {
     App,
-    Lib
+    Lib,
+    Vue
   };
 
   struct FeaturesSelection

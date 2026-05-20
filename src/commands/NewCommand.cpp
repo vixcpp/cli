@@ -107,6 +107,8 @@ namespace vix::commands::NewCommand
 
     const bool force = consume_flag(args, "--force");
     const std::optional<std::string> baseOpt = take_option_value(args, {"-d", "--dir"});
+    const std::optional<std::string> templateOpt =
+        take_option_value(args, {"--template"});
 
     const bool wantsLib = has_any(args, {"--lib", "--library", "--type=lib", "--type=library"});
     const bool wantsApp = has_any(args, {"--app", "--application", "--type=app", "--type=application"});
@@ -115,10 +117,44 @@ namespace vix::commands::NewCommand
                           "--app", "--application", "--type=app", "--type=application"})
       consume_flag(args, f);
 
+    if (args.empty())
+    {
+      error("Missing project name.");
+      hint("Usage: vix new <name|path> [--template vue] [--app|--lib] [--force]");
+      return 1;
+    }
+
+    if (!args[0].empty() && args[0][0] == '-' && !gen::is_dot_path(args[0]))
+    {
+      error("Missing project name.");
+      hint("Options must come after a project name or be followed by one.");
+      step("vix new my-app --template vue");
+      return 1;
+    }
+
     if (wantsLib && wantsApp)
     {
       error("Conflicting options: choose either --app or --lib.");
       return 1;
+    }
+
+    if (templateOpt.has_value())
+    {
+      const std::string tpl = *templateOpt;
+
+      if (tpl != "vue")
+      {
+        error("Unknown template: " + tpl);
+        hint("Supported templates: vue");
+        return 1;
+      }
+
+      if (wantsLib)
+      {
+        error("Conflicting options: --template vue cannot be used with --lib.");
+        hint("Vue templates generate applications.");
+        return 1;
+      }
     }
 
     const std::string nameOrPath = args[0];
@@ -241,10 +277,18 @@ namespace vix::commands::NewCommand
       // ------------------------------------------------------------------
       TemplateKind kind = TemplateKind::App;
 
-      if (wantsLib)
+      if (templateOpt.has_value() && *templateOpt == "vue")
+      {
+        kind = TemplateKind::Vue;
+      }
+      else if (wantsLib)
+      {
         kind = TemplateKind::Lib;
+      }
       else if (wantsApp)
+      {
         kind = TemplateKind::App;
+      }
       else if (tui::can_interact())
       {
         const auto sel = tui::choose_template_interactive();
@@ -260,7 +304,7 @@ namespace vix::commands::NewCommand
       // Step 3 – Choose features (App only)
       // ------------------------------------------------------------------
       FeaturesSelection features{};
-      if (kind == TemplateKind::App && tui::can_interact())
+      if ((kind == TemplateKind::App || kind == TemplateKind::Vue) && tui::can_interact())
       {
         bool cancelled = false;
         features = tui::choose_features_interactive(cancelled);
@@ -293,6 +337,21 @@ namespace vix::commands::NewCommand
       // Step 5 – Generate files
       // ------------------------------------------------------------------
       std::string genErr;
+
+      if (kind == TemplateKind::Vue)
+      {
+        if (!gen::generate_vue_project(projectDir, projName, features, genErr))
+        {
+          vix::cli::util::err_line(std::cerr, "Failed to create project files.");
+          vix::cli::util::warn_line(std::cerr, genErr);
+          return 1;
+        }
+
+        vix::cli::util::ok_line(std::cout, "Project created.");
+        vix::cli::util::kv(std::cout, "Location", projectDir.string());
+        gen::print_next_steps_vue(projectDir, projName);
+        return 0;
+      }
 
       if (kind == TemplateKind::App)
       {
@@ -342,6 +401,7 @@ namespace vix::commands::NewCommand
         << "  vix new api\n"
         << "  vix new .\n"
         << "  vix new tree --lib\n"
+        << "  vix new shop --template vue\n"
         << "  vix new blog -d ./projects\n"
         << "  vix new api --force\n\n"
 
@@ -356,6 +416,7 @@ namespace vix::commands::NewCommand
         << "Options\n"
         << "  --app       Generate an application (default)\n"
         << "  --lib       Generate a header-only library\n"
+        << "  --template  Project template, currently: vue\n"
         << "  -d, --dir   Base directory for project creation\n"
         << "  --force     Overwrite existing directory\n\n"
 

@@ -85,6 +85,10 @@ namespace vix::commands::RunCommand::dev
     DevFileIndex fileIndex_;
     DevChangeKind pendingChangeKind_{DevChangeKind::Ignore};
 
+#ifndef _WIN32
+    int vueFrontendPid_{-1};
+#endif
+
     DevFileSnapshot snapshot_project() const;
 
     std::vector<DevDetectedChange> detect_changes(
@@ -107,6 +111,10 @@ namespace vix::commands::RunCommand::dev
 #ifndef _WIN32
     int run_child_once(const fs::path &exePath);
     void stop_child(int pid) const;
+
+    bool has_vue_frontend() const;
+    int start_vue_frontend();
+    void stop_vue_frontend();
 #endif
 
     bool should_skip_directory(const fs::path &path) const;

@@ -1727,17 +1727,15 @@ namespace vix::commands::RunCommand
 
       warn_if_env_file_missing(resolved.userProjectDir);
 
+      if (!opt.devMode && !opt.watch && project_has_vue_frontend(resolved.userProjectDir))
+      {
+        print_vue_fullstack_banner();
+      }
+
       if (opt.watch)
       {
 #ifndef _WIN32
-        if (resolved.generated)
-        {
-          hint("Watch mode for vix.app projects is not wired yet; running once.");
-        }
-        else
-        {
-          return run_project_watch(opt, resolved.userProjectDir);
-        }
+        return run_project_watch(opt, resolved.userProjectDir);
 #else
         hint("Project watch mode is not yet implemented on Windows; running once without auto-reload.");
 #endif
@@ -1789,6 +1787,11 @@ namespace vix::commands::RunCommand
       error("Unable to resolve project.");
       hint(resolved.error);
       return 1;
+    }
+
+    if (!opt.devMode && !opt.watch && project_has_vue_frontend(resolved.userProjectDir))
+    {
+      print_vue_fullstack_banner();
     }
 
     if (!resolved.generated && has_presets(resolved.cmakeSourceDir))

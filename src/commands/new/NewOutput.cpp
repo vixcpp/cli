@@ -98,6 +98,15 @@ namespace vix::commands::new_cmd::output
     print_command_step(4, "vix tests", "run tests");
   }
 
+  static void print_steps_game(const std::string &projName)
+  {
+    section("next");
+
+    print_command_step(1, "cd " + projName + "/", "enter project");
+    print_command_step(2, "vix build", "compile");
+    print_command_step(3, "vix run", "start game");
+  }
+
   // ------------------------------------------------------------------
   // High-level entry points
   // ------------------------------------------------------------------
@@ -128,6 +137,15 @@ namespace vix::commands::new_cmd::output
     print_banner(projName, "library");
     sep();
     print_steps_lib(projName);
+  }
+
+  void print_creation_game(
+      const std::filesystem::path & /*projectDir*/,
+      const std::string &projName)
+  {
+    print_banner(projName, "game");
+    sep();
+    print_steps_game(projName);
   }
 
 } // namespace vix::commands::new_cmd::output

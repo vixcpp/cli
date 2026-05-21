@@ -1059,4 +1059,196 @@ h1 {
     return s;
   }
 
+  // ------------------------------------------------------------------
+  // Game generators
+  // ------------------------------------------------------------------
+
+  std::string make_game_main_cpp(const std::string &projectName)
+  {
+    std::string s;
+    s.reserve(1800);
+
+    s += "#include <vix/game/all.hpp>\n";
+    s += "#include <vix/print.hpp>\n\n";
+
+    s += "class MainScene final : public vix::game::Scene\n";
+    s += "{\n";
+    s += "public:\n";
+    s += "  vix::game::GameBoolResult on_load() override\n";
+    s += "  {\n";
+    s += "    vix::print(\"Main scene loaded\");\n";
+    s += "    return vix::game::Scene::on_load();\n";
+    s += "  }\n\n";
+
+    s += "  void on_update(const vix::game::Frame &frame) override\n";
+    s += "  {\n";
+    s += "    vix::print(\"frame:\", frame.index);\n\n";
+    s += "    if (frame.index >= 5)\n";
+    s += "    {\n";
+    s += "      app().stop();\n";
+    s += "    }\n";
+    s += "  }\n";
+    s += "};\n\n";
+
+    s += "int main()\n";
+    s += "{\n";
+    s += "  vix::game::App app;\n";
+    s += "  app.set_title(\"" + projectName + "\");\n\n";
+
+    s += "  vix::game::GameRuntime runtime(app);\n";
+    s += "  auto runtime_init = runtime.init();\n";
+    s += "  if (!runtime_init)\n";
+    s += "  {\n";
+    s += "    vix::print(\"runtime init failed:\", runtime_init.error().message());\n";
+    s += "    return 1;\n";
+    s += "  }\n\n";
+
+    s += "  auto scene = app.scenes().create<MainScene>(\"main\");\n";
+    s += "  if (!scene)\n";
+    s += "  {\n";
+    s += "    vix::print(\"scene creation failed:\", scene.error().message());\n";
+    s += "    return 1;\n";
+    s += "  }\n\n";
+
+    s += "  auto active = app.scenes().set_active(\"main\");\n";
+    s += "  if (!active)\n";
+    s += "  {\n";
+    s += "    vix::print(\"scene activation failed:\", active.error().message());\n";
+    s += "    return 1;\n";
+    s += "  }\n\n";
+
+    s += "  auto result = app.run();\n";
+    s += "  if (!result)\n";
+    s += "  {\n";
+    s += "    vix::print(\"game failed:\", result.error().message());\n";
+    s += "    return 1;\n";
+    s += "  }\n\n";
+
+    s += "  return 0;\n";
+    s += "}\n";
+
+    return s;
+  }
+
+  std::string make_game_package_json(const std::string &projectName)
+  {
+    std::string s;
+    s.reserve(800);
+
+    s += "{\n";
+    s += "  \"name\": \"" + projectName + "\",\n";
+    s += "  \"version\": \"0.1.0\",\n";
+    s += "  \"author\": \"\",\n";
+    s += "  \"entry_scene\": \"main\",\n";
+    s += "  \"asset_root\": \"assets\",\n";
+    s += "  \"output_dir\": \"dist\",\n";
+    s += "  \"scenes\": [\n";
+    s += "    \"main\"\n";
+    s += "  ],\n";
+    s += "  \"assets\": []\n";
+    s += "}\n";
+
+    return s;
+  }
+
+  std::string make_project_manifest_game(const std::string &projectName)
+  {
+    std::string s;
+    s.reserve(1400);
+
+    s += "# Vix game manifest\n";
+    s += "# This file is read by Vix and converted to an internal CMake project.\n\n";
+
+    s += "name = \"" + projectName + "\"\n";
+    s += "type = \"executable\"\n";
+    s += "standard = \"c++20\"\n\n";
+
+    s += "sources = [\n";
+    s += "  \"src/main.cpp\",\n";
+    s += "]\n\n";
+
+    s += "include_dirs = [\n";
+    s += "  \"src\",\n";
+    s += "]\n\n";
+
+    s += "compile_features = [\n";
+    s += "  \"cxx_std_20\",\n";
+    s += "]\n\n";
+
+    s += "packages = [\n";
+    s += "  \"vix\",\n";
+    s += "]\n\n";
+
+    s += "links = [\n";
+    s += "  \"vix::game\",\n";
+    s += "  \"vix::io\",\n";
+    s += "]\n\n";
+
+    s += "resources = [\n";
+    s += "  \"assets=assets\",\n";
+    s += "  \"game.package.json=game.package.json\",\n";
+    s += "]\n\n";
+
+    s += "output_dir = \"bin\"\n";
+
+    return s;
+  }
+
+  std::string make_vix_json_game(const std::string &projectName)
+  {
+    std::string s;
+    s.reserve(1200);
+
+    s += "{\n";
+    s += "  \"name\": \"" + projectName + "\",\n";
+    s += "  \"deps\": [],\n";
+    s += "  \"vars\": {\n";
+    s += "    \"preset\": \"dev-ninja\"\n";
+    s += "  },\n";
+    s += "  \"tasks\": {\n";
+    s += "    \"dev\": \"vix run\",\n";
+    s += "    \"build\": \"vix build\",\n";
+    s += "    \"run\": \"vix run\"\n";
+    s += "  }\n";
+    s += "}\n";
+
+    return s;
+  }
+
+  std::string make_readme_game(const std::string &projectName)
+  {
+    std::string readme;
+    readme.reserve(2000);
+
+    readme += "# " + projectName + "\n\n";
+    readme += "Minimal Vix game project.\n\n";
+
+    readme += "## Quick start\n\n";
+    readme += "```bash\n";
+    readme += "cd " + projectName + "\n";
+    readme += "vix build\n";
+    readme += "vix run\n";
+    readme += "```\n\n";
+
+    readme += "## Project layout\n\n";
+    readme += "```txt\n";
+    readme += "src/main.cpp        Game entry point\n";
+    readme += "assets/             Game assets\n";
+    readme += "game.package.json   Game package metadata\n";
+    readme += "vix.app             Vix application manifest\n";
+    readme += "vix.json            Vix project metadata and tasks\n";
+    readme += "```\n\n";
+
+    readme += "## Runtime\n\n";
+    readme += "This project uses the vix/game V3 runtime foundation:\n\n";
+    readme += "- `GameRuntime`\n";
+    readme += "- `GameContext`\n";
+    readme += "- `SceneRuntime`\n";
+    readme += "- `ScriptRuntime`\n";
+    readme += "- `AudioRuntime`\n";
+    readme += "- `PhysicsRuntime`\n";
+    readme += "- `GamePackage`\n";
+
+    return readme;
+  }
 } // namespace vix::commands::new_cmd::templates

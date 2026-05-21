@@ -99,7 +99,7 @@ namespace vix::commands::NewCommand
     if (argsIn.empty())
     {
       error("Missing project name.");
-      hint("Usage: vix new <name|path> [-d|--dir <base_dir>] [--app|--lib] [--force]");
+      hint("Usage: vix new <name|path> [-d|--dir <base_dir>] [--app|--lib|--game] [--force]");
       return 1;
     }
 
@@ -112,15 +112,23 @@ namespace vix::commands::NewCommand
 
     const bool wantsLib = has_any(args, {"--lib", "--library", "--type=lib", "--type=library"});
     const bool wantsApp = has_any(args, {"--app", "--application", "--type=app", "--type=application"});
+    const bool wantsGame = has_any(args, {"--game", "--type=game"});
 
     for (const auto &f : {"--lib", "--library", "--type=lib", "--type=library",
-                          "--app", "--application", "--type=app", "--type=application"})
+                          "--app", "--application", "--type=app", "--type=application",
+                          "--game", "--type=game"})
       consume_flag(args, f);
 
     if (args.empty())
     {
       error("Missing project name.");
-      hint("Usage: vix new <name|path> [--template vue] [--app|--lib] [--force]");
+      hint("Usage: vix new <name|path> [--template vue|game] [--app|--lib|--game] [--force]");
+      return 1;
+    }
+
+    if ((wantsLib && wantsApp) || (wantsLib && wantsGame) || (wantsApp && wantsGame))
+    {
+      error("Conflicting options: choose only one project type.");
       return 1;
     }
 
@@ -132,27 +140,35 @@ namespace vix::commands::NewCommand
       return 1;
     }
 
-    if (wantsLib && wantsApp)
-    {
-      error("Conflicting options: choose either --app or --lib.");
-      return 1;
-    }
-
     if (templateOpt.has_value())
     {
       const std::string tpl = *templateOpt;
 
-      if (tpl != "vue")
+      if (tpl != "vue" && tpl != "game")
       {
         error("Unknown template: " + tpl);
-        hint("Supported templates: vue");
+        hint("Supported templates: vue, game");
         return 1;
       }
 
       if (wantsLib)
       {
-        error("Conflicting options: --template vue cannot be used with --lib.");
-        hint("Vue templates generate applications.");
+        error("Conflicting options: --template cannot be used with --lib.");
+        hint("Templates currently supported: vue, game.");
+        return 1;
+      }
+
+      if (wantsApp && *templateOpt == "game")
+      {
+        error("Conflicting options: --template game cannot be used with --app.");
+        hint("Use --game or --template game.");
+        return 1;
+      }
+
+      if (wantsGame && *templateOpt == "vue")
+      {
+        error("Conflicting options: --template vue cannot be used with --game.");
+        hint("Use --app, --template vue, or --template game.");
         return 1;
       }
     }
@@ -277,9 +293,17 @@ namespace vix::commands::NewCommand
       // ------------------------------------------------------------------
       TemplateKind kind = TemplateKind::App;
 
-      if (templateOpt.has_value() && *templateOpt == "vue")
+      if (templateOpt.has_value() && *templateOpt == "game")
+      {
+        kind = TemplateKind::Game;
+      }
+      else if (templateOpt.has_value() && *templateOpt == "vue")
       {
         kind = TemplateKind::Vue;
+      }
+      else if (wantsGame)
+      {
+        kind = TemplateKind::Game;
       }
       else if (wantsLib)
       {
@@ -353,6 +377,21 @@ namespace vix::commands::NewCommand
         return 0;
       }
 
+      if (kind == TemplateKind::Game)
+      {
+        if (!gen::generate_game_project(projectDir, projName, genErr))
+        {
+          vix::cli::util::err_line(std::cerr, "Failed to create project files.");
+          vix::cli::util::warn_line(std::cerr, genErr);
+          return 1;
+        }
+
+        vix::cli::util::ok_line(std::cout, "Project created.");
+        vix::cli::util::kv(std::cout, "Location", projectDir.string());
+        gen::print_next_steps_game(projectDir, projName);
+        return 0;
+      }
+
       if (kind == TemplateKind::App)
       {
         if (!gen::generate_app_project(projectDir, projName, features, genErr))
@@ -401,7 +440,9 @@ namespace vix::commands::NewCommand
         << "  vix new api\n"
         << "  vix new .\n"
         << "  vix new tree --lib\n"
+        << "  vix new mario --game\n"
         << "  vix new shop --template vue\n"
+        << "  vix new platformer --template game\n"
         << "  vix new blog -d ./projects\n"
         << "  vix new api --force\n\n"
 
@@ -411,17 +452,22 @@ namespace vix::commands::NewCommand
         << "  • Creates a vix.json manifest\n"
         << "  • For apps, creates an executable target matching the project name\n"
         << "  • For libraries, creates a header-only CMake interface target\n"
-        << "  • Applies the selected template (app or library)\n\n"
+        << "  • Applies the selected template (app, game, library, or Vue)\n\n"
 
-        << "Options\n"
         << "  --app       Generate an application (default)\n"
+        << "  --game      Generate a Vix game project\n"
         << "  --lib       Generate a header-only library\n"
-        << "  --template  Project template, currently: vue\n"
+        << "  --template  Project template, currently: vue, game\n"
         << "  -d, --dir   Base directory for project creation\n"
         << "  --force     Overwrite existing directory\n\n"
 
         << "Application workflow\n"
         << "  cd api/\n"
+        << "  vix build\n"
+        << "  vix run\n\n"
+
+        << "Game workflow\n"
+        << "  cd mario/\n"
         << "  vix build\n"
         << "  vix run\n\n"
 

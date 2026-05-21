@@ -43,6 +43,11 @@ namespace vix::commands::new_cmd::output
       const std::filesystem::path &projectDir,
       const std::string &projName);
 
+  /// Full creation summary for a Game project.
+  void print_creation_game(
+      const std::filesystem::path &projectDir,
+      const std::string &projName);
+
 } // namespace vix::commands::new_cmd::output
 
 #endif

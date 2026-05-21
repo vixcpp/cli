@@ -1082,10 +1082,9 @@ h1 {
 
     s += "  void on_update(const vix::game::Frame &frame) override\n";
     s += "  {\n";
-    s += "    vix::print(\"frame:\", frame.index);\n\n";
-    s += "    if (frame.index >= 5)\n";
+    s += "    if (frame.first())\n";
     s += "    {\n";
-    s += "      app().stop();\n";
+    s += "      vix::print(\"Game running. Press Ctrl+C to stop.\");\n";
     s += "    }\n";
     s += "  }\n";
     s += "};\n\n";

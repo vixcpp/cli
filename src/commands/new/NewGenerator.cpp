@@ -269,6 +269,50 @@ namespace vix::commands::new_cmd::generator
   }
 
   // ------------------------------------------------------------------
+  // Game
+  // ------------------------------------------------------------------
+
+  bool generate_game_project(
+      const fs::path &projectDir,
+      const std::string &projName,
+      std::string &err)
+  {
+    const fs::path srcDir = projectDir / "src";
+    const fs::path assetsDir = projectDir / "assets";
+
+    if (!ensure_dir(srcDir, err))
+      return false;
+
+    if (!ensure_dir(assetsDir, err))
+      return false;
+
+    if (!write_text_file(srcDir / "main.cpp",
+                         tpl::make_game_main_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "game.package.json",
+                         tpl::make_game_package_json(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "README.md",
+                         tpl::make_readme_game(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "vix.json",
+                         tpl::make_vix_json_game(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "vix.app",
+                         tpl::make_project_manifest_game(projName), err))
+      return false;
+
+    if (!write_text_file(assetsDir / ".gitkeep", "", err))
+      return false;
+
+    return true;
+  }
+
+  // ------------------------------------------------------------------
   // Post-generation output
   // ------------------------------------------------------------------
 
@@ -292,6 +336,13 @@ namespace vix::commands::new_cmd::generator
       const std::string &projName)
   {
     out::print_creation_lib(projectDir, projName);
+  }
+
+  void print_next_steps_game(
+      const fs::path &projectDir,
+      const std::string &projName)
+  {
+    out::print_creation_game(projectDir, projName);
   }
 
 } // namespace vix::commands::new_cmd::generator

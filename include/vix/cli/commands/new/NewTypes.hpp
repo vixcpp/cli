@@ -18,7 +18,8 @@ namespace vix::commands::new_cmd
   {
     App,
     Lib,
-    Vue
+    Vue,
+    Game
   };
 
   struct FeaturesSelection

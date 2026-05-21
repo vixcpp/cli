@@ -486,9 +486,9 @@ namespace vix::commands::new_cmd::tui
   {
     return menu_select<TemplateKind>(
         "Template",
-        {"Application", "Library (header-only)"},
+        {"Application", "Game", "Library (header-only)"},
         0,
-        {TemplateKind::App, TemplateKind::Lib});
+        {TemplateKind::App, TemplateKind::Game, TemplateKind::Lib});
   }
 
   SelectResult<OverwriteChoice> confirm_overwrite_interactive(const std::filesystem::path &dir)

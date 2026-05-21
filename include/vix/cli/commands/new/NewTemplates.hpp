@@ -172,6 +172,16 @@ WAF_MODE=basic
   std::string make_vue_app_vue();
 
   // ------------------------------------------------------------------
+  // Game generators
+  // ------------------------------------------------------------------
+
+  std::string make_game_main_cpp(const std::string &projectName);
+  std::string make_game_package_json(const std::string &projectName);
+  std::string make_readme_game(const std::string &projectName);
+  std::string make_project_manifest_game(const std::string &projectName);
+  std::string make_vix_json_game(const std::string &projectName);
+
+  // ------------------------------------------------------------------
   // CMakeLists.txt generators
   // ------------------------------------------------------------------
 

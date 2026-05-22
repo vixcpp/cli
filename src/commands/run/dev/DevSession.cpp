@@ -317,6 +317,36 @@ namespace vix::commands::RunCommand::dev
         result.message = "Dev server exited with code " + std::to_string(runCode) + ".";
         return result;
       }
+
+      while (true)
+      {
+        std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
+
+        if (!changes.empty())
+        {
+          DevChangeKind kind = DevChangeKind::Ignore;
+
+          for (const auto &change : changes)
+          {
+            if (!change.valid())
+              continue;
+
+            if (change.kind == DevChangeKind::ReconfigureAndRebuild)
+            {
+              kind = DevChangeKind::ReconfigureAndRebuild;
+              break;
+            }
+
+            if (kind == DevChangeKind::Ignore)
+              kind = change.kind;
+          }
+
+          pendingChangeKind_ = kind;
+          break;
+        }
+
+        std::this_thread::sleep_for(options_.pollInterval);
+      }
     }
 
     result.exitCode = 0;

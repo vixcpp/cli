@@ -293,6 +293,17 @@ else()
   endif()
 endif()
 
+# ----------------------------------------------------
+# Optional game command support
+# ----------------------------------------------------
+if (TARGET vix::game)
+  message(STATUS "[cli] Game command enabled")
+  target_link_libraries(vix_cli PRIVATE vix::game)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_GAME=1)
+else()
+  message(STATUS "[cli] Game command disabled: vix::game target not found")
+endif()
+
 if (TARGET vix_warnings)
   target_link_libraries(vix_cli PRIVATE vix_warnings)
 endif()

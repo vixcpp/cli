@@ -19,15 +19,17 @@
 
 #include <chrono>
 #include <filesystem>
-#include <map>
 #include <string>
 #include <vector>
 #include <optional>
 
 #include <vix/cli/commands/run/RunDetail.hpp>
-#include <vix/cli/commands/run/dev/DevChangeClassifier.hpp>
 #include <vix/cli/commands/run/dev/DevRebuilder.hpp>
 #include <vix/cli/commands/run/dev/DevFileIndex.hpp>
+
+#include <vix/async/core/io_context.hpp>
+#include <vix/async/core/task.hpp>
+#include <vix/async/core/cancel.hpp>
 
 namespace vix::commands::RunCommand::dev
 {
@@ -54,19 +56,17 @@ namespace vix::commands::RunCommand::dev
     std::string message;
   };
 
-  struct DevFileSnapshot
+  enum class DevChildExitReason
   {
-    std::map<std::string, fs::file_time_type> files;
-
-    bool empty() const;
+    Exited,
+    RestartRequested,
+    Cancelled
   };
 
-  struct DevDetectedChange
+  struct DevChildRunResult
   {
-    fs::path path;
-    DevChangeKind kind{DevChangeKind::Ignore};
-
-    bool valid() const;
+    int exitCode{0};
+    DevChildExitReason reason{DevChildExitReason::Exited};
   };
 
   class DevSession
@@ -79,8 +79,39 @@ namespace vix::commands::RunCommand::dev
     DevSessionResult run();
 
   private:
+#ifndef _WIN32
+    vix::async::core::task<void> watch_stop_signals_async(
+        vix::async::core::io_context &ctx,
+        vix::async::core::cancel_source &cancel);
+#endif
+
+    vix::async::core::task<DevSessionResult> run_async(
+        vix::async::core::io_context &ctx,
+        vix::async::core::cancel_token ct);
+
+    vix::async::core::task<void> sleep_poll_interval(
+        vix::async::core::io_context &ctx,
+        vix::async::core::cancel_token ct) const;
+
+    vix::async::core::task<void> sleep_debounce_delay(
+        vix::async::core::io_context &ctx,
+        vix::async::core::cancel_token ct) const;
+
+    vix::async::core::task<DevRebuilderResult> rebuild_async(
+        vix::async::core::io_context &ctx,
+        DevChangeKind kind,
+        vix::async::core::cancel_token ct) const;
+
+    vix::async::core::task<DevIndexedChange> wait_for_indexed_change_async(
+        vix::async::core::io_context &ctx,
+        vix::async::core::cancel_token ct);
+
+    DevIndexedChange select_relevant_indexed_change(
+        const std::vector<DevIndexedChange> &changes) const;
+
+    void print_reload_for_change(const DevIndexedChange &change) const;
+
     DevSessionOptions options_;
-    DevChangeClassifier classifier_;
     DevRebuilder rebuilder_;
     DevFileIndex fileIndex_;
     DevChangeKind pendingChangeKind_{DevChangeKind::Ignore};
@@ -89,35 +120,25 @@ namespace vix::commands::RunCommand::dev
     int vueFrontendPid_{-1};
 #endif
 
-    DevFileSnapshot snapshot_project() const;
-
-    std::vector<DevDetectedChange> detect_changes(
-        const DevFileSnapshot &before,
-        const DevFileSnapshot &after) const;
-
-    DevChangeKind strongest_change_kind(
-        const std::vector<DevDetectedChange> &changes) const;
-
-    DevDetectedChange first_relevant_change(
-        const std::vector<DevDetectedChange> &changes) const;
-
-    DevDetectedChange wait_for_change(
-        DevFileSnapshot &snapshot) const;
-
-    int rebuild_for_change(DevChangeKind kind) const;
-
     std::optional<fs::path> executable_path() const;
 
 #ifndef _WIN32
-    int run_child_once(const fs::path &exePath);
-    void stop_child(int pid) const;
+    vix::async::core::task<DevChildRunResult> run_child_once_async(
+        vix::async::core::io_context &ctx,
+        const fs::path &exePath,
+        vix::async::core::cancel_token ct);
+
+    [[noreturn]] void exec_child_process(const fs::path &exePath) const;
+
+    vix::async::core::task<void> terminate_and_wait_child_async(
+        vix::async::core::io_context &ctx,
+        int pid,
+        vix::async::core::cancel_token ct) const;
 
     bool has_vue_frontend() const;
     int start_vue_frontend();
     void stop_vue_frontend();
 #endif
-
-    bool should_skip_directory(const fs::path &path) const;
   };
 
 } // namespace vix::commands::RunCommand::dev

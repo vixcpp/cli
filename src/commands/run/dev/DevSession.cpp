@@ -17,6 +17,11 @@
 #include <vix/cli/commands/run/dev/DevSession.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/async/core/io_context.hpp>
+#include <vix/async/core/timer.hpp>
+#include <vix/async/core/thread_pool.hpp>
+#include <vix/async/core/cancel.hpp>
+#include <vix/async/core/signal.hpp>
 #include <vix/utils/Env.hpp>
 #include <cctype>
 
@@ -24,7 +29,6 @@
 #include <cstring>
 #include <iostream>
 #include <system_error>
-#include <thread>
 #include <utility>
 #include <optional>
 #include <algorithm>
@@ -43,11 +47,6 @@ namespace vix::commands::RunCommand::dev
 {
   namespace
   {
-    std::string path_key(const fs::path &path)
-    {
-      return path.lexically_normal().generic_string();
-    }
-
     std::string executable_name(const std::string &name)
     {
 #ifdef _WIN32
@@ -55,17 +54,6 @@ namespace vix::commands::RunCommand::dev
 #else
       return name;
 #endif
-    }
-
-    bool change_is_stronger(DevChangeKind current, DevChangeKind next)
-    {
-      if (next == DevChangeKind::ReconfigureAndRebuild)
-        return current != DevChangeKind::ReconfigureAndRebuild;
-
-      if (next == DevChangeKind::RebuildOnly)
-        return current == DevChangeKind::Ignore;
-
-      return false;
     }
 
     void clear_dev_screen()
@@ -131,36 +119,39 @@ namespace vix::commands::RunCommand::dev
                 << "\n";
     }
 
-    void print_dev_reload_header(const DevDetectedChange &change)
+    void print_dev_app_exited_cleanly()
     {
-      if (!change.valid())
-        return;
-
-      std::cout << CYAN << BOLD << "Dev " << RESET
-                << CYAN << BOLD << "reload" << RESET
-                << GRAY << " (dev)" << RESET
-                << "\n";
-
       std::cout << "  "
-                << GRAY << "changed: " << RESET
-                << change.path.string()
+                << CYAN << "•" << RESET
+                << " Dev app exited cleanly"
+                << GRAY << ". Session stopped." << RESET
                 << "\n";
     }
+
+#ifndef _WIN32
+    bool wait_child_nonblocking(pid_t pid, int &status)
+    {
+      while (true)
+      {
+        const pid_t r = ::waitpid(pid, &status, WNOHANG);
+
+        if (r == pid)
+          return true;
+
+        if (r == 0)
+          return false;
+
+        if (r < 0 && errno == EINTR)
+          continue;
+
+        return true;
+      }
+    }
+#endif
   } // namespace
-
-  bool DevFileSnapshot::empty() const
-  {
-    return files.empty();
-  }
-
-  bool DevDetectedChange::valid() const
-  {
-    return kind != DevChangeKind::Ignore && !path.empty();
-  }
 
   DevSession::DevSession(DevSessionOptions options)
       : options_(std::move(options)),
-        classifier_(),
         rebuilder_(DevRebuilderOptions{
             options_.projectDir,
             options_.buildDir,
@@ -176,14 +167,137 @@ namespace vix::commands::RunCommand::dev
     return options_;
   }
 
-  DevSessionResult DevSession::run()
+  vix::async::core::task<void> DevSession::sleep_poll_interval(
+      vix::async::core::io_context &ctx,
+      vix::async::core::cancel_token ct) const
+  {
+    co_await ctx.timers().sleep_for(options_.pollInterval, std::move(ct));
+  }
+
+  vix::async::core::task<void> DevSession::sleep_debounce_delay(
+      vix::async::core::io_context &ctx,
+      vix::async::core::cancel_token ct) const
+  {
+    co_await ctx.timers().sleep_for(options_.debounceDelay, std::move(ct));
+  }
+
+  vix::async::core::task<DevRebuilderResult> DevSession::rebuild_async(
+      vix::async::core::io_context &ctx,
+      DevChangeKind kind,
+      vix::async::core::cancel_token ct) const
+  {
+    if (ct.is_cancelled())
+    {
+      DevRebuilderResult result;
+      result.ok = false;
+      result.exitCode = 130;
+      result.message = "Dev rebuild cancelled.";
+      co_return result;
+    }
+
+    co_return co_await ctx.cpu_pool().submit(
+        [this, kind]()
+        {
+          if (kind == DevChangeKind::ReconfigureAndRebuild)
+          {
+            return rebuilder_.reconfigure_and_rebuild();
+          }
+
+          return rebuilder_.rebuild();
+        },
+        std::move(ct));
+  }
+
+  DevIndexedChange DevSession::select_relevant_indexed_change(
+      const std::vector<DevIndexedChange> &changes) const
+  {
+    DevIndexedChange selected{};
+
+    for (const auto &change : changes)
+    {
+      if (!change.valid())
+        continue;
+
+      if (change.kind == DevChangeKind::ReconfigureAndRebuild)
+        return change;
+
+      if (!selected.valid())
+        selected = change;
+    }
+
+    return selected;
+  }
+
+  void DevSession::print_reload_for_change(
+      const DevIndexedChange &change) const
+  {
+    if (options_.quiet || !change.valid())
+      return;
+
+    clear_dev_screen();
+
+    std::cout << CYAN << BOLD << "Dev " << RESET
+              << CYAN << BOLD << options_.targetName << RESET
+              << GRAY << " (dev)" << RESET
+              << "\n";
+
+    std::cout << "  "
+              << GRAY << "changed: " << RESET
+              << change.path.string()
+              << "\n";
+  }
+
+  vix::async::core::task<DevIndexedChange> DevSession::wait_for_indexed_change_async(
+      vix::async::core::io_context &ctx,
+      vix::async::core::cancel_token ct)
+  {
+    while (!ct.is_cancelled())
+    {
+      std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
+
+      if (!changes.empty())
+      {
+        DevIndexedChange selected =
+            select_relevant_indexed_change(changes);
+
+        if (selected.valid())
+        {
+          co_await sleep_debounce_delay(ctx, ct);
+
+          std::vector<DevIndexedChange> debouncedChanges = fileIndex_.poll_changes();
+
+          if (!debouncedChanges.empty())
+          {
+            DevIndexedChange debouncedSelected =
+                select_relevant_indexed_change(debouncedChanges);
+
+            if (debouncedSelected.valid())
+              selected = debouncedSelected;
+          }
+
+          co_return selected;
+        }
+      }
+
+      co_await sleep_poll_interval(ctx, ct);
+    }
+
+    co_return DevIndexedChange{};
+  }
+
+  vix::async::core::task<DevSessionResult> DevSession::run_async(
+      vix::async::core::io_context &ctx,
+      vix::async::core::cancel_token ct)
   {
 #ifdef _WIN32
+    (void)ctx;
+    (void)ct;
+
     DevSessionResult result;
     result.exitCode = 1;
     result.message = "DevSession is not implemented on Windows.";
     error(result.message);
-    return result;
+    co_return result;
 #else
     DevSessionResult result;
 
@@ -211,46 +325,45 @@ namespace vix::commands::RunCommand::dev
       {
         result.exitCode = frontendCode;
         result.message = "Failed to start Vue frontend.";
-        return result;
+        co_return result;
       }
     }
 
     bool fileIndexReady = false;
 
-    while (true)
+    while (!ct.is_cancelled())
     {
-      DevRebuilderResult rebuildResult;
-
-      if (pendingChangeKind_ == DevChangeKind::ReconfigureAndRebuild)
-      {
-        rebuildResult = rebuilder_.reconfigure_and_rebuild();
-      }
-      else
-      {
-        rebuildResult = rebuilder_.rebuild();
-      }
-
+      const DevChangeKind rebuildKind = pendingChangeKind_;
       pendingChangeKind_ = DevChangeKind::Ignore;
+
+      DevRebuilderResult rebuildResult =
+          co_await rebuild_async(ctx, rebuildKind, ct);
+
+      if (ct.is_cancelled())
+      {
+        result.exitCode = 130;
+        result.message = "Dev session cancelled.";
+        co_return result;
+      }
 
       if (!rebuildResult.ok)
       {
         hint("Fix the errors, save your files, and Vix will rebuild automatically.");
 
         fileIndex_.refresh();
+        fileIndexReady = true;
 
-        while (true)
+        DevIndexedChange change =
+            co_await wait_for_indexed_change_async(ctx, ct);
+
+        if (!change.valid())
         {
-          std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
-
-          if (!changes.empty())
-          {
-            pendingChangeKind_ = DevChangeKind::RebuildOnly;
-            break;
-          }
-
-          std::this_thread::sleep_for(options_.pollInterval);
+          result.exitCode = 130;
+          result.message = "Dev session cancelled.";
+          co_return result;
         }
 
+        pendingChangeKind_ = change.kind;
         continue;
       }
 
@@ -271,243 +384,158 @@ namespace vix::commands::RunCommand::dev
           hint("Use `vix tests` to run the test suite.");
         }
 
-        while (true)
+        DevIndexedChange change =
+            co_await wait_for_indexed_change_async(ctx, ct);
+
+        if (!change.valid())
         {
-          std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
-
-          if (!changes.empty())
-          {
-            DevChangeKind kind = DevChangeKind::Ignore;
-
-            for (const auto &change : changes)
-            {
-              if (!change.valid())
-                continue;
-
-              if (change.kind == DevChangeKind::ReconfigureAndRebuild)
-              {
-                kind = DevChangeKind::ReconfigureAndRebuild;
-                break;
-              }
-
-              if (kind == DevChangeKind::Ignore)
-                kind = change.kind;
-            }
-
-            pendingChangeKind_ = kind;
-            break;
-          }
-
-          std::this_thread::sleep_for(options_.pollInterval);
+          result.exitCode = 130;
+          result.message = "Dev session cancelled.";
+          co_return result;
         }
 
+        pendingChangeKind_ = change.kind;
         continue;
       }
+
       if (!fileIndexReady)
       {
         fileIndex_.refresh();
         fileIndexReady = true;
       }
 
-      const int runCode = run_child_once(*exePath);
+      const DevChildRunResult childResult =
+          co_await run_child_once_async(ctx, *exePath, ct);
 
-      if (runCode != 0)
+      if (childResult.reason == DevChildExitReason::RestartRequested)
+        continue;
+
+      if (childResult.reason == DevChildExitReason::Cancelled)
       {
-        result.exitCode = runCode;
-        result.message = "Dev server exited with code " + std::to_string(runCode) + ".";
-        return result;
+        result.exitCode = 0;
+        result.message = "Dev session stopped.";
+        co_return result;
       }
 
-      while (true)
+      result.exitCode = childResult.exitCode;
+
+      if (childResult.exitCode == 0)
       {
-        std::vector<DevIndexedChange> changes = fileIndex_.poll_changes();
+        if (!options_.quiet)
+          print_dev_app_exited_cleanly();
 
-        if (!changes.empty())
-        {
-          DevChangeKind kind = DevChangeKind::Ignore;
-
-          for (const auto &change : changes)
-          {
-            if (!change.valid())
-              continue;
-
-            if (change.kind == DevChangeKind::ReconfigureAndRebuild)
-            {
-              kind = DevChangeKind::ReconfigureAndRebuild;
-              break;
-            }
-
-            if (kind == DevChangeKind::Ignore)
-              kind = change.kind;
-          }
-
-          pendingChangeKind_ = kind;
-          break;
-        }
-
-        std::this_thread::sleep_for(options_.pollInterval);
+        result.message = "Dev app exited cleanly.";
       }
+      else
+      {
+        result.message =
+            "Dev server exited with code " + std::to_string(childResult.exitCode) + ".";
+      }
+
+      co_return result;
     }
 
     result.exitCode = 0;
     result.message = "Dev session stopped.";
-    return result;
+    co_return result;
 #endif
   }
 
-  DevFileSnapshot DevSession::snapshot_project() const
+#ifndef _WIN32
+  vix::async::core::task<void> DevSession::watch_stop_signals_async(
+      vix::async::core::io_context &ctx,
+      vix::async::core::cancel_source &cancel)
   {
-    DevFileSnapshot snapshot;
+    auto &signals = ctx.signals();
 
-    std::error_code ec;
+    signals.add(SIGINT);
+    signals.add(SIGTERM);
 
-    if (!fs::exists(options_.projectDir, ec) || ec)
-      return snapshot;
-    for (auto it = fs::recursive_directory_iterator(
-             options_.projectDir,
-             fs::directory_options::skip_permission_denied,
-             ec);
-         !ec && it != fs::recursive_directory_iterator();
-         ++it)
+    try
     {
-      const fs::path path = it->path();
+      const int sig = co_await signals.async_wait(cancel.token());
 
-      if (it->is_directory())
+      if (!options_.quiet)
       {
-        if (should_skip_directory(path))
-          it.disable_recursion_pending();
-
-        continue;
+        std::cout << "\n";
+        hint("Stopping dev session...");
       }
 
-      if (!it->is_regular_file())
-        continue;
+      (void)sig;
 
-      const DevChangeKind kind = classifier_.classify(options_.projectDir, path);
-      if (kind == DevChangeKind::Ignore)
-        continue;
-
-      std::error_code timeEc;
-      const fs::file_time_type time = fs::last_write_time(path, timeEc);
-      if (timeEc)
-        continue;
-
-      snapshot.files[path_key(path)] = time;
+      cancel.request_cancel();
+      ctx.stop();
+    }
+    catch (...)
+    {
+      cancel.request_cancel();
+      ctx.stop();
     }
 
-    return snapshot;
+    co_return;
   }
+#endif
 
-  std::vector<DevDetectedChange> DevSession::detect_changes(
-      const DevFileSnapshot &before,
-      const DevFileSnapshot &after) const
+  DevSessionResult DevSession::run()
   {
-    std::vector<DevDetectedChange> changes;
+#ifdef _WIN32
+    DevSessionResult result;
+    result.exitCode = 1;
+    result.message = "DevSession is not implemented on Windows.";
+    error(result.message);
+    return result;
+#else
+    vix::async::core::io_context ctx;
+    vix::async::core::cancel_source cancel;
+    auto signalTask = watch_stop_signals_async(ctx, cancel);
+    std::move(signalTask).start(ctx.get_scheduler());
 
-    for (const auto &[key, newTime] : after.files)
+    DevSessionResult result;
+    bool completed = false;
+
+    auto mainTask =
+        [this, &ctx, &cancel, &result, &completed]() -> vix::async::core::task<void>
     {
-      const auto oldIt = before.files.find(key);
-
-      if (oldIt == before.files.end() || oldIt->second != newTime)
+      try
       {
-        const fs::path changedPath = fs::path(key);
-        const DevChangeKind kind = classifier_.classify(options_.projectDir, changedPath);
-
-        if (kind != DevChangeKind::Ignore)
-          changes.push_back(DevDetectedChange{changedPath, kind});
+        result = co_await run_async(ctx, cancel.token());
       }
-    }
-
-    for (const auto &[key, oldTime] : before.files)
-    {
-      (void)oldTime;
-
-      if (after.files.find(key) == after.files.end())
+      catch (const std::exception &e)
       {
-        const fs::path changedPath = fs::path(key);
-        const DevChangeKind kind = classifier_.classify(options_.projectDir, changedPath);
+        result.exitCode = 1;
+        result.message = e.what();
 
-        if (kind != DevChangeKind::Ignore)
-          changes.push_back(DevDetectedChange{changedPath, kind});
+        if (!result.message.empty())
+          error(result.message);
       }
-    }
+      catch (...)
+      {
+        result.exitCode = 1;
+        result.message = "Dev session failed with an unknown error.";
+        error(result.message);
+      }
 
-    return changes;
-  }
+      completed = true;
+      ctx.stop();
 
-  DevChangeKind DevSession::strongest_change_kind(
-      const std::vector<DevDetectedChange> &changes) const
-  {
-    DevChangeKind strongest = DevChangeKind::Ignore;
+      co_return;
+    }();
 
-    for (const auto &change : changes)
+    std::move(mainTask).start(ctx.get_scheduler());
+
+    ctx.run();
+    ctx.shutdown();
+
+    if (!completed)
     {
-      if (change_is_stronger(strongest, change.kind))
-        strongest = change.kind;
+      result.exitCode = cancel.is_cancelled() ? 0 : 1;
+      result.message = cancel.is_cancelled()
+                           ? "Dev session stopped."
+                           : "Dev session stopped before completion.";
     }
 
-    return strongest;
-  }
-
-  DevDetectedChange DevSession::first_relevant_change(
-      const std::vector<DevDetectedChange> &changes) const
-  {
-    for (const auto &change : changes)
-    {
-      if (change.kind == DevChangeKind::ReconfigureAndRebuild)
-        return change;
-    }
-
-    for (const auto &change : changes)
-    {
-      if (change.kind == DevChangeKind::RebuildOnly)
-        return change;
-    }
-
-    return {};
-  }
-
-  DevDetectedChange DevSession::wait_for_change(
-      DevFileSnapshot &snapshot) const
-  {
-    while (true)
-    {
-      std::this_thread::sleep_for(options_.pollInterval);
-
-      DevFileSnapshot next = snapshot_project();
-      std::vector<DevDetectedChange> changes = detect_changes(snapshot, next);
-
-      if (changes.empty())
-        continue;
-
-      std::this_thread::sleep_for(options_.debounceDelay);
-
-      next = snapshot_project();
-      changes = detect_changes(snapshot, next);
-
-      snapshot = std::move(next);
-
-      const DevDetectedChange change = first_relevant_change(changes);
-      if (change.valid())
-        return change;
-    }
-  }
-
-  int DevSession::rebuild_for_change(DevChangeKind kind) const
-  {
-    if (kind == DevChangeKind::ReconfigureAndRebuild)
-    {
-      const DevRebuilderResult result = rebuilder_.reconfigure_and_rebuild();
-      return result.ok ? 0 : result.exitCode;
-    }
-
-    if (kind == DevChangeKind::RebuildOnly)
-    {
-      const DevRebuilderResult result = rebuilder_.rebuild();
-      return result.ok ? 0 : result.exitCode;
-    }
-
-    return 0;
+    return result;
+#endif
   }
 
   std::optional<fs::path> DevSession::executable_path() const
@@ -715,7 +743,78 @@ namespace vix::commands::RunCommand::dev
 #endif
 
 #ifndef _WIN32
-  int DevSession::run_child_once(const fs::path &exePath)
+  [[noreturn]] void DevSession::exec_child_process(const fs::path &exePath) const
+  {
+    const std::string runCwd = options_.runOptions.cwd.empty()
+                                   ? options_.projectDir.string()
+                                   : detail::normalize_cwd_if_needed(options_.runOptions.cwd);
+
+    if (::chdir(runCwd.c_str()) != 0)
+    {
+      std::cerr << "[vix][run] chdir failed: " << std::strerror(errno) << "\n";
+      _exit(127);
+    }
+
+    if (::setenv("VIX_STDOUT_MODE", "line", 1) != 0)
+    {
+      std::cerr << "[vix][run] setenv VIX_STDOUT_MODE failed: " << std::strerror(errno) << "\n";
+      _exit(127);
+    }
+
+    if (::setenv("VIX_MODE", "dev", 1) != 0)
+    {
+      std::cerr << "[vix][run] setenv VIX_MODE failed: " << std::strerror(errno) << "\n";
+      _exit(127);
+    }
+
+    if (options_.runOptions.withMySql)
+    {
+      ::setenv("VIX_DB_ENGINE", "mysql", 1);
+      ::setenv("VIX_ENABLE_DB", "1", 1);
+      ::setenv("VIX_DB_USE_MYSQL", "1", 1);
+    }
+
+    if (options_.runOptions.withSqlite)
+    {
+      ::setenv("VIX_DB_ENGINE", "sqlite", 1);
+      ::setenv("VIX_ENABLE_DB", "1", 1);
+      ::setenv("VIX_DB_USE_SQLITE", "1", 1);
+    }
+
+    detail::apply_sanitizer_env_if_needed(
+        options_.runOptions.enableSanitizers,
+        options_.runOptions.enableUbsanOnly,
+        options_.runOptions.enableThreadSanitizer);
+
+    std::vector<std::string> argvStr;
+    argvStr.push_back(exePath.string());
+
+    for (const auto &arg : options_.runOptions.runArgs)
+    {
+      if (!arg.empty())
+        argvStr.push_back(arg);
+    }
+
+    std::vector<char *> argv;
+    argv.reserve(argvStr.size() + 1);
+
+    for (auto &arg : argvStr)
+      argv.push_back(const_cast<char *>(arg.c_str()));
+
+    argv.push_back(nullptr);
+
+    ::execv(argv[0], argv.data());
+
+    std::cerr << "[vix][run] execv failed: " << std::strerror(errno) << "\n";
+    _exit(127);
+  }
+#endif
+
+#ifndef _WIN32
+  vix::async::core::task<DevChildRunResult> DevSession::run_child_once_async(
+      vix::async::core::io_context &ctx,
+      const fs::path &exePath,
+      vix::async::core::cancel_token ct)
   {
     using Clock = std::chrono::steady_clock;
 
@@ -725,140 +824,49 @@ namespace vix::commands::RunCommand::dev
     if (pid < 0)
     {
       error("Failed to fork() for dev process.");
-      return 1;
+      co_return 1;
     }
 
     if (pid == 0)
     {
-      const std::string runCwd = options_.runOptions.cwd.empty()
-                                     ? options_.projectDir.string()
-                                     : detail::normalize_cwd_if_needed(options_.runOptions.cwd);
-
-      if (::chdir(runCwd.c_str()) != 0)
-      {
-        std::cerr << "[vix][run] chdir failed: " << std::strerror(errno) << "\n";
-        _exit(127);
-      }
-
-      if (::setenv("VIX_STDOUT_MODE", "line", 1) != 0)
-      {
-        std::cerr << "[vix][run] setenv VIX_STDOUT_MODE failed: " << std::strerror(errno) << "\n";
-        _exit(127);
-      }
-
-      if (::setenv("VIX_MODE", "dev", 1) != 0)
-      {
-        std::cerr << "[vix][run] setenv VIX_MODE failed: " << std::strerror(errno) << "\n";
-        _exit(127);
-      }
-
-      if (options_.runOptions.withMySql)
-      {
-        ::setenv("VIX_DB_ENGINE", "mysql", 1);
-        ::setenv("VIX_ENABLE_DB", "1", 1);
-        ::setenv("VIX_DB_USE_MYSQL", "1", 1);
-      }
-
-      if (options_.runOptions.withSqlite)
-      {
-        ::setenv("VIX_DB_ENGINE", "sqlite", 1);
-        ::setenv("VIX_ENABLE_DB", "1", 1);
-        ::setenv("VIX_DB_USE_SQLITE", "1", 1);
-      }
-
-      detail::apply_sanitizer_env_if_needed(
-          options_.runOptions.enableSanitizers,
-          options_.runOptions.enableUbsanOnly,
-          options_.runOptions.enableThreadSanitizer);
-
-      std::vector<std::string> argvStr;
-      argvStr.push_back(exePath.string());
-
-      for (const auto &arg : options_.runOptions.runArgs)
-      {
-        if (!arg.empty())
-          argvStr.push_back(arg);
-      }
-
-      std::vector<char *> argv;
-      argv.reserve(argvStr.size() + 1);
-
-      for (auto &arg : argvStr)
-        argv.push_back(const_cast<char *>(arg.c_str()));
-
-      argv.push_back(nullptr);
-
-      ::execv(argv[0], argv.data());
-
-      std::cerr << "[vix][run] execv failed: " << std::strerror(errno) << "\n";
-      _exit(127);
+      exec_child_process(exePath);
     }
-
-    bool needRestart = false;
-    bool running = true;
 
     if (!options_.quiet)
       print_dev_started(static_cast<int>(pid));
 
-    while (running)
+    while (!ct.is_cancelled())
     {
-      std::this_thread::sleep_for(options_.pollInterval);
+      co_await sleep_poll_interval(ctx, ct);
 
       std::vector<DevIndexedChange> indexedChanges = fileIndex_.poll_changes();
 
       if (!indexedChanges.empty())
       {
-        std::this_thread::sleep_for(options_.debounceDelay);
+        co_await sleep_debounce_delay(ctx, ct);
 
-        DevChangeKind kind = DevChangeKind::Ignore;
-        DevIndexedChange selected{};
+        std::vector<DevIndexedChange> debouncedChanges = fileIndex_.poll_changes();
 
-        for (const auto &change : indexedChanges)
-        {
-          if (!change.valid())
-            continue;
+        if (debouncedChanges.empty())
+          debouncedChanges = std::move(indexedChanges);
 
-          if (change.kind == DevChangeKind::ReconfigureAndRebuild)
-          {
-            selected = change;
-            kind = DevChangeKind::ReconfigureAndRebuild;
-            break;
-          }
-
-          if (!selected.valid())
-          {
-            selected = change;
-            kind = change.kind;
-          }
-        }
+        DevIndexedChange selected =
+            select_relevant_indexed_change(debouncedChanges);
 
         if (!selected.valid())
           continue;
 
-        if (!options_.quiet)
-        {
-          clear_dev_screen();
+        print_reload_for_change(selected);
+        pendingChangeKind_ = selected.kind;
 
-          std::cout << CYAN << BOLD << "Dev " << RESET
-                    << CYAN << BOLD << options_.targetName << RESET
-                    << GRAY << " (dev)" << RESET
-                    << "\n";
+        co_await terminate_and_wait_child_async(
+            ctx,
+            static_cast<int>(pid),
+            ct);
 
-          std::cout << "  "
-                    << GRAY << "changed: " << RESET
-                    << selected.path.string()
-                    << "\n";
-        }
-
-        pendingChangeKind_ = kind;
-
-        needRestart = true;
-        stop_child(pid);
-
-        int status = 0;
-        (void)::waitpid(pid, &status, 0);
-
-        return 0;
+        co_return DevChildRunResult{
+            0,
+            DevChildExitReason::RestartRequested};
       }
 
       int status = 0;
@@ -866,8 +874,6 @@ namespace vix::commands::RunCommand::dev
 
       if (r == pid)
       {
-        running = false;
-
         const auto childEnd = Clock::now();
         const auto ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -881,53 +887,96 @@ namespace vix::commands::RunCommand::dev
         else if (WIFSIGNALED(status))
           exitCode = 128 + WTERMSIG(status);
 
-        if (!needRestart)
+        if (exitCode != 0)
         {
-          if (exitCode != 0)
-          {
-            error("Dev server exited with code " +
-                  std::to_string(exitCode) +
-                  " (lifetime ~" + std::to_string(ms) + "ms).");
-          }
-          else
-          {
-            success("Dev server stopped cleanly (lifetime ~" +
-                    std::to_string(ms) + "ms).");
-          }
-
-          return exitCode;
+          error("Dev server exited with code " +
+                std::to_string(exitCode) +
+                " (lifetime ~" + std::to_string(ms) + "ms).");
         }
+        else
+        {
+          success("Dev server stopped cleanly (lifetime ~" +
+                  std::to_string(ms) + "ms).");
+        }
+
+        co_return DevChildRunResult{
+            exitCode,
+            DevChildExitReason::Exited};
       }
     }
 
-    return 0;
+    co_await terminate_and_wait_child_async(
+        ctx,
+        static_cast<int>(pid),
+        ct);
+
+    co_return DevChildRunResult{
+        130,
+        DevChildExitReason::Cancelled};
   }
 
-  void DevSession::stop_child(int pid) const
+  vix::async::core::task<void> DevSession::terminate_and_wait_child_async(
+      vix::async::core::io_context &ctx,
+      int pid,
+      vix::async::core::cancel_token ct) const
   {
     if (pid <= 0)
-      return;
+      co_return;
 
-    if (::kill(pid, SIGINT) != 0)
+    const pid_t child = static_cast<pid_t>(pid);
+    int status = 0;
+
+    auto wait_for_exit =
+        [&](std::chrono::milliseconds timeout) -> vix::async::core::task<bool>
     {
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+      while (std::chrono::steady_clock::now() < deadline)
+      {
+        if (wait_child_nonblocking(child, status))
+          co_return true;
+
+        if (ct.is_cancelled())
+          co_return false;
+
+        co_await ctx.timers().sleep_for(
+            std::chrono::milliseconds(20),
+            ct);
+      }
+
+      co_return wait_child_nonblocking(child, status);
+    };
+
+    if (::kill(child, SIGINT) == 0)
+    {
+      if (co_await wait_for_exit(std::chrono::milliseconds(800)))
+        co_return;
     }
+
+    if (::kill(child, SIGTERM) == 0)
+    {
+      if (co_await wait_for_exit(std::chrono::milliseconds(800)))
+        co_return;
+    }
+
+    if (::kill(child, SIGKILL) == 0)
+    {
+      while (true)
+      {
+        const pid_t r = ::waitpid(child, &status, 0);
+
+        if (r == child)
+          co_return;
+
+        if (r < 0 && errno == EINTR)
+          continue;
+
+        co_return;
+      }
+    }
+
+    co_return;
   }
 #endif
-
-  bool DevSession::should_skip_directory(const fs::path &path) const
-  {
-    const std::string name = path.filename().string();
-
-    return name == ".git" ||
-           name == ".vix" ||
-           name == "build" ||
-           name == "build-dev" ||
-           name == "build-ninja" ||
-           name == "build-release" ||
-           name == "node_modules" ||
-           name == ".cache" ||
-           name == ".idea" ||
-           name == ".vscode";
-  }
 
 } // namespace vix::commands::RunCommand::dev

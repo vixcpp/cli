@@ -32,6 +32,32 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VIX_ENABLE_LTO "Enable LTO in Release builds" OFF)
 
+# ----------------------------------------------------
+# CLI test isolation
+# ----------------------------------------------------
+option(VIX_CLI_BUILD_TESTS "Build Vix CLI tests" OFF)
+
+if (VIX_CLI_BUILD_TESTS)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+
+  set(ASYNC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(ASYNC_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+  set(TEMPLATE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(TEMPLATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(TEMPLATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+
+  set(VIX_UTILS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_JSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_CORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_NET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_CRYPTO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_SYNC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_CACHE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_P2P_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_AGENT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+endif()
+
 file(GLOB_RECURSE CLI_SOURCES
   CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
@@ -395,6 +421,15 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   install(TARGETS vix_cli
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   )
+endif()
+
+# ----------------------------------------------------
+# Tests
+# ----------------------------------------------------
+if (VIX_CLI_BUILD_TESTS)
+  set(BUILD_TESTING ON CACHE BOOL "" FORCE)
+  enable_testing()
+  add_subdirectory(tests)
 endif()
 
 message(STATUS "CLI module configured.")

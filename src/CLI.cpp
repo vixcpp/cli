@@ -50,6 +50,7 @@
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
+#include <vix/cli/commands/GameExportCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -285,6 +286,8 @@ namespace vix
     { return commands::TaskCommand::run(args); };
     commands_["agent"] = [](auto args)
     { return commands::AgentCommand::run(args); };
+    commands_["game"] = [](auto args)
+    { return commands::GameCommand::run(args); };
 
     commands_["-h"] = [this](auto args)
     { return help(args); };
@@ -509,6 +512,8 @@ namespace vix
         return commands::TaskCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
+      if (cmd == "game")
+        return commands::GameCommand::help();
 
       if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
         return commands::MakeCommand::help();
@@ -655,6 +660,7 @@ namespace vix
     out << indent(2) << "Runtime and advanced:\n";
     docs("/cli/commands");
     out << indent(3) << "agent              Run local AI agent commands\n";
+    out << indent(3) << "game               Export and manage Vix game projects\n";
     out << indent(3) << "p2p                Run P2P node/tools\n";
     out << indent(3) << "orm                Database migrations/status/rollback\n\n";
 
@@ -684,6 +690,7 @@ namespace vix
     out << indent(2) << "vix make:class User\n";
     out << indent(2) << "vix add @cnerium/app\n";
     out << indent(2) << "vix install\n";
+    out << indent(2) << "vix game export\n";
     out << indent(2) << "vix agent ask \"Explain Vix.cpp\" --model qwen2.5-coder:1.5b --timeout 120000\n";
     out << indent(2) << "vix help run\n\n";
 

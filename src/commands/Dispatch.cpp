@@ -49,6 +49,7 @@
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
+#include <vix/cli/commands/GameExportCommand.hpp>
 
 #include <stdexcept>
 
@@ -117,6 +118,14 @@ namespace vix::cli::dispatch
          { return vix::commands::AgentCommand::run(a); },
          []()
          { return vix::commands::AgentCommand::help(); }});
+
+    add({"game",
+         "Game",
+         "Export and manage Vix game projects",
+         [](const Args &a)
+         { return vix::commands::GameCommand::run(a); },
+         []()
+         { return vix::commands::GameCommand::help(); }});
 
     add({"check",
          "Project",

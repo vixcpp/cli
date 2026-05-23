@@ -49,6 +49,7 @@
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
 #include <vix/cli/commands/ServiceCommand.hpp>
+#include <vix/cli/commands/ProxyCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 
@@ -215,6 +216,14 @@ namespace vix::cli::dispatch
          { return vix::commands::ServiceCommand::run(a); },
          []()
          { return vix::commands::ServiceCommand::help(); }});
+
+    add({"proxy",
+         "Project",
+         "Generate and validate reverse proxy configs",
+         [](const Args &a)
+         { return vix::commands::ProxyCommand::run(a); },
+         []()
+         { return vix::commands::ProxyCommand::help(); }});
 
     // Packaging & security
     add({"pack",

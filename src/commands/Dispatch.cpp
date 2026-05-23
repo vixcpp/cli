@@ -51,6 +51,7 @@
 #include <vix/cli/commands/ServiceCommand.hpp>
 #include <vix/cli/commands/ProxyCommand.hpp>
 #include <vix/cli/commands/HealthCommand.hpp>
+#include <vix/cli/commands/DeployCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 
@@ -233,6 +234,14 @@ namespace vix::cli::dispatch
          { return vix::commands::HealthCommand::run(a); },
          []()
          { return vix::commands::HealthCommand::help(); }});
+
+    add({"deploy",
+         "Project",
+         "Run the production deployment workflow",
+         [](const Args &a)
+         { return vix::commands::DeployCommand::run(a); },
+         []()
+         { return vix::commands::DeployCommand::help(); }});
 
     // Packaging & security
     add({"pack",

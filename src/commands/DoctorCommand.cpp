@@ -402,6 +402,7 @@ namespace vix::commands
     {
       bool jsonOut = false;
       bool online = false;
+      bool production = false;
       std::string repo = "vixcpp/vix";
     };
 
@@ -413,6 +414,11 @@ namespace vix::commands
       for (size_t i = 0; i < args.size(); ++i)
       {
         const auto &a = args[i];
+        if (a == "production")
+        {
+          o.production = true;
+          continue;
+        }
         if (a == "--json")
         {
           o.jsonOut = true;
@@ -472,6 +478,421 @@ namespace vix::commands
 #endif
     }
 
+    std::string shell_quote(const std::string &s)
+    {
+#ifdef _WIN32
+      return "\"" + s + "\"";
+#else
+      std::string out = "'";
+      for (char c : s)
+      {
+        if (c == '\'')
+          out += "'\\''";
+        else
+          out += c;
+      }
+      out += "'";
+      return out;
+#endif
+    }
+
+    std::string lower_copy(std::string s)
+    {
+      std::transform(
+          s.begin(),
+          s.end(),
+          s.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return s;
+    }
+
+    std::optional<std::string> read_project_name()
+    {
+      const fs::path vixJson = fs::current_path() / "vix.json";
+
+      if (fs::exists(vixJson))
+      {
+        try
+        {
+          const auto j = read_json_or_throw(vixJson);
+
+          if (j.is_object() && j.contains("name") && j["name"].is_string())
+          {
+            const std::string name = trim_copy(j["name"].get<std::string>());
+
+            if (!name.empty())
+              return name;
+          }
+        }
+        catch (...)
+        {
+        }
+      }
+
+      for (const auto &entry : fs::directory_iterator(fs::current_path()))
+      {
+        if (!entry.is_regular_file())
+          continue;
+
+        const auto p = entry.path();
+
+        if (p.extension() == ".vix")
+        {
+          return p.stem().string();
+        }
+      }
+
+      const auto current = fs::current_path().filename().string();
+
+      if (!current.empty())
+        return current;
+
+      return std::nullopt;
+    }
+
+    std::optional<fs::path> detect_build_dir()
+    {
+      const std::vector<fs::path> candidates = {
+          fs::current_path() / "build-ninja",
+          fs::current_path() / "build-release",
+          fs::current_path() / "build",
+          fs::current_path() / "cmake-build-debug",
+          fs::current_path() / "cmake-build-release"};
+
+      for (const auto &candidate : candidates)
+      {
+        if (fs::exists(candidate) && fs::is_directory(candidate))
+          return candidate;
+      }
+
+      return std::nullopt;
+    }
+
+    std::optional<fs::path> detect_binary_path(const std::string &projectName)
+    {
+      const auto buildDir = detect_build_dir();
+
+      if (!buildDir)
+        return std::nullopt;
+
+#ifdef _WIN32
+      const auto exe = *buildDir / (projectName + ".exe");
+#else
+      const auto exe = *buildDir / projectName;
+#endif
+
+      if (fs::exists(exe))
+        return exe;
+
+      for (const auto &entry : fs::recursive_directory_iterator(*buildDir))
+      {
+        if (!entry.is_regular_file())
+          continue;
+
+#ifdef _WIN32
+        if (entry.path().filename() == projectName + ".exe")
+          return entry.path();
+#else
+        if (entry.path().filename() == projectName)
+          return entry.path();
+#endif
+      }
+
+      return exe;
+    }
+
+#ifndef _WIN32
+    bool process_running_for_binary(const fs::path &binary)
+    {
+      if (binary.empty())
+        return false;
+
+      const std::string cmd =
+          "pgrep -f " + shell_quote(binary.string()) + " >/dev/null 2>&1";
+
+      return std::system(cmd.c_str()) == 0;
+    }
+
+    std::optional<std::string> detect_systemd_service(const std::string &projectName)
+    {
+      const std::string lower = lower_copy(projectName);
+
+      auto out = run_capture(
+          "systemctl list-units --type=service --all --no-legend 2>/dev/null | "
+          "awk '{print $1}' | grep -i " +
+          shell_quote(lower) +
+          " | head -1");
+
+      if (out && !trim_copy(*out).empty())
+        return trim_copy(*out);
+
+      return lower + ".service";
+    }
+
+    std::optional<std::string> systemctl_property(
+        const std::string &service,
+        const std::string &property)
+    {
+      auto out = run_capture(
+          "systemctl show " +
+          shell_quote(service) +
+          " -p " +
+          shell_quote(property) +
+          " --value 2>/dev/null");
+
+      if (!out)
+        return std::nullopt;
+
+      const auto value = trim_copy(*out);
+
+      if (value.empty())
+        return std::nullopt;
+
+      return value;
+    }
+
+    bool systemd_service_exists(const std::string &service)
+    {
+      const std::string cmd =
+          "systemctl status " + shell_quote(service) + " >/dev/null 2>&1";
+
+      return std::system(cmd.c_str()) == 0;
+    }
+
+    std::optional<std::string> detect_listening_port_for_binary(const fs::path &binary)
+    {
+      if (binary.empty() || !have_cmd("ss"))
+        return std::nullopt;
+
+      auto out = run_capture(
+          "ss -tulpn 2>/dev/null | grep " +
+          shell_quote(binary.filename().string()) +
+          " | head -1");
+
+      if (!out)
+        return std::nullopt;
+
+      const std::string line = *out;
+      const auto colon = line.find(':');
+
+      if (colon == std::string::npos)
+        return std::nullopt;
+
+      std::size_t start = colon + 1;
+      std::size_t end = start;
+
+      while (end < line.size() && std::isdigit(static_cast<unsigned char>(line[end])))
+        ++end;
+
+      if (end == start)
+        return std::nullopt;
+
+      return line.substr(start, end - start);
+    }
+
+    std::optional<std::string> detect_nginx_domain(const std::string &projectName)
+    {
+      const std::string lower = lower_copy(projectName);
+
+      auto out = run_capture(
+          "grep -R \"server_name\" /etc/nginx/sites-available /etc/nginx/sites-enabled "
+          "2>/dev/null | grep -i " +
+          shell_quote(lower) +
+          " | head -1");
+
+      if (!out)
+        return std::nullopt;
+
+      const std::string line = *out;
+      const std::string key = "server_name";
+      const auto pos = line.find(key);
+
+      if (pos == std::string::npos)
+        return std::nullopt;
+
+      std::string value = trim_copy(line.substr(pos + key.size()));
+
+      if (!value.empty() && value.back() == ';')
+        value.pop_back();
+
+      return trim_copy(value);
+    }
+
+    bool nginx_config_exists_for_project(const std::string &projectName)
+    {
+      const std::string lower = lower_copy(projectName);
+
+      const std::string cmd =
+          "grep -R " +
+          shell_quote(lower) +
+          " /etc/nginx/sites-available /etc/nginx/sites-enabled >/dev/null 2>&1";
+
+      return std::system(cmd.c_str()) == 0;
+    }
+
+    bool tls_config_exists_for_domain(const std::string &domain)
+    {
+      if (domain.empty())
+        return false;
+
+      const fs::path cert =
+          fs::path("/etc/letsencrypt/live") / domain / "fullchain.pem";
+
+      return fs::exists(cert);
+    }
+
+    bool local_health_ok(const std::string &port)
+    {
+      if (port.empty())
+        return false;
+
+      if (!have_cmd("curl"))
+        return false;
+
+      const std::string cmd =
+          "curl -fsS --max-time 3 http://127.0.0.1:" + port + "/ >/dev/null 2>&1";
+
+      return std::system(cmd.c_str()) == 0;
+    }
+
+    bool public_health_ok(const std::string &domain)
+    {
+      if (domain.empty())
+        return false;
+
+      if (!have_cmd("curl"))
+        return false;
+
+      const std::string cmd =
+          "curl -fsS --max-time 5 https://" + domain + "/ >/dev/null 2>&1";
+
+      return std::system(cmd.c_str()) == 0;
+    }
+
+    int run_production_doctor(bool jsonOut)
+    {
+      vix::cli::util::section(std::cout, "Production Doctor");
+
+      const auto projectName = read_project_name().value_or("unknown");
+      const auto buildDir = detect_build_dir();
+      const auto binary = detect_binary_path(projectName);
+
+      const auto service = detect_systemd_service(projectName);
+      const bool serviceExists = service && systemd_service_exists(*service);
+
+      const auto serviceStatus =
+          serviceExists ? systemctl_property(*service, "ActiveState") : std::nullopt;
+
+      const auto restartPolicy =
+          serviceExists ? systemctl_property(*service, "Restart") : std::nullopt;
+
+      const auto workingDir =
+          serviceExists ? systemctl_property(*service, "WorkingDirectory") : std::nullopt;
+
+      const bool binaryExists = binary && fs::exists(*binary);
+      const bool running = binaryExists && process_running_for_binary(*binary);
+
+      const auto port =
+          binaryExists ? detect_listening_port_for_binary(*binary) : std::nullopt;
+
+      const bool nginxExists = nginx_config_exists_for_project(projectName);
+      const auto domain = detect_nginx_domain(projectName);
+      const bool tls = domain && tls_config_exists_for_domain(*domain);
+
+      const bool localHealth = port && local_health_ok(*port);
+      const bool publicHealth = domain && public_health_ok(*domain);
+
+      vix::cli::util::kv(std::cout, "App", projectName);
+      vix::cli::util::kv(std::cout, "Status", running ? "running" : "not running");
+      vix::cli::util::kv(std::cout, "Build dir", buildDir ? buildDir->string() : "not found");
+      vix::cli::util::kv(std::cout, "Binary", binary ? binary->string() : "not found");
+      vix::cli::util::kv(std::cout, "Binary exists", binaryExists ? "yes" : "no");
+      vix::cli::util::kv(std::cout, "Service", service ? *service : "not found");
+      vix::cli::util::kv(std::cout, "Service status", serviceStatus.value_or("unknown"));
+      vix::cli::util::kv(std::cout, "Restart policy", restartPolicy.value_or("unknown"));
+      vix::cli::util::kv(std::cout, "Working directory", workingDir.value_or("unknown"));
+      vix::cli::util::kv(std::cout, "HTTP port", port.value_or("unknown"));
+      vix::cli::util::kv(std::cout, "Proxy", nginxExists ? "nginx" : "not found");
+      vix::cli::util::kv(std::cout, "Public URL", domain ? "https://" + *domain : "unknown");
+      vix::cli::util::kv(std::cout, "TLS", tls ? "enabled" : "unknown");
+      vix::cli::util::kv(std::cout, "Local health", localHealth ? "ok" : "unknown");
+      vix::cli::util::kv(std::cout, "Public health", publicHealth ? "ok" : "unknown");
+
+      int rc = 0;
+
+      if (!buildDir)
+      {
+        rc = 1;
+        vix::cli::util::warn_line(std::cerr, "Fix: run `vix build` to create a build directory.");
+      }
+
+      if (!binaryExists)
+      {
+        rc = 1;
+        vix::cli::util::warn_line(std::cerr, "Fix: build the project and verify the executable name.");
+      }
+
+      if (!running)
+      {
+        rc = 1;
+        vix::cli::util::warn_line(std::cerr, "Fix: start the app or install a systemd service.");
+      }
+
+      if (!serviceExists)
+      {
+        rc = 1;
+        vix::cli::util::warn_line(std::cerr, "Fix: create a systemd service for this app.");
+      }
+
+      if (!nginxExists)
+      {
+        rc = 1;
+        vix::cli::util::warn_line(std::cerr, "Fix: create an Nginx reverse proxy config.");
+      }
+
+      if (domain && !tls)
+      {
+        rc = 1;
+        vix::cli::util::warn_line(std::cerr, "Fix: enable TLS with Let's Encrypt for " + *domain + ".");
+      }
+
+      if (jsonOut)
+      {
+        json out;
+        out["app"] = projectName;
+        out["running"] = running;
+        out["build_dir"] = buildDir ? buildDir->string() : "";
+        out["binary"] = binary ? binary->string() : "";
+        out["binary_exists"] = binaryExists;
+        out["service"] = service ? *service : "";
+        out["service_exists"] = serviceExists;
+        out["service_status"] = serviceStatus.value_or("");
+        out["restart_policy"] = restartPolicy.value_or("");
+        out["working_directory"] = workingDir.value_or("");
+        out["http_port"] = port.value_or("");
+        out["proxy"] = nginxExists ? "nginx" : "";
+        out["domain"] = domain.value_or("");
+        out["tls"] = tls;
+        out["local_health"] = localHealth;
+        out["public_health"] = publicHealth;
+
+        std::cout << "\n"
+                  << out.dump(2) << "\n";
+      }
+
+      if (rc == 0)
+        vix::cli::util::ok_line(std::cout, "production doctor: ok");
+      else
+        vix::cli::util::warn_line(std::cerr, "production doctor: issues detected");
+
+      return rc;
+    }
+#endif
+
   } // namespace
 
   int DoctorCommand::run(const std::vector<std::string> &args)
@@ -489,6 +910,19 @@ namespace vix::commands
       vix::cli::util::warn_line(std::cerr, "Tip: vix doctor --help");
       return 1;
     }
+
+#ifndef _WIN32
+    if (opt.production)
+    {
+      return run_production_doctor(opt.jsonOut);
+    }
+#else
+    if (opt.production)
+    {
+      vix::cli::util::err_line(std::cerr, "vix doctor production is currently supported on Linux only.");
+      return 1;
+    }
+#endif
 
     const fs::path exe = current_exe_path();
     fs::path realExe = exe;
@@ -679,15 +1113,19 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix doctor [options]\n\n"
+        << "  vix doctor [options]\n"
+        << "  vix doctor production [options]\n\n"
         << "Description:\n"
-        << "  Check local environment for running and upgrading Vix.\n\n"
+        << "  Check local environment for running and upgrading Vix.\n"
+        << "  Check production state for a deployed Vix app.\n\n"
         << "Options:\n"
         << "  --json                 Print a JSON summary at the end\n"
         << "  --online               Also check latest release on GitHub\n"
         << "  --repo <owner/name>    Repo to check when using --online (default: vixcpp/vix)\n\n"
         << "Examples:\n"
         << "  vix doctor\n"
+        << "  vix doctor production\n"
+        << "  vix doctor production --json\n"
         << "  vix doctor --online\n"
         << "  vix doctor --online --repo vixcpp/vix\n"
         << "  vix doctor --json --online\n";

@@ -51,6 +51,7 @@
 #include <vix/cli/commands/TaskCommand.hpp>
 #include <vix/cli/commands/ServiceCommand.hpp>
 #include <vix/cli/commands/ProxyCommand.hpp>
+#include <vix/cli/commands/HealthCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 #include <vix/utils/Env.hpp>
@@ -290,6 +291,8 @@ namespace vix
     { return commands::ServiceCommand::run(args); };
     commands_["proxy"] = [](auto args)
     { return commands::ProxyCommand::run(args); };
+    commands_["health"] = [](auto args)
+    { return commands::HealthCommand::run(args); };
     commands_["agent"] = [](auto args)
     { return commands::AgentCommand::run(args); };
     commands_["game"] = [](auto args)
@@ -520,6 +523,8 @@ namespace vix
         return commands::ServiceCommand::help();
       if (cmd == "proxy")
         return commands::ProxyCommand::help();
+      if (cmd == "health")
+        return commands::HealthCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
       if (cmd == "game")
@@ -644,6 +649,7 @@ namespace vix
     out << indent(3) << "task               Run reusable project tasks\n";
     out << indent(3) << "service            Install and manage a production systemd service\n";
     out << indent(3) << "proxy              Generate and validate reverse proxy configs\n";
+    out << indent(3) << "health             Check local, public and WebSocket app health\n";
     out << indent(3) << "modules            Manage optional project modules\n\n";
 
     out << indent(2) << "Registry and dependencies:\n";

@@ -22,9 +22,9 @@ namespace vix::commands::health::output
 {
   namespace
   {
-    std::string enabled_disabled(bool value)
+    std::string yes_no(bool value)
     {
-      return value ? "enabled" : "disabled";
+      return value ? "yes" : "no";
     }
 
     std::string status_text(const HealthResult &result)
@@ -66,7 +66,7 @@ namespace vix::commands::health::output
     vix::cli::util::kv(out, "Status", status_text(result));
     vix::cli::util::kv(out, "Time", time_text(result));
     vix::cli::util::kv(out, "Max time", std::to_string(result.maxResponseMs) + " ms");
-    vix::cli::util::kv(out, "Healthy", enabled_disabled(result.healthy));
+    vix::cli::util::kv(out, "Healthy", yes_no(result.healthy));
 
     if (!result.error.empty())
       vix::cli::util::kv(out, "Error", result.error);

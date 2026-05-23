@@ -32,6 +32,17 @@ namespace vix::commands::health::checker
       return std::system(cmd.c_str()) == 0;
     }
 
+    std::string websocket_http_url(std::string url)
+    {
+      if (url.rfind("wss://", 0) == 0)
+        return "https://" + url.substr(6);
+
+      if (url.rfind("ws://", 0) == 0)
+        return "http://" + url.substr(5);
+
+      return url;
+    }
+
     bool service_is_running(const HealthConfig &cfg)
     {
       if (!cfg.serviceName.has_value())
@@ -71,7 +82,7 @@ namespace vix::commands::health::checker
 
       vix::net::http::ClientRequest request;
       request.set_method(vix::net::http::Method::Head)
-          .set_url(endpoint.url)
+          .set_url(websocket_http_url(endpoint.url))
           .set_timeout_ms(endpoint.timeoutMs);
 
       const auto start = std::chrono::steady_clock::now();
@@ -131,7 +142,7 @@ namespace vix::commands::health::checker
 
       vix::net::http::ClientRequest request;
       request.set_method(vix::net::http::Method::Get)
-          .set_url(endpoint.url)
+          .set_url(websocket_http_url(endpoint.url))
           .set_timeout_ms(endpoint.timeoutMs)
           .set_header("Connection", "Upgrade")
           .set_header("Upgrade", "websocket")

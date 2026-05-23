@@ -141,29 +141,26 @@ namespace vix::commands::health
       return production["health"];
     }
 
-    void apply_common_options(
-        HealthEndpointConfig &endpoint,
-        const json &health)
+    HealthEndpointConfig make_endpoint(
+        const json &health,
+        const std::string &key,
+        int defaultExpectedStatus,
+        bool applyExpectedStatus)
     {
-      if (auto expected = read_int(health, "expected_status"))
-        endpoint.expectedStatus = *expected;
+      HealthEndpointConfig endpoint;
+      endpoint.expectedStatus = defaultExpectedStatus;
+
+      if (applyExpectedStatus)
+      {
+        if (auto expected = read_int(health, "expected_status"))
+          endpoint.expectedStatus = *expected;
+      }
 
       if (auto timeout = read_uint64(health, "timeout_ms"))
         endpoint.timeoutMs = *timeout;
 
       if (auto max = read_uint64(health, "max_response_ms"))
         endpoint.maxResponseMs = *max;
-    }
-
-    HealthEndpointConfig make_endpoint(
-        const json &health,
-        const std::string &key,
-        int defaultExpectedStatus)
-    {
-      HealthEndpointConfig endpoint;
-      endpoint.expectedStatus = defaultExpectedStatus;
-
-      apply_common_options(endpoint, health);
 
       if (auto url = read_string(health, key))
       {
@@ -211,9 +208,9 @@ namespace vix::commands::health
     if (auto service = read_string(health, "service"))
       cfg.serviceName = *service;
 
-    cfg.local = make_endpoint(health, "local", 200);
-    cfg.publicEndpoint = make_endpoint(health, "public", 200);
-    cfg.websocket = make_endpoint(health, "websocket", 101);
+    cfg.local = make_endpoint(health, "local", 200, true);
+    cfg.publicEndpoint = make_endpoint(health, "public", 200, true);
+    cfg.websocket = make_endpoint(health, "websocket", 101, false);
 
     return cfg;
   }

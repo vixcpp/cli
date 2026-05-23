@@ -152,6 +152,7 @@ else()
   set(_VIX_SYNC_DIR     "${_VIX_MODULES_DIR}/sync")
   set(_VIX_CACHE_DIR    "${_VIX_MODULES_DIR}/cache")
   set(_VIX_AGENT_DIR    "${_VIX_MODULES_DIR}/agent")
+  set(_VIX_WEBSOCKET_DIR "${_VIX_MODULES_DIR}/websocket")
 
   set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
@@ -205,6 +206,11 @@ else()
       add_subdirectory("${_VIX_AGENT_DIR}" "${CMAKE_BINARY_DIR}/_vix_ai_agent")
     endif()
 
+    if (EXISTS "${_VIX_WEBSOCKET_DIR}/CMakeLists.txt" AND NOT TARGET vix::websocket)
+      set(VIX_WEBSOCKET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+      add_subdirectory("${_VIX_WEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/_vix_websocket")
+    endif()
+
     if (EXISTS "${_VIX_P2P_DIR}/CMakeLists.txt" AND NOT TARGET vix::p2p)
       add_subdirectory("${_VIX_P2P_DIR}" "${CMAKE_BINARY_DIR}/_vix_p2p")
     endif()
@@ -253,6 +259,10 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ai_agent)
     endif()
 
+    if (TARGET vix::websocket)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::websocket)
+    endif()
+
     if (TARGET vix::p2p)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::p2p)
     endif()
@@ -269,6 +279,7 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_AGENT_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_WEBSOCKET_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
 
     if (_VIX_LOCAL_LINK_TARGETS)
@@ -328,6 +339,17 @@ if (TARGET vix::game)
   target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_GAME=1)
 else()
   message(STATUS "[cli] Game command disabled: vix::game target not found")
+endif()
+
+# ----------------------------------------------------
+# Optional websocket command support
+# ----------------------------------------------------
+if (TARGET vix::websocket)
+  message(STATUS "[cli] WebSocket command enabled")
+  target_link_libraries(vix_cli PRIVATE vix::websocket)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_WEBSOCKET=1)
+else()
+  message(STATUS "[cli] WebSocket command disabled: vix::websocket target not found")
 endif()
 
 if (TARGET vix_warnings)

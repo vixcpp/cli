@@ -37,21 +37,47 @@ namespace vix::cli::errors::runtime
   };
 
   std::unique_ptr<IRuntimeErrorRule> makeThreadJoinableRule();
-  std::unique_ptr<IRuntimeErrorRule> makeSegfaultRule();
-  std::unique_ptr<IRuntimeErrorRule> makeAbortRule();
   std::unique_ptr<IRuntimeErrorRule> makeDataRaceRule();
   std::unique_ptr<IRuntimeErrorRule> makeDeadlockRule();
-  std::unique_ptr<IRuntimeErrorRule> makeMutexMisuseRule();
   std::unique_ptr<IRuntimeErrorRule> makeConditionVariableMisuseRule();
+  std::unique_ptr<IRuntimeErrorRule> makeMutexMisuseRule();
   std::unique_ptr<IRuntimeErrorRule> makeFuturePromiseRule();
   std::unique_ptr<IRuntimeErrorRule> makeThreadCreationFailureRule();
   std::unique_ptr<IRuntimeErrorRule> makeDetachedThreadLifetimeRule();
-  std::unique_ptr<IRuntimeErrorRule> makeIteratorInvalidationRule();
+  std::unique_ptr<IRuntimeErrorRule> makeEmptyContainerFrontBackRule();
   std::unique_ptr<IRuntimeErrorRule> makeOutOfRangeAccessRule();
   std::unique_ptr<IRuntimeErrorRule> makeInvalidIteratorDereferenceRule();
-  std::unique_ptr<IRuntimeErrorRule> makeEmptyContainerFrontBackRule();
+  std::unique_ptr<IRuntimeErrorRule> makeIteratorInvalidationRule();
   std::unique_ptr<IRuntimeErrorRule> makeStringViewDanglingRuntimeRule();
   std::unique_ptr<IRuntimeErrorRule> makeSpanLifetimeRule();
+
+  std::unique_ptr<IRuntimeErrorRule> makeDoubleFreeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeInvalidFreeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeUseAfterFreeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeMemoryLeakRule();
+  std::unique_ptr<IRuntimeErrorRule> makeBufferOverflowRule();
+  std::unique_ptr<IRuntimeErrorRule> makeStackOverflowRule();
+
+  std::unique_ptr<IRuntimeErrorRule> makeNullPointerRule();
+  std::unique_ptr<IRuntimeErrorRule> makeDivisionByZeroRule();
+  std::unique_ptr<IRuntimeErrorRule> makeIntegerOverflowRule();
+  std::unique_ptr<IRuntimeErrorRule> makeUninitializedMemoryRule();
+  std::unique_ptr<IRuntimeErrorRule> makeMisalignedAccessRule();
+  std::unique_ptr<IRuntimeErrorRule> makeInvalidCastRule();
+  std::unique_ptr<IRuntimeErrorRule> makePureVirtualCallRule();
+
+  std::unique_ptr<IRuntimeErrorRule> makeFilesystemRuntimeRule();
+  std::unique_ptr<IRuntimeErrorRule> makePermissionDeniedRule();
+  std::unique_ptr<IRuntimeErrorRule> makeAddressAlreadyInUseRule();
+  std::unique_ptr<IRuntimeErrorRule> makeBrokenPipeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeTimeoutRuntimeRule();
+
+  std::unique_ptr<IRuntimeErrorRule> makeJsonParseRuntimeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeConfigParseRuntimeRule();
+  std::unique_ptr<IRuntimeErrorRule> makeUncaughtExceptionRuntimeRule();
+
+  std::unique_ptr<IRuntimeErrorRule> makeSegfaultRule();
+  std::unique_ptr<IRuntimeErrorRule> makeAbortRule();
 } // namespace vix::cli::errors::runtime
 
 #endif

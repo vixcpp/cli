@@ -347,4 +347,78 @@ namespace vix::cli::errors::runtime
                 << "\n";
     }
   }
+
+  void print_runtime_log_excerpt(
+      const std::string &log,
+      std::size_t maxLines)
+  {
+    if (log.empty() || maxLines == 0)
+      return;
+
+    std::istringstream input(log);
+    std::vector<std::string> lines;
+    std::string line;
+
+    while (std::getline(input, line))
+      lines.push_back(line);
+
+    if (lines.empty())
+      return;
+
+    std::size_t firstInteresting = lines.size();
+
+    for (std::size_t i = 0; i < lines.size(); ++i)
+    {
+      const std::string &current = lines[i];
+
+      const bool interesting =
+          icontains(current, "terminate called") ||
+          icontains(current, "terminate called without an active exception") ||
+          icontains(current, "std::terminate") ||
+          icontains(current, "std::thread") ||
+          icontains(current, "thread::~thread") ||
+          icontains(current, "~thread") ||
+          icontains(current, "what():") ||
+          icontains(current, "Aborted") ||
+          icontains(current, "SIGABRT") ||
+          icontains(current, "core dumped") ||
+          icontains(current, "websocket") ||
+          icontains(current, "LowLevelServer") ||
+          icontains(current, "Session") ||
+          icontains(current, "#");
+
+      if (interesting)
+      {
+        firstInteresting = i;
+        break;
+      }
+    }
+
+    const std::size_t start =
+        firstInteresting == lines.size()
+            ? 0
+            : (firstInteresting >= 2 ? firstInteresting - 2 : 0);
+
+    const std::size_t end =
+        std::min(lines.size(), start + maxLines);
+
+    if (start >= end)
+      return;
+
+    std::cerr << "\n"
+              << RED
+              << "runtime log:"
+              << RESET
+              << "\n";
+
+    for (std::size_t i = start; i < end; ++i)
+    {
+      if (lines[i].empty())
+        continue;
+
+      std::cerr << "  " << lines[i] << "\n";
+    }
+
+    std::cerr << "\n";
+  }
 } // namespace vix::cli::errors::runtime

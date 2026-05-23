@@ -54,6 +54,7 @@
 #include <vix/cli/commands/HealthCommand.hpp>
 #include <vix/cli/commands/DeployCommand.hpp>
 #include <vix/cli/commands/LogsCommand.hpp>
+#include <vix/cli/commands/WsCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 #include <vix/utils/Env.hpp>
@@ -299,6 +300,8 @@ namespace vix
     { return commands::DeployCommand::run(args); };
     commands_["logs"] = [](auto args)
     { return commands::LogsCommand::run(args); };
+    commands_["ws"] = [](auto args)
+    { return commands::WsCommand::run(args); };
     commands_["agent"] = [](auto args)
     { return commands::AgentCommand::run(args); };
     commands_["game"] = [](auto args)
@@ -535,6 +538,8 @@ namespace vix
         return commands::DeployCommand::help();
       if (cmd == "logs")
         return commands::LogsCommand::help();
+      if (cmd == "ws")
+        return commands::WsCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
       if (cmd == "game")
@@ -662,6 +667,7 @@ namespace vix
     out << indent(3) << "health             Check local, public and WebSocket app health\n";
     out << indent(3) << "deploy             Run the production deployment workflow\n";
     out << indent(3) << "logs               Show production app and proxy logs\n";
+    out << indent(3) << "ws                 Check and diagnose WebSocket endpoints\n";
     out << indent(3) << "modules            Manage optional project modules\n\n";
 
     out << indent(2) << "Registry and dependencies:\n";

@@ -1427,6 +1427,39 @@ namespace vix::cli::errors
       rules.push_back(runtime::makeIteratorInvalidationRule());
       rules.push_back(runtime::makeStringViewDanglingRuntimeRule());
       rules.push_back(runtime::makeSpanLifetimeRule());
+
+      // Memory safety
+      rules.push_back(runtime::makeDoubleFreeRule());
+      rules.push_back(runtime::makeInvalidFreeRule());
+      rules.push_back(runtime::makeUseAfterFreeRule());
+      rules.push_back(runtime::makeMemoryLeakRule());
+      rules.push_back(runtime::makeBufferOverflowRule());
+      rules.push_back(runtime::makeStackOverflowRule());
+
+      // Pointer / arithmetic / undefined behavior
+      rules.push_back(runtime::makeNullPointerRule());
+      rules.push_back(runtime::makeDivisionByZeroRule());
+      rules.push_back(runtime::makeIntegerOverflowRule());
+      rules.push_back(runtime::makeUninitializedMemoryRule());
+      rules.push_back(runtime::makeMisalignedAccessRule());
+      rules.push_back(runtime::makeInvalidCastRule());
+      rules.push_back(runtime::makePureVirtualCallRule());
+
+      // Filesystem / OS / I/O / network
+      rules.push_back(runtime::makeFilesystemRuntimeRule());
+      rules.push_back(runtime::makePermissionDeniedRule());
+      rules.push_back(runtime::makeAddressAlreadyInUseRule());
+      rules.push_back(runtime::makeBrokenPipeRule());
+      rules.push_back(runtime::makeTimeoutRuntimeRule());
+
+      // Data / config parsing
+      rules.push_back(runtime::makeJsonParseRuntimeRule());
+      rules.push_back(runtime::makeConfigParseRuntimeRule());
+
+      // Generic exception fallback
+      rules.push_back(runtime::makeUncaughtExceptionRuntimeRule());
+
+      // Last-resort crash/abort fallbacks
       rules.push_back(runtime::makeSegfaultRule());
       rules.push_back(runtime::makeAbortRule());
 

@@ -617,20 +617,41 @@ namespace vix::commands
       return std::system(cmd.c_str()) == 0;
     }
 
-    std::optional<std::string> detect_systemd_service(const std::string &projectName)
+    std::vector<std::string> list_systemd_services()
     {
-      const std::string lower = lower_copy(projectName);
+      std::vector<std::string> services;
 
       auto out = run_capture(
-          "systemctl list-units --type=service --all --no-legend 2>/dev/null | "
-          "awk '{print $1}' | grep -i " +
-          shell_quote(lower) +
-          " | head -1");
+          "systemctl list-unit-files --type=service --no-legend 2>/dev/null | "
+          "awk '{print $1}'");
 
-      if (out && !trim_copy(*out).empty())
-        return trim_copy(*out);
+      if (!out)
+        return services;
 
-      return lower + ".service";
+      std::string current;
+
+      for (char c : *out)
+      {
+        if (c == '\n' || c == '\r')
+        {
+          current = trim_copy(current);
+
+          if (!current.empty())
+            services.push_back(current);
+
+          current.clear();
+          continue;
+        }
+
+        current.push_back(c);
+      }
+
+      current = trim_copy(current);
+
+      if (!current.empty())
+        services.push_back(current);
+
+      return services;
     }
 
     std::optional<std::string> systemctl_property(
@@ -655,12 +676,85 @@ namespace vix::commands
       return value;
     }
 
+    bool service_points_to_project(
+        const std::string &service,
+        const fs::path &projectDir,
+        const std::optional<fs::path> &binary)
+    {
+      const auto workingDir = systemctl_property(service, "WorkingDirectory");
+      const auto execStart = systemctl_property(service, "ExecStart");
+
+      std::error_code ec;
+      const fs::path canonicalProject =
+          fs::weakly_canonical(projectDir, ec);
+
+      if (workingDir && !workingDir->empty())
+      {
+        std::error_code wdEc;
+        const fs::path canonicalWorkingDir =
+            fs::weakly_canonical(fs::path(*workingDir), wdEc);
+
+        if (!wdEc && !ec && canonicalWorkingDir == canonicalProject)
+          return true;
+
+        if (trim_copy(*workingDir) == projectDir.string())
+          return true;
+      }
+
+      if (binary && execStart && !execStart->empty())
+      {
+        const std::string exec = *execStart;
+        const std::string bin = binary->string();
+
+        if (!bin.empty() && exec.find(bin) != std::string::npos)
+          return true;
+
+        if (binary->has_filename())
+        {
+          const std::string filename = binary->filename().string();
+
+          if (!filename.empty() && exec.find(filename) != std::string::npos)
+          {
+            if (workingDir && trim_copy(*workingDir) == projectDir.string())
+              return true;
+          }
+        }
+      }
+
+      return false;
+    }
+
     bool systemd_service_exists(const std::string &service)
     {
       const std::string cmd =
           "systemctl status " + shell_quote(service) + " >/dev/null 2>&1";
 
       return std::system(cmd.c_str()) == 0;
+    }
+
+    std::optional<std::string> detect_systemd_service(
+        const std::string &projectName,
+        const fs::path &projectDir,
+        const std::optional<fs::path> &binary)
+    {
+      const std::string lower = lower_copy(projectName);
+      const std::string exactService = lower + ".service";
+
+      if (systemd_service_exists(exactService) &&
+          service_points_to_project(exactService, projectDir, binary))
+      {
+        return exactService;
+      }
+
+      const auto services = list_systemd_services();
+
+      for (const auto &service : services)
+      {
+        if (service_points_to_project(service, projectDir, binary))
+          return service;
+      }
+
+      return std::nullopt;
     }
 
     std::optional<std::string> detect_listening_port_for_binary(const fs::path &binary)
@@ -781,8 +875,12 @@ namespace vix::commands
       const auto buildDir = detect_build_dir();
       const auto binary = detect_binary_path(projectName);
 
-      const auto service = detect_systemd_service(projectName);
-      const bool serviceExists = service && systemd_service_exists(*service);
+      const auto service = detect_systemd_service(
+          projectName,
+          fs::current_path(),
+          binary);
+
+      const bool serviceExists = service.has_value();
 
       const auto serviceStatus =
           serviceExists ? systemctl_property(*service, "ActiveState") : std::nullopt;

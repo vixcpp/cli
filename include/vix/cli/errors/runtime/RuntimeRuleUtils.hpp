@@ -66,6 +66,10 @@ namespace vix::cli::errors::runtime
   void print_runtime_hints_and_at(
       const std::vector<std::string> &hints,
       const std::string &at);
+
+  void print_runtime_log_excerpt(
+      const std::string &log,
+      std::size_t maxLines = 14);
 } // namespace vix::cli::errors::runtime
 
 #endif

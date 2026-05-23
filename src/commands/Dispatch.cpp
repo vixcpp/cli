@@ -53,6 +53,7 @@
 #include <vix/cli/commands/HealthCommand.hpp>
 #include <vix/cli/commands/DeployCommand.hpp>
 #include <vix/cli/commands/LogsCommand.hpp>
+#include <vix/cli/commands/WsCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 
@@ -251,6 +252,14 @@ namespace vix::cli::dispatch
          { return vix::commands::LogsCommand::run(a); },
          []()
          { return vix::commands::LogsCommand::help(); }});
+
+    add({"ws",
+         "Project",
+         "Check and diagnose WebSocket endpoints",
+         [](const Args &a)
+         { return vix::commands::WsCommand::run(a); },
+         []()
+         { return vix::commands::WsCommand::help(); }});
 
     // Packaging & security
     add({"pack",

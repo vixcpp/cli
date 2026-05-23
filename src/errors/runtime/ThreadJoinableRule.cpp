@@ -35,6 +35,7 @@ namespace vix::cli::errors::runtime
       std::string name;
       int line = 1;
       int column = 1;
+      bool isJThread = false;
     };
 
     std::vector<ThreadDecl> find_thread_declarations(
@@ -42,21 +43,27 @@ namespace vix::cli::errors::runtime
     {
       std::vector<ThreadDecl> decls;
 
-      const std::regex re(R"(\bstd::thread\s+([A-Za-z_]\w*))");
+      const std::regex re(
+          R"(\bstd::(jthread|thread)\s+([A-Za-z_]\w*))");
 
       for (std::size_t i = 0; i < lines.size(); ++i)
       {
         const std::string code = strip_line_comment(lines[i]);
-        std::smatch m;
+        std::smatch match;
 
-        if (std::regex_search(code, m, re))
-        {
-          ThreadDecl d;
-          d.name = m[1].str();
-          d.line = static_cast<int>(i + 1);
-          d.column = static_cast<int>(m.position(1) + 1);
-          decls.push_back(d);
-        }
+        if (!std::regex_search(code, match, re))
+          continue;
+
+        if (match.size() < 3)
+          continue;
+
+        ThreadDecl decl;
+        decl.isJThread = match[1].str() == "jthread";
+        decl.name = match[2].str();
+        decl.line = static_cast<int>(i + 1);
+        decl.column = static_cast<int>(match.position(2) + 1);
+
+        decls.push_back(decl);
       }
 
       return decls;
@@ -101,6 +108,9 @@ namespace vix::cli::errors::runtime
 
       for (const auto &decl : decls)
       {
+        if (decl.isJThread)
+          continue;
+
         if (!has_join_or_detach_after(lines, decl.name, decl.line))
           return decl;
       }
@@ -112,6 +122,45 @@ namespace vix::cli::errors::runtime
     {
       return "call " + decl.name + ".join() or " + decl.name + ".detach() before leaving the scope";
     }
+
+    std::vector<std::string> source_patterns_for_joinable_thread()
+    {
+      return {
+          "std::thread",
+          "thread(",
+          "std::jthread",
+          "jthread(",
+          ".join(",
+          ".join()",
+          ".detach(",
+          ".detach()",
+          "joinable(",
+          ".joinable(",
+          ".joinable()",
+      };
+    }
+
+    bool looks_like_joinable_thread_log(const std::string &log)
+    {
+      const bool terminateWithoutException =
+          icontains(log, "terminate called without an active exception") ||
+          icontains(log, "terminate called without active exception");
+
+      const bool abortSignal =
+          icontains(log, "aborted") ||
+          icontains(log, "sigabrt") ||
+          icontains(log, "core dumped") ||
+          icontains(log, "signal 6");
+
+      const bool threadSignal =
+          icontains(log, "std::thread") ||
+          icontains(log, "thread::~thread") ||
+          icontains(log, "~thread") ||
+          icontains(log, "joinable");
+
+      return terminateWithoutException &&
+             (abortSignal || threadSignal);
+    }
   } // namespace
 
   class ThreadJoinableRule final : public IRuntimeErrorRule
@@ -122,16 +171,7 @@ namespace vix::cli::errors::runtime
         const std::filesystem::path &sourceFile) const override
     {
       (void)sourceFile;
-
-      const bool hasTerminateWithoutException =
-          icontains(log, "terminate called without an active exception");
-
-      const bool hasAbort =
-          icontains(log, "aborted") ||
-          icontains(log, "sigabrt") ||
-          icontains(log, "core dumped");
-
-      return hasTerminateWithoutException && hasAbort;
+      return looks_like_joinable_thread_log(log);
     }
 
     bool handle(
@@ -160,22 +200,26 @@ namespace vix::cli::errors::runtime
         print_runtime_hints_and_at(
             {
                 make_thread_hint(*suspect),
+                "prefer std::jthread for RAII thread shutdown when possible",
             },
             sourceFile.string() + ":" + std::to_string(suspect->line));
+
+        print_runtime_log_excerpt(log, 18);
 
         return true;
       }
 
-      const RuntimeLocation location =
-          find_best_runtime_location_or_source_hint(
-              log,
-              sourceFile,
-              {
-                  "std::thread",
-                  "thread(",
-                  ".join(",
-                  ".detach(",
-              });
+      RuntimeLocation location =
+          find_best_runtime_location(log, sourceFile);
+
+      if (!location.valid())
+      {
+        location =
+            find_best_runtime_location_or_source_hint(
+                log,
+                sourceFile,
+                source_patterns_for_joinable_thread());
+      }
 
       if (location.valid())
       {
@@ -191,8 +235,12 @@ namespace vix::cli::errors::runtime
       print_runtime_hints_and_at(
           {
               "join or detach every started std::thread before it leaves scope",
+              "prefer std::jthread for RAII thread shutdown when possible",
+              "do not ignore the runtime log: std::thread destruction calls std::terminate when the thread is still joinable",
           },
           make_at_text(location, sourceFile));
+
+      print_runtime_log_excerpt(log, 18);
 
       return true;
     }

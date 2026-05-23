@@ -48,6 +48,7 @@
 #include <vix/cli/commands/CleanCommand.hpp>
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
+#include <vix/cli/commands/ServiceCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 
@@ -206,6 +207,14 @@ namespace vix::cli::dispatch
          { return vix::commands::TaskCommand::run(a); },
          []()
          { return vix::commands::TaskCommand::help(); }});
+
+    add({"service",
+         "Project",
+         "Install and manage a production systemd service",
+         [](const Args &a)
+         { return vix::commands::ServiceCommand::run(a); },
+         []()
+         { return vix::commands::ServiceCommand::help(); }});
 
     // Packaging & security
     add({"pack",

@@ -49,6 +49,7 @@
 #include <vix/cli/commands/CleanCommand.hpp>
 #include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/cli/commands/TaskCommand.hpp>
+#include <vix/cli/commands/ServiceCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 #include <vix/utils/Env.hpp>
@@ -284,6 +285,8 @@ namespace vix
     { return commands::ResetCommand::run(args); };
     commands_["task"] = [](auto args)
     { return commands::TaskCommand::run(args); };
+    commands_["service"] = [](auto args)
+    { return commands::ServiceCommand::run(args); };
     commands_["agent"] = [](auto args)
     { return commands::AgentCommand::run(args); };
     commands_["game"] = [](auto args)
@@ -510,6 +513,8 @@ namespace vix
         return commands::ResetCommand::help();
       if (cmd == "task")
         return commands::TaskCommand::help();
+      if (cmd == "service")
+        return commands::ServiceCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
       if (cmd == "game")
@@ -632,6 +637,7 @@ namespace vix
     out << indent(3) << "clean              Remove local cache directories\n";
     out << indent(3) << "reset              Clean cache and reinstall dependencies\n";
     out << indent(3) << "task               Run reusable project tasks\n";
+    out << indent(3) << "service            Install and manage a production systemd service\n";
     out << indent(3) << "modules            Manage optional project modules\n\n";
 
     out << indent(2) << "Registry and dependencies:\n";

@@ -54,6 +54,26 @@ namespace vix::cli::errors::template_rules
   std::unique_ptr<ITemplateErrorRule> makeObjectSlicingRule();
   std::unique_ptr<ITemplateErrorRule> makeBadOverrideRule();
   std::unique_ptr<ITemplateErrorRule> makeInvalidDowncastRule();
+  std::unique_ptr<ITemplateErrorRule> makeAmbiguousOverloadRule();
+  std::unique_ptr<ITemplateErrorRule> makeDeletedFunctionRule();
+  std::unique_ptr<ITemplateErrorRule> makeInaccessibleMemberRule();
+  std::unique_ptr<ITemplateErrorRule> makeIncompleteTypeRule();
+  std::unique_ptr<ITemplateErrorRule> makeNoViableConversionRule();
+  std::unique_ptr<ITemplateErrorRule> makeConstQualifierRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidReferenceBindingRule();
+  std::unique_ptr<ITemplateErrorRule> makeStaticAssertFailureRule();
+  std::unique_ptr<ITemplateErrorRule> makeConstexprEvaluationFailureRule();
+  std::unique_ptr<ITemplateErrorRule> makeCtadFailureRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidInitializerListRule();
+  std::unique_ptr<ITemplateErrorRule> makeNarrowingConversionRule();
+  std::unique_ptr<ITemplateErrorRule> makeMissingBeginEndRule();
+  std::unique_ptr<ITemplateErrorRule> makeOperatorNotFoundRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidTemplateTemplateArgumentRule();
+  std::unique_ptr<ITemplateErrorRule> makeAllocatorValueTypeMismatchRule();
+  std::unique_ptr<ITemplateErrorRule> makeTupleVariantAccessRule();
+  std::unique_ptr<ITemplateErrorRule> makeInvalidUseOfVoidRule();
+  std::unique_ptr<ITemplateErrorRule> makePrivateConstructorRule();
+  std::unique_ptr<ITemplateErrorRule> makeMoveOnlyCopyRule();
 } // namespace vix::cli::errors::template_rules
 
 #endif

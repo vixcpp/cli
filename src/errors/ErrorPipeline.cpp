@@ -22,17 +22,48 @@ namespace vix::cli::errors
   ErrorPipeline::ErrorPipeline()
   {
     // Template-specific compile errors
+
+    // Template parameter / deduction family (most specific first)
     templateRules_.push_back(vix::cli::errors::template_rules::makeDependentTypenameRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoTypeNamedRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeTemplateArgumentMismatchRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidTemplateTemplateArgumentRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeCtadFailureRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeRequiresExpressionFailureRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeConceptConstraintFailureRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoMatchingOverloadWithConstraintsRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeSubstitutionFailureRule());
+
+    // Compile-time evaluation family
+    templateRules_.push_back(vix::cli::errors::template_rules::makeStaticAssertFailureRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeConstexprEvaluationFailureRule());
+
+    // Ownership / access / conversion family (specific before generic)
+    templateRules_.push_back(vix::cli::errors::template_rules::makeMoveOnlyCopyRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeDeletedFunctionRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makePrivateConstructorRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeInaccessibleMemberRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeIncompleteTypeRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeNoViableConversionRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeConstQualifierRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidReferenceBindingRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidInitializerListRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeNarrowingConversionRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeMissingBeginEndRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeAmbiguousOverloadRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeOperatorNotFoundRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeAllocatorValueTypeMismatchRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeTupleVariantAccessRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidUseOfVoidRule());
+
+    // Lifetime / OOP / slicing family
     templateRules_.push_back(vix::cli::errors::template_rules::makeLambdaCaptureLifetimeRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNonVirtualDestructorDeleteRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeObjectSlicingRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeBadOverrideRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidDowncastRule());
+
+    // Coroutines family (always late, very specific signals)
     templateRules_.push_back(vix::cli::errors::template_rules::makeCoroutineReturnTypeRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeMissingCoReturnRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidAwaitableRule());
@@ -40,7 +71,6 @@ namespace vix::cli::errors
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoMemberAwaitSuspendRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoMemberAwaitResumeRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidPromiseTypeRule());
-    templateRules_.push_back(vix::cli::errors::template_rules::makeSubstitutionFailureRule());
 
     // Beginner / syntax / common mistakes
     rules_.push_back(makeCoutNotDeclaredRule());

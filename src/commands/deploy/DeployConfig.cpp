@@ -214,6 +214,12 @@ namespace vix::commands::deploy
     if (auto healthPublic = read_bool(deploy, "health_public"))
       cfg.healthPublic = *healthPublic;
 
+    if (auto proxyCheck = read_bool(deploy, "proxy_check"))
+      cfg.proxyCheck = *proxyCheck;
+
+    if (auto proxyReload = read_bool(deploy, "proxy_reload"))
+      cfg.proxyReload = *proxyReload;
+
     if (auto logs = read_bool(deploy, "logs_on_failure"))
       cfg.logsOnFailure = *logs;
 

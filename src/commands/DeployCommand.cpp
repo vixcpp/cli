@@ -122,6 +122,8 @@ namespace vix::commands
         << "  production.deploy.service\n"
         << "  production.deploy.health_local\n"
         << "  production.deploy.health_public\n"
+        << "  production.deploy.proxy_check\n"
+        << "  production.deploy.proxy_reload\n"
         << "  production.deploy.logs_on_failure\n";
 
     return 0;

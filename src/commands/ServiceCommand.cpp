@@ -12,6 +12,9 @@
  *
  */
 #include <vix/cli/commands/ServiceCommand.hpp>
+#include <vix/net/http/CurlClient.hpp>
+#include <vix/net/http/ClientRequest.hpp>
+#include <vix/net/http/Method.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -69,6 +72,43 @@ namespace vix::commands
           });
 
       return s;
+    }
+
+    struct HealthResult
+    {
+      bool ok{false};
+      int statusCode{0};
+      std::string error;
+    };
+
+    HealthResult run_http_health_check(
+        const std::string &url,
+        std::uint64_t timeoutMs)
+    {
+      HealthResult result;
+
+      vix::net::http::CurlClient client;
+
+      vix::net::http::ClientRequest request;
+      request.set_method(vix::net::http::Method::Get)
+          .set_url(url)
+          .set_timeout_ms(timeoutMs);
+
+      auto response = client.send(request);
+
+      if (!response)
+      {
+        result.error = std::string(response.error().message());
+        return result;
+      }
+
+      result.statusCode = response.value().status_code;
+      result.ok = response.value().success();
+
+      if (!response.value().error.empty())
+        result.error = response.value().error;
+
+      return result;
     }
 
     std::string shell_quote(const std::string &s)
@@ -282,7 +322,113 @@ namespace vix::commands
       int restartSec{3};
       int limitNoFile{65535};
       std::optional<fs::path> vixDir;
+      std::optional<std::string> healthLocal;
+      std::optional<std::string> healthPublic;
+      std::uint64_t healthTimeoutMs{2000};
     };
+
+    ServiceConfig load_service_config();
+
+    int service_health()
+    {
+      const ServiceConfig cfg = load_service_config();
+
+      vix::cli::util::section(std::cout, "Service Health");
+
+      vix::cli::util::kv(std::cout, "Service", cfg.serviceName);
+      vix::cli::util::kv(std::cout, "Timeout", std::to_string(cfg.healthTimeoutMs) + "ms");
+
+      bool ok = true;
+
+      if (cfg.healthLocal)
+      {
+        vix::cli::util::kv(std::cout, "Health local", *cfg.healthLocal);
+
+        const HealthResult result =
+            run_http_health_check(*cfg.healthLocal, cfg.healthTimeoutMs);
+
+        if (result.ok)
+        {
+          vix::cli::util::ok_line(
+              std::cout,
+              "local health check passed: HTTP " + std::to_string(result.statusCode));
+        }
+        else
+        {
+          ok = false;
+
+          vix::cli::util::err_line(
+              std::cerr,
+              "local health check failed");
+
+          if (result.statusCode > 0)
+          {
+            vix::cli::util::warn_line(
+                std::cerr,
+                "HTTP status: " + std::to_string(result.statusCode));
+          }
+
+          if (!result.error.empty())
+          {
+            vix::cli::util::warn_line(
+                std::cerr,
+                result.error);
+          }
+        }
+      }
+
+      if (cfg.healthPublic)
+      {
+        vix::cli::util::kv(std::cout, "Health public", *cfg.healthPublic);
+
+        const HealthResult result =
+            run_http_health_check(*cfg.healthPublic, cfg.healthTimeoutMs);
+
+        if (result.ok)
+        {
+          vix::cli::util::ok_line(
+              std::cout,
+              "public health check passed: HTTP " + std::to_string(result.statusCode));
+        }
+        else
+        {
+          ok = false;
+
+          vix::cli::util::err_line(
+              std::cerr,
+              "public health check failed");
+
+          if (result.statusCode > 0)
+          {
+            vix::cli::util::warn_line(
+                std::cerr,
+                "HTTP status: " + std::to_string(result.statusCode));
+          }
+
+          if (!result.error.empty())
+          {
+            vix::cli::util::warn_line(
+                std::cerr,
+                result.error);
+          }
+        }
+      }
+
+      if (!cfg.healthLocal && !cfg.healthPublic)
+      {
+        vix::cli::util::warn_line(
+            std::cerr,
+            "No health check configured.");
+
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Add production.service.health_local or production.service.health_public to vix.json.");
+
+        return 1;
+      }
+
+      return ok ? 0 : 1;
+    }
 
     ServiceConfig load_service_config()
     {
@@ -316,6 +462,15 @@ namespace vix::commands
 
           if (svc.contains("working_dir") && svc["working_dir"].is_string())
             cfg.workingDir = fs::path(svc["working_dir"].get<std::string>());
+
+          if (svc.contains("health_local") && svc["health_local"].is_string())
+            cfg.healthLocal = svc["health_local"].get<std::string>();
+
+          if (svc.contains("health_public") && svc["health_public"].is_string())
+            cfg.healthPublic = svc["health_public"].get<std::string>();
+
+          if (svc.contains("health_timeout_ms") && svc["health_timeout_ms"].is_number_unsigned())
+            cfg.healthTimeoutMs = svc["health_timeout_ms"].get<std::uint64_t>();
 
           if (svc.contains("exec") && svc["exec"].is_string())
           {
@@ -503,6 +658,9 @@ namespace vix::commands
     if (action == "install")
       return install_service();
 
+    if (action == "health")
+      return service_health();
+
     if (action == "start" ||
         action == "stop" ||
         action == "restart" ||
@@ -530,13 +688,14 @@ namespace vix::commands
         << "  stop        Stop the service\n"
         << "  restart     Restart the service\n"
         << "  status      Show service status\n"
-        << "  logs        Show recent service logs\n\n"
+        << "  logs        Show recent service logs\n"
+        << "  health      Run configured HTTP health checks\n\n"
         << "Examples:\n"
         << "  vix service install\n"
         << "  vix service restart\n"
         << "  vix service status\n"
-        << "  vix service logs\n";
-
+        << "  vix service logs\n"
+        << "  vix service health\n";
     return 0;
   }
 }

@@ -147,28 +147,40 @@ namespace vix::commands::deploy::runner
       return run_cmd(cmd, options);
     }
 
-    bool health_local(
+    bool service_health(
         const DeployConfig &cfg,
         const DeployOptions &options)
     {
-      if (!cfg.healthLocal)
+      if (!cfg.healthLocal && !cfg.healthPublic)
         return true;
 
-      output::step(std::cout, "Local Health");
+      output::step(std::cout, "Service Health");
 
-      return run_cmd("vix health local", options);
+      return run_cmd("vix service health", options);
     }
 
-    bool health_public(
+    bool proxy_check(
         const DeployConfig &cfg,
         const DeployOptions &options)
     {
-      if (!cfg.healthPublic)
+      if (!cfg.proxyCheck && !cfg.proxyReload)
         return true;
 
-      output::step(std::cout, "Public Health");
+      output::step(std::cout, "Proxy Check");
 
-      return run_cmd("vix health public", options);
+      return run_cmd("vix proxy nginx check", options);
+    }
+
+    bool proxy_reload(
+        const DeployConfig &cfg,
+        const DeployOptions &options)
+    {
+      if (!cfg.proxyReload)
+        return true;
+
+      output::step(std::cout, "Proxy Reload");
+
+      return run_cmd("vix proxy nginx reload", options);
     }
   }
 
@@ -212,17 +224,23 @@ namespace vix::commands::deploy::runner
 
     output::ok(std::cout, "service is active");
 
-    if (!health_local(cfg, options))
-      return fail(cfg, options, "local health check failed", "run `vix health local`");
+    if (!service_health(cfg, options))
+      return fail(cfg, options, "service health check failed", "run `vix service health`");
 
-    if (cfg.healthLocal)
-      output::ok(std::cout, "local endpoint is healthy");
+    if (cfg.healthLocal || cfg.healthPublic)
+      output::ok(std::cout, "service health checks passed");
 
-    if (!health_public(cfg, options))
-      return fail(cfg, options, "public health check failed", "run `vix health public`");
+    if (!proxy_check(cfg, options))
+      return fail(cfg, options, "proxy check failed", "run `vix proxy nginx check`");
 
-    if (cfg.healthPublic)
-      output::ok(std::cout, "public endpoint is healthy");
+    if (cfg.proxyCheck || cfg.proxyReload)
+      output::ok(std::cout, "proxy config is valid");
+
+    if (!proxy_reload(cfg, options))
+      return fail(cfg, options, "proxy reload failed", "run `vix proxy nginx reload`");
+
+    if (cfg.proxyReload)
+      output::ok(std::cout, "proxy reloaded");
 
     output::ok(std::cout, "deployment completed");
 

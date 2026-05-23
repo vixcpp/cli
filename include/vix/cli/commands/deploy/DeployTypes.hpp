@@ -96,6 +96,16 @@ namespace vix::commands::deploy
     bool healthPublic{false};
 
     /**
+     * @brief Whether deploy should validate the Nginx reverse proxy config.
+     */
+    bool proxyCheck{false};
+
+    /**
+     * @brief Whether deploy should reload Nginx after validation.
+     */
+    bool proxyReload{false};
+
+    /**
      * @brief Whether deploy should print recent service logs on failure.
      */
     bool logsOnFailure{true};

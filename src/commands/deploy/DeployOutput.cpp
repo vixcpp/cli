@@ -46,6 +46,8 @@ namespace vix::commands::deploy::output
     vix::cli::util::kv(out, "Service", cfg.serviceName.empty() ? "(missing)" : cfg.serviceName);
     vix::cli::util::kv(out, "Health local", enabled_disabled(cfg.healthLocal));
     vix::cli::util::kv(out, "Health public", enabled_disabled(cfg.healthPublic));
+    vix::cli::util::kv(out, "Proxy check", enabled_disabled(cfg.proxyCheck));
+    vix::cli::util::kv(out, "Proxy reload", enabled_disabled(cfg.proxyReload));
     vix::cli::util::kv(out, "Logs on failure", enabled_disabled(cfg.logsOnFailure));
     vix::cli::util::kv(out, "Dry run", yes_no(options.dryRun));
     vix::cli::util::kv(out, "Verbose", yes_no(options.verbose));

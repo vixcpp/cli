@@ -1,0 +1,463 @@
+name: CLI Release Check
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - dev
+      - release/**
+    paths:
+      - ".github/workflows/cli-release-check.yml"
+      - ".github/workflows/cli-ci.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "src/**"
+      - "cmake/**"
+      - "scripts/**"
+      - "vix.json"
+      - "README.md"
+      - "CHANGELOG.md"
+
+  pull_request:
+    branches:
+      - main
+      - master
+      - dev
+      - release/**
+    paths:
+      - ".github/workflows/cli-release-check.yml"
+      - ".github/workflows/cli-ci.yml"
+      - "CMakeLists.txt"
+      - "include/**"
+      - "src/**"
+      - "cmake/**"
+      - "scripts/**"
+      - "vix.json"
+      - "README.md"
+      - "CHANGELOG.md"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-release-check-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_JOBS: 2
+  VIX_GIT_BRANCH: dev
+
+jobs:
+  cross-platform:
+    name: ${{ matrix.vixos }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            vixos: linux
+            arch: x86_64
+
+          - os: ubuntu-24.04-arm
+            vixos: linux
+            arch: aarch64
+
+          - os: macos-15-intel
+            vixos: macos
+            arch: x86_64
+
+          - os: macos-14
+            vixos: macos
+            arch: aarch64
+
+          - os: windows-2022
+            vixos: windows
+            arch: x86_64
+
+    steps:
+      - name: Checkout CLI repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install deps (Linux x86_64)
+        if: runner.os == 'Linux' && matrix.arch == 'x86_64'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            g++ \
+            pkg-config \
+            git \
+            curl \
+            ca-certificates \
+            libasio-dev \
+            nlohmann-json3-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libsqlite3-dev \
+            libspdlog-dev \
+            libfmt-dev
+
+      - name: Install deps (Linux aarch64)
+        if: runner.os == 'Linux' && matrix.arch == 'aarch64'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            g++ \
+            pkg-config \
+            git \
+            curl \
+            ca-certificates \
+            libasio-dev \
+            nlohmann-json3-dev \
+            libssl-dev \
+            zlib1g-dev \
+            libsqlite3-dev \
+            libspdlog-dev \
+            libfmt-dev
+
+      - name: Install deps (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          brew update
+          brew install cmake ninja pkg-config openssl@3 spdlog fmt
+
+      - name: Setup vcpkg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg $env:GITHUB_WORKSPACE\vcpkg
+          "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          cd $env:GITHUB_WORKSPACE\vcpkg
+          .\bootstrap-vcpkg.bat
+
+      - name: Install deps (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd $env:GITHUB_WORKSPACE
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            asio `
+            nlohmann-json `
+            openssl `
+            sqlite3 `
+            spdlog `
+            fmt `
+            --triplet x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Fetch sibling modules (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf \
+            ../error \
+            ../path \
+            ../fs \
+            ../io \
+            ../env \
+            ../os \
+            ../process \
+            ../utils \
+            ../json \
+            ../async \
+            ../core \
+            ../reply \
+            ../template \
+            ../net \
+            ../crypto \
+            ../sync \
+            ../cache \
+            ../p2p \
+            ../agent \
+            ../websocket \
+            ../db
+
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/path.git ../path
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/fs.git ../fs
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/io.git ../io
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/env.git ../env
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/os.git ../os
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/process.git ../process
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/reply.git ../reply || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/websocket.git ../websocket || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/db.git ../db || true
+
+      - name: Fetch sibling modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $modules = @(
+            "error",
+            "path",
+            "fs",
+            "io",
+            "env",
+            "os",
+            "process",
+            "utils",
+            "json",
+            "async",
+            "core",
+            "reply",
+            "template",
+            "net",
+            "crypto",
+            "sync",
+            "cache",
+            "p2p",
+            "agent",
+            "websocket",
+            "db"
+          )
+
+          foreach ($m in $modules) {
+            $target = Join-Path ".." $m
+            if (Test-Path $target) {
+              Remove-Item -Recurse -Force $target
+            }
+          }
+
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/error.git ..\error
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/path.git ..\path
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/fs.git ..\fs
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/io.git ..\io
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/env.git ..\env
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/os.git ..\os
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/process.git ..\process
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/utils.git ..\utils
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/json.git ..\json
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" --recurse-submodules https://github.com/vixcpp/async.git ..\async
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/core.git ..\core
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/reply.git ..\reply
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/template.git ..\template
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/net.git ..\net
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/crypto.git ..\crypto
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/sync.git ..\sync
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/cache.git ..\cache
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/p2p.git ..\p2p
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/agent.git ..\agent
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/websocket.git ..\websocket
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/db.git ..\db
+
+      - name: Prepare Asio for modules (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f /usr/include/asio.hpp
+
+          for module in ../async ../p2p ../websocket; do
+            if [ -d "$module" ]; then
+              mkdir -p "$module/third_party/asio"
+              rm -rf "$module/third_party/asio/include"
+              mkdir -p "$module/third_party/asio/include"
+              cp -r /usr/include/asio* "$module/third_party/asio/include/" || true
+              test -f "$module/third_party/asio/include/asio.hpp"
+            fi
+          done
+
+      - name: Verify sibling layout (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f ../error/CMakeLists.txt
+          test -f ../path/CMakeLists.txt
+          test -f ../fs/CMakeLists.txt
+          test -f ../io/CMakeLists.txt
+          test -f ../env/CMakeLists.txt
+          test -f ../os/CMakeLists.txt
+          test -f ../process/CMakeLists.txt
+          test -f ../utils/CMakeLists.txt
+          test -f ../json/CMakeLists.txt
+          test -f ../async/CMakeLists.txt
+          test -f ../core/CMakeLists.txt
+          test -f ../net/CMakeLists.txt
+          test -f ../crypto/CMakeLists.txt
+
+      - name: Verify sibling layout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $required = @(
+            "..\error\CMakeLists.txt",
+            "..\path\CMakeLists.txt",
+            "..\fs\CMakeLists.txt",
+            "..\io\CMakeLists.txt",
+            "..\env\CMakeLists.txt",
+            "..\os\CMakeLists.txt",
+            "..\process\CMakeLists.txt",
+            "..\utils\CMakeLists.txt",
+            "..\json\CMakeLists.txt",
+            "..\async\CMakeLists.txt",
+            "..\core\CMakeLists.txt",
+            "..\net\CMakeLists.txt",
+            "..\crypto\CMakeLists.txt"
+          )
+
+          foreach ($file in $required) {
+            if (!(Test-Path $file)) {
+              Write-Host "Missing required file: $file"
+              exit 1
+            }
+          }
+
+      - name: Configure CLI (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          CMAKE_ARGS=(
+            -S . -B build -G Ninja
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+            -DVIX_ENABLE_LTO=OFF
+            -DVIX_DB_USE_MYSQL=OFF
+            -DVIX_CORE_WITH_MYSQL=OFF
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF
+          )
+
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            BREW_PREFIX="$(brew --prefix)"
+            BREW_SSL="$(brew --prefix openssl@3 2>/dev/null || true)"
+
+            CMAKE_ARGS+=(-DCMAKE_PREFIX_PATH="$BREW_PREFIX")
+
+            if [ -n "$BREW_SSL" ] && [ -d "$BREW_SSL" ]; then
+              CMAKE_ARGS+=(-DOPENSSL_ROOT_DIR="$BREW_SSL")
+            fi
+          fi
+
+          cmake "${CMAKE_ARGS[@]}"
+
+      - name: Configure CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake -S . -B build -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
+            -DVIX_ENABLE_LTO=OFF `
+            -DVIX_DB_USE_MYSQL=OFF `
+            -DVIX_CORE_WITH_MYSQL=OFF `
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF `
+            -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+
+      - name: Build CLI
+        shell: bash
+        if: runner.os != 'Windows'
+        run: |
+          set -euxo pipefail
+          cmake --build build -j"${BUILD_JOBS}"
+
+      - name: Build CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cmake --build build --config Release --parallel 2
+
+      - name: Smoke test CLI (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          BIN=""
+          for p in "build/vix" "build/bin/vix" "build/Release/vix"; do
+            if [ -f "$p" ]; then
+              BIN="$p"
+              break
+            fi
+          done
+
+          if [ -z "$BIN" ]; then
+            echo "vix binary not found"
+            find build -maxdepth 6 -type f -name vix -print || true
+            exit 1
+          fi
+
+          "$BIN" --version || "$BIN" version || true
+          "$BIN" --help >/tmp/vix-help.txt
+          head -n 40 /tmp/vix-help.txt
+
+      - name: Smoke test CLI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "build\vix.exe",
+            "build\Release\vix.exe",
+            "build\bin\vix.exe",
+            "build\Release\bin\vix.exe"
+          )
+
+          $bin = $null
+
+          foreach ($p in $candidates) {
+            if (Test-Path $p) {
+              $bin = $p
+              break
+            }
+          }
+
+          if (!$bin) {
+            Write-Host "vix.exe not found"
+            Get-ChildItem -Recurse build | Select-Object FullName
+            exit 1
+          }
+
+          & $bin --version
+          & $bin --help | Select-Object -First 40
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-release-check-${{ matrix.vixos }}-${{ matrix.arch }}
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles/CMakeError.log
+            build/CMakeFiles/CMakeOutput.log
+            build/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn

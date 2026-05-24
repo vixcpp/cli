@@ -149,6 +149,8 @@ namespace vix::commands
       options.errorsOnly = options.errorsOnly ||
                            consume_flag(args, "--errors");
 
+      options.repeated = consume_flag(args, "--repeated");
+
       if (!consume_value(args, "--since", options.since))
       {
         ok = false;
@@ -239,6 +241,7 @@ namespace vix::commands
         << "  --follow    Follow logs live\n"
         << "  -f          Alias for --follow\n"
         << "  --errors    Filter logs by common error keywords\n"
+        << "  --repeated  Detect repeated errors\n"
         << "  --since     Filter app logs by systemd time expression\n"
         << "  --lines     Show last N lines\n"
         << "  -n          Alias for --lines\n"
@@ -250,6 +253,7 @@ namespace vix::commands
         << "  vix logs errors\n"
         << "  vix logs --follow\n"
         << "  vix logs --errors\n"
+        << "  vix logs errors --repeated\n"
         << "  vix logs --since \"1 hour ago\"\n"
         << "  vix logs -n 200\n\n"
         << "Config:\n"

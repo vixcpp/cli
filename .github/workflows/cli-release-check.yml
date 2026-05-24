@@ -276,20 +276,79 @@ jobs:
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/websocket.git ..\websocket
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/db.git ..\db
 
+      - name: Prepare Asio for modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $asioSource = ""
+
+          $vcpkgAsio = Join-Path $env:VCPKG_ROOT "installed\x64-windows\include\asio.hpp"
+
+          if (Test-Path $vcpkgAsio) {
+            $asioSource = Join-Path $env:VCPKG_ROOT "installed\x64-windows\include"
+          } else {
+            git clone --depth 1 --branch asio-1-30-2 https://github.com/chriskohlhoff/asio.git "$env:TEMP\asio"
+            $asioSource = "$env:TEMP\asio\asio\include"
+          }
+
+          if (!(Test-Path (Join-Path $asioSource "asio.hpp"))) {
+            Write-Host "asio.hpp not found in $asioSource"
+            exit 1
+          }
+
+          $modules = @(
+            "..\async",
+            "..\p2p",
+            "..\websocket"
+          )
+
+          foreach ($module in $modules) {
+            if (Test-Path $module) {
+              $target = Join-Path $module "third_party\asio\include"
+
+              if (Test-Path $target) {
+                Remove-Item -Recurse -Force $target
+              }
+
+              New-Item -ItemType Directory -Force -Path $target | Out-Null
+              Copy-Item -Recurse -Force "$asioSource\*" $target
+
+              if (!(Test-Path (Join-Path $target "asio.hpp"))) {
+                Write-Host "asio.hpp was not copied into $target"
+                exit 1
+              }
+            }
+          }
+
       - name: Prepare Asio for modules (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euxo pipefail
 
-          test -f /usr/include/asio.hpp
+          ASIO_SOURCE=""
+
+          if [ -f /usr/include/asio.hpp ]; then
+            ASIO_SOURCE="/usr/include"
+          elif [ -f /opt/homebrew/include/asio.hpp ]; then
+            ASIO_SOURCE="/opt/homebrew/include"
+          elif [ -f /usr/local/include/asio.hpp ]; then
+            ASIO_SOURCE="/usr/local/include"
+          else
+            git clone --depth 1 --branch asio-1-30-2 https://github.com/chriskohlhoff/asio.git /tmp/asio
+            ASIO_SOURCE="/tmp/asio/asio/include"
+          fi
+
+          test -f "$ASIO_SOURCE/asio.hpp"
 
           for module in ../async ../p2p ../websocket; do
             if [ -d "$module" ]; then
               mkdir -p "$module/third_party/asio"
               rm -rf "$module/third_party/asio/include"
               mkdir -p "$module/third_party/asio/include"
-              cp -r /usr/include/asio* "$module/third_party/asio/include/" || true
+              cp -R "$ASIO_SOURCE/"* "$module/third_party/asio/include/"
               test -f "$module/third_party/asio/include/asio.hpp"
             fi
           done

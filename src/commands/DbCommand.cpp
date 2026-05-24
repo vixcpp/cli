@@ -11,8 +11,10 @@
  *  Vix.cpp
  */
 #include <vix/cli/commands/DbCommand.hpp>
+#include <vix/cli/commands/db/DbBackup.hpp>
 #include <vix/cli/commands/db/DbChecker.hpp>
 #include <vix/cli/commands/db/DbConfig.hpp>
+#include <vix/cli/commands/db/DbMigrator.hpp>
 #include <vix/cli/commands/db/DbOutput.hpp>
 #include <vix/cli/commands/db/DbTypes.hpp>
 
@@ -155,33 +157,47 @@ namespace vix::commands
       return 1;
     }
 
-    if (action != "status")
-    {
-      db::output::error(
-          std::cerr,
-          "unknown db action: " + action);
-
-      db::output::fix(
-          std::cerr,
-          "vix db --help");
-
-      return 1;
-    }
-
     const db::DbConfig cfg =
         db::apply_db_options(
             db::load_db_config(),
             options);
 
-    const db::DbCheckResult result =
-        db::checker::check_status(cfg);
+    if (action == "status")
+    {
+      const db::DbCheckResult result =
+          db::checker::check_status(cfg);
 
-    db::output::print_status(
-        std::cout,
-        result,
-        options);
+      db::output::print_status(
+          std::cout,
+          result,
+          options);
 
-    return exit_code_for_status(result.status);
+      return exit_code_for_status(result.status);
+    }
+
+    if (action == "migrate")
+    {
+      return db::migrator::migrate(
+          cfg,
+          options);
+    }
+
+    if (action == "backup")
+    {
+      return db::backup::create_backup(
+          cfg,
+          options);
+    }
+
+    db::output::error(
+        std::cerr,
+        "unknown db action: " + action);
+
+    db::output::fix(
+        std::cerr,
+        "vix db --help");
+
+    return 1;
   }
 
   int DbCommand::help()
@@ -190,7 +206,9 @@ namespace vix::commands
         << "Usage:\n"
         << "  vix db [action] [options]\n\n"
         << "Actions:\n"
-        << "  status      Inspect SQLite database and storage status\n\n"
+        << "  status      Inspect SQLite database and storage status\n"
+        << "  migrate     Apply pending file-based SQL migrations\n"
+        << "  backup      Create a SQLite database backup\n\n"
         << "Options:\n"
         << "  --json      Print supported output as JSON\n"
         << "  --verbose   Show verbose diagnostic output\n"
@@ -199,7 +217,9 @@ namespace vix::commands
         << "Examples:\n"
         << "  vix db\n"
         << "  vix db status\n"
-        << "  vix db status --json\n\n"
+        << "  vix db status --json\n"
+        << "  vix db migrate\n"
+        << "  vix db backup\n\n"
         << "Config:\n"
         << "  database.engine\n"
         << "  database.sqlite.path\n"

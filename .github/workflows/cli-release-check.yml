@@ -140,7 +140,7 @@ jobs:
         run: |
           set -euxo pipefail
           brew update
-          brew install cmake ninja pkg-config openssl@3 spdlog fmt
+          brew install cmake ninja pkg-config openssl@3 spdlog fmt nlohmann-json
 
       - name: Setup vcpkg (Windows)
         if: runner.os == 'Windows'

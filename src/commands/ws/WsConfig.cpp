@@ -251,6 +251,7 @@ namespace vix::commands::ws
     const json ws = read_ws_object(production);
     const json proxy = read_proxy_object(production);
     const json proxyWs = read_proxy_ws_object(proxy);
+    bool hasExplicitLocalUrl = false;
 
     if (auto host = read_string(ws, "host"))
       cfg.host = *host;
@@ -262,8 +263,10 @@ namespace vix::commands::ws
       cfg.path = normalize_path(*path);
 
     if (auto localUrl = read_string(ws, "local_url"))
+    {
       cfg.localUrl = *localUrl;
-
+      hasExplicitLocalUrl = true;
+    }
     if (auto publicUrl = read_string(ws, "public_url"))
       cfg.publicUrl = *publicUrl;
 
@@ -273,11 +276,17 @@ namespace vix::commands::ws
     if (auto heartbeat = read_bool(ws, "heartbeat"))
       cfg.heartbeat = *heartbeat;
 
-    if (auto proxyPort = read_int(proxyWs, "port"))
-      cfg.port = *proxyPort;
+    const bool proxyWebSocketEnabled =
+        read_bool(proxyWs, "enabled").value_or(false);
 
-    if (auto proxyPath = read_string(proxyWs, "path"))
-      cfg.path = normalize_path(*proxyPath);
+    if (proxyWebSocketEnabled)
+    {
+      if (auto proxyPort = read_int(proxyWs, "port"))
+        cfg.port = *proxyPort;
+
+      if (auto proxyPath = read_string(proxyWs, "path"))
+        cfg.path = normalize_path(*proxyPath);
+    }
 
     if (cfg.port <= 0 || cfg.port > 65535)
       cfg.port = 9090;
@@ -285,7 +294,7 @@ namespace vix::commands::ws
     if (cfg.timeoutMs == 0)
       cfg.timeoutMs = 3000;
 
-    if (cfg.localUrl.empty())
+    if (!hasExplicitLocalUrl)
       cfg.localUrl = build_local_url(cfg.host, cfg.port, cfg.path);
 
     return cfg;

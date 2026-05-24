@@ -81,7 +81,7 @@ namespace vix::commands::ws
     /**
      * @brief Local WebSocket URL.
      */
-    std::string localUrl{"ws://127.0.0.1:9090/ws"};
+    std::string localUrl{};
 
     /**
      * @brief WebSocket host.

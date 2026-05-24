@@ -57,6 +57,11 @@ namespace vix::commands::logs
     bool repeated{false};
 
     /**
+     * @brief Print machine-readable JSON output when supported.
+     */
+    bool json{false};
+
+    /**
      * @brief Number of lines to show.
      */
     int lines{120};

@@ -150,6 +150,7 @@ namespace vix::commands
                            consume_flag(args, "--errors");
 
       options.repeated = consume_flag(args, "--repeated");
+      options.json = consume_flag(args, "--json");
 
       if (!consume_value(args, "--since", options.since))
       {
@@ -242,6 +243,7 @@ namespace vix::commands
         << "  -f          Alias for --follow\n"
         << "  --errors    Filter logs by common error keywords\n"
         << "  --repeated  Detect repeated errors\n"
+        << "  --json      Print supported output as JSON\n"
         << "  --since     Filter app logs by systemd time expression\n"
         << "  --lines     Show last N lines\n"
         << "  -n          Alias for --lines\n"
@@ -254,6 +256,7 @@ namespace vix::commands
         << "  vix logs --follow\n"
         << "  vix logs --errors\n"
         << "  vix logs errors --repeated\n"
+        << "  vix logs errors --repeated --json\n"
         << "  vix logs --since \"1 hour ago\"\n"
         << "  vix logs -n 200\n\n"
         << "Config:\n"

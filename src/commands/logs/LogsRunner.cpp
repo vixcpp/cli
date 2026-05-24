@@ -194,8 +194,11 @@ namespace vix::commands::logs::runner
         const std::string appCommand =
             build_journalctl_analysis_command(cfg, options);
 
-        output::step(std::cout, "Analyze App Errors");
-        output::ok(std::cout, "reading systemd app errors");
+        if (!options.json)
+        {
+          output::step(std::cout, "Analyze App Errors");
+          output::ok(std::cout, "reading systemd app errors");
+        }
 
         std::vector<std::string> appLines =
             read_command_lines(appCommand);
@@ -215,8 +218,11 @@ namespace vix::commands::logs::runner
                 options,
                 false);
 
-        output::step(std::cout, "Analyze Proxy Errors");
-        output::ok(std::cout, "reading Nginx proxy errors");
+        if (!options.json)
+        {
+          output::step(std::cout, "Analyze Proxy Errors");
+          output::ok(std::cout, "reading Nginx proxy errors");
+        }
 
         std::vector<std::string> proxyLines =
             read_command_lines(proxyCommand);
@@ -226,7 +232,7 @@ namespace vix::commands::logs::runner
             proxyLines.begin(),
             proxyLines.end());
       }
-      else
+      else if (!options.json)
       {
         output::warn(
             std::cerr,
@@ -240,7 +246,10 @@ namespace vix::commands::logs::runner
       const analyzer::RepeatedLogReport report =
           analyzer::analyze_repeated_errors(lines);
 
-      analyzer::print_repeated_report(std::cout, report);
+      if (options.json)
+        analyzer::print_repeated_report_json(std::cout, report);
+      else
+        analyzer::print_repeated_report(std::cout, report);
 
       return true;
     }
@@ -356,7 +365,11 @@ namespace vix::commands::logs::runner
       const LogsConfig &cfg,
       const LogsOptions &options)
   {
-    output::print_summary(std::cout, cfg, options);
+    if (!options.json)
+      output::print_summary(std::cout, cfg, options);
+
+    if (options.repeated)
+      return show_repeated_errors(cfg, options) ? 0 : 1;
 
     if (options.repeated)
       return show_repeated_errors(cfg, options) ? 0 : 1;

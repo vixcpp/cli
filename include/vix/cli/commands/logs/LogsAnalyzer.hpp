@@ -112,6 +112,16 @@ namespace vix::commands::logs::analyzer
   void print_repeated_report(
       std::ostream &out,
       const RepeatedLogReport &report);
+
+  /**
+   * @brief Print a repeated error analysis report as JSON.
+   *
+   * @param out Output stream.
+   * @param report Repeated error report to print.
+   */
+  void print_repeated_report_json(
+      std::ostream &out,
+      const RepeatedLogReport &report);
 }
 
 #endif

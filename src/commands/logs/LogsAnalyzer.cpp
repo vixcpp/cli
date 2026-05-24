@@ -13,6 +13,8 @@
 #include <vix/cli/commands/logs/LogsAnalyzer.hpp>
 #include <vix/cli/util/Ui.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <ostream>
@@ -20,6 +22,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+using json = nlohmann::json;
 
 namespace vix::commands::logs::analyzer
 {
@@ -296,5 +300,41 @@ namespace vix::commands::logs::analyzer
           std::to_string(group.count) + "x",
           group.name);
     }
+  }
+
+  void print_repeated_report_json(
+      std::ostream &out,
+      const RepeatedLogReport &report)
+  {
+    json root = json::object();
+
+    root["analyzed_lines"] = report.totalLines;
+    root["repeated_groups"] = report.repeatedGroups;
+    root["network_disconnect_groups"] = report.networkDisconnectGroups;
+    root["hidden_normal_noise_lines"] = report.hiddenNormalNoiseLines;
+
+    root["repeated_errors"] = json::array();
+
+    for (const RepeatedLogEntry &entry : report.entries)
+    {
+      root["repeated_errors"].push_back(
+          {
+              {"message", entry.message},
+              {"count", entry.count},
+          });
+    }
+
+    root["network_disconnects"] = json::array();
+
+    for (const NetworkDisconnectGroup &group : report.networkGroups)
+    {
+      root["network_disconnects"].push_back(
+          {
+              {"name", group.name},
+              {"count", group.count},
+          });
+    }
+
+    out << root.dump(2) << '\n';
   }
 }

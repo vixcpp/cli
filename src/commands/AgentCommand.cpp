@@ -24,7 +24,7 @@
 #include <string_view>
 #include <vector>
 
-#include <vix/ai/agent/agent.hpp>
+#include <vix/ai/agent/AgentRuntime.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 

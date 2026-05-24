@@ -481,7 +481,13 @@ namespace vix::commands::ws::checker
       }
 
       if (contains_text(message, "upgrade") ||
-          contains_text(message, "sec-websocket-accept"))
+          contains_text(message, "sec-websocket-accept") ||
+          contains_text(message, "bad response") ||
+          contains_text(message, "invalid response") ||
+          contains_text(message, "expected 101") ||
+          contains_text(message, "did not switch protocols") ||
+          contains_text(message, "missing connection") ||
+          contains_text(message, "missing upgrade"))
       {
         return WsFailureKind::MissingUpgrade;
       }
@@ -521,7 +527,7 @@ namespace vix::commands::ws::checker
       case WsFailureKind::Timeout:
         return "WebSocket connection timed out.";
       case WsFailureKind::MissingUpgrade:
-        return "WebSocket upgrade headers are missing or invalid.";
+        return "WebSocket upgrade failed.";
       case WsFailureKind::BadPath:
         return "WebSocket path does not exist on the server.";
       case WsFailureKind::ProxyHttpResponse:
@@ -548,7 +554,7 @@ namespace vix::commands::ws::checker
       case WsFailureKind::Timeout:
         return "check firewall, upstream and service";
       case WsFailureKind::MissingUpgrade:
-        return "check Nginx Upgrade headers";
+        return "check Upgrade and Connection headers";
       case WsFailureKind::BadPath:
         return "check WebSocket route/path";
       case WsFailureKind::ProxyHttpResponse:

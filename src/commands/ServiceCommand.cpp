@@ -74,6 +74,8 @@ namespace vix::commands
       return s;
     }
 
+#ifdef __linux__
+
     struct HealthResult
     {
       bool ok{false};
@@ -639,6 +641,8 @@ namespace vix::commands
 
       return rc == 0 ? 0 : 1;
     }
+
+#endif // __linux__
   }
 
   int ServiceCommand::run(const std::vector<std::string> &args)

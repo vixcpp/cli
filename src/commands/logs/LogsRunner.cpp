@@ -51,6 +51,8 @@ namespace vix::commands::logs::runner
       return std::system(cmd.c_str()) == 0;
     }
 
+#ifdef __linux__
+
     std::string grep_errors_command()
     {
       return "grep -Ei 'error|failed|failure|exception|panic|fatal|critical|timeout|refused|denied'";
@@ -359,17 +361,30 @@ namespace vix::commands::logs::runner
 
       return ok;
     }
+
+#endif // __linux__
   }
 
   int run(
       const LogsConfig &cfg,
       const LogsOptions &options)
   {
+#ifndef __linux__
+    (void)cfg;
+    (void)options;
+
+    output::error(
+        std::cerr,
+        "vix logs is currently supported on Linux only.");
+
+    output::fix(
+        std::cerr,
+        "run this command on the Linux server that hosts the service");
+
+    return 1;
+#else
     if (!options.json)
       output::print_summary(std::cout, cfg, options);
-
-    if (options.repeated)
-      return show_repeated_errors(cfg, options) ? 0 : 1;
 
     if (options.repeated)
       return show_repeated_errors(cfg, options) ? 0 : 1;
@@ -405,5 +420,6 @@ namespace vix::commands::logs::runner
 
     output::ok(std::cout, "logs command completed");
     return 0;
+#endif
   }
 }

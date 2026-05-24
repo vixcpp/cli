@@ -12,11 +12,16 @@
  */
 #include <vix/cli/commands/logs/LogsRunner.hpp>
 #include <vix/cli/commands/logs/LogsOutput.hpp>
+#include <vix/cli/commands/logs/LogsAnalyzer.hpp>
 
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <array>
+#include <cstdio>
+#include <memory>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -86,6 +91,36 @@ namespace vix::commands::logs::runner
       return cmd;
     }
 
+    std::vector<std::string> read_command_lines(
+        const std::string &cmd)
+    {
+      std::vector<std::string> lines;
+      std::array<char, 4096> buffer{};
+
+      std::unique_ptr<FILE, decltype(&pclose)> pipe(
+          popen(cmd.c_str(), "r"),
+          pclose);
+
+      if (!pipe)
+        return lines;
+
+      while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr)
+      {
+        std::string line = buffer.data();
+
+        while (!line.empty() &&
+               (line.back() == '\n' || line.back() == '\r'))
+        {
+          line.pop_back();
+        }
+
+        if (!line.empty())
+          lines.push_back(line);
+      }
+
+      return lines;
+    }
+
     std::string build_tail_command(
         const fs::path &path,
         const LogsConfig &cfg,
@@ -114,6 +149,71 @@ namespace vix::commands::logs::runner
       }
 
       return cmd;
+    }
+
+    bool show_repeated_errors(
+        const LogsConfig &cfg,
+        LogsOptions options)
+    {
+      options.errorsOnly = true;
+      options.follow = false;
+
+      std::vector<std::string> lines;
+
+      if (!cfg.serviceName.empty())
+      {
+        const std::string appCommand =
+            build_journalctl_command(cfg, options);
+
+        output::step(std::cout, "Analyze App Errors");
+        output::ok(std::cout, "reading systemd app errors");
+
+        std::vector<std::string> appLines =
+            read_command_lines(appCommand);
+
+        lines.insert(
+            lines.end(),
+            appLines.begin(),
+            appLines.end());
+      }
+
+      if (fs::exists(cfg.nginxErrorLog))
+      {
+        const std::string proxyCommand =
+            build_tail_command(
+                cfg.nginxErrorLog,
+                cfg,
+                options,
+                false);
+
+        output::step(std::cout, "Analyze Proxy Errors");
+        output::ok(std::cout, "reading Nginx proxy errors");
+
+        std::vector<std::string> proxyLines =
+            read_command_lines(proxyCommand);
+
+        lines.insert(
+            lines.end(),
+            proxyLines.begin(),
+            proxyLines.end());
+      }
+      else
+      {
+        output::warn(
+            std::cerr,
+            "Nginx error log not found: " + cfg.nginxErrorLog.string());
+
+        output::fix(
+            std::cerr,
+            "add production.logs.nginx_error to vix.json or create the Nginx log file");
+      }
+
+      const analyzer::RepeatedLogReport report =
+          analyzer::analyze_repeated_errors(lines);
+
+      analyzer::print_repeated_report(std::cout, report);
+
+      return true;
     }
 
     bool show_app_logs(
@@ -228,6 +328,9 @@ namespace vix::commands::logs::runner
       const LogsOptions &options)
   {
     output::print_summary(std::cout, cfg, options);
+
+    if (options.repeated)
+      return show_repeated_errors(cfg, options) ? 0 : 1;
 
     bool ok = true;
 

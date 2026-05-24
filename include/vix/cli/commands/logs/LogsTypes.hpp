@@ -52,6 +52,11 @@ namespace vix::commands::logs
     bool errorsOnly{false};
 
     /**
+     * @brief Show repeated error summary.
+     */
+    bool repeated{false};
+
+    /**
      * @brief Number of lines to show.
      */
     int lines{120};

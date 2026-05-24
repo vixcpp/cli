@@ -56,6 +56,11 @@ namespace vix::commands::logs::runner
       return "grep -Ei 'error|failed|failure|exception|panic|fatal|critical|timeout|refused|denied'";
     }
 
+    std::string grep_analysis_command()
+    {
+      return "grep -Ei 'error|failed|failure|exception|panic|fatal|critical|timeout|refused|denied|disconnect|disconnected|closed|reset by peer|broken pipe|eof'";
+    }
+
     std::string build_journalctl_command(
         const LogsConfig &cfg,
         const LogsOptions &options)
@@ -87,6 +92,30 @@ namespace vix::commands::logs::runner
         cmd += " | ";
         cmd += grep_errors_command();
       }
+
+      return cmd;
+    }
+
+    std::string build_journalctl_analysis_command(
+        const LogsConfig &cfg,
+        const LogsOptions &options)
+    {
+      std::string cmd =
+          "journalctl -u " +
+          shell_quote(cfg.serviceName);
+
+      if (!options.since.empty())
+      {
+        cmd += " --since ";
+        cmd += shell_quote(options.since);
+      }
+
+      cmd += " -n ";
+      cmd += std::to_string(cfg.lines);
+      cmd += " --no-pager";
+
+      cmd += " | ";
+      cmd += grep_analysis_command();
 
       return cmd;
     }
@@ -163,7 +192,7 @@ namespace vix::commands::logs::runner
       if (!cfg.serviceName.empty())
       {
         const std::string appCommand =
-            build_journalctl_command(cfg, options);
+            build_journalctl_analysis_command(cfg, options);
 
         output::step(std::cout, "Analyze App Errors");
         output::ok(std::cout, "reading systemd app errors");

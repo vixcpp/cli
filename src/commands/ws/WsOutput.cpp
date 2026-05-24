@@ -48,6 +48,22 @@ namespace vix::commands::ws::output
 
       return cfg.localUrl;
     }
+
+    std::string selected_url_source(
+        const WsConfig &cfg,
+        const WsOptions &options)
+    {
+      if (!options.url.empty())
+        return "cli";
+
+      if (!cfg.publicUrl.empty())
+        return "production.websocket.public_url";
+
+      if (!cfg.localUrl.empty())
+        return "production.websocket.local_url";
+
+      return "generated from config";
+    }
   }
 
   void print_summary(
@@ -60,11 +76,12 @@ namespace vix::commands::ws::output
     vix::cli::util::kv(out, "App", cfg.appName);
     vix::cli::util::kv(out, "Target", target_name(options.target));
     vix::cli::util::kv(out, "URL", selected_url(cfg, options));
+    vix::cli::util::kv(out, "URL Source", selected_url_source(cfg, options));
     vix::cli::util::kv(out, "Local URL", cfg.localUrl.empty() ? "(missing)" : cfg.localUrl);
     vix::cli::util::kv(out, "Public URL", cfg.publicUrl.empty() ? "(missing)" : cfg.publicUrl);
-    vix::cli::util::kv(out, "Host", cfg.host);
-    vix::cli::util::kv(out, "Port", std::to_string(cfg.port));
-    vix::cli::util::kv(out, "Path", cfg.path);
+    vix::cli::util::kv(out, "Configured Host", cfg.host);
+    vix::cli::util::kv(out, "Configured Port", std::to_string(cfg.port));
+    vix::cli::util::kv(out, "Configured Path", cfg.path);
     vix::cli::util::kv(out, "Timeout", std::to_string(cfg.timeoutMs) + "ms");
     vix::cli::util::kv(out, "Ping", yes_no(options.ping));
     vix::cli::util::kv(out, "Heartbeat", yes_no(cfg.heartbeat));

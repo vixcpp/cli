@@ -26,6 +26,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <cctype>
 
 namespace vix::commands::ws::checker
 {
@@ -50,6 +51,19 @@ namespace vix::commands::ws::checker
       std::string error{};
     };
 
+    enum class WsFailureKind
+    {
+      Unknown,
+      Dns,
+      ConnectionRefused,
+      Timeout,
+      TlsUnsupported,
+      BadHandshake,
+      MissingUpgrade,
+      BadPath,
+      ProxyHttpResponse
+    };
+
     bool starts_with(
         const std::string &value,
         const std::string &prefix)
@@ -71,6 +85,22 @@ namespace vix::commands::ws::checker
       return true;
     }
 
+    bool is_valid_port_number(const std::string &value)
+    {
+      if (!is_digit_string(value))
+        return false;
+
+      try
+      {
+        const unsigned long parsed = std::stoul(value);
+        return parsed >= 1 && parsed <= 65535;
+      }
+      catch (...)
+      {
+        return false;
+      }
+    }
+
     std::string selected_url(
         const WsConfig &cfg,
         const WsOptions &options)
@@ -82,6 +112,130 @@ namespace vix::commands::ws::checker
         return cfg.publicUrl;
 
       return cfg.localUrl;
+    }
+
+    std::string lower_copy(std::string value)
+    {
+      for (char &ch : value)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+      return value;
+    }
+
+    bool contains_text(
+        const std::string &value,
+        const std::string &needle)
+    {
+      return lower_copy(value).find(lower_copy(needle)) != std::string::npos;
+    }
+
+    WsFailureKind classify_failure(const std::string &message)
+    {
+      if (message.empty())
+        return WsFailureKind::Unknown;
+
+      if (contains_text(message, "resolve") ||
+          contains_text(message, "dns") ||
+          contains_text(message, "host not found") ||
+          contains_text(message, "name or service not known"))
+      {
+        return WsFailureKind::Dns;
+      }
+
+      if (contains_text(message, "connection refused") ||
+          contains_text(message, "refused"))
+      {
+        return WsFailureKind::ConnectionRefused;
+      }
+
+      if (contains_text(message, "timeout") ||
+          contains_text(message, "timed out"))
+      {
+        return WsFailureKind::Timeout;
+      }
+
+      if (contains_text(message, "upgrade") ||
+          contains_text(message, "sec-websocket-accept"))
+      {
+        return WsFailureKind::MissingUpgrade;
+      }
+
+      if (contains_text(message, "404") ||
+          contains_text(message, "not found"))
+      {
+        return WsFailureKind::BadPath;
+      }
+
+      if (contains_text(message, "301") ||
+          contains_text(message, "302") ||
+          contains_text(message, "400") ||
+          contains_text(message, "403") ||
+          contains_text(message, "502") ||
+          contains_text(message, "503") ||
+          contains_text(message, "504") ||
+          contains_text(message, "http"))
+      {
+        return WsFailureKind::ProxyHttpResponse;
+      }
+
+      if (contains_text(message, "handshake"))
+        return WsFailureKind::BadHandshake;
+
+      return WsFailureKind::Unknown;
+    }
+
+    std::string failure_title(WsFailureKind kind)
+    {
+      switch (kind)
+      {
+      case WsFailureKind::Dns:
+        return "DNS resolution failed.";
+      case WsFailureKind::ConnectionRefused:
+        return "WebSocket TCP connection was refused.";
+      case WsFailureKind::Timeout:
+        return "WebSocket connection timed out.";
+      case WsFailureKind::MissingUpgrade:
+        return "WebSocket upgrade headers are missing or invalid.";
+      case WsFailureKind::BadPath:
+        return "WebSocket path does not exist on the server.";
+      case WsFailureKind::ProxyHttpResponse:
+        return "Server returned an HTTP response instead of a WebSocket upgrade.";
+      case WsFailureKind::BadHandshake:
+        return "WebSocket handshake failed.";
+      case WsFailureKind::TlsUnsupported:
+        return "TLS WebSocket checks are not supported yet.";
+      case WsFailureKind::Unknown:
+        return "WebSocket check failed.";
+      }
+
+      return "WebSocket check failed.";
+    }
+
+    std::string failure_fix(WsFailureKind kind)
+    {
+      switch (kind)
+      {
+      case WsFailureKind::Dns:
+        return "check the domain name, DNS record and network resolver";
+      case WsFailureKind::ConnectionRefused:
+        return "check that the WebSocket service is running and listening on the selected port";
+      case WsFailureKind::Timeout:
+        return "check firewall rules, service availability, Nginx upstream and network reachability";
+      case WsFailureKind::MissingUpgrade:
+        return "check Nginx proxy_set_header Upgrade and Connection headers";
+      case WsFailureKind::BadPath:
+        return "check the WebSocket route/path configured by the application";
+      case WsFailureKind::ProxyHttpResponse:
+        return "check that the endpoint is a WebSocket endpoint and not a normal HTTP route";
+      case WsFailureKind::BadHandshake:
+        return "check WebSocket port, route/path and proxy upgrade configuration";
+      case WsFailureKind::TlsUnsupported:
+        return "use ws:// for local checks until native wss:// support is added";
+      case WsFailureKind::Unknown:
+        return "run with --verbose and check the WebSocket server logs";
+      }
+
+      return "run with --verbose and check the WebSocket server logs";
     }
 
     std::optional<ParsedWsUrl> parse_ws_url(
@@ -157,15 +311,21 @@ namespace vix::commands::ws::checker
           return std::nullopt;
         }
 
-        if (!is_digit_string(parsed.port))
+        if (!is_valid_port_number(parsed.port))
         {
-          error = "WebSocket URL port must be numeric";
+          error = "WebSocket URL port must be between 1 and 65535";
           return std::nullopt;
         }
       }
 
       if (parsed.target.front() != '/')
         parsed.target.insert(parsed.target.begin(), '/');
+
+      if (parsed.target.find('#') != std::string::npos)
+      {
+        error = "WebSocket URL fragments are not supported";
+        return std::nullopt;
+      }
 
       return parsed;
     }
@@ -306,14 +466,17 @@ namespace vix::commands::ws::checker
 
       if (state.errored)
       {
+        const std::string errorMessage = state.error;
+        const WsFailureKind failureKind = classify_failure(errorMessage);
+
         client->close();
 
-        output::error(std::cerr, "WebSocket handshake failed.");
+        output::error(std::cerr, failure_title(failureKind));
 
-        if (!state.error.empty())
-          output::warn(std::cerr, state.error);
+        if (!errorMessage.empty())
+          output::warn(std::cerr, errorMessage);
 
-        output::fix(std::cerr, "check WebSocket port, path and proxy upgrade headers");
+        output::fix(std::cerr, failure_fix(failureKind));
         return 1;
       }
 
@@ -332,22 +495,15 @@ namespace vix::commands::ws::checker
     if (options.ping)
     {
       output::step(std::cout, "Ping");
-      output::command(std::cout, "send websocket ping frame");
+      output::command(std::cout, "check ping capability");
 
-      try
-      {
-        client->send_ping();
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
-        output::ok(std::cout, "ping frame sent");
-      }
-      catch (const std::exception &e)
-      {
-        client->close();
+      output::warn(
+          std::cout,
+          "ping diagnostic disabled");
 
-        output::error(std::cerr, "failed to send WebSocket ping");
-        output::warn(std::cerr, e.what());
-        return 1;
-      }
+      output::fix(
+          std::cout,
+          "use --no-ping or check heartbeat logs");
     }
 
     client->close();

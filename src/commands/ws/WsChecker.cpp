@@ -12,7 +12,9 @@
  */
 #include <vix/cli/commands/ws/WsChecker.hpp>
 #include <vix/cli/commands/ws/WsOutput.hpp>
+#ifdef VIX_CLI_HAS_WEBSOCKET
 #include <vix/websocket/client.hpp>
+#endif
 
 #include <chrono>
 #include <condition_variable>
@@ -73,6 +75,7 @@ namespace vix::commands::ws::checker
       bool tls{false};
     };
 
+#ifdef VIX_CLI_HAS_WEBSOCKET
     struct CheckState
     {
       std::mutex mutex;
@@ -82,6 +85,7 @@ namespace vix::commands::ws::checker
       bool errored{false};
       std::string error{};
     };
+#endif
 
     enum class WsFailureKind
     {
@@ -662,6 +666,7 @@ namespace vix::commands::ws::checker
       return parsed;
     }
 
+#ifdef VIX_CLI_HAS_WEBSOCKET
     bool wait_for_open_or_error(
         CheckState &state,
         std::uint64_t timeoutMs)
@@ -676,6 +681,7 @@ namespace vix::commands::ws::checker
             return state.opened || state.errored || state.closed;
           });
     }
+#endif
 
     void print_parsed_url(
         const ParsedWsUrl &url)
@@ -761,6 +767,17 @@ namespace vix::commands::ws::checker
     if (!run_tcp_probe(*parsed, options.timeoutMs))
       return 1;
 
+#ifndef VIX_CLI_HAS_WEBSOCKET
+    output::warn(
+        std::cout,
+        "WebSocket client module is not available in this build");
+
+    output::fix(
+        std::cout,
+        "TCP check passed; rebuild the Vix CLI with the websocket module enabled for handshake checks");
+
+    return 0;
+#else
     CheckState state;
 
     auto client = vix::websocket::Client::create(
@@ -883,5 +900,6 @@ namespace vix::commands::ws::checker
 
     output::ok(std::cout, "WebSocket endpoint is reachable");
     return 0;
+#endif
   }
 }

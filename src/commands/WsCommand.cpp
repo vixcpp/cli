@@ -152,13 +152,6 @@ namespace vix::commands
 
   int WsCommand::run(const std::vector<std::string> &argsIn)
   {
-#ifndef __linux__
-    ws::output::error(
-        std::cerr,
-        "vix ws is currently supported on Linux only.");
-
-    return 1;
-#else
     std::vector<std::string> args = argsIn;
 
     if (!args.empty() &&
@@ -206,7 +199,6 @@ namespace vix::commands
             options);
 
     return ws::checker::check(cfg, options);
-#endif
   }
 
   int WsCommand::help()

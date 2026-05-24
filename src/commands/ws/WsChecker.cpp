@@ -14,24 +14,56 @@
 #include <vix/cli/commands/ws/WsOutput.hpp>
 #include <vix/websocket/client.hpp>
 
-#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
-#include <cctype>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#ifdef _MSC_VER
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+
+#else
+
+#include <cerrno>
+#include <cstring>
+
+#include <fcntl.h>
+#include <netdb.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#endif
 
 namespace vix::commands::ws::checker
 {
   namespace
   {
+#ifdef _WIN32
+    using NativeSocket = SOCKET;
+    constexpr NativeSocket invalid_socket_value = INVALID_SOCKET;
+#else
+    using NativeSocket = int;
+    constexpr NativeSocket invalid_socket_value = -1;
+#endif
+
     struct ParsedWsUrl
     {
       std::string scheme{};
@@ -63,6 +95,298 @@ namespace vix::commands::ws::checker
       BadPath,
       ProxyHttpResponse
     };
+
+#ifdef _WIN32
+    struct WinsockRuntime
+    {
+      bool ready{false};
+
+      WinsockRuntime()
+      {
+        WSADATA data{};
+        ready = (::WSAStartup(MAKEWORD(2, 2), &data) == 0);
+      }
+
+      ~WinsockRuntime()
+      {
+        if (ready)
+          ::WSACleanup();
+      }
+
+      WinsockRuntime(const WinsockRuntime &) = delete;
+      WinsockRuntime &operator=(const WinsockRuntime &) = delete;
+    };
+
+    bool ensure_winsock_ready(std::string &error)
+    {
+      static WinsockRuntime runtime;
+
+      if (!runtime.ready)
+      {
+        error = "Winsock initialization failed";
+        return false;
+      }
+
+      return true;
+    }
+#endif
+
+    void close_native_socket(NativeSocket socket)
+    {
+      if (socket == invalid_socket_value)
+        return;
+
+#ifdef _WIN32
+      ::closesocket(socket);
+#else
+      ::close(socket);
+#endif
+    }
+
+    std::string native_socket_error_message(int code)
+    {
+#ifdef _WIN32
+      return "socket error " + std::to_string(code);
+#else
+      return std::strerror(code);
+#endif
+    }
+
+    int native_last_error()
+    {
+#ifdef _WIN32
+      return ::WSAGetLastError();
+#else
+      return errno;
+#endif
+    }
+
+    bool is_connect_in_progress(int errorCode)
+    {
+#ifdef _WIN32
+      return errorCode == WSAEWOULDBLOCK ||
+             errorCode == WSAEINPROGRESS ||
+             errorCode == WSAEALREADY ||
+             errorCode == WSAEINVAL;
+#else
+      return errorCode == EINPROGRESS;
+#endif
+    }
+
+    bool set_socket_non_blocking(NativeSocket socket, std::string &error)
+    {
+#ifdef _WIN32
+      u_long mode = 1;
+
+      if (::ioctlsocket(socket, FIONBIO, &mode) == 0)
+        return true;
+
+      error = native_socket_error_message(native_last_error());
+      return false;
+#else
+      const int flags = ::fcntl(socket, F_GETFL, 0);
+
+      if (flags < 0)
+      {
+        error = native_socket_error_message(errno);
+        return false;
+      }
+
+      if (::fcntl(socket, F_SETFL, flags | O_NONBLOCK) == 0)
+        return true;
+
+      error = native_socket_error_message(errno);
+      return false;
+#endif
+    }
+
+    int clamp_timeout_ms(std::uint64_t timeoutMs)
+    {
+      if (timeoutMs == 0)
+        return 1;
+
+      if (timeoutMs > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+        return std::numeric_limits<int>::max();
+
+      return static_cast<int>(timeoutMs);
+    }
+
+    bool wait_socket_writable(
+        NativeSocket socket,
+        std::uint64_t timeoutMs,
+        std::string &error)
+    {
+      fd_set writeSet;
+      FD_ZERO(&writeSet);
+      FD_SET(socket, &writeSet);
+
+      fd_set errorSet;
+      FD_ZERO(&errorSet);
+      FD_SET(socket, &errorSet);
+
+      const int timeout = clamp_timeout_ms(timeoutMs);
+
+      timeval tv{};
+      tv.tv_sec = timeout / 1000;
+      tv.tv_usec = (timeout % 1000) * 1000;
+
+#ifdef _WIN32
+      const int rc = ::select(
+          0,
+          nullptr,
+          &writeSet,
+          &errorSet,
+          &tv);
+#else
+      const int rc = ::select(
+          socket + 1,
+          nullptr,
+          &writeSet,
+          &errorSet,
+          &tv);
+#endif
+
+      if (rc == 0)
+      {
+        error = "TCP connection timed out";
+        return false;
+      }
+
+      if (rc < 0)
+      {
+        error = native_socket_error_message(native_last_error());
+        return false;
+      }
+
+      int socketError = 0;
+#ifdef _WIN32
+      int socketErrorSize = sizeof(socketError);
+#else
+      socklen_t socketErrorSize = sizeof(socketError);
+#endif
+
+      if (::getsockopt(
+              socket,
+              SOL_SOCKET,
+              SO_ERROR,
+#ifdef _WIN32
+              reinterpret_cast<char *>(&socketError),
+#else
+              &socketError,
+#endif
+              &socketErrorSize) != 0)
+      {
+        error = native_socket_error_message(native_last_error());
+        return false;
+      }
+
+      if (socketError != 0)
+      {
+        error = native_socket_error_message(socketError);
+        return false;
+      }
+
+      return true;
+    }
+
+    bool tcp_connect_check(
+        const std::string &host,
+        const std::string &port,
+        std::uint64_t timeoutMs,
+        std::string &error)
+    {
+#ifdef _WIN32
+      if (!ensure_winsock_ready(error))
+        return false;
+#endif
+
+      addrinfo hints{};
+      hints.ai_family = AF_UNSPEC;
+      hints.ai_socktype = SOCK_STREAM;
+      hints.ai_protocol = IPPROTO_TCP;
+
+      addrinfo *result = nullptr;
+
+      const int gai = ::getaddrinfo(
+          host.c_str(),
+          port.c_str(),
+          &hints,
+          &result);
+
+      if (gai != 0)
+      {
+#ifdef _WIN32
+        error = ::gai_strerrorA(gai);
+#else
+        error = ::gai_strerror(gai);
+#endif
+        return false;
+      }
+
+      std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)> addresses(
+          result,
+          ::freeaddrinfo);
+
+      for (addrinfo *rp = addresses.get(); rp != nullptr; rp = rp->ai_next)
+      {
+        NativeSocket socket = ::socket(
+            rp->ai_family,
+            rp->ai_socktype,
+            rp->ai_protocol);
+
+        if (socket == invalid_socket_value)
+        {
+          error = native_socket_error_message(native_last_error());
+          continue;
+        }
+
+        if (!set_socket_non_blocking(socket, error))
+        {
+          close_native_socket(socket);
+          continue;
+        }
+
+        const int rc = ::connect(
+            socket,
+            rp->ai_addr,
+#ifdef _WIN32
+            static_cast<int>(rp->ai_addrlen)
+#else
+            rp->ai_addrlen
+#endif
+        );
+
+        if (rc == 0)
+        {
+          close_native_socket(socket);
+          return true;
+        }
+
+        const int connectError = native_last_error();
+
+        if (!is_connect_in_progress(connectError))
+        {
+          error = native_socket_error_message(connectError);
+          close_native_socket(socket);
+          continue;
+        }
+
+        const bool writable = wait_socket_writable(
+            socket,
+            timeoutMs,
+            error);
+
+        close_native_socket(socket);
+
+        if (writable)
+          return true;
+      }
+
+      if (error.empty())
+        error = "TCP connection failed";
+
+      return false;
+    }
 
     bool starts_with(
         const std::string &value,
@@ -137,13 +461,15 @@ namespace vix::commands::ws::checker
       if (contains_text(message, "resolve") ||
           contains_text(message, "dns") ||
           contains_text(message, "host not found") ||
-          contains_text(message, "name or service not known"))
+          contains_text(message, "name or service not known") ||
+          contains_text(message, "nodename nor servname provided"))
       {
         return WsFailureKind::Dns;
       }
 
       if (contains_text(message, "connection refused") ||
-          contains_text(message, "refused"))
+          contains_text(message, "refused") ||
+          contains_text(message, "socket error 10061"))
       {
         return WsFailureKind::ConnectionRefused;
       }
@@ -199,7 +525,7 @@ namespace vix::commands::ws::checker
       case WsFailureKind::BadPath:
         return "WebSocket path does not exist on the server.";
       case WsFailureKind::ProxyHttpResponse:
-        return "Server returned an HTTP response instead of a WebSocket upgrade.";
+        return "Server returned HTTP instead of WebSocket upgrade.";
       case WsFailureKind::BadHandshake:
         return "WebSocket handshake failed.";
       case WsFailureKind::TlsUnsupported:
@@ -216,26 +542,26 @@ namespace vix::commands::ws::checker
       switch (kind)
       {
       case WsFailureKind::Dns:
-        return "check the domain name, DNS record and network resolver";
+        return "check domain and DNS resolver";
       case WsFailureKind::ConnectionRefused:
-        return "check that the WebSocket service is running and listening on the selected port";
+        return "check service port and listener";
       case WsFailureKind::Timeout:
-        return "check firewall rules, service availability, Nginx upstream and network reachability";
+        return "check firewall, upstream and service";
       case WsFailureKind::MissingUpgrade:
-        return "check Nginx proxy_set_header Upgrade and Connection headers";
+        return "check Nginx Upgrade headers";
       case WsFailureKind::BadPath:
-        return "check the WebSocket route/path configured by the application";
+        return "check WebSocket route/path";
       case WsFailureKind::ProxyHttpResponse:
-        return "check that the endpoint is a WebSocket endpoint and not a normal HTTP route";
+        return "check endpoint and proxy route";
       case WsFailureKind::BadHandshake:
-        return "check WebSocket port, route/path and proxy upgrade configuration";
+        return "check port, path and proxy upgrade";
       case WsFailureKind::TlsUnsupported:
-        return "use ws:// for local checks until native wss:// support is added";
+        return "use ws:// until wss:// support is added";
       case WsFailureKind::Unknown:
-        return "run with --verbose and check the WebSocket server logs";
+        return "run with --verbose and check logs";
       }
 
-      return "run with --verbose and check the WebSocket server logs";
+      return "run with --verbose and check logs";
     }
 
     std::optional<ParsedWsUrl> parse_ws_url(
@@ -358,6 +684,38 @@ namespace vix::commands::ws::checker
       output::ok(std::cout, "port: " + url.port);
       output::ok(std::cout, "path: " + url.target);
     }
+
+    bool run_tcp_probe(
+        const ParsedWsUrl &parsed,
+        std::uint64_t timeoutMs)
+    {
+      output::step(std::cout, "TCP");
+      output::command(
+          std::cout,
+          "connect " + parsed.host + ":" + parsed.port);
+
+      std::string tcpError;
+
+      if (tcp_connect_check(
+              parsed.host,
+              parsed.port,
+              timeoutMs,
+              tcpError))
+      {
+        output::ok(std::cout, "TCP endpoint is reachable");
+        return true;
+      }
+
+      const WsFailureKind failureKind = classify_failure(tcpError);
+
+      output::error(std::cerr, failure_title(failureKind));
+
+      if (!tcpError.empty())
+        output::warn(std::cerr, tcpError);
+
+      output::fix(std::cerr, failure_fix(failureKind));
+      return false;
+    }
   }
 
   int check(
@@ -389,10 +747,13 @@ namespace vix::commands::ws::checker
 
     if (parsed->tls)
     {
-      output::error(std::cerr, "wss:// checks are not supported by the native checker yet.");
-      output::fix(std::cerr, "use ws:// for local checks, or test WSS through the proxy layer later");
+      output::error(std::cerr, "wss:// checks are not supported yet.");
+      output::fix(std::cerr, "use ws:// until TLS support is added");
       return 1;
     }
+
+    if (!run_tcp_probe(*parsed, options.timeoutMs))
+      return 1;
 
     CheckState state;
 
@@ -457,37 +818,43 @@ namespace vix::commands::ws::checker
       client->close();
 
       output::error(std::cerr, "WebSocket check timed out.");
-      output::fix(std::cerr, "check host, port, firewall, service status and Nginx upstream");
+      output::fix(std::cerr, "check service, firewall and proxy");
       return 1;
     }
 
+    bool opened = false;
+    bool errored = false;
+    std::string errorMessage;
+
     {
       std::lock_guard<std::mutex> lock(state.mutex);
+      opened = state.opened;
+      errored = state.errored;
+      errorMessage = state.error;
+    }
 
-      if (state.errored)
-      {
-        const std::string errorMessage = state.error;
-        const WsFailureKind failureKind = classify_failure(errorMessage);
+    if (errored)
+    {
+      const WsFailureKind failureKind = classify_failure(errorMessage);
 
-        client->close();
+      client->close();
 
-        output::error(std::cerr, failure_title(failureKind));
+      output::error(std::cerr, failure_title(failureKind));
 
-        if (!errorMessage.empty())
-          output::warn(std::cerr, errorMessage);
+      if (!errorMessage.empty())
+        output::warn(std::cerr, errorMessage);
 
-        output::fix(std::cerr, failure_fix(failureKind));
-        return 1;
-      }
+      output::fix(std::cerr, failure_fix(failureKind));
+      return 1;
+    }
 
-      if (!state.opened)
-      {
-        client->close();
+    if (!opened)
+    {
+      client->close();
 
-        output::error(std::cerr, "WebSocket connection closed before opening.");
-        output::fix(std::cerr, "check whether the endpoint accepts WebSocket upgrades");
-        return 1;
-      }
+      output::error(std::cerr, "WebSocket closed before opening.");
+      output::fix(std::cerr, "check upgrade support");
+      return 1;
     }
 
     output::ok(std::cout, "WebSocket handshake succeeded");

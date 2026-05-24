@@ -824,7 +824,10 @@ namespace vix::commands::RunCommand::dev
     if (pid < 0)
     {
       error("Failed to fork() for dev process.");
-      co_return 1;
+
+      co_return DevChildRunResult{
+          1,
+          DevChildExitReason::Exited};
     }
 
     if (pid == 0)

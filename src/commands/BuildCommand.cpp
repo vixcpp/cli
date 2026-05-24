@@ -2035,25 +2035,6 @@ namespace vix::commands::BuildCommand
       return false;
     }
 
-    static bool node_metadata_changed(
-        const build::BuildNode &current,
-        const build::BuildNode &previous)
-    {
-      if (current.hash != previous.hash)
-        return true;
-
-      if (current.size != previous.size)
-        return true;
-
-      if (current.mtime != previous.mtime)
-        return true;
-
-      if (current.state != previous.state)
-        return true;
-
-      return false;
-    }
-
     static std::string explain_node_change(
         const build::BuildNode &current,
         const build::BuildNode *previous)

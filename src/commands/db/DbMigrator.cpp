@@ -13,8 +13,11 @@
 #include <vix/cli/commands/db/DbMigrator.hpp>
 #include <vix/cli/commands/db/DbOutput.hpp>
 #include <vix/cli/util/Ui.hpp>
+
+#ifdef VIX_CLI_HAS_DB
 #include <vix/db/Database.hpp>
 #include <vix/db/mig/FileMigrationsRunner.hpp>
+#endif
 
 #include <exception>
 #include <filesystem>
@@ -27,23 +30,11 @@ namespace vix::commands::db::migrator
 {
   namespace
   {
-    /**
-     * @brief Check whether the selected database engine is SQLite.
-     *
-     * @param cfg Database configuration.
-     * @return true if SQLite is selected.
-     */
     bool is_sqlite(const DbConfig &cfg)
     {
       return cfg.engine == DbEngine::SQLite;
     }
 
-    /**
-     * @brief Validate filesystem preconditions before running migrations.
-     *
-     * @param cfg Database configuration.
-     * @return true if migration can continue.
-     */
     bool validate_migration_inputs(const DbConfig &cfg)
     {
       if (!is_sqlite(cfg))
@@ -54,7 +45,7 @@ namespace vix::commands::db::migrator
 
         output::fix(
             std::cerr,
-            "set database.engine to sqlite or use the ORM command for other engines");
+            "set database.engine to sqlite");
 
         return false;
       }
@@ -90,11 +81,6 @@ namespace vix::commands::db::migrator
       return true;
     }
 
-    /**
-     * @brief Print the migration summary.
-     *
-     * @param cfg Database configuration.
-     */
     void print_migration_summary(const DbConfig &cfg)
     {
       output::step(std::cout, "Database Migrations");
@@ -111,6 +97,17 @@ namespace vix::commands::db::migrator
   {
     (void)options;
 
+#ifndef VIX_CLI_HAS_DB
+    output::error(
+        std::cerr,
+        "vix db migrate is not available in this build.");
+
+    output::fix(
+        std::cerr,
+        "rebuild the Vix CLI with the db module enabled");
+
+    return 1;
+#else
     if (!validate_migration_inputs(cfg))
       return 1;
 
@@ -143,5 +140,6 @@ namespace vix::commands::db::migrator
 
       return 1;
     }
+#endif
   }
 }

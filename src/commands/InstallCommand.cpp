@@ -220,11 +220,6 @@ namespace vix::commands
       return store_git_dir() / sanitize_id_dot(id) / commit;
     }
 
-    static fs::path global_pkg_dir(const std::string &id, const std::string &commit)
-    {
-      return global_pkgs_dir() / sanitize_id_dot(id) / commit;
-    }
-
     static fs::path entry_path(const std::string &ns, const std::string &name)
     {
       return registry_index_dir() / (ns + "." + name + ".json");

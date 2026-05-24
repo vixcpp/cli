@@ -138,20 +138,6 @@ namespace vix::commands::AgentCommand
       return std::to_string(timeout_ms) + "ms";
     }
 
-    [[nodiscard]] std::string format_duration_ms(long long milliseconds)
-    {
-      std::ostringstream oss;
-
-      const double seconds =
-          static_cast<double>(milliseconds) / 1000.0;
-
-      oss.setf(std::ios::fixed);
-      oss.precision(seconds >= 10.0 ? 1 : 2);
-      oss << seconds << "s";
-
-      return oss.str();
-    }
-
     [[nodiscard]] bool parse_options(
         const std::vector<std::string> &args,
         Options &options)

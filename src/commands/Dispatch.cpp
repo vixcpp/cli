@@ -24,6 +24,7 @@
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
+#include <vix/cli/commands/DbCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/SearchCommand.hpp>
@@ -180,6 +181,14 @@ namespace vix::cli::dispatch
          { return vix::commands::OrmCommand::run(a); },
          []()
          { return vix::commands::OrmCommand::help(); }});
+
+    add({"db",
+         "Database",
+         "Inspect SQLite database and storage status",
+         [](const Args &a)
+         { return vix::commands::DbCommand::run(a); },
+         []()
+         { return vix::commands::DbCommand::help(); }});
 
     add({"fmt",
          "Project",

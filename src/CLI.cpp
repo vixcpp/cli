@@ -19,6 +19,7 @@
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/ReplayCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
+#include <vix/cli/commands/DbCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
@@ -266,6 +267,8 @@ namespace vix
     { return commands::ReplayCommand::run(args); };
     commands_["orm"] = [](auto args)
     { return commands::OrmCommand::run(args); };
+    commands_["db"] = [](auto args)
+    { return commands::DbCommand::run(args); };
     commands_["pack"] = [](auto args)
     { return commands::PackCommand::run(args); };
     commands_["verify"] = [](auto args)
@@ -587,6 +590,8 @@ namespace vix
         return commands::P2PCommand::help();
       if (cmd == "orm")
         return commands::OrmCommand::help();
+      if (cmd == "db")
+        return commands::DbCommand::help();
 
       if (cmd == "completion")
         return commands::CompletionCommand::help();
@@ -699,6 +704,7 @@ namespace vix
     out << indent(3) << "game               Export and manage Vix game projects\n";
     out << indent(3) << "p2p                Run P2P node/tools\n";
     out << indent(3) << "orm                Database migrations/status/rollback\n\n";
+    out << indent(3) << "db                 Inspect SQLite database and storage status\n\n";
 
     out << indent(2) << "System:\n";
     docs("/cli/info");

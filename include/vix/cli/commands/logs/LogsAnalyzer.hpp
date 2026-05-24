@@ -83,6 +83,11 @@ namespace vix::commands::logs::analyzer
      * @brief Number of common network disconnect groups detected.
      */
     int networkDisconnectGroups{0};
+
+    /**
+     * @brief Number of normal network noise lines hidden from repeated errors.
+     */
+    int hiddenNormalNoiseLines{0};
   };
 
   /**

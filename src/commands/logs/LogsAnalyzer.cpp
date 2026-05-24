@@ -100,9 +100,13 @@ namespace vix::commands::logs::analyzer
         return "connection reset by peer";
       }
 
-      if (line.find("client closed connection") != std::string::npos ||
+      if (line.find("client disconnected") != std::string::npos ||
+          line.find("client_closed") != std::string::npos ||
+          line.find("client closed connection") != std::string::npos ||
           line.find("client prematurely closed connection") != std::string::npos ||
-          line.find("broken pipe") != std::string::npos)
+          line.find("broken pipe") != std::string::npos ||
+          line.find("detail=eof") != std::string::npos ||
+          line.find(" eof") != std::string::npos)
       {
         return "client disconnected";
       }
@@ -136,6 +140,13 @@ namespace vix::commands::logs::analyzer
 
       return {};
     }
+
+    bool is_normal_network_noise(const std::string &group)
+    {
+      return group == "client disconnected" ||
+             group == "connection reset by peer" ||
+             group == "websocket disconnected";
+    }
   }
 
   RepeatedLogReport analyze_repeated_errors(
@@ -154,13 +165,21 @@ namespace vix::commands::logs::analyzer
       if (normalized.empty())
         continue;
 
-      ++repeatedCounts[normalized];
-
       const std::string networkGroup =
           detect_network_group(normalized);
 
       if (!networkGroup.empty())
+      {
         ++networkCounts[networkGroup];
+
+        if (is_normal_network_noise(networkGroup))
+        {
+          ++report.hiddenNormalNoiseLines;
+          continue;
+        }
+      }
+
+      ++repeatedCounts[normalized];
     }
 
     for (const auto &[message, count] : repeatedCounts)
@@ -252,6 +271,14 @@ namespace vix::commands::logs::analyzer
         out,
         "Detected groups",
         std::to_string(report.networkDisconnectGroups));
+
+    if (report.hiddenNormalNoiseLines > 0)
+    {
+      vix::cli::util::kv(
+          out,
+          "Hidden normal noise",
+          std::to_string(report.hiddenNormalNoiseLines) + " lines");
+    }
 
     if (report.networkGroups.empty())
     {

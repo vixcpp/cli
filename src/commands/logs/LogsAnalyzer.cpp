@@ -91,6 +91,51 @@ namespace vix::commands::logs::analyzer
 
       return line;
     }
+
+    std::string detect_network_group(const std::string &line)
+    {
+      if (line.find("connection reset by peer") != std::string::npos ||
+          line.find("reset by peer") != std::string::npos)
+      {
+        return "connection reset by peer";
+      }
+
+      if (line.find("client closed connection") != std::string::npos ||
+          line.find("client prematurely closed connection") != std::string::npos ||
+          line.find("broken pipe") != std::string::npos)
+      {
+        return "client disconnected";
+      }
+
+      if (line.find("upstream prematurely closed connection") != std::string::npos)
+      {
+        return "upstream disconnected";
+      }
+
+      if (line.find("connection refused") != std::string::npos ||
+          line.find("connect() failed") != std::string::npos ||
+          line.find("connect failed") != std::string::npos)
+      {
+        return "connection refused";
+      }
+
+      if (line.find("timed out") != std::string::npos ||
+          line.find("timeout") != std::string::npos ||
+          line.find("upstream timed out") != std::string::npos)
+      {
+        return "timeout";
+      }
+
+      if (line.find("websocket") != std::string::npos &&
+          (line.find("close") != std::string::npos ||
+           line.find("closed") != std::string::npos ||
+           line.find("disconnect") != std::string::npos))
+      {
+        return "websocket disconnected";
+      }
+
+      return {};
+    }
   }
 
   RepeatedLogReport analyze_repeated_errors(
@@ -99,7 +144,8 @@ namespace vix::commands::logs::analyzer
     RepeatedLogReport report;
     report.totalLines = static_cast<int>(lines.size());
 
-    std::unordered_map<std::string, int> counts;
+    std::unordered_map<std::string, int> repeatedCounts;
+    std::unordered_map<std::string, int> networkCounts;
 
     for (const std::string &line : lines)
     {
@@ -108,10 +154,16 @@ namespace vix::commands::logs::analyzer
       if (normalized.empty())
         continue;
 
-      ++counts[normalized];
+      ++repeatedCounts[normalized];
+
+      const std::string networkGroup =
+          detect_network_group(normalized);
+
+      if (!networkGroup.empty())
+        ++networkCounts[networkGroup];
     }
 
-    for (const auto &[message, count] : counts)
+    for (const auto &[message, count] : repeatedCounts)
     {
       if (count <= 1)
         continue;
@@ -119,6 +171,14 @@ namespace vix::commands::logs::analyzer
       report.entries.push_back(
           RepeatedLogEntry{
               message,
+              count});
+    }
+
+    for (const auto &[name, count] : networkCounts)
+    {
+      report.networkGroups.push_back(
+          NetworkDisconnectGroup{
+              name,
               count});
     }
 
@@ -133,8 +193,22 @@ namespace vix::commands::logs::analyzer
           return a.message < b.message;
         });
 
+    std::sort(
+        report.networkGroups.begin(),
+        report.networkGroups.end(),
+        [](const NetworkDisconnectGroup &a, const NetworkDisconnectGroup &b)
+        {
+          if (a.count != b.count)
+            return a.count > b.count;
+
+          return a.name < b.name;
+        });
+
     report.repeatedGroups =
         static_cast<int>(report.entries.size());
+
+    report.networkDisconnectGroups =
+        static_cast<int>(report.networkGroups.size());
 
     return report;
   }
@@ -160,16 +234,40 @@ namespace vix::commands::logs::analyzer
       vix::cli::util::ok_line(
           out,
           "no repeated errors detected");
+    }
+    else
+    {
+      for (const RepeatedLogEntry &entry : report.entries)
+      {
+        vix::cli::util::kv(
+            out,
+            std::to_string(entry.count) + "x",
+            entry.message);
+      }
+    }
+
+    vix::cli::util::section(out, "Common Network Disconnects");
+
+    vix::cli::util::kv(
+        out,
+        "Detected groups",
+        std::to_string(report.networkDisconnectGroups));
+
+    if (report.networkGroups.empty())
+    {
+      vix::cli::util::ok_line(
+          out,
+          "no common network disconnects detected");
 
       return;
     }
 
-    for (const RepeatedLogEntry &entry : report.entries)
+    for (const NetworkDisconnectGroup &group : report.networkGroups)
     {
       vix::cli::util::kv(
           out,
-          std::to_string(entry.count) + "x",
-          entry.message);
+          std::to_string(group.count) + "x",
+          group.name);
     }
   }
 }

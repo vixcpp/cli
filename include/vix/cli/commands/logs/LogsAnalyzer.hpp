@@ -37,6 +37,23 @@ namespace vix::commands::logs::analyzer
   };
 
   /**
+   * @struct NetworkDisconnectGroup
+   * @brief Represents a known network disconnect family.
+   */
+  struct NetworkDisconnectGroup
+  {
+    /**
+     * @brief Human-readable group name.
+     */
+    std::string name{};
+
+    /**
+     * @brief Number of log lines matching this network group.
+     */
+    int count{0};
+  };
+
+  /**
    * @struct RepeatedLogReport
    * @brief Summary produced by repeated log analysis.
    */
@@ -48,6 +65,11 @@ namespace vix::commands::logs::analyzer
     std::vector<RepeatedLogEntry> entries{};
 
     /**
+     * @brief Common network disconnect groups sorted by descending count.
+     */
+    std::vector<NetworkDisconnectGroup> networkGroups{};
+
+    /**
      * @brief Total number of log lines analyzed.
      */
     int totalLines{0};
@@ -56,6 +78,11 @@ namespace vix::commands::logs::analyzer
      * @brief Number of repeated message groups detected.
      */
     int repeatedGroups{0};
+
+    /**
+     * @brief Number of common network disconnect groups detected.
+     */
+    int networkDisconnectGroups{0};
   };
 
   /**
@@ -63,10 +90,10 @@ namespace vix::commands::logs::analyzer
    *
    * This function normalizes variable parts of log lines, such as timestamps,
    * IP addresses, numbers, and long values, then groups equivalent messages
-   * together.
+   * together. It also detects common network disconnect families.
    *
    * @param lines Raw log lines to analyze.
-   * @return Report containing repeated error groups and counters.
+   * @return Report containing repeated error groups and network disconnect groups.
    */
   RepeatedLogReport analyze_repeated_errors(
       const std::vector<std::string> &lines);

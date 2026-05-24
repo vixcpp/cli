@@ -103,18 +103,6 @@ namespace vix::cli::build
           << "\n";
     }
 
-    static void print_optional_line(
-        std::ostream &out,
-        const std::string &label,
-        const std::string &value)
-    {
-      if (value.empty())
-        return;
-
-      print_label(out, label);
-      out << "    " << value << "\n\n";
-    }
-
     static void print_compact_optional_line(
         std::ostream &out,
         const std::string &label,

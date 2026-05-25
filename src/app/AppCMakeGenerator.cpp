@@ -83,6 +83,38 @@ namespace vix::cli::app
       return value;
     }
 
+    static std::string normalize_module_id(std::string name)
+    {
+      name.erase(
+          name.begin(),
+          std::find_if(
+              name.begin(),
+              name.end(),
+              [](unsigned char c)
+              {
+                return std::isspace(c) == 0;
+              }));
+
+      name.erase(
+          std::find_if(
+              name.rbegin(),
+              name.rend(),
+              [](unsigned char c)
+              {
+                return std::isspace(c) == 0;
+              })
+              .base(),
+          name.end());
+
+      for (char &c : name)
+      {
+        if (c == '-')
+          c = '_';
+      }
+
+      return name;
+    }
+
     // ---------------------------------------------------------------
     // Standard normalization
     // ---------------------------------------------------------------
@@ -283,6 +315,19 @@ namespace vix::cli::app
       out << "set(CMAKE_CXX_EXTENSIONS OFF)\n\n";
     }
 
+    static void emit_modules_loader(
+        std::ostringstream &out,
+        const fs::path &projectDir)
+    {
+      const fs::path loader =
+          projectDir / "cmake" / "vix_modules.cmake";
+
+      out << "# Internal application modules declared by `vix modules`\n";
+      out << "if(EXISTS " << cmake_quoted_path(loader) << ")\n";
+      out << "  include(" << cmake_quoted_path(loader) << ")\n";
+      out << "endif()\n\n";
+    }
+
     static bool is_vix_package(const AppPackage &pkg)
     {
       const std::string name = lower_copy(pkg.name);
@@ -429,6 +474,39 @@ namespace vix::cli::app
           "target_link_libraries",
           targetName,
           manifest.links);
+    }
+
+    static void emit_modules_links(
+        std::ostringstream &out,
+        const AppManifest &manifest,
+        const std::string &targetName)
+    {
+      if (manifest.modules.empty())
+        return;
+
+      out << "# Modules declared in vix.app\n";
+
+      for (const std::string &module : manifest.modules)
+      {
+        const std::string normalized = normalize_module_id(module);
+        const std::string alias = manifest.name + "::" + normalized;
+
+        out << "if(TARGET " << alias << ")\n";
+        out << "  target_link_libraries("
+            << targetName
+            << " PRIVATE "
+            << alias
+            << ")\n";
+        out << "else()\n";
+        out << "  message(FATAL_ERROR \"vix.app module not found: "
+            << normalized
+            << " (expected target "
+            << alias
+            << ")\")\n";
+        out << "endif()\n";
+      }
+
+      out << "\n";
     }
 
     static void emit_output_dir(
@@ -646,10 +724,15 @@ namespace vix::cli::app
     // targets are available to target_link_libraries.
     emit_packages(out, manifest.packages);
 
+    // User application modules must be loaded before linking their
+    // alias targets into the generated application target.
+    emit_modules_loader(out, projectDir);
+
     emit_target(out, manifest, targetName, projectDir);
     emit_includes_and_defines(out, manifest, targetName, projectDir);
     emit_options_and_features(out, manifest, targetName);
     emit_links(out, manifest, targetName);
+    emit_modules_links(out, manifest, targetName);
     emit_output_dir(out, manifest, targetName);
     emit_resources(out, manifest, targetName, projectDir);
     emit_tests(out, manifest, targetName, projectDir);

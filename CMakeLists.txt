@@ -192,6 +192,8 @@ else()
     endif()
 
     if (EXISTS "${_VIX_CRYPTO_DIR}/CMakeLists.txt" AND NOT TARGET vix::crypto)
+      set(VIX_CRYPTO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+      set(VIX_CRYPTO_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
       add_subdirectory("${_VIX_CRYPTO_DIR}" "${CMAKE_BINARY_DIR}/_vix_crypto")
     endif()
 
@@ -351,6 +353,17 @@ if (TARGET vix::game)
   target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_GAME=1)
 else()
   message(STATUS "[cli] Game command disabled: vix::game target not found")
+endif()
+
+# ----------------------------------------------------
+# Optional crypto command support
+# ----------------------------------------------------
+if (TARGET vix::crypto)
+  message(STATUS "[cli] Crypto command enabled")
+  target_link_libraries(vix_cli PRIVATE vix::crypto)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_CRYPTO=1)
+else()
+  message(STATUS "[cli] Crypto command disabled: vix::crypto target not found")
 endif()
 
 # ----------------------------------------------------

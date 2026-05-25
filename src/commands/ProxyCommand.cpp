@@ -11,6 +11,7 @@
  *  Vix.cpp
  */
 #include <vix/cli/commands/ProxyCommand.hpp>
+#include <vix/cli/commands/proxy/NginxCertbot.hpp>
 #include <vix/cli/commands/proxy/NginxChecker.hpp>
 #include <vix/cli/commands/proxy/NginxGenerator.hpp>
 #include <vix/cli/commands/proxy/NginxOutput.hpp>
@@ -32,11 +33,13 @@ namespace vix::commands
           << "Commands:\n"
           << "  init       Generate, install and enable an Nginx config\n"
           << "  check      Validate the installed Nginx proxy config\n"
-          << "  reload     Validate and reload Nginx\n\n"
+          << "  reload     Validate and reload Nginx\n"
+          << "  certbot    Issue or renew a Let's Encrypt certificate\n\n"
           << "Examples:\n"
           << "  vix proxy nginx init\n"
           << "  vix proxy nginx check\n"
-          << "  vix proxy nginx reload\n";
+          << "  vix proxy nginx reload\n"
+          << "  vix proxy nginx certbot\n";
 
       return 0;
     }
@@ -57,6 +60,9 @@ namespace vix::commands
 
       if (action == "reload")
         return proxy::nginx_checker::reload(cfg);
+
+      if (action == "certbot")
+        return proxy::nginx_certbot::run(cfg);
 
       proxy::nginx_output::error(
           std::cerr,
@@ -116,11 +122,13 @@ namespace vix::commands
         << "Commands:\n"
         << "  nginx init       Generate, install and enable an Nginx config\n"
         << "  nginx check      Validate the installed Nginx proxy config\n"
-        << "  nginx reload     Validate and reload Nginx\n\n"
+        << "  nginx reload     Validate and reload Nginx\n"
+        << "  nginx certbot    Issue or renew a Let's Encrypt certificate\n\n"
         << "Examples:\n"
         << "  vix proxy nginx init\n"
         << "  vix proxy nginx check\n"
-        << "  vix proxy nginx reload\n";
+        << "  vix proxy nginx reload\n"
+        << "  vix proxy nginx certbot\n";
 
     return 0;
   }

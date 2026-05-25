@@ -44,13 +44,7 @@ namespace vix::commands::proxy::nginx_output
 
     std::string tls_value(const NginxProxyConfig &cfg)
     {
-      if (!cfg.tlsEnabled)
-        return "disabled";
-
-      if (cfg.certificatePath.empty() || cfg.certificateKeyPath.empty())
-        return "enabled";
-
-      return "enabled";
+      return cfg.tlsEnabled ? "enabled" : "disabled";
     }
   }
 

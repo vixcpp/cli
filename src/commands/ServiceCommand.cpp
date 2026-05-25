@@ -510,6 +510,9 @@ namespace vix::commands
       out << "User=" << cfg.user << "\n";
       out << "WorkingDirectory=" << cfg.workingDir.string() << "\n";
 
+      if (const auto cliPath = current_vix_cli_path())
+        out << "Environment=VIX_CLI_PATH=" << cliPath->string() << "\n";
+
       if (cfg.vixDir)
       {
         out << "Environment=Vix_DIR=" << cfg.vixDir->string() << "\n";
@@ -525,6 +528,159 @@ namespace vix::commands
       out << "WantedBy=multi-user.target\n";
 
       return out.str();
+    }
+
+    std::optional<std::string> systemctl_property(
+        const std::string &serviceName,
+        const std::string &property)
+    {
+      const std::string cmd =
+          "systemctl show " +
+          shell_quote(serviceName) +
+          " -p " +
+          shell_quote(property) +
+          " --value 2>/dev/null";
+
+      return run_capture(cmd);
+    }
+
+    fs::path canonical_or_absolute(const fs::path &path)
+    {
+      std::error_code ec;
+
+      fs::path resolved = fs::weakly_canonical(path, ec);
+
+      if (!ec && !resolved.empty())
+        return resolved;
+
+      resolved = fs::absolute(path, ec);
+
+      if (!ec && !resolved.empty())
+        return resolved;
+
+      return path;
+    }
+
+    std::optional<fs::path> current_vix_cli_path()
+    {
+      if (const char *path = vix::utils::vix_getenv("VIX_CLI_PATH"))
+      {
+        if (*path)
+          return fs::path(path);
+      }
+
+      const auto found = run_capture("command -v vix 2>/dev/null");
+
+      if (!found)
+        return std::nullopt;
+
+      return fs::path(*found);
+    }
+
+    std::optional<std::string> parse_environment_value(
+        const std::string &raw,
+        const std::string &key)
+    {
+      std::istringstream stream(raw);
+      std::string token;
+      const std::string prefix = key + "=";
+
+      while (stream >> token)
+      {
+        if (token.rfind(prefix, 0) == 0)
+          return token.substr(prefix.size());
+      }
+
+      return std::nullopt;
+    }
+
+    void warn_if_service_points_to_old_build_dir(const ServiceConfig &cfg)
+    {
+      const auto execStart =
+          systemctl_property(cfg.serviceName, "ExecStart");
+
+      if (!execStart || execStart->empty())
+        return;
+
+      const fs::path currentExec =
+          canonical_or_absolute(cfg.execPath);
+
+      const std::string currentExecString = currentExec.string();
+
+      if (execStart->find(currentExecString) != std::string::npos)
+        return;
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Service executable points to a different build path.");
+
+      vix::cli::util::kv(
+          std::cerr,
+          "Service",
+          *execStart);
+
+      vix::cli::util::kv(
+          std::cerr,
+          "Current",
+          currentExecString);
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Fix: run `vix service install` then `vix service restart`.");
+    }
+
+    void warn_if_service_uses_different_vix_installation(const ServiceConfig &cfg)
+    {
+      const auto currentCli =
+          current_vix_cli_path();
+
+      if (!currentCli)
+        return;
+
+      const auto environment =
+          systemctl_property(cfg.serviceName, "Environment");
+
+      if (!environment || environment->empty())
+        return;
+
+      const auto serviceCli =
+          parse_environment_value(*environment, "VIX_CLI_PATH");
+
+      if (!serviceCli || serviceCli->empty())
+        return;
+
+      const fs::path current =
+          canonical_or_absolute(*currentCli);
+
+      const fs::path service =
+          canonical_or_absolute(fs::path(*serviceCli));
+
+      if (current == service)
+        return;
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Service uses a different Vix CLI installation.");
+
+      vix::cli::util::kv(
+          std::cerr,
+          "Current CLI",
+          current.string());
+
+      vix::cli::util::kv(
+          std::cerr,
+          "Service CLI",
+          service.string());
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Fix: update production.service.environment.VIX_CLI_PATH, then run `vix service install`.");
+    }
+
+    void warn_if_service_config_is_stale(const ServiceConfig &cfg)
+    {
+      warn_if_service_points_to_old_build_dir(cfg);
+      warn_if_service_uses_different_vix_installation(cfg);
     }
 
     int install_service()
@@ -611,6 +767,8 @@ namespace vix::commands
 
       if (action == "status")
       {
+        warn_if_service_config_is_stale(cfg);
+
         return std::system(
             ("systemctl status " + shell_quote(cfg.serviceName)).c_str());
       }

@@ -111,6 +111,11 @@ namespace vix::commands::deploy
     bool logsOnFailure{true};
 
     /**
+     * @brief Whether deploy should attempt rollback on failure.
+     */
+    bool rollback{false};
+
+    /**
      * @brief Number of journalctl log lines shown on failure.
      */
     int logLines{80};

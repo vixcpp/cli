@@ -49,6 +49,7 @@ namespace vix::commands::deploy::output
     vix::cli::util::kv(out, "Proxy check", enabled_disabled(cfg.proxyCheck));
     vix::cli::util::kv(out, "Proxy reload", enabled_disabled(cfg.proxyReload));
     vix::cli::util::kv(out, "Logs on failure", enabled_disabled(cfg.logsOnFailure));
+    vix::cli::util::kv(out, "Rollback", enabled_disabled(cfg.rollback));
     vix::cli::util::kv(out, "Dry run", yes_no(options.dryRun));
     vix::cli::util::kv(out, "Verbose", yes_no(options.verbose));
   }

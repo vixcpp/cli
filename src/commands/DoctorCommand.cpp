@@ -403,8 +403,183 @@ namespace vix::commands
       bool jsonOut = false;
       bool online = false;
       bool production = false;
+      bool toolchain = false;
       std::string repo = "vixcpp/vix";
     };
+
+    struct ToolchainInfo
+    {
+      fs::path cliPath{};
+      std::string cliVersion{};
+      std::optional<fs::path> vixDir{};
+      std::optional<fs::path> cmakePrefixPath{};
+    };
+
+    std::optional<fs::path> env_path(const char *name)
+    {
+      if (const char *value = vix::utils::vix_getenv(name))
+      {
+        if (*value)
+          return fs::path(value);
+      }
+
+      return std::nullopt;
+    }
+
+    std::optional<fs::path> first_cmake_prefix_path()
+    {
+      if (const char *value = vix::utils::vix_getenv("CMAKE_PREFIX_PATH"))
+      {
+        if (!*value)
+          return std::nullopt;
+
+        std::string raw(value);
+
+#ifdef _WIN32
+        const char sep = ';';
+#else
+        const char sep = ':';
+#endif
+
+        const auto pos = raw.find(sep);
+
+        if (pos != std::string::npos)
+          raw = raw.substr(0, pos);
+
+        raw = trim_copy(raw);
+
+        if (!raw.empty())
+          return fs::path(raw);
+      }
+
+      return std::nullopt;
+    }
+
+    fs::path canonical_or_absolute(const fs::path &path)
+    {
+      std::error_code ec;
+
+      fs::path resolved = fs::weakly_canonical(path, ec);
+
+      if (!ec && !resolved.empty())
+        return resolved;
+
+      resolved = fs::absolute(path, ec);
+
+      if (!ec && !resolved.empty())
+        return resolved;
+
+      return path;
+    }
+
+    bool same_installation_root(
+        const fs::path &a,
+        const fs::path &b)
+    {
+      if (a.empty() || b.empty())
+        return false;
+
+      const fs::path left = canonical_or_absolute(a);
+      const fs::path right = canonical_or_absolute(b);
+
+      if (left == right)
+        return true;
+
+      const std::string ls = left.string();
+      const std::string rs = right.string();
+
+      return ls.find(rs) == 0 || rs.find(ls) == 0;
+    }
+
+    int doctor_toolchain()
+    {
+      vix::cli::util::section(std::cout, "Toolchain Consistency");
+
+      ToolchainInfo info;
+
+      if (auto path = which_vix())
+        info.cliPath = *path;
+      else
+        info.cliPath = current_exe_path();
+
+      info.cliVersion = vix_version_from_self().value_or("unknown");
+      info.vixDir = env_path("Vix_DIR");
+      info.cmakePrefixPath = first_cmake_prefix_path();
+
+      vix::cli::util::section(std::cout, "CLI");
+      vix::cli::util::kv(std::cout, "Path", info.cliPath.string());
+      vix::cli::util::kv(std::cout, "Version", info.cliVersion);
+
+      vix::cli::util::section(std::cout, "CMake Package");
+      vix::cli::util::kv(
+          std::cout,
+          "Vix_DIR",
+          info.vixDir ? info.vixDir->string() : "(not set)");
+
+      vix::cli::util::kv(
+          std::cout,
+          "CMAKE_PREFIX_PATH",
+          info.cmakePrefixPath ? info.cmakePrefixPath->string() : "(not set)");
+
+      bool ok = true;
+
+      if (info.vixDir)
+      {
+        if (!same_installation_root(info.cliPath.parent_path(), *info.vixDir))
+          ok = false;
+      }
+
+      if (info.cmakePrefixPath)
+      {
+        if (!same_installation_root(info.cliPath.parent_path(), *info.cmakePrefixPath))
+          ok = false;
+      }
+
+      vix::cli::util::section(std::cout, "Result");
+
+      if (ok)
+      {
+        vix::cli::util::ok_line(
+            std::cout,
+            "Vix CLI and CMake package appear to come from the same installation");
+
+        return 0;
+      }
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Vix CLI and Vix libraries come from different installations");
+
+      vix::cli::util::kv(std::cerr, "CLI", info.cliPath.string());
+
+      if (info.vixDir)
+        vix::cli::util::kv(std::cerr, "Vix_DIR", info.vixDir->string());
+
+      if (info.cmakePrefixPath)
+        vix::cli::util::kv(std::cerr, "CMAKE_PREFIX_PATH", info.cmakePrefixPath->string());
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "This can cause confusing builds.");
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Fix: use the same Vix installation for the CLI and CMake package.");
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Example:");
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "  export Vix_DIR=" + info.cliPath.parent_path().string());
+
+      vix::cli::util::warn_line(
+          std::cerr,
+          "  export CMAKE_PREFIX_PATH=" + info.cliPath.parent_path().string());
+
+      return 1;
+    }
 
     Options parse_args(const std::vector<std::string> &args)
     {
@@ -417,6 +592,11 @@ namespace vix::commands
         if (a == "production")
         {
           o.production = true;
+          continue;
+        }
+        if (a == "toolchain")
+        {
+          o.toolchain = true;
           continue;
         }
         if (a == "--json")
@@ -867,6 +1047,127 @@ namespace vix::commands
       return std::system(cmd.c_str()) == 0;
     }
 
+    enum class ReadinessStatus
+    {
+      Ok,
+      Warn,
+      Fail
+    };
+
+    struct ReadinessItem
+    {
+      ReadinessStatus status{ReadinessStatus::Warn};
+      std::string label;
+      int points{0};
+      int maxPoints{0};
+      std::string fix;
+    };
+
+    std::string readiness_status_text(ReadinessStatus status)
+    {
+      switch (status)
+      {
+      case ReadinessStatus::Ok:
+        return "OK";
+
+      case ReadinessStatus::Warn:
+        return "WARN";
+
+      case ReadinessStatus::Fail:
+        return "FAIL";
+      }
+
+      return "WARN";
+    }
+
+    std::optional<bool> read_bool_from_object(
+        const json &object,
+        const std::string &key)
+    {
+      if (!object.is_object() ||
+          !object.contains(key) ||
+          !object[key].is_boolean())
+      {
+        return std::nullopt;
+      }
+
+      return object[key].get<bool>();
+    }
+
+    json read_production_child_object(const std::string &key)
+    {
+      const fs::path vixJson = fs::current_path() / "vix.json";
+
+      if (!fs::exists(vixJson))
+        return json::object();
+
+      try
+      {
+        const json root = read_json_or_throw(vixJson);
+
+        if (!root.is_object() ||
+            !root.contains("production") ||
+            !root["production"].is_object())
+        {
+          return json::object();
+        }
+
+        const json &production = root["production"];
+
+        if (!production.contains(key) ||
+            !production[key].is_object())
+        {
+          return json::object();
+        }
+
+        return production[key];
+      }
+      catch (...)
+      {
+        return json::object();
+      }
+    }
+
+    bool production_health_websocket_configured()
+    {
+      const json health = read_production_child_object("health");
+
+      return health.is_object() &&
+             health.contains("websocket") &&
+             health["websocket"].is_string() &&
+             !trim_copy(health["websocket"].get<std::string>()).empty();
+    }
+
+    bool production_deploy_rollback_configured()
+    {
+      const json deploy = read_production_child_object("deploy");
+
+      if (const auto rollback = read_bool_from_object(deploy, "rollback"))
+        return *rollback;
+
+      return false;
+    }
+
+    void print_readiness_item(
+        const ReadinessItem &item)
+    {
+      const std::string prefix = readiness_status_text(item.status);
+
+      vix::cli::util::kv(
+          std::cout,
+          prefix,
+          item.label + " (" +
+              std::to_string(item.points) + "/" +
+              std::to_string(item.maxPoints) + ")");
+
+      if (item.status != ReadinessStatus::Ok && !item.fix.empty())
+      {
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Fix: " + item.fix);
+      }
+    }
+
     int run_production_doctor(bool jsonOut)
     {
       vix::cli::util::section(std::cout, "Production Doctor");
@@ -904,6 +1205,92 @@ namespace vix::commands
       const bool localHealth = port && local_health_ok(*port);
       const bool publicHealth = domain && public_health_ok(*domain);
 
+      const bool websocketHealthConfigured =
+          production_health_websocket_configured();
+
+      const bool deployRollbackConfigured =
+          production_deploy_rollback_configured();
+
+      std::vector<ReadinessItem> readiness;
+
+      auto add_item =
+          [&](ReadinessStatus status,
+              std::string label,
+              int maxPoints,
+              std::string fix)
+      {
+        readiness.push_back(
+            ReadinessItem{
+                status,
+                label,
+                status == ReadinessStatus::Ok ? maxPoints : 0,
+                maxPoints,
+                fix});
+      };
+
+      add_item(
+          serviceExists ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "service installed",
+          15,
+          "run `vix service install`");
+
+      add_item(
+          running ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "service running",
+          15,
+          "run `vix service start` or `vix service status`");
+
+      add_item(
+          binaryExists ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "binary exists",
+          10,
+          "run `vix build`");
+
+      add_item(
+          nginxExists ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "nginx proxy configured",
+          15,
+          "run `vix proxy nginx init`");
+
+      add_item(
+          tls ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "TLS enabled",
+          15,
+          domain ? "run `vix proxy nginx certbot`" : "configure production.proxy.domain in vix.json");
+
+      add_item(
+          localHealth ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "local health check",
+          10,
+          "configure production.health.local and run `vix health local`");
+
+      add_item(
+          publicHealth ? ReadinessStatus::Ok : ReadinessStatus::Fail,
+          "public health check",
+          10,
+          "configure production.health.public and run `vix health public`");
+
+      add_item(
+          websocketHealthConfigured ? ReadinessStatus::Ok : ReadinessStatus::Warn,
+          "websocket health configured",
+          5,
+          "add production.health.websocket to vix.json");
+
+      add_item(
+          deployRollbackConfigured ? ReadinessStatus::Ok : ReadinessStatus::Warn,
+          "deploy rollback configured",
+          5,
+          "add production.deploy.rollback=true to vix.json");
+
+      int readinessScore = 0;
+      int readinessMax = 0;
+
+      for (const auto &item : readiness)
+      {
+        readinessScore += item.points;
+        readinessMax += item.maxPoints;
+      }
+
       vix::cli::util::kv(std::cout, "App", projectName);
       vix::cli::util::kv(std::cout, "Status", running ? "running" : "not running");
       vix::cli::util::kv(std::cout, "Build dir", buildDir ? buildDir->string() : "not found");
@@ -919,6 +1306,15 @@ namespace vix::commands
       vix::cli::util::kv(std::cout, "TLS", tls ? "enabled" : "unknown");
       vix::cli::util::kv(std::cout, "Local health", localHealth ? "ok" : "unknown");
       vix::cli::util::kv(std::cout, "Public health", publicHealth ? "ok" : "unknown");
+      vix::cli::util::section(std::cout, "Production Readiness");
+
+      vix::cli::util::kv(
+          std::cout,
+          "Score",
+          std::to_string(readinessScore) + "/" + std::to_string(readinessMax));
+
+      for (const auto &item : readiness)
+        print_readiness_item(item);
 
       int rc = 0;
 
@@ -977,6 +1373,23 @@ namespace vix::commands
         out["tls"] = tls;
         out["local_health"] = localHealth;
         out["public_health"] = publicHealth;
+        out["readiness_score"] = readinessScore;
+        out["readiness_max"] = readinessMax;
+        out["websocket_health_configured"] = websocketHealthConfigured;
+        out["deploy_rollback_configured"] = deployRollbackConfigured;
+        out["readiness"] = json::array();
+
+        for (const auto &item : readiness)
+        {
+          out["readiness"].push_back(
+              {
+                  {"status", readiness_status_text(item.status)},
+                  {"label", item.label},
+                  {"points", item.points},
+                  {"max_points", item.maxPoints},
+                  {"fix", item.fix},
+              });
+        }
 
         std::cout << "\n"
                   << out.dump(2) << "\n";
@@ -1008,6 +1421,9 @@ namespace vix::commands
       vix::cli::util::warn_line(std::cerr, "Tip: vix doctor --help");
       return 1;
     }
+
+    if (opt.toolchain)
+      return doctor_toolchain();
 
 #ifndef _WIN32
     if (opt.production)

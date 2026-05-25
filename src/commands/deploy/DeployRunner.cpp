@@ -13,13 +13,21 @@
 #include <vix/cli/commands/deploy/DeployRunner.hpp>
 #include <vix/cli/commands/deploy/DeployOutput.hpp>
 
-#include <cstdlib>
-#include <iostream>
-#include <string>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <optional>
+#include <string>
+
+#if defined(_WIN32)
+#define VIX_CLI_POPEN _popen
+#define VIX_CLI_PCLOSE _pclose
+#else
+#define VIX_CLI_POPEN popen
+#define VIX_CLI_PCLOSE pclose
+#endif
 
 namespace vix::commands::deploy::runner
 {
@@ -58,14 +66,16 @@ namespace vix::commands::deploy::runner
       std::array<char, 2048> buffer{};
       std::string output;
 
-      std::unique_ptr<FILE, decltype(&pclose)> pipe(
-          popen(cmd.c_str(), "r"),
-          pclose);
+      using PipeCloser = int (*)(FILE *);
+
+      std::unique_ptr<FILE, PipeCloser> pipe(
+          VIX_CLI_POPEN(cmd.c_str(), "r"),
+          VIX_CLI_PCLOSE);
 
       if (!pipe)
         return std::nullopt;
 
-      while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr)
+      while (std::fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr)
         output += buffer.data();
 
       while (!output.empty() &&

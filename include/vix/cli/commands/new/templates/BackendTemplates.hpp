@@ -4,40 +4,14 @@
  * @file BackendTemplates.hpp
  * @author Gaspard Kirira
  *
- * File-content templates for the production backend `vix new` template.
+ * Public facade for the production backend `vix new` template.
  */
 
-#include <string>
-
-#include <vix/cli/commands/new/NewTypes.hpp>
-
-namespace vix::commands::new_cmd::templates
-{
-
-  std::string make_backend_main_cpp(const std::string &projectName);
-
-  std::string make_backend_app_bootstrap_hpp(const std::string &projectName);
-  std::string make_backend_app_bootstrap_cpp(const std::string &projectName);
-
-  std::string make_backend_route_registry_hpp(const std::string &projectName);
-  std::string make_backend_route_registry_cpp(const std::string &projectName);
-
-  std::string make_backend_middleware_registry_hpp(const std::string &projectName);
-  std::string make_backend_middleware_registry_cpp(const std::string &projectName);
-
-  std::string make_backend_health_controller_hpp(const std::string &projectName);
-  std::string make_backend_health_controller_cpp(const std::string &projectName);
-
-  std::string make_backend_production_config_json();
-  std::string make_backend_env_example();
-  std::string make_backend_basic_test_cpp(const std::string &projectName);
-
-  std::string make_readme_backend(const std::string &projectName);
-
-  std::string make_project_manifest_backend(
-      const std::string &projectName,
-      const FeaturesSelection &features);
-
-  std::string make_vix_json_backend(const std::string &projectName);
-
-} // namespace vix::commands::new_cmd::templates
+#include <vix/cli/commands/new/templates/backend/BackendBootstrapTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendConfigTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendControllerTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendManifestTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendMiddlewareTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendReadmeTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendRouteTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendTestTemplates.hpp>

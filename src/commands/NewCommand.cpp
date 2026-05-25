@@ -144,10 +144,10 @@ namespace vix::commands::NewCommand
     {
       const std::string tpl = *templateOpt;
 
-      if (tpl != "vue" && tpl != "game" && tpl != "backend")
+      if (tpl != "vue" && tpl != "game" && tpl != "backend" && tpl != "web")
       {
         error("Unknown template: " + tpl);
-        hint("Supported templates: vue, game, backend");
+        hint("Supported templates: backend, web, vue, game");
         return 1;
       }
 
@@ -176,6 +176,13 @@ namespace vix::commands::NewCommand
       {
         error("Conflicting options: --template backend cannot be used with --game.");
         hint("Use --template backend.");
+        return 1;
+      }
+
+      if (wantsGame && *templateOpt == "web")
+      {
+        error("Conflicting options: --template web cannot be used with --game.");
+        hint("Use --template web.");
         return 1;
       }
     }
@@ -304,7 +311,11 @@ namespace vix::commands::NewCommand
       {
         kind = TemplateKind::Backend;
       }
-      if (templateOpt.has_value() && *templateOpt == "game")
+      else if (templateOpt.has_value() && *templateOpt == "web")
+      {
+        kind = TemplateKind::Web;
+      }
+      else if (templateOpt.has_value() && *templateOpt == "game")
       {
         kind = TemplateKind::Game;
       }
@@ -404,6 +415,21 @@ namespace vix::commands::NewCommand
         return 0;
       }
 
+      if (kind == TemplateKind::Web)
+      {
+        if (!gen::generate_web_project(projectDir, projName, features, genErr))
+        {
+          vix::cli::util::err_line(std::cerr, "Failed to create project files.");
+          vix::cli::util::warn_line(std::cerr, genErr);
+          return 1;
+        }
+
+        vix::cli::util::ok_line(std::cout, "Project created.");
+        vix::cli::util::kv(std::cout, "Location", projectDir.string());
+        gen::print_next_steps_web(projectDir, projName);
+        return 0;
+      }
+
       if (kind == TemplateKind::Game)
       {
         if (!gen::generate_game_project(projectDir, projName, genErr))
@@ -468,6 +494,7 @@ namespace vix::commands::NewCommand
         << "  vix new .\n"
         << "  vix new tree --lib\n"
         << "  vix new api --template backend\n"
+        << "  vix new blog --template web\n"
         << "  vix new mario --game\n"
         << "  vix new shop --template vue\n"
         << "  vix new platformer --template game\n"
@@ -476,23 +503,37 @@ namespace vix::commands::NewCommand
 
         << "What happens\n"
         << "  • Generates a ready-to-run Vix project\n"
-        << "  • Sets up CMake, source structure, and config files\n"
+        << "  • Sets up source structure and config files\n"
         << "  • Creates a vix.json manifest\n"
+        << "  • Creates a vix.app manifest when the template uses the Vix app workflow\n"
         << "  • For apps, creates an executable target matching the project name\n"
         << "  • For libraries, creates a header-only CMake interface target\n"
-        << "  • Applies the selected template (app, backend, game, library, or Vue)\n\n"
+        << "  • Applies the selected template: app, backend, game, library, or Vue\n\n"
 
+        << "Options\n"
         << "  --app       Generate an application (default)\n"
         << "  --game      Generate a Vix game project\n"
         << "  --lib       Generate a header-only library\n"
-        << "  --template  Project template, currently: vue, game\n"
+        << "  --template  Project template: backend, web, vue, game\n"
         << "  -d, --dir   Base directory for project creation\n"
         << "  --force     Overwrite existing directory\n\n"
+
+        << "Web workflow\n"
+        << "  cd blog/\n"
+        << "  cp .env.example .env\n"
+        << "  vix dev\n"
+        << "  open http://127.0.0.1:8080\n\n"
 
         << "Application workflow\n"
         << "  cd api/\n"
         << "  vix build\n"
         << "  vix run\n\n"
+
+        << "Backend workflow\n"
+        << "  cd api/\n"
+        << "  cp .env.example .env\n"
+        << "  vix dev\n"
+        << "  curl http://127.0.0.1:8080/health\n\n"
 
         << "Game workflow\n"
         << "  cd mario/\n"
@@ -514,6 +555,7 @@ namespace vix::commands::NewCommand
         << "  • Use 'vix add <pkg>' to add dependencies\n"
         << "  • Use 'vix install' to install from vix.lock\n"
         << "  • Use 'vix task <name>' to run generated tasks\n"
+        << "  • Backend projects are generated with production-oriented folders and config\n"
         << "  • For header-only libraries, use '--build-target all' to build the generated project\n"
         << "  • Tests for header-only libraries are disabled by default and must be enabled with CMake args\n"
         << "  • Designed for fast start with zero setup\n";

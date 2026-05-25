@@ -18,3 +18,4 @@
 #include <vix/cli/commands/new/templates/GameTemplates.hpp>
 #include <vix/cli/commands/new/templates/LibTemplates.hpp>
 #include <vix/cli/commands/new/templates/VueTemplates.hpp>
+#include <vix/cli/commands/new/templates/WebTemplates.hpp>

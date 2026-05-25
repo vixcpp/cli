@@ -1,5 +1,5 @@
 /**
- * @file BackendTemplates.cpp
+ * @file WebTemplates.cpp
  * @author Gaspard Kirira
  *
  * Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -8,4 +8,4 @@
  * that can be found in the License file.
  */
 
-#include <vix/cli/commands/new/templates/BackendTemplates.hpp>
+#include <vix/cli/commands/new/templates/WebTemplates.hpp>

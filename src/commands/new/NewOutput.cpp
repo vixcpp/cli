@@ -118,6 +118,16 @@ namespace vix::commands::new_cmd::output
     print_command_step(5, "curl http://localhost:8080/health", "check health");
   }
 
+  static void print_steps_web(const std::string &projName)
+  {
+    section("next");
+
+    print_command_step(1, "cd " + projName + "/", "enter project");
+    print_command_step(2, "cp .env.example .env", "create local config");
+    print_command_step(3, "vix dev", "start web backend");
+    print_command_step(4, "curl http://localhost:8080/health", "check health");
+  }
+
   // ------------------------------------------------------------------
   // High-level entry points
   // ------------------------------------------------------------------
@@ -169,4 +179,13 @@ namespace vix::commands::new_cmd::output
     print_steps_backend(projName);
   }
 
+  void print_creation_web(
+      const std::filesystem::path & /*projectDir*/,
+      const std::string &projName,
+      const FeaturesSelection & /*features*/)
+  {
+    print_banner(projName, "web application");
+    sep();
+    print_steps_web(projName);
+  }
 } // namespace vix::commands::new_cmd::output

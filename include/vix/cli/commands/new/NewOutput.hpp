@@ -54,6 +54,11 @@ namespace vix::commands::new_cmd::output
       const std::string &projName,
       const FeaturesSelection &features);
 
+  void print_creation_web(
+      const std::filesystem::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features);
+
 } // namespace vix::commands::new_cmd::output
 
 #endif

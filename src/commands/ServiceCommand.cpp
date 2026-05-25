@@ -498,6 +498,22 @@ namespace vix::commands
       return cfg;
     }
 
+    std::optional<fs::path> current_vix_cli_path()
+    {
+      if (const char *path = vix::utils::vix_getenv("VIX_CLI_PATH"))
+      {
+        if (*path)
+          return fs::path(path);
+      }
+
+      const auto found = run_capture("command -v vix 2>/dev/null");
+
+      if (!found)
+        return std::nullopt;
+
+      return fs::path(*found);
+    }
+
     std::string render_systemd_service(const ServiceConfig &cfg)
     {
       std::ostringstream out;
@@ -559,22 +575,6 @@ namespace vix::commands
         return resolved;
 
       return path;
-    }
-
-    std::optional<fs::path> current_vix_cli_path()
-    {
-      if (const char *path = vix::utils::vix_getenv("VIX_CLI_PATH"))
-      {
-        if (*path)
-          return fs::path(path);
-      }
-
-      const auto found = run_capture("command -v vix 2>/dev/null");
-
-      if (!found)
-        return std::nullopt;
-
-      return fs::path(*found);
     }
 
     std::optional<std::string> parse_environment_value(

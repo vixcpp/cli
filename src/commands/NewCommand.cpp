@@ -144,17 +144,17 @@ namespace vix::commands::NewCommand
     {
       const std::string tpl = *templateOpt;
 
-      if (tpl != "vue" && tpl != "game")
+      if (tpl != "vue" && tpl != "game" && tpl != "backend")
       {
         error("Unknown template: " + tpl);
-        hint("Supported templates: vue, game");
+        hint("Supported templates: vue, game, backend");
         return 1;
       }
 
       if (wantsLib)
       {
         error("Conflicting options: --template cannot be used with --lib.");
-        hint("Templates currently supported: vue, game.");
+        hint("Templates currently supported: vue, game, backend.");
         return 1;
       }
 
@@ -169,6 +169,13 @@ namespace vix::commands::NewCommand
       {
         error("Conflicting options: --template vue cannot be used with --game.");
         hint("Use --app, --template vue, or --template game.");
+        return 1;
+      }
+
+      if (wantsGame && *templateOpt == "backend")
+      {
+        error("Conflicting options: --template backend cannot be used with --game.");
+        hint("Use --template backend.");
         return 1;
       }
     }
@@ -293,6 +300,10 @@ namespace vix::commands::NewCommand
       // ------------------------------------------------------------------
       TemplateKind kind = TemplateKind::App;
 
+      if (templateOpt.has_value() && *templateOpt == "backend")
+      {
+        kind = TemplateKind::Backend;
+      }
       if (templateOpt.has_value() && *templateOpt == "game")
       {
         kind = TemplateKind::Game;
@@ -325,10 +336,11 @@ namespace vix::commands::NewCommand
         return 2;
 
       // ------------------------------------------------------------------
-      // Step 3 – Choose features (App only)
+      // Step 3 – Choose features
       // ------------------------------------------------------------------
       FeaturesSelection features{};
-      if ((kind == TemplateKind::App || kind == TemplateKind::Vue) && tui::can_interact())
+      if ((kind == TemplateKind::App || kind == TemplateKind::Vue || kind == TemplateKind::Backend) &&
+          tui::can_interact())
       {
         bool cancelled = false;
         features = tui::choose_features_interactive(cancelled);
@@ -374,6 +386,21 @@ namespace vix::commands::NewCommand
         vix::cli::util::ok_line(std::cout, "Project created.");
         vix::cli::util::kv(std::cout, "Location", projectDir.string());
         gen::print_next_steps_vue(projectDir, projName);
+        return 0;
+      }
+
+      if (kind == TemplateKind::Backend)
+      {
+        if (!gen::generate_backend_project(projectDir, projName, features, genErr))
+        {
+          vix::cli::util::err_line(std::cerr, "Failed to create project files.");
+          vix::cli::util::warn_line(std::cerr, genErr);
+          return 1;
+        }
+
+        vix::cli::util::ok_line(std::cout, "Project created.");
+        vix::cli::util::kv(std::cout, "Location", projectDir.string());
+        gen::print_next_steps_backend(projectDir, projName);
         return 0;
       }
 
@@ -440,6 +467,7 @@ namespace vix::commands::NewCommand
         << "  vix new api\n"
         << "  vix new .\n"
         << "  vix new tree --lib\n"
+        << "  vix new api --template backend\n"
         << "  vix new mario --game\n"
         << "  vix new shop --template vue\n"
         << "  vix new platformer --template game\n"
@@ -452,7 +480,7 @@ namespace vix::commands::NewCommand
         << "  • Creates a vix.json manifest\n"
         << "  • For apps, creates an executable target matching the project name\n"
         << "  • For libraries, creates a header-only CMake interface target\n"
-        << "  • Applies the selected template (app, game, library, or Vue)\n\n"
+        << "  • Applies the selected template (app, backend, game, library, or Vue)\n\n"
 
         << "  --app       Generate an application (default)\n"
         << "  --game      Generate a Vix game project\n"

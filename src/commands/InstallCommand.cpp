@@ -913,6 +913,23 @@ namespace vix::commands
       out << "  endforeach()\n";
       out << "endfunction()\n\n";
 
+      out << "function(_vix_ensure_interface_dep canonical safe include_dir)\n";
+      out << "  if(TARGET ${canonical})\n";
+      out << "    return()\n";
+      out << "  endif()\n";
+      out << "\n";
+      out << "  if(NOT TARGET ${safe})\n";
+      out << "    add_library(${safe} INTERFACE)\n";
+      out << "    if(EXISTS \"${include_dir}\")\n";
+      out << "      target_include_directories(${safe} INTERFACE \"${include_dir}\")\n";
+      out << "    endif()\n";
+      out << "  endif()\n";
+      out << "\n";
+      out << "  if(NOT TARGET ${canonical})\n";
+      out << "    add_library(${canonical} ALIAS ${safe})\n";
+      out << "  endif()\n";
+      out << "endfunction()\n\n";
+
       for (const auto &dep : deps)
       {
         const std::string safe = cmake_safe_target(dep.id);
@@ -940,7 +957,15 @@ namespace vix::commands
             dep.type == "header_and_source" ||
             dep.type == "headers-and-sources";
 
-        if (hasCMake)
+        if (isHeaderOnly)
+        {
+          out << "_vix_ensure_interface_dep("
+              << alias << " "
+              << safe << " "
+              << cmake_quote(depIncludeDir.string())
+              << ")\n";
+        }
+        else if (hasCMake)
         {
           out << "_vix_disable_dep_extras(" << depNs << " " << depName << ")\n";
           out << "if(EXISTS " << cmake_quote(depCMake.string()) << ")\n";
@@ -955,15 +980,11 @@ namespace vix::commands
             out << " " << target;
 
           out << ")\n";
-        }
-        else if (isHeaderOnly)
-        {
-          out << "if(NOT TARGET " << alias << ")\n";
-          out << "  add_library(" << safe << " INTERFACE)\n";
-          out << "  add_library(" << alias << " ALIAS " << safe << ")\n";
-          out << "  target_include_directories(" << safe << " INTERFACE "
-              << cmake_quote(depIncludeDir.string()) << ")\n";
-          out << "endif()\n";
+          out << "_vix_ensure_interface_dep("
+              << alias << " "
+              << safe << " "
+              << cmake_quote(depIncludeDir.string())
+              << ")\n";
         }
         else if (isCompiledLike)
         {
@@ -976,23 +997,7 @@ namespace vix::commands
         }
         else
         {
-          if (hasCMake)
-          {
-            out << "_vix_disable_dep_extras(" << depNs << " " << depName << ")\n";
-            out << "if(EXISTS " << cmake_quote(depCMake.string()) << ")\n";
-            out << "  add_subdirectory("
-                << cmake_quote(depSourceDir.string()) << " "
-                << cmake_quote((project_vix_dir() / buildDirName).string())
-                << " EXCLUDE_FROM_ALL)\n";
-            out << "endif()\n";
-            out << "_vix_try_bridge_for_dep(" << depNs << " " << depName;
-
-            for (const auto &target : dep.cmakeTargets)
-              out << " " << target;
-
-            out << ")\n";
-          }
-          else if (fs::exists(depIncludeDir))
+          if (fs::exists(depIncludeDir))
           {
             out << "if(NOT TARGET " << alias << ")\n";
             out << "  add_library(" << safe << " INTERFACE)\n";
@@ -1012,6 +1017,13 @@ namespace vix::commands
         out << "\n";
       }
     }
+
+    static bool project_uses_vix_app()
+    {
+      return fs::exists(fs::current_path() / "vix.app") &&
+             !fs::exists(fs::current_path() / "CMakeLists.txt");
+    }
+
     static void print_next_steps(const std::vector<DepResolved> &deps)
     {
       vix::cli::util::one_line_spacer(std::cout);
@@ -1020,6 +1032,17 @@ namespace vix::commands
       vix::cli::util::info(std::cout, std::to_string(deps.size()) + " package(s) installed");
       vix::cli::util::info(std::cout, "CMake integration generated");
       std::cout << "\n";
+
+      if (project_uses_vix_app())
+      {
+        vix::cli::util::warn_line(std::cout, "Next:");
+        std::cout << "  " << GRAY << "• " << RESET
+                  << "run "
+                  << CYAN << BOLD << "vix build" << RESET
+                  << "\n\n";
+
+        return;
+      }
 
       std::vector<std::string> aliases;
       aliases.reserve(deps.size());

@@ -187,6 +187,21 @@ namespace vix::cli::app
     std::vector<std::string> modules;
 
     /**
+     * @brief External dependencies from the Vix Registry.
+     *
+     * Each entry uses the same package syntax as `vix add`:
+     *
+     * - "namespace/name"
+     * - "namespace/name@version"
+     * - "@namespace/name"
+     * - "@namespace/name@version"
+     *
+     * Registry dependencies are resolved through vix.json/vix.lock
+     * and linked through the generated Vix dependency CMake file.
+     */
+    std::vector<std::string> deps;
+
+    /**
      * @brief CMake targets or libraries to link.
      */
     std::vector<std::string> links;

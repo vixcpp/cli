@@ -836,6 +836,36 @@ namespace vix::cli::errors::build
       return true;
     }
 
+    bool handleVixAppDependencyTargetNotFound(std::string_view log)
+    {
+      constexpr std::string_view marker =
+          "VIX_APP_DEP_TARGET_NOT_FOUND";
+
+      if (!contains(log, marker))
+        return false;
+
+      const std::string dependency = extract(
+          log,
+          std::regex(R"re(VIX_APP_DEP_TARGET_NOT_FOUND\s+dependency=([^\s]+))re"));
+
+      const std::string target = extract(
+          log,
+          std::regex(R"re(VIX_APP_DEP_TARGET_NOT_FOUND\s+dependency=[^\s]+\s+target=([^\s]+))re"));
+
+      print_error_title("vix.app dependency is not linkable");
+
+      print_field("dependency: ", dependency);
+      print_colored_field("target: ", RED, target);
+
+      print_hint(
+          "this dependency is installed, but it does not export the expected CMake target");
+
+      print_hint(
+          "check the package export target or update the dependency target mapping");
+
+      return true;
+    }
+
     // 8. Missing linked CMake target
     bool handleMissingLinkTarget(std::string_view log)
     {
@@ -1529,6 +1559,8 @@ namespace vix::cli::errors::build
       return true; // NEW 9
 
     // --- CMake targets and export sets -------------------------------------
+    if (handleVixAppDependencyTargetNotFound(log))
+      return true;
     if (handleMissingLinkTarget(log))
       return true; // 8
     if (handleInstallExportMissingDependency(log))
@@ -1577,7 +1609,7 @@ namespace vix::cli::errors::build
     if (handleToolchainNotFound(log))
       return true;
     if (handleGenericCMakeError(log))
-      return true; // 16 fallback
+      return true;
 
     return false;
   }

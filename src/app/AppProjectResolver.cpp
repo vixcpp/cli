@@ -19,7 +19,12 @@
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 
+#include <vix/cli/util/Lockfile.hpp>
+#include <vix/cli/util/Manifest.hpp>
+#include <vix/cli/util/Resolver.hpp>
+
 #include <system_error>
+#include <fstream>
 
 namespace vix::cli::app
 {
@@ -41,6 +46,124 @@ namespace vix::cli::app
         out = path;
 
       return out.lexically_normal();
+    }
+
+    static fs::path app_manifest_json_path(const fs::path &projectDir)
+    {
+      return projectDir / "vix.json";
+    }
+
+    static fs::path app_lock_path(const fs::path &projectDir)
+    {
+      return projectDir / "vix.lock";
+    }
+
+    static bool parse_registry_dep_spec(
+        const std::string &raw,
+        std::string &packageId,
+        std::string &version)
+    {
+      std::string value = raw;
+
+      while (!value.empty() &&
+             std::isspace(static_cast<unsigned char>(value.front())) != 0)
+      {
+        value.erase(value.begin());
+      }
+
+      while (!value.empty() &&
+             std::isspace(static_cast<unsigned char>(value.back())) != 0)
+      {
+        value.pop_back();
+      }
+
+      if (value.empty())
+        return false;
+
+      if (value.front() == '@')
+        value.erase(value.begin());
+
+      const std::size_t slash = value.find('/');
+
+      if (slash == std::string::npos || slash == 0 || slash + 1 >= value.size())
+        return false;
+
+      const std::size_t atVersion = value.find('@', slash + 1);
+
+      if (atVersion == std::string::npos)
+      {
+        packageId = value;
+        version.clear();
+        return true;
+      }
+
+      packageId = value.substr(0, atVersion);
+      version = value.substr(atVersion + 1);
+
+      return !packageId.empty() && !version.empty();
+    }
+
+    static bool sync_vix_app_registry_deps(
+        const AppManifest &manifest,
+        const fs::path &projectDir,
+        std::string &error)
+    {
+      if (manifest.deps.empty())
+        return true;
+
+      const fs::path manifestPath = app_manifest_json_path(projectDir);
+      const fs::path lockPath = app_lock_path(projectDir);
+
+      for (const std::string &dep : manifest.deps)
+      {
+        std::string packageId;
+        std::string version;
+
+        if (!parse_registry_dep_spec(dep, packageId, version))
+        {
+          error = "Invalid vix.app dependency: " + dep;
+          return false;
+        }
+
+        const std::string requested =
+            version.empty() ? std::string("*") : version;
+
+        try
+        {
+          vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
+              manifestPath,
+              vix::cli::util::manifest::Dependency{
+                  packageId,
+                  requested});
+        }
+        catch (const std::exception &ex)
+        {
+          error = std::string("Failed to update vix.json from vix.app deps: ") + ex.what();
+          return false;
+        }
+      }
+
+      try
+      {
+        const auto manifestDependencies =
+            vix::cli::util::manifest::read_manifest_dependencies_or_throw(
+                manifestPath);
+
+        const auto lockedDependencies =
+            vix::cli::util::resolver::resolve_project_dependencies_or_throw(
+                manifestDependencies);
+
+        vix::cli::util::lockfile::write_lockfile_replace_all_or_throw(
+            lockPath,
+            lockedDependencies);
+      }
+      catch (const std::exception &ex)
+      {
+        error = std::string("Failed to resolve vix.app dependencies: ") + ex.what();
+        return false;
+      }
+
+      return true;
     }
 
     static fs::path search_project_root(const fs::path &base)
@@ -100,6 +223,17 @@ namespace vix::cli::app
       if (!loadResult.success())
       {
         result.error = loadResult.error;
+        return result;
+      }
+
+      std::string depsError;
+
+      if (!sync_vix_app_registry_deps(
+              loadResult.manifest,
+              projectDir,
+              depsError))
+      {
+        result.error = depsError;
         return result;
       }
 

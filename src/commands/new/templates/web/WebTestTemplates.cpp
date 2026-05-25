@@ -55,7 +55,7 @@ namespace vix::commands::new_cmd::templates
     s += "  registry.add(TestCase(\"" + projectName + " web template name is available\", []\n";
     s += "  {\n";
     s += "    const char *name = \"" + projectName + "\";\n";
-    s += "    Assert::truthy(name != nullptr);\n";
+    s += "    Assert::is_true(name != nullptr);\n";
     s += "  }));\n\n";
 
     s += "  registry.add(TestCase(\"" + projectName + " web route names are stable\", []\n";
@@ -98,7 +98,7 @@ namespace vix::commands::new_cmd::templates
 
     s += "defines = [\n";
     s += "  \"VIX_WEB_TESTS=1\",\n";
-    s += "  \"VIX_APP_NAME=\\\"" + projectName + "\\\"\",\n";
+    s += "  \"VIX_APP_NAME=" + projectName + "\",\n";
     s += "]\n\n";
 
     s += "packages = [\n";

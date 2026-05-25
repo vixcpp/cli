@@ -34,17 +34,12 @@ namespace vix::commands::new_cmd::templates
     s += "#define " + guard + "\n\n";
 
     s += "#include <string>\n\n";
-
-    s += "#include <vix/http/RequestHandler.hpp>\n";
-    s += "#include <vix/json/json.hpp>\n\n";
+    s += "#include <vix.hpp>\n\n";
 
     s += "namespace " + projectName + "::support\n";
     s += "{\n";
     s += "  /**\n";
     s += "   * @brief Write a standard JSON error response.\n";
-    s += "   *\n";
-    s += "   * The response body contains an ok flag, a machine-readable error code,\n";
-    s += "   * and a human-readable message.\n";
     s += "   *\n";
     s += "   * @param res HTTP response wrapper.\n";
     s += "   * @param status HTTP status code to send.\n";
@@ -60,8 +55,6 @@ namespace vix::commands::new_cmd::templates
     s += "  /**\n";
     s += "   * @brief Write a standard successful JSON response with data.\n";
     s += "   *\n";
-    s += "   * The response body contains an ok flag and a data field.\n";
-    s += "   *\n";
     s += "   * @param res HTTP response wrapper.\n";
     s += "   * @param data JSON payload to place under the data field.\n";
     s += "   */\n";
@@ -71,8 +64,6 @@ namespace vix::commands::new_cmd::templates
 
     s += "  /**\n";
     s += "   * @brief Write a standard successful JSON response with a message.\n";
-    s += "   *\n";
-    s += "   * The response body contains an ok flag and a message field.\n";
     s += "   *\n";
     s += "   * @param res HTTP response wrapper.\n";
     s += "   * @param message Message to send to the client.\n";

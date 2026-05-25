@@ -80,9 +80,8 @@ namespace vix::commands::new_cmd::output
     section("next");
 
     print_command_step(1, "cd " + projName + "/", "enter project");
-    print_command_step(2, "cd frontend && npm install", "install Vue dependencies");
-    print_command_step(3, "vix run", "start Vix backend");
-    print_command_step(4, "cd frontend && npm run dev", "start Vue frontend");
+    print_command_step(2, "npm install --prefix frontend", "install Vue dependencies");
+    print_command_step(3, "vix dev", "start backend and Vue frontend");
   }
 
   static void print_steps_lib(const std::string &projName)

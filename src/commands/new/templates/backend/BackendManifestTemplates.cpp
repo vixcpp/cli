@@ -48,7 +48,7 @@ namespace vix::commands::new_cmd::templates
 
     s += "defines = [\n";
     s += "  \"VIX_BACKEND_APP=1\",\n";
-    s += "  \"VIX_APP_NAME=\\\"" + projectName + "\\\"\",\n";
+    s += "  \"VIX_APP_NAME=" + projectName + "\",\n";
 
     if (features.orm)
       s += "  \"VIX_USE_ORM=1\",\n";

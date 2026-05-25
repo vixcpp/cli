@@ -54,7 +54,7 @@ namespace vix::commands::new_cmd::templates
     s += "  registry.add(TestCase(\"" + projectName + " backend name is available\", []\n";
     s += "  {\n";
     s += "    const char *name = \"" + projectName + "\";\n";
-    s += "    Assert::truthy(name != nullptr);\n";
+    s += "    Assert::is_true(name != nullptr);\n";
     s += "  }));\n\n";
 
     s += "  return TestRunner::run_all_and_exit();\n";
@@ -90,7 +90,7 @@ namespace vix::commands::new_cmd::templates
 
     s += "defines = [\n";
     s += "  \"VIX_BACKEND_TESTS=1\",\n";
-    s += "  \"VIX_APP_NAME=\\\"" + projectName + "\\\"\",\n";
+    s += "  \"VIX_APP_NAME=" + projectName + "\",\n";
     s += "]\n\n";
 
     s += "packages = [\n";

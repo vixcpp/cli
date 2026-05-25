@@ -968,6 +968,88 @@ namespace vix::commands
       return line.substr(start, end - start);
     }
 
+    std::optional<std::string> detect_websocket_port_from_config()
+    {
+      const fs::path vixJson = fs::current_path() / "vix.json";
+
+      if (!fs::exists(vixJson))
+        return std::nullopt;
+
+      try
+      {
+        const json root = read_json_or_throw(vixJson);
+
+        if (!root.is_object() ||
+            !root.contains("production") ||
+            !root["production"].is_object())
+        {
+          return std::nullopt;
+        }
+
+        const auto &production = root["production"];
+
+        if (!production.contains("ports") ||
+            !production["ports"].is_object())
+        {
+          return std::nullopt;
+        }
+
+        const auto &ports = production["ports"];
+
+        if (!ports.contains("websocket") ||
+            !ports["websocket"].is_number_integer())
+        {
+          return std::nullopt;
+        }
+
+        const int port = ports["websocket"].get<int>();
+
+        if (port <= 0)
+          return std::nullopt;
+
+        return std::to_string(port);
+      }
+      catch (...)
+      {
+        return std::nullopt;
+      }
+    }
+
+    std::optional<std::string> detect_nginx_proxy_target(const std::string &projectName)
+    {
+      const std::string lower = lower_copy(projectName);
+
+      auto out = run_capture(
+          "grep -R \"proxy_pass\" /etc/nginx/sites-available /etc/nginx/sites-enabled "
+          "2>/dev/null | grep -i " +
+          shell_quote(lower) +
+          " | head -1");
+
+      if (!out)
+      {
+        out = run_capture(
+            "grep -R \"proxy_pass\" /etc/nginx/sites-available /etc/nginx/sites-enabled "
+            "2>/dev/null | head -1");
+      }
+
+      if (!out)
+        return std::nullopt;
+
+      const std::string line = *out;
+      const std::string key = "proxy_pass";
+      const auto pos = line.find(key);
+
+      if (pos == std::string::npos)
+        return std::nullopt;
+
+      std::string value = trim_copy(line.substr(pos + key.size()));
+
+      if (!value.empty() && value.back() == ';')
+        value.pop_back();
+
+      return trim_copy(value);
+    }
+
     std::optional<std::string> detect_nginx_domain(const std::string &projectName)
     {
       const std::string lower = lower_copy(projectName);
@@ -1192,15 +1274,23 @@ namespace vix::commands
       const auto workingDir =
           serviceExists ? systemctl_property(*service, "WorkingDirectory") : std::nullopt;
 
+      const auto environment =
+          serviceExists ? systemctl_property(*service, "Environment") : std::nullopt;
+
       const bool binaryExists = binary && fs::exists(*binary);
       const bool running = binaryExists && process_running_for_binary(*binary);
 
       const auto port =
           binaryExists ? detect_listening_port_for_binary(*binary) : std::nullopt;
 
+      const auto websocketPort =
+          detect_websocket_port_from_config();
+
       const bool nginxExists = nginx_config_exists_for_project(projectName);
       const auto domain = detect_nginx_domain(projectName);
       const bool tls = domain && tls_config_exists_for_domain(*domain);
+      const auto proxyTarget =
+          detect_nginx_proxy_target(projectName);
 
       const bool localHealth = port && local_health_ok(*port);
       const bool publicHealth = domain && public_health_ok(*domain);
@@ -1300,8 +1390,20 @@ namespace vix::commands
       vix::cli::util::kv(std::cout, "Service status", serviceStatus.value_or("unknown"));
       vix::cli::util::kv(std::cout, "Restart policy", restartPolicy.value_or("unknown"));
       vix::cli::util::kv(std::cout, "Working directory", workingDir.value_or("unknown"));
+      vix::cli::util::kv(
+          std::cout,
+          "Environment",
+          environment && !environment->empty() ? *environment : "unknown");
       vix::cli::util::kv(std::cout, "HTTP port", port.value_or("unknown"));
+      vix::cli::util::kv(
+          std::cout,
+          "WebSocket port",
+          websocketPort.value_or("unknown"));
       vix::cli::util::kv(std::cout, "Proxy", nginxExists ? "nginx" : "not found");
+      vix::cli::util::kv(
+          std::cout,
+          "Proxy target",
+          proxyTarget.value_or("unknown"));
       vix::cli::util::kv(std::cout, "Public URL", domain ? "https://" + *domain : "unknown");
       vix::cli::util::kv(std::cout, "TLS", tls ? "enabled" : "unknown");
       vix::cli::util::kv(std::cout, "Local health", localHealth ? "ok" : "unknown");
@@ -1378,6 +1480,9 @@ namespace vix::commands
         out["websocket_health_configured"] = websocketHealthConfigured;
         out["deploy_rollback_configured"] = deployRollbackConfigured;
         out["readiness"] = json::array();
+        out["environment"] = environment.value_or("");
+        out["websocket_port"] = websocketPort.value_or("");
+        out["proxy_target"] = proxyTarget.value_or("");
 
         for (const auto &item : readiness)
         {

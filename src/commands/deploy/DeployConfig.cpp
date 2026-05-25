@@ -223,6 +223,9 @@ namespace vix::commands::deploy
     if (auto logs = read_bool(deploy, "logs_on_failure"))
       cfg.logsOnFailure = *logs;
 
+    if (auto rollback = read_bool(deploy, "rollback"))
+      cfg.rollback = *rollback;
+
     if (auto lines = read_int(deploy, "log_lines"))
       cfg.logLines = *lines;
 

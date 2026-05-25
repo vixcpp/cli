@@ -124,7 +124,16 @@ namespace vix::commands
         << "  production.deploy.health_public\n"
         << "  production.deploy.proxy_check\n"
         << "  production.deploy.proxy_reload\n"
-        << "  production.deploy.logs_on_failure\n";
+        << "  production.deploy.logs_on_failure\n"
+        << "  production.deploy.log_lines\n"
+        << "  production.deploy.rollback\n"
+        << "  production.health.service\n"
+        << "  production.health.local\n"
+        << "  production.health.public\n"
+        << "  production.health.websocket\n"
+        << "  production.logs.service\n"
+        << "  production.logs.nginx_access\n"
+        << "  production.logs.nginx_error\n";
 
     return 0;
   }

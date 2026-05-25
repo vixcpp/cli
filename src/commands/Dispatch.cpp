@@ -54,6 +54,7 @@
 #include <vix/cli/commands/HealthCommand.hpp>
 #include <vix/cli/commands/DeployCommand.hpp>
 #include <vix/cli/commands/LogsCommand.hpp>
+#include <vix/cli/commands/ProductionCommand.hpp>
 #include <vix/cli/commands/WsCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
@@ -261,6 +262,14 @@ namespace vix::cli::dispatch
          { return vix::commands::LogsCommand::run(a); },
          []()
          { return vix::commands::LogsCommand::help(); }});
+
+    add({"production",
+         "Project",
+         "Show and validate production status",
+         [](const Args &a)
+         { return vix::commands::ProductionCommand{}.run(a); },
+         []()
+         { return vix::commands::ProductionCommand{}.help(); }});
 
     add({"ws",
          "Project",

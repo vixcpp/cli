@@ -81,9 +81,8 @@ namespace vix::commands::new_cmd::templates
     readme += "\n";
     readme += "storage/\n";
     readme += "tests/\n";
-    readme += "config/\n";
-    readme += "  production.json\n";
     readme += "\n";
+    readme += ".env\n";
     readme += ".env.example\n";
     readme += "vix.app\n";
     readme += "vix.json\n";
@@ -173,10 +172,36 @@ namespace vix::commands::new_cmd::templates
     readme += "VIEWS_PATH=views\n";
     readme += "```\n\n";
 
-    readme += "Production defaults are documented in:\n\n";
+    readme += "## Configuration sources\n\n";
+    readme += "This template intentionally keeps one Vix production configuration source:\n\n";
     readme += "```txt\n";
-    readme += "config/production.json\n";
+    readme += "vix.json\n";
     readme += "```\n\n";
+
+    readme += "`vix.json` describes what Vix needs to orchestrate the project:\n\n";
+    readme += "- service generation\n";
+    readme += "- Nginx proxy configuration\n";
+    readme += "- health checks\n";
+    readme += "- deployment workflow\n";
+    readme += "- logs\n";
+    readme += "- production ports\n";
+    readme += "- required environment variables\n";
+    readme += "- web template and public file settings\n\n";
+
+    readme += "Runtime values and secrets stay in:\n\n";
+    readme += "```txt\n";
+    readme += ".env\n";
+    readme += ".env.example\n";
+    readme += "```\n\n";
+
+    readme += "Rule:\n\n";
+    readme += "```txt\n";
+    readme += "vix.json      -> Vix orchestration config\n";
+    readme += ".env          -> local runtime values and secrets\n";
+    readme += ".env.example  -> documented expected variables\n";
+    readme += "```\n\n";
+
+    readme += "This web template does not generate `config/production.json` to avoid two competing production configuration files.\n\n";
 
     readme += "## Common commands\n\n";
     readme += "```bash\n";
@@ -188,10 +213,13 @@ namespace vix::commands::new_cmd::templates
     readme += "```\n\n";
 
     readme += "## Production workflow\n\n";
+    readme += "`vix.json` is the production control file for Vix. It contains tasks and settings for service, proxy, health checks, logs, deploys, ports, environment requirements, and web runtime defaults.\n\n";
     readme += "Useful commands:\n\n";
     readme += "```bash\n";
     readme += "vix build --preset release\n";
     readme += "vix check --tests --run\n";
+    readme += "vix env check --production\n";
+    readme += "vix health\n";
     readme += "vix logs\n";
     readme += "vix deploy\n";
     readme += "```\n\n";

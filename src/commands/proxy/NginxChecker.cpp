@@ -12,6 +12,9 @@
  */
 #include <vix/cli/commands/proxy/NginxChecker.hpp>
 #include <vix/cli/commands/proxy/NginxOutput.hpp>
+#ifdef VIX_CLI_HAS_CRYPTO
+#include <vix/crypto/certificate.hpp>
+#endif
 
 #include <cstdlib>
 #include <filesystem>
@@ -169,6 +172,69 @@ namespace vix::commands::proxy::nginx_checker
     }
   }
 
+  bool check_tls_certificate(const NginxProxyConfig &cfg)
+  {
+    if (!cfg.tlsEnabled)
+      return true;
+
+#ifndef VIX_CLI_HAS_CRYPTO
+    nginx_output::error(
+        std::cerr,
+        "TLS certificate checks are not available in this build.");
+
+    nginx_output::fix(
+        std::cerr,
+        "rebuild the Vix CLI with the crypto module enabled");
+
+    return false;
+#else
+    bool ok = true;
+
+    const auto cert = vix::crypto::inspect_certificate(cfg.certificatePath);
+
+    if (!cert.ok())
+    {
+      nginx_output::error(
+          std::cerr,
+          "TLS certificate check failed: " + std::string(cert.error().message));
+
+      nginx_output::fix(
+          std::cerr,
+          "check production.proxy.tls.certificate in vix.json");
+
+      return false;
+    }
+
+    const auto &info = cert.value();
+
+    if (!info.validFormat)
+    {
+      nginx_output::error(std::cerr, "TLS certificate has an invalid format.");
+      nginx_output::fix(std::cerr, "replace the certificate with a valid PEM X.509 certificate");
+      ok = false;
+    }
+
+    if (info.expired)
+    {
+      nginx_output::error(std::cerr, "TLS certificate is expired.");
+      nginx_output::fix(std::cerr, "renew the certificate, then run `vix proxy nginx init`");
+      ok = false;
+    }
+
+    if (!vix::crypto::certificate_matches_domain(info, cfg.domain))
+    {
+      nginx_output::error(std::cerr, "TLS certificate does not match proxy domain.");
+      nginx_output::fix(std::cerr, "check production.proxy.domain and production.proxy.tls.certificate in vix.json");
+      ok = false;
+    }
+
+    if (ok)
+      nginx_output::ok(std::cout, "tls certificate looks good");
+
+    return ok;
+#endif
+  }
+
   int check(const NginxProxyConfig &cfg)
   {
     const bool enabled = site_enabled(cfg);
@@ -208,6 +274,9 @@ namespace vix::commands::proxy::nginx_checker
     }
 
     if (!check_required_content(cfg))
+      ok = false;
+
+    if (!check_tls_certificate(cfg))
       ok = false;
 
     if (!run_cmd("command -v nginx >/dev/null 2>&1"))

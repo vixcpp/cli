@@ -54,6 +54,7 @@
 #include <vix/cli/commands/HealthCommand.hpp>
 #include <vix/cli/commands/DeployCommand.hpp>
 #include <vix/cli/commands/LogsCommand.hpp>
+#include <vix/cli/commands/EnvCommand.hpp>
 #include <vix/cli/commands/ProductionCommand.hpp>
 #include <vix/cli/commands/WsCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
@@ -262,6 +263,14 @@ namespace vix::cli::dispatch
          { return vix::commands::LogsCommand::run(a); },
          []()
          { return vix::commands::LogsCommand::help(); }});
+
+    add({"env",
+         "Project",
+         "Check project and production environment variables",
+         [](const Args &a)
+         { return vix::commands::EnvCommand::run(a); },
+         []()
+         { return vix::commands::EnvCommand::help(); }});
 
     add({"production",
          "Project",

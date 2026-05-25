@@ -1,5 +1,5 @@
 /**
- * @file BackendConfigTemplates.cpp
+ * @file WebConfigTemplates.cpp
  * @author Gaspard Kirira
  *
  * Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -8,14 +8,14 @@
  * that can be found in the License file.
  */
 
-#include <vix/cli/commands/new/templates/backend/BackendConfigTemplates.hpp>
+#include <vix/cli/commands/new/templates/web/WebConfigTemplates.hpp>
 
 #include <string>
 
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_backend_production_config_json(const std::string &projectName)
+  std::string make_web_production_config_json(const std::string &projectName)
   {
     std::string s;
     s.reserve(2600);
@@ -23,7 +23,8 @@ namespace vix::commands::new_cmd::templates
     s += "{\n";
     s += "  \"app\": {\n";
     s += "    \"name\": \"" + projectName + "\",\n";
-    s += "    \"env\": \"production\"\n";
+    s += "    \"env\": \"production\",\n";
+    s += "    \"template\": \"web\"\n";
     s += "  },\n";
     s += "  \"server\": {\n";
     s += "    \"host\": \"0.0.0.0\",\n";
@@ -43,45 +44,35 @@ namespace vix::commands::new_cmd::templates
     s += "  \"public\": {\n";
     s += "    \"path\": \"public\",\n";
     s += "    \"mount\": \"/\",\n";
-    s += "    \"index\": \"index.html\",\n";
     s += "    \"spa_fallback\": false\n";
     s += "  },\n";
     s += "  \"templates\": {\n";
-    s += "    \"path\": \"views\"\n";
+    s += "    \"path\": \"views\",\n";
+    s += "    \"auto_escape_html\": true,\n";
+    s += "    \"cache\": true\n";
     s += "  },\n";
     s += "  \"storage\": {\n";
     s += "    \"path\": \"storage\"\n";
     s += "  },\n";
-    s += "  \"database\": {\n";
-    s += "    \"engine\": \"sqlite\",\n";
-    s += "    \"sqlite_path\": \"storage/" + projectName + ".db\",\n";
-    s += "    \"migrations\": \"migrations\"\n";
-    s += "  },\n";
     s += "  \"health\": {\n";
-    s += "    \"path\": \"/health\",\n";
-    s += "    \"api_path\": \"/api/health\"\n";
-    s += "  },\n";
-    s += "  \"websocket\": {\n";
-    s += "    \"enabled\": false,\n";
-    s += "    \"host\": \"0.0.0.0\",\n";
-    s += "    \"port\": 9090,\n";
-    s += "    \"path\": \"/ws\"\n";
+    s += "    \"path\": \"/health\"\n";
     s += "  }\n";
     s += "}\n";
 
     return s;
   }
 
-  std::string make_backend_env_example(const std::string &projectName)
+  std::string make_web_env_example(const std::string &projectName)
   {
     std::string s;
-    s.reserve(4200);
+    s.reserve(3600);
 
     s += "# ----------------------------------\n";
     s += "# App\n";
     s += "# ----------------------------------\n";
     s += "APP_NAME=" + projectName + "\n";
-    s += "APP_ENV=development\n\n";
+    s += "APP_ENV=development\n";
+    s += "APP_TEMPLATE=web\n\n";
 
     s += "# ----------------------------------\n";
     s += "# Server\n";
@@ -111,48 +102,17 @@ namespace vix::commands::new_cmd::templates
     s += "LOGGING_DROP_ON_OVERFLOW=true\n\n";
 
     s += "# ----------------------------------\n";
-    s += "# Public files and templates\n";
+    s += "# Web rendering\n";
     s += "# ----------------------------------\n";
     s += "PUBLIC_PATH=public\n";
-    s += "VIEWS_PATH=views\n\n";
+    s += "VIEWS_PATH=views\n";
+    s += "TEMPLATE_AUTO_ESCAPE_HTML=true\n";
+    s += "TEMPLATE_CACHE=true\n\n";
 
     s += "# ----------------------------------\n";
     s += "# Storage\n";
     s += "# ----------------------------------\n";
     s += "STORAGE_PATH=storage\n\n";
-
-    s += "# ----------------------------------\n";
-    s += "# Database\n";
-    s += "# ----------------------------------\n";
-    s += "DATABASE_ENGINE=sqlite\n";
-    s += "DATABASE_SQLITE_PATH=storage/" + projectName + ".db\n";
-    s += "DATABASE_DEFAULT_HOST=127.0.0.1\n";
-    s += "DATABASE_DEFAULT_PORT=3306\n";
-    s += "DATABASE_DEFAULT_USER=root\n";
-    s += "DATABASE_DEFAULT_PASSWORD=\n";
-    s += "DATABASE_DEFAULT_NAME=" + projectName + "\n\n";
-
-    s += "# ----------------------------------\n";
-    s += "# ORM and migrations\n";
-    s += "# ----------------------------------\n";
-    s += "VIX_ORM_HOST=tcp://127.0.0.1:3306\n";
-    s += "VIX_ORM_USER=root\n";
-    s += "VIX_ORM_PASS=\n";
-    s += "VIX_ORM_DB=" + projectName + "\n";
-    s += "VIX_ORM_DIR=migrations\n";
-    s += "VIX_ORM_TOOL=\n\n";
-
-    s += "# ----------------------------------\n";
-    s += "# WebSocket\n";
-    s += "# ----------------------------------\n";
-    s += "WEBSOCKET_ENABLED=false\n";
-    s += "WEBSOCKET_HOST=0.0.0.0\n";
-    s += "WEBSOCKET_PORT=9090\n";
-    s += "WEBSOCKET_MAX_MESSAGE_SIZE=65536\n";
-    s += "WEBSOCKET_IDLE_TIMEOUT=60\n";
-    s += "WEBSOCKET_ENABLE_DEFLATE=true\n";
-    s += "WEBSOCKET_PING_INTERVAL=30\n";
-    s += "WEBSOCKET_AUTO_PING_PONG=true\n\n";
 
     s += "# ----------------------------------\n";
     s += "# Production diagnostics\n";

@@ -13,7 +13,7 @@
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_backend_production_config_json();
-  std::string make_backend_env_example();
+  std::string make_backend_production_config_json(const std::string &projectName);
+  std::string make_backend_env_example(const std::string &projectName);
 
 } // namespace vix::commands::new_cmd::templates

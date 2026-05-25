@@ -1,5 +1,5 @@
 /**
- * @file BackendControllerTemplates.cpp
+ * @file WebControllerTemplates.cpp
  * @author Gaspard Kirira
  *
  * Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -8,14 +8,14 @@
  * that can be found in the License file.
  */
 
-#include <vix/cli/commands/new/templates/backend/BackendControllerTemplates.hpp>
+#include <vix/cli/commands/new/templates/web/WebControllerTemplates.hpp>
 
 #include <string>
 
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_backend_home_controller_hpp(const std::string &projectName)
+  std::string make_web_page_controller_hpp(const std::string &projectName)
   {
     std::string s;
     s.reserve(800);
@@ -27,7 +27,7 @@ namespace vix::commands::new_cmd::templates
     s += "}\n\n";
     s += "namespace " + projectName + "::presentation::controllers\n";
     s += "{\n";
-    s += "  class HomeController\n";
+    s += "  class PageController\n";
     s += "  {\n";
     s += "  public:\n";
     s += "    static void register_routes(vix::App &app);\n";
@@ -37,25 +37,42 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_home_controller_cpp(const std::string &projectName)
+  std::string make_web_page_controller_cpp(const std::string &projectName)
   {
     std::string s;
-    s.reserve(1500);
+    s.reserve(3200);
 
-    s += "#include <" + projectName + "/presentation/controllers/HomeController.hpp>\n\n";
-    s += "#include <vix.hpp>\n\n";
+    s += "#include <" + projectName + "/presentation/controllers/PageController.hpp>\n\n";
+    s += "#include <vix.hpp>\n";
+    s += "#include <vix/template/Context.hpp>\n\n";
     s += "namespace " + projectName + "::presentation::controllers\n";
     s += "{\n";
-    s += "  void HomeController::register_routes(vix::App &app)\n";
+    s += "  void PageController::register_routes(vix::App &app)\n";
     s += "  {\n";
-    s += "    app.get(\"/api\", [](vix::Request &req, vix::Response &res)\n";
+    s += "    app.get(\"/\", [](vix::Request &req, vix::Response &res)\n";
     s += "    {\n";
     s += "      (void)req;\n\n";
-    s += "      res.json({\n";
-    s += "        \"ok\", true,\n";
-    s += "        \"service\", \"" + projectName + "\",\n";
-    s += "        \"message\", \"Vix backend is running\"\n";
-    s += "      });\n";
+    s += "      vix::template_::Context ctx;\n";
+    s += "      ctx.set(\"title\", \"Home\");\n";
+    s += "      ctx.set(\"app_name\", \"" + projectName + "\");\n";
+    s += "      ctx.set(\"user\", \"Gaspard\");\n\n";
+    s += "      res.render(\"index.html\", ctx);\n";
+    s += "    });\n\n";
+    s += "    app.get(\"/dashboard\", [](vix::Request &req, vix::Response &res)\n";
+    s += "    {\n";
+    s += "      (void)req;\n\n";
+    s += "      vix::template_::Context ctx;\n";
+    s += "      ctx.set(\"title\", \"Dashboard\");\n";
+    s += "      ctx.set(\"app_name\", \"" + projectName + "\");\n";
+    s += "      ctx.set(\"user\", \"Gaspard\");\n";
+    s += "      ctx.set(\"total_orders\", 42);\n\n";
+    s += "      vix::template_::Array features;\n";
+    s += "      features.emplace_back(\"Server-rendered HTML\");\n";
+    s += "      features.emplace_back(\"Layouts with extends\");\n";
+    s += "      features.emplace_back(\"Partials with include\");\n";
+    s += "      features.emplace_back(\"Static assets\");\n\n";
+    s += "      ctx.set(\"features\", features);\n\n";
+    s += "      res.render(\"dashboard.html\", ctx);\n";
     s += "    });\n";
     s += "  }\n";
     s += "} // namespace " + projectName + "::presentation::controllers\n";
@@ -63,7 +80,7 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_health_controller_hpp(const std::string &projectName)
+  std::string make_web_health_controller_hpp(const std::string &projectName)
   {
     std::string s;
     s.reserve(800);
@@ -85,10 +102,10 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_health_controller_cpp(const std::string &projectName)
+  std::string make_web_health_controller_cpp(const std::string &projectName)
   {
     std::string s;
-    s.reserve(1700);
+    s.reserve(1600);
 
     s += "#include <" + projectName + "/presentation/controllers/HealthController.hpp>\n\n";
     s += "#include <vix.hpp>\n\n";
@@ -102,17 +119,8 @@ namespace vix::commands::new_cmd::templates
     s += "      res.json({\n";
     s += "        \"ok\", true,\n";
     s += "        \"status\", \"ok\",\n";
-    s += "        \"service\", \"" + projectName + "\"\n";
-    s += "      });\n";
-    s += "    });\n\n";
-    s += "    app.get(\"/api/health\", [](vix::Request &req, vix::Response &res)\n";
-    s += "    {\n";
-    s += "      (void)req;\n\n";
-    s += "      res.json({\n";
-    s += "        \"ok\", true,\n";
-    s += "        \"status\", \"ok\",\n";
     s += "        \"service\", \"" + projectName + "\",\n";
-    s += "        \"api\", true\n";
+    s += "        \"template\", \"web\"\n";
     s += "      });\n";
     s += "    });\n";
     s += "  }\n";

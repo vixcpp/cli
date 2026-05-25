@@ -1,5 +1,5 @@
 /**
- * @file BackendRouteTemplates.cpp
+ * @file WebRouteTemplates.cpp
  * @author Gaspard Kirira
  *
  * Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -8,14 +8,14 @@
  * that can be found in the License file.
  */
 
-#include <vix/cli/commands/new/templates/backend/BackendRouteTemplates.hpp>
+#include <vix/cli/commands/new/templates/web/WebRouteTemplates.hpp>
 
 #include <string>
 
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_backend_route_registry_hpp(const std::string &projectName)
+  std::string make_web_route_registry_hpp(const std::string &projectName)
   {
     std::string s;
     s.reserve(800);
@@ -37,20 +37,20 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_route_registry_cpp(const std::string &projectName)
+  std::string make_web_route_registry_cpp(const std::string &projectName)
   {
     std::string s;
     s.reserve(1400);
 
     s += "#include <" + projectName + "/presentation/routes/RouteRegistry.hpp>\n";
-    s += "#include <" + projectName + "/presentation/controllers/HomeController.hpp>\n";
+    s += "#include <" + projectName + "/presentation/controllers/PageController.hpp>\n";
     s += "#include <" + projectName + "/presentation/controllers/HealthController.hpp>\n\n";
     s += "#include <vix.hpp>\n\n";
     s += "namespace " + projectName + "::presentation::routes\n";
     s += "{\n";
     s += "  void RouteRegistry::register_all(vix::App &app)\n";
     s += "  {\n";
-    s += "    controllers::HomeController::register_routes(app);\n";
+    s += "    controllers::PageController::register_routes(app);\n";
     s += "    controllers::HealthController::register_routes(app);\n";
     s += "  }\n";
     s += "} // namespace " + projectName + "::presentation::routes\n";

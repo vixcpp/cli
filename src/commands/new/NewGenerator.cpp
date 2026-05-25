@@ -280,8 +280,16 @@ namespace vix::commands::new_cmd::generator
   {
     namespace tpl = vix::commands::new_cmd::templates;
 
+    const fs::path includeRoot = projectDir / "include" / projName;
     const fs::path srcDir = projectDir / "src";
     const fs::path appRoot = srcDir / projName;
+
+    const fs::path includeAppDir = includeRoot / "app";
+    const fs::path includeSupportDir = includeRoot / "support";
+    const fs::path includePresentationDir = includeRoot / "presentation";
+    const fs::path includeControllersDir = includePresentationDir / "controllers";
+    const fs::path includeRoutesDir = includePresentationDir / "routes";
+    const fs::path includeMiddlewareDir = includePresentationDir / "middleware";
 
     const fs::path appDir = appRoot / "app";
     const fs::path applicationDir = appRoot / "application";
@@ -294,10 +302,22 @@ namespace vix::commands::new_cmd::generator
     const fs::path supportDir = appRoot / "support";
 
     const fs::path publicDir = projectDir / "public";
+    const fs::path viewsDir = projectDir / "views";
     const fs::path storageDir = projectDir / "storage";
     const fs::path migrationsDir = projectDir / "migrations";
     const fs::path testsDir = projectDir / "tests";
     const fs::path configDir = projectDir / "config";
+
+    if (!ensure_dir(includeAppDir, err))
+      return false;
+    if (!ensure_dir(includeSupportDir, err))
+      return false;
+    if (!ensure_dir(includeControllersDir, err))
+      return false;
+    if (!ensure_dir(includeRoutesDir, err))
+      return false;
+    if (!ensure_dir(includeMiddlewareDir, err))
+      return false;
 
     if (!ensure_dir(srcDir, err))
       return false;
@@ -317,7 +337,10 @@ namespace vix::commands::new_cmd::generator
       return false;
     if (!ensure_dir(supportDir, err))
       return false;
+
     if (!ensure_dir(publicDir, err))
+      return false;
+    if (!ensure_dir(viewsDir, err))
       return false;
     if (!ensure_dir(storageDir, err))
       return false;
@@ -328,49 +351,378 @@ namespace vix::commands::new_cmd::generator
     if (!ensure_dir(configDir, err))
       return false;
 
-    if (!write_text_file(srcDir / "main.cpp", tpl::make_backend_main_cpp(projName), err))
+    if (!write_text_file(srcDir / "main.cpp",
+                         tpl::make_backend_main_cpp(projName), err))
       return false;
 
-    if (!write_text_file(appDir / "AppBootstrap.hpp", tpl::make_backend_app_bootstrap_hpp(projName), err))
-      return false;
-    if (!write_text_file(appDir / "AppBootstrap.cpp", tpl::make_backend_app_bootstrap_cpp(projName), err))
-      return false;
-
-    if (!write_text_file(routesDir / "RouteRegistry.hpp", tpl::make_backend_route_registry_hpp(projName), err))
-      return false;
-    if (!write_text_file(routesDir / "RouteRegistry.cpp", tpl::make_backend_route_registry_cpp(projName), err))
+    if (!write_text_file(includeAppDir / "AppBootstrap.hpp",
+                         tpl::make_backend_app_bootstrap_hpp(projName), err))
       return false;
 
-    if (!write_text_file(middlewareDir / "MiddlewareRegistry.hpp", tpl::make_backend_middleware_registry_hpp(projName), err))
-      return false;
-    if (!write_text_file(middlewareDir / "MiddlewareRegistry.cpp", tpl::make_backend_middleware_registry_cpp(projName), err))
-      return false;
-
-    if (!write_text_file(controllersDir / "HealthController.hpp", tpl::make_backend_health_controller_hpp(projName), err))
-      return false;
-    if (!write_text_file(controllersDir / "HealthController.cpp", tpl::make_backend_health_controller_cpp(projName), err))
+    if (!write_text_file(appDir / "AppBootstrap.cpp",
+                         tpl::make_backend_app_bootstrap_cpp(projName), err))
       return false;
 
-    if (!write_text_file(testsDir / "test_basic.cpp", tpl::make_backend_basic_test_cpp(projName), err))
+    if (!write_text_file(includeSupportDir / "HttpResponses.hpp",
+                         tpl::make_backend_http_responses_hpp(projName), err))
       return false;
 
-    if (!write_text_file(publicDir / ".gitkeep", "", err))
+    if (!write_text_file(supportDir / "HttpResponses.cpp",
+                         tpl::make_backend_http_responses_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeRoutesDir / "RouteRegistry.hpp",
+                         tpl::make_backend_route_registry_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(routesDir / "RouteRegistry.cpp",
+                         tpl::make_backend_route_registry_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeMiddlewareDir / "MiddlewareRegistry.hpp",
+                         tpl::make_backend_middleware_registry_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(middlewareDir / "MiddlewareRegistry.cpp",
+                         tpl::make_backend_middleware_registry_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeControllersDir / "HomeController.hpp",
+                         tpl::make_backend_home_controller_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(controllersDir / "HomeController.cpp",
+                         tpl::make_backend_home_controller_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeControllersDir / "HealthController.hpp",
+                         tpl::make_backend_health_controller_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(controllersDir / "HealthController.cpp",
+                         tpl::make_backend_health_controller_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(testsDir / "test_basic.cpp",
+                         tpl::make_backend_basic_test_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(testsDir / "vix.app",
+                         tpl::make_backend_tests_manifest(projName), err))
+      return false;
+
+    if (!write_text_file(publicDir / "index.html",
+                         "<!doctype html>\n"
+                         "<html lang=\"en\">\n"
+                         "  <head>\n"
+                         "    <meta charset=\"utf-8\" />\n"
+                         "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n"
+                         "    <title>" +
+                             projName +
+                             "</title>\n"
+                             "    <link rel=\"stylesheet\" href=\"/app.css\" />\n"
+                             "  </head>\n"
+                             "  <body>\n"
+                             "    <main class=\"page\">\n"
+                             "      <section class=\"card\">\n"
+                             "        <p class=\"eyebrow\">Vix backend</p>\n"
+                             "        <h1>" +
+                             projName +
+                             "</h1>\n"
+                             "        <p>Your production-oriented Vix backend is running.</p>\n"
+                             "        <div class=\"actions\">\n"
+                             "          <a href=\"/api\">API</a>\n"
+                             "          <a href=\"/health\">Health</a>\n"
+                             "        </div>\n"
+                             "      </section>\n"
+                             "    </main>\n"
+                             "    <script src=\"/app.js\"></script>\n"
+                             "  </body>\n"
+                             "</html>\n",
+                         err))
+      return false;
+
+    if (!write_text_file(publicDir / "app.css",
+                         ":root {\n"
+                         "  color-scheme: light dark;\n"
+                         "  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;\n"
+                         "  background: #0b0e14;\n"
+                         "  color: #f7f7f8;\n"
+                         "}\n"
+                         "\n"
+                         "* {\n"
+                         "  box-sizing: border-box;\n"
+                         "}\n"
+                         "\n"
+                         "body {\n"
+                         "  margin: 0;\n"
+                         "}\n"
+                         "\n"
+                         ".page {\n"
+                         "  min-height: 100vh;\n"
+                         "  display: grid;\n"
+                         "  place-items: center;\n"
+                         "  padding: 24px;\n"
+                         "}\n"
+                         "\n"
+                         ".card {\n"
+                         "  width: min(720px, 100%);\n"
+                         "  padding: 40px;\n"
+                         "  border: 1px solid rgba(255, 255, 255, 0.12);\n"
+                         "  border-radius: 24px;\n"
+                         "  background: rgba(255, 255, 255, 0.06);\n"
+                         "  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);\n"
+                         "}\n"
+                         "\n"
+                         ".eyebrow {\n"
+                         "  margin: 0 0 12px;\n"
+                         "  color: #ff9900;\n"
+                         "  font-weight: 700;\n"
+                         "  letter-spacing: 0.08em;\n"
+                         "  text-transform: uppercase;\n"
+                         "}\n"
+                         "\n"
+                         "h1 {\n"
+                         "  margin: 0;\n"
+                         "  font-size: clamp(2.2rem, 8vw, 5rem);\n"
+                         "  line-height: 1;\n"
+                         "}\n"
+                         "\n"
+                         "p {\n"
+                         "  font-size: 1.05rem;\n"
+                         "  line-height: 1.7;\n"
+                         "  color: rgba(255, 255, 255, 0.78);\n"
+                         "}\n"
+                         "\n"
+                         ".actions {\n"
+                         "  display: flex;\n"
+                         "  gap: 12px;\n"
+                         "  flex-wrap: wrap;\n"
+                         "  margin-top: 24px;\n"
+                         "}\n"
+                         "\n"
+                         ".actions a {\n"
+                         "  color: #0b0e14;\n"
+                         "  background: #ff9900;\n"
+                         "  padding: 10px 16px;\n"
+                         "  border-radius: 999px;\n"
+                         "  text-decoration: none;\n"
+                         "  font-weight: 700;\n"
+                         "}\n",
+                         err))
+      return false;
+
+    if (!write_text_file(publicDir / "app.js",
+                         "console.log(\"Vix backend is running\");\n",
+                         err))
+      return false;
+
+    if (!write_text_file(applicationDir / ".gitkeep", "", err))
+      return false;
+    if (!write_text_file(domainDir / ".gitkeep", "", err))
+      return false;
+    if (!write_text_file(infrastructureDir / ".gitkeep", "", err))
+      return false;
+    if (!write_text_file(viewsDir / ".gitkeep", "", err))
       return false;
     if (!write_text_file(storageDir / ".gitkeep", "", err))
       return false;
     if (!write_text_file(migrationsDir / ".gitkeep", "", err))
       return false;
 
-    if (!write_text_file(configDir / "production.json", tpl::make_backend_production_config_json(), err))
+    if (!write_text_file(configDir / "production.json",
+                         tpl::make_backend_production_config_json(projName), err))
       return false;
 
-    if (!write_text_file(projectDir / ".env.example", tpl::make_backend_env_example(), err))
+    if (!write_text_file(projectDir / ".env.example",
+                         tpl::make_backend_env_example(projName), err))
       return false;
-    if (!write_text_file(projectDir / "vix.app", tpl::make_project_manifest_backend(projName, features), err))
+
+    if (!write_text_file(projectDir / ".env",
+                         tpl::make_backend_env_example(projName), err))
       return false;
-    if (!write_text_file(projectDir / "vix.json", tpl::make_vix_json_backend(projName), err))
+
+    if (!write_text_file(projectDir / "vix.app",
+                         tpl::make_project_manifest_backend(projName, features), err))
       return false;
-    if (!write_text_file(projectDir / "README.md", tpl::make_readme_backend(projName), err))
+
+    if (!write_text_file(projectDir / "vix.json",
+                         tpl::make_vix_json_backend(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "README.md",
+                         tpl::make_readme_backend(projName), err))
+      return false;
+
+    return true;
+  }
+
+  // ------------------------------------------------------------------
+  // Web
+  // -----------------------------------------------------------------
+
+  bool generate_web_project(
+      const fs::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features,
+      std::string &err)
+  {
+    namespace tpl = vix::commands::new_cmd::templates;
+
+    const fs::path includeRoot = projectDir / "include" / projName;
+    const fs::path srcDir = projectDir / "src";
+    const fs::path appRoot = srcDir / projName;
+
+    const fs::path includeAppDir = includeRoot / "app";
+    const fs::path includePresentationDir = includeRoot / "presentation";
+    const fs::path includeControllersDir = includePresentationDir / "controllers";
+    const fs::path includeRoutesDir = includePresentationDir / "routes";
+    const fs::path includeMiddlewareDir = includePresentationDir / "middleware";
+
+    const fs::path appDir = appRoot / "app";
+    const fs::path presentationDir = appRoot / "presentation";
+    const fs::path controllersDir = presentationDir / "controllers";
+    const fs::path routesDir = presentationDir / "routes";
+    const fs::path middlewareDir = presentationDir / "middleware";
+
+    const fs::path publicDir = projectDir / "public";
+    const fs::path viewsDir = projectDir / "views";
+    const fs::path storageDir = projectDir / "storage";
+    const fs::path testsDir = projectDir / "tests";
+    const fs::path configDir = projectDir / "config";
+
+    if (!ensure_dir(includeAppDir, err))
+      return false;
+    if (!ensure_dir(includeControllersDir, err))
+      return false;
+    if (!ensure_dir(includeRoutesDir, err))
+      return false;
+    if (!ensure_dir(includeMiddlewareDir, err))
+      return false;
+
+    if (!ensure_dir(srcDir, err))
+      return false;
+    if (!ensure_dir(appDir, err))
+      return false;
+    if (!ensure_dir(controllersDir, err))
+      return false;
+    if (!ensure_dir(routesDir, err))
+      return false;
+    if (!ensure_dir(middlewareDir, err))
+      return false;
+
+    if (!ensure_dir(publicDir, err))
+      return false;
+    if (!ensure_dir(viewsDir, err))
+      return false;
+    if (!ensure_dir(storageDir, err))
+      return false;
+    if (!ensure_dir(testsDir, err))
+      return false;
+    if (!ensure_dir(configDir, err))
+      return false;
+
+    if (!write_text_file(srcDir / "main.cpp",
+                         tpl::make_web_main_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeAppDir / "AppBootstrap.hpp",
+                         tpl::make_web_app_bootstrap_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(appDir / "AppBootstrap.cpp",
+                         tpl::make_web_app_bootstrap_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeRoutesDir / "RouteRegistry.hpp",
+                         tpl::make_web_route_registry_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(routesDir / "RouteRegistry.cpp",
+                         tpl::make_web_route_registry_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeMiddlewareDir / "MiddlewareRegistry.hpp",
+                         tpl::make_web_middleware_registry_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(middlewareDir / "MiddlewareRegistry.cpp",
+                         tpl::make_web_middleware_registry_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeControllersDir / "PageController.hpp",
+                         tpl::make_web_page_controller_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(controllersDir / "PageController.cpp",
+                         tpl::make_web_page_controller_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(includeControllersDir / "HealthController.hpp",
+                         tpl::make_web_health_controller_hpp(projName), err))
+      return false;
+
+    if (!write_text_file(controllersDir / "HealthController.cpp",
+                         tpl::make_web_health_controller_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(viewsDir / "base.html",
+                         tpl::make_web_view_base_html(projName), err))
+      return false;
+
+    if (!write_text_file(viewsDir / "header.html",
+                         tpl::make_web_view_header_html(projName), err))
+      return false;
+
+    if (!write_text_file(viewsDir / "index.html",
+                         tpl::make_web_view_index_html(projName), err))
+      return false;
+
+    if (!write_text_file(viewsDir / "dashboard.html",
+                         tpl::make_web_view_dashboard_html(projName), err))
+      return false;
+
+    if (!write_text_file(publicDir / "app.css",
+                         tpl::make_web_public_app_css(projName), err))
+      return false;
+
+    if (!write_text_file(publicDir / "app.js",
+                         tpl::make_web_public_app_js(projName), err))
+      return false;
+
+    if (!write_text_file(storageDir / ".gitkeep", "", err))
+      return false;
+
+    if (!write_text_file(testsDir / "test_basic.cpp",
+                         tpl::make_web_basic_test_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(testsDir / "vix.app",
+                         tpl::make_web_tests_manifest(projName), err))
+      return false;
+
+    if (!write_text_file(configDir / "production.json",
+                         tpl::make_web_production_config_json(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / ".env.example",
+                         tpl::make_web_env_example(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / ".env",
+                         tpl::make_web_env_example(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "vix.app",
+                         tpl::make_project_manifest_web(projName, features), err))
+      return false;
+
+    if (!write_text_file(projectDir / "vix.json",
+                         tpl::make_vix_json_web(projName), err))
+      return false;
+
+    if (!write_text_file(projectDir / "README.md",
+                         tpl::make_readme_web(projName), err))
       return false;
 
     return true;
@@ -449,6 +801,11 @@ namespace vix::commands::new_cmd::generator
   void print_next_steps_backend(const fs::path &projectDir, const std::string &projName)
   {
     output::print_creation_backend(projectDir, projName, FeaturesSelection{});
+  }
+
+  void print_next_steps_web(const fs::path &projectDir, const std::string &projName)
+  {
+    output::print_creation_web(projectDir, projName, FeaturesSelection{});
   }
 
   void print_next_steps_game(

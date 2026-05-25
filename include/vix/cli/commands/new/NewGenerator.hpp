@@ -79,6 +79,12 @@ namespace vix::commands::new_cmd::generator
       const FeaturesSelection &features,
       std::string &err);
 
+  bool generate_web_project(
+      const std::filesystem::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features,
+      std::string &err);
+
   // ------------------------------------------------------------------
   // Post-generation output
   // ------------------------------------------------------------------
@@ -87,4 +93,7 @@ namespace vix::commands::new_cmd::generator
   void print_next_steps_lib(const fs::path &projectDir, const std::string &projName);
   void print_next_steps_game(const fs::path &projectDir, const std::string &projName);
   void print_next_steps_backend(const fs::path &projectDir, const std::string &projName);
+  void print_next_steps_web(
+      const std::filesystem::path &projectDir,
+      const std::string &projName);
 } // namespace vix::commands::new_cmd::generator

@@ -15,3 +15,4 @@
 #include <vix/cli/commands/new/templates/backend/BackendReadmeTemplates.hpp>
 #include <vix/cli/commands/new/templates/backend/BackendRouteTemplates.hpp>
 #include <vix/cli/commands/new/templates/backend/BackendTestTemplates.hpp>
+#include <vix/cli/commands/new/templates/backend/BackendSupportTemplates.hpp>

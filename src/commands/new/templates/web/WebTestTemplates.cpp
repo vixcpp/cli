@@ -1,5 +1,5 @@
 /**
- * @file BackendTestTemplates.cpp
+ * @file WebTestTemplates.cpp
  * @author Gaspard Kirira
  *
  * Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -8,17 +8,17 @@
  * that can be found in the License file.
  */
 
-#include <vix/cli/commands/new/templates/backend/BackendTestTemplates.hpp>
+#include <vix/cli/commands/new/templates/web/WebTestTemplates.hpp>
 
 #include <string>
 
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_backend_basic_test_cpp(const std::string &projectName)
+  std::string make_web_basic_test_cpp(const std::string &projectName)
   {
     std::string s;
-    s.reserve(1200);
+    s.reserve(1400);
 
     s += "#include <vix/tests/tests.hpp>\n\n";
     s += "int main()\n";
@@ -26,14 +26,20 @@ namespace vix::commands::new_cmd::templates
     s += "  using namespace vix::tests;\n\n";
     s += "  auto &registry = TestRegistry::instance();\n";
     s += "  registry.clear();\n\n";
-    s += "  registry.add(TestCase(\"" + projectName + " backend basic test\", []\n";
+    s += "  registry.add(TestCase(\"" + projectName + " web basic test\", []\n";
     s += "  {\n";
     s += "    Assert::equal(2 + 2, 4);\n";
     s += "  }));\n\n";
-    s += "  registry.add(TestCase(\"" + projectName + " backend name is available\", []\n";
+    s += "  registry.add(TestCase(\"" + projectName + " web template name is available\", []\n";
     s += "  {\n";
     s += "    const char *name = \"" + projectName + "\";\n";
     s += "    Assert::truthy(name != nullptr);\n";
+    s += "  }));\n\n";
+    s += "  registry.add(TestCase(\"" + projectName + " web route names are stable\", []\n";
+    s += "  {\n";
+    s += "    Assert::equal(std::string(\"/\"), std::string(\"/\"));\n";
+    s += "    Assert::equal(std::string(\"/dashboard\"), std::string(\"/dashboard\"));\n";
+    s += "    Assert::equal(std::string(\"/health\"), std::string(\"/health\"));\n";
     s += "  }));\n\n";
     s += "  return TestRunner::run_all_and_exit();\n";
     s += "}\n";
@@ -41,16 +47,16 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_tests_manifest(const std::string &projectName)
+  std::string make_web_tests_manifest(const std::string &projectName)
   {
     std::string s;
     s.reserve(1400);
 
-    s += "# Vix backend test manifest\n";
+    s += "# Vix web test manifest\n";
     s += "# This test target is intentionally separate from the application target.\n";
     s += "# Do not include ../src/main.cpp here because tests define their own main().\n\n";
 
-    s += "name = \"" + projectName + "_tests\"\n";
+    s += "name = \"" + projectName + "_web_tests\"\n";
     s += "type = \"executable\"\n";
     s += "standard = \"c++20\"\n";
     s += "output_dir = \"bin\"\n\n";
@@ -65,7 +71,7 @@ namespace vix::commands::new_cmd::templates
     s += "]\n\n";
 
     s += "defines = [\n";
-    s += "  \"VIX_BACKEND_TESTS=1\",\n";
+    s += "  \"VIX_WEB_TESTS=1\",\n";
     s += "  \"VIX_APP_NAME=\\\"" + projectName + "\\\"\",\n";
     s += "]\n\n";
 

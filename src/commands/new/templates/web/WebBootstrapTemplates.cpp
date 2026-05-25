@@ -1,5 +1,5 @@
 /**
- * @file BackendBootstrapTemplates.cpp
+ * @file WebBootstrapTemplates.cpp
  * @author Gaspard Kirira
  *
  * Copyright 2025, Gaspard Kirira.  All rights reserved.
@@ -8,14 +8,13 @@
  * that can be found in the License file.
  */
 
-#include <vix/cli/commands/new/templates/backend/BackendBootstrapTemplates.hpp>
-
+#include <vix/cli/commands/new/templates/web/WebBootstrapTemplates.hpp>
 #include <string>
 
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_backend_main_cpp(const std::string &projectName)
+  std::string make_web_main_cpp(const std::string &projectName)
   {
     std::string s;
     s.reserve(400);
@@ -30,7 +29,7 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_app_bootstrap_hpp(const std::string &projectName)
+  std::string make_web_app_bootstrap_hpp(const std::string &projectName)
   {
     std::string s;
     s.reserve(900);
@@ -54,10 +53,10 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_app_bootstrap_cpp(const std::string &projectName)
+  std::string make_web_app_bootstrap_cpp(const std::string &projectName)
   {
     std::string s;
-    s.reserve(2400);
+    s.reserve(2600);
 
     s += "#include <" + projectName + "/app/AppBootstrap.hpp>\n";
     s += "#include <" + projectName + "/presentation/middleware/MiddlewareRegistry.hpp>\n";
@@ -74,7 +73,7 @@ namespace vix::commands::new_cmd::templates
     s += "    app.static_dir(\"public\", \"/\");\n\n";
     s += "    presentation::middleware::MiddlewareRegistry::register_all(app);\n";
     s += "    presentation::routes::RouteRegistry::register_all(app);\n\n";
-    s += "    vix::log::info(\"Starting " + projectName + " on port {}\", cfg.getServerPort());\n\n";
+    s += "    vix::log::info(\"Starting " + projectName + " web app on port {}\", cfg.getServerPort());\n\n";
     s += "    app.run(cfg);\n";
     s += "    return 0;\n";
     s += "  }\n";

@@ -13,5 +13,6 @@ namespace vix::commands::new_cmd::templates
 {
 
   std::string make_backend_basic_test_cpp(const std::string &projectName);
+  std::string make_backend_tests_manifest(const std::string &projectName);
 
 } // namespace vix::commands::new_cmd::templates

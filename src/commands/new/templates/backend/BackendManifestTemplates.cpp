@@ -115,7 +115,6 @@ namespace vix::commands::new_cmd::templates
 
     s += "resources = [\n";
     s += "  \".env=.env\",\n";
-    s += "  \"config=config\",\n";
     s += "  \"public=public\",\n";
     s += "  \"views=views\",\n";
     s += "  \"storage=storage\",\n";

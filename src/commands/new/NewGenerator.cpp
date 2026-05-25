@@ -306,7 +306,6 @@ namespace vix::commands::new_cmd::generator
     const fs::path storageDir = projectDir / "storage";
     const fs::path migrationsDir = projectDir / "migrations";
     const fs::path testsDir = projectDir / "tests";
-    const fs::path configDir = projectDir / "config";
 
     if (!ensure_dir(includeAppDir, err))
       return false;
@@ -347,8 +346,6 @@ namespace vix::commands::new_cmd::generator
     if (!ensure_dir(migrationsDir, err))
       return false;
     if (!ensure_dir(testsDir, err))
-      return false;
-    if (!ensure_dir(configDir, err))
       return false;
 
     if (!write_text_file(srcDir / "main.cpp",
@@ -530,10 +527,6 @@ namespace vix::commands::new_cmd::generator
     if (!write_text_file(migrationsDir / ".gitkeep", "", err))
       return false;
 
-    if (!write_text_file(configDir / "production.json",
-                         tpl::make_backend_production_config_json(projName), err))
-      return false;
-
     if (!write_text_file(projectDir / ".env.example",
                          tpl::make_backend_env_example(projName), err))
       return false;
@@ -589,7 +582,6 @@ namespace vix::commands::new_cmd::generator
     const fs::path viewsDir = projectDir / "views";
     const fs::path storageDir = projectDir / "storage";
     const fs::path testsDir = projectDir / "tests";
-    const fs::path configDir = projectDir / "config";
 
     if (!ensure_dir(includeAppDir, err))
       return false;
@@ -618,8 +610,6 @@ namespace vix::commands::new_cmd::generator
     if (!ensure_dir(storageDir, err))
       return false;
     if (!ensure_dir(testsDir, err))
-      return false;
-    if (!ensure_dir(configDir, err))
       return false;
 
     if (!write_text_file(srcDir / "main.cpp",
@@ -699,10 +689,6 @@ namespace vix::commands::new_cmd::generator
 
     if (!write_text_file(testsDir / "vix.app",
                          tpl::make_web_tests_manifest(projName), err))
-      return false;
-
-    if (!write_text_file(configDir / "production.json",
-                         tpl::make_web_production_config_json(projName), err))
       return false;
 
     if (!write_text_file(projectDir / ".env.example",

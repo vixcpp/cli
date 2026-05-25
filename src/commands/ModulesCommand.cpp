@@ -108,7 +108,7 @@ namespace vix::commands::ModulesCommand
     const auto root = utils::resolve_root(opt.dir);
 
     const std::string project = opt.project.empty()
-                                    ? utils::detect_project_name_from_cmake(root)
+                                    ? utils::detect_project_name(root)
                                     : opt.project;
 
     if (opt.subcmd == "init")

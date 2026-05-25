@@ -12,7 +12,7 @@
  */
 
 #ifndef VIX_CLI_MODULES_UTILS_HPP
-#define VIX_CLI_MODULES_UTISL_HPP
+#define VIX_CLI_MODULES_UTILS_HPP
 
 #include <filesystem>
 #include <optional>
@@ -55,6 +55,14 @@ namespace vix::commands::modules_cmd::utils
   /// Parses the project name from the first project() call in CMakeLists.txt.
   /// Falls back to "myproj" if not found.
   std::string detect_project_name_from_cmake(const std::filesystem::path &root);
+
+  /// Parses the project name from the `name = ...` field in vix.app.
+  /// Falls back to "myproj" if not found.
+  std::string detect_project_name_from_vix_app(const std::filesystem::path &root);
+
+  /// Detects the project name from CMakeLists.txt first, then vix.app.
+  /// Falls back to "myproj" if no project name can be detected.
+  std::string detect_project_name(const std::filesystem::path &root);
 
 } // namespace vix::commands::modules_cmd::utils
 

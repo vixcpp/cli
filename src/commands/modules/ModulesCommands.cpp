@@ -21,7 +21,6 @@
 
 namespace vix::commands::modules_cmd::commands
 {
-
   namespace fs = std::filesystem;
   namespace cnt = vix::commands::modules_cmd::content;
   namespace utils = vix::commands::modules_cmd::utils;
@@ -90,10 +89,31 @@ namespace vix::commands::modules_cmd::commands
       return false;
     }
 
-    if (patchRoot && !cnt::patch_root_cmakelists_include(root))
+    const bool hasRootCMake =
+        utils::exists_file(root / "CMakeLists.txt");
+
+    const bool hasVixApp =
+        utils::exists_file(root / "vix.app");
+
+    if (patchRoot && hasRootCMake)
     {
-      ui::err_line(std::cout, "Failed to patch root CMakeLists.txt.");
-      return false;
+      if (!cnt::patch_root_cmakelists_include(root))
+      {
+        ui::err_line(std::cout, "Failed to patch root CMakeLists.txt.");
+        return false;
+      }
+    }
+    else if (patchRoot && hasVixApp)
+    {
+      ui::warn_line(
+          std::cout,
+          "vix.app project detected. CMake patch skipped.");
+    }
+    else if (patchRoot)
+    {
+      ui::warn_line(
+          std::cout,
+          "CMakeLists.txt not found. Skipping root patch.");
     }
 
     print_modules_banner("modules", "initialized");
@@ -103,8 +123,10 @@ namespace vix::commands::modules_cmd::commands
     print_command_step(1, "modules/", "module directory");
     print_command_step(2, "cmake/vix_modules.cmake", "module loader");
 
-    if (patchRoot)
+    if (patchRoot && hasRootCMake)
+    {
       print_command_step(3, "CMakeLists.txt", "patched");
+    }
 
     sep();
     section("next");
@@ -187,54 +209,80 @@ namespace vix::commands::modules_cmd::commands
       return false;
     }
 
-    if (patchRootLink && !cnt::patch_root_cmakelists_link_module(root, project, module))
+    const bool hasRootCMake =
+        utils::exists_file(root / "CMakeLists.txt");
+
+    const bool hasVixApp =
+        utils::exists_file(root / "vix.app");
+
+    if (patchRootLink && hasRootCMake)
     {
-      ui::err_line(std::cout, "Failed to patch root CMakeLists.txt with module link.");
-      return false;
+      if (!cnt::patch_root_cmakelists_link_module(root, project, module))
+      {
+        ui::err_line(std::cout, "Failed to patch root CMakeLists.txt with module link.");
+        return false;
+      }
+    }
+    else if (patchRootLink && hasVixApp)
+    {
+      ui::warn_line(
+          std::cout,
+          "vix.app project detected. Add the module in vix.app.");
+    }
+    else if (patchRootLink)
+    {
+      ui::warn_line(
+          std::cout,
+          "CMakeLists.txt not found. Skipping auto-link.");
     }
 
-    print_modules_banner(normalized, "module");
+    print_modules_banner(normalized, "module created");
     sep();
 
     section("files");
     print_command_step(
         1,
-        "modules/" + normalized + "/include/" + normalized + "/api.hpp",
-        "public header");
+        "modules/" + normalized + "/");
 
     print_command_step(
         2,
-        "modules/" + normalized + "/src/" + normalized + ".cpp",
-        "implementation");
+        "modules/" + normalized + "/include/" + normalized + "/api.hpp");
 
     print_command_step(
         3,
-        "modules/" + normalized + "/CMakeLists.txt",
-        "target");
-
-    sep();
-    section("target");
-    print_command_step(1, cnt::module_alias_name(project, module), "CMake alias");
+        "modules/" + normalized + "/src/" + normalized + ".cpp");
 
     sep();
     section("next");
-    print_command_step(
-        1,
-        "#include <" + normalized + "/api.hpp>",
-        "include");
 
-    if (patchRootLink)
+    if (hasVixApp)
     {
-      print_command_step(2, "vix build", "compile");
+      print_command_step(
+          1,
+          "add \"" + normalized + "\" to modules in vix.app");
+
+      print_command_step(2, "vix build");
+    }
+    else if (patchRootLink && hasRootCMake)
+    {
+      print_command_step(
+          1,
+          "#include <" + normalized + "/api.hpp>");
+
+      print_command_step(2, "vix build");
     }
     else
     {
       print_command_step(
-          2,
-          "target_link_libraries(" + project + " PRIVATE " + cnt::module_alias_name(project, module) + ")",
-          "link manually");
-    }
+          1,
+          "#include <" + normalized + "/api.hpp>");
 
+      print_command_step(
+          2,
+          "target_link_libraries(" + project + " PRIVATE " + cnt::module_alias_name(project, module) + ")");
+
+      print_command_step(3, "vix build");
+    }
     return true;
   }
 

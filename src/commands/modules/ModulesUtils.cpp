@@ -183,4 +183,68 @@ namespace vix::commands::modules_cmd::utils
     return "myproj";
   }
 
+  std::string detect_project_name_from_vix_app(const fs::path &root)
+  {
+    const fs::path app = root / "vix.app";
+    auto content = read_file(app);
+
+    if (!content)
+      return "myproj";
+
+    std::istringstream in(*content);
+    std::string line;
+
+    while (std::getline(in, line))
+    {
+      std::string s = trim(line);
+
+      if (s.empty())
+        continue;
+
+      if (starts_with(s, "#"))
+        continue;
+
+      auto eq = s.find('=');
+
+      if (eq == std::string::npos)
+        continue;
+
+      std::string key = to_lower(trim(s.substr(0, eq)));
+      std::string value = trim(s.substr(eq + 1));
+
+      if (key != "name")
+        continue;
+
+      auto comment = value.find('#');
+
+      if (comment != std::string::npos)
+        value = trim(value.substr(0, comment));
+
+      if (value.size() >= 2 &&
+          ((value.front() == '"' && value.back() == '"') ||
+           (value.front() == '\'' && value.back() == '\'')))
+      {
+        value = value.substr(1, value.size() - 2);
+      }
+
+      value = trim(value);
+
+      if (!value.empty())
+        return value;
+    }
+
+    return "myproj";
+  }
+
+  std::string detect_project_name(const fs::path &root)
+  {
+    if (exists_file(root / "CMakeLists.txt"))
+      return detect_project_name_from_cmake(root);
+
+    if (exists_file(root / "vix.app"))
+      return detect_project_name_from_vix_app(root);
+
+    return "myproj";
+  }
+
 } // namespace vix::commands::modules_cmd::utils

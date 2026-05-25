@@ -582,6 +582,12 @@ namespace vix::cli::app
         return true;
       }
 
+      if (normalizedKey == "modules")
+      {
+        manifest.modules = values;
+        return true;
+      }
+
       if (normalizedKey == "compile_options" ||
           normalizedKey == "compileoptions" ||
           normalizedKey == "cxxflags")

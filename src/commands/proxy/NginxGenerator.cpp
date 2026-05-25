@@ -225,7 +225,12 @@ namespace vix::commands::proxy::nginx_generator
     if (!run_cmd("sudo systemctl reload nginx"))
     {
       nginx_output::error(std::cerr, "Failed to reload Nginx.");
-      nginx_output::fix(std::cerr, "sudo systemctl reload nginx");
+
+      if (!run_cmd("systemctl is-active --quiet nginx"))
+        nginx_output::fix(std::cerr, "sudo systemctl start nginx");
+      else
+        nginx_output::fix(std::cerr, "sudo systemctl reload nginx");
+
       return 1;
     }
 

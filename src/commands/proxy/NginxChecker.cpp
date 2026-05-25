@@ -26,22 +26,6 @@ namespace vix::commands::proxy::nginx_checker
 {
   namespace
   {
-    std::string shell_quote(const std::string &value)
-    {
-      std::string out = "'";
-
-      for (char c : value)
-      {
-        if (c == '\'')
-          out += "'\\''";
-        else
-          out += c;
-      }
-
-      out += "'";
-      return out;
-    }
-
     bool run_cmd(const std::string &cmd)
     {
       return std::system(cmd.c_str()) == 0;
@@ -254,26 +238,24 @@ namespace vix::commands::proxy::nginx_checker
   {
     nginx_output::print_reload_summary(std::cout, cfg);
 
-    if (!run_cmd("command -v nginx >/dev/null 2>&1"))
-    {
-      nginx_output::error(std::cerr, "Nginx is not installed or not available in PATH.");
-      nginx_output::fix(std::cerr, "install nginx");
-      return 1;
-    }
+    const int check_code = check(cfg);
 
-    if (!run_cmd("sudo nginx -t"))
+    if (check_code != 0)
     {
-      nginx_output::error(std::cerr, "Nginx config is invalid.");
-      nginx_output::fix(std::cerr, "sudo nginx -t");
-      return 1;
+      nginx_output::error(std::cerr, "Proxy check failed. Nginx reload aborted.");
+      nginx_output::fix(std::cerr, "run `vix proxy nginx check`");
+      return check_code;
     }
-
-    nginx_output::ok(std::cout, "nginx config is valid");
 
     if (!run_cmd("sudo systemctl reload nginx"))
     {
       nginx_output::error(std::cerr, "Failed to reload Nginx.");
-      nginx_output::fix(std::cerr, "sudo systemctl reload nginx");
+
+      if (!run_cmd("systemctl is-active --quiet nginx"))
+        nginx_output::fix(std::cerr, "sudo systemctl start nginx");
+      else
+        nginx_output::fix(std::cerr, "sudo systemctl reload nginx");
+
       return 1;
     }
 

@@ -272,6 +272,114 @@ namespace vix::commands::new_cmd::generator
   // Game
   // ------------------------------------------------------------------
 
+  bool generate_backend_project(
+      const fs::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features,
+      std::string &err)
+  {
+    namespace tpl = vix::commands::new_cmd::templates;
+
+    const fs::path srcDir = projectDir / "src";
+    const fs::path appRoot = srcDir / projName;
+
+    const fs::path appDir = appRoot / "app";
+    const fs::path applicationDir = appRoot / "application";
+    const fs::path domainDir = appRoot / "domain";
+    const fs::path infrastructureDir = appRoot / "infrastructure";
+    const fs::path presentationDir = appRoot / "presentation";
+    const fs::path controllersDir = presentationDir / "controllers";
+    const fs::path routesDir = presentationDir / "routes";
+    const fs::path middlewareDir = presentationDir / "middleware";
+    const fs::path supportDir = appRoot / "support";
+
+    const fs::path publicDir = projectDir / "public";
+    const fs::path storageDir = projectDir / "storage";
+    const fs::path migrationsDir = projectDir / "migrations";
+    const fs::path testsDir = projectDir / "tests";
+    const fs::path configDir = projectDir / "config";
+
+    if (!ensure_dir(srcDir, err))
+      return false;
+    if (!ensure_dir(appDir, err))
+      return false;
+    if (!ensure_dir(applicationDir, err))
+      return false;
+    if (!ensure_dir(domainDir, err))
+      return false;
+    if (!ensure_dir(infrastructureDir, err))
+      return false;
+    if (!ensure_dir(controllersDir, err))
+      return false;
+    if (!ensure_dir(routesDir, err))
+      return false;
+    if (!ensure_dir(middlewareDir, err))
+      return false;
+    if (!ensure_dir(supportDir, err))
+      return false;
+    if (!ensure_dir(publicDir, err))
+      return false;
+    if (!ensure_dir(storageDir, err))
+      return false;
+    if (!ensure_dir(migrationsDir, err))
+      return false;
+    if (!ensure_dir(testsDir, err))
+      return false;
+    if (!ensure_dir(configDir, err))
+      return false;
+
+    if (!write_text_file(srcDir / "main.cpp", tpl::make_backend_main_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(appDir / "AppBootstrap.hpp", tpl::make_backend_app_bootstrap_hpp(projName), err))
+      return false;
+    if (!write_text_file(appDir / "AppBootstrap.cpp", tpl::make_backend_app_bootstrap_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(routesDir / "RouteRegistry.hpp", tpl::make_backend_route_registry_hpp(projName), err))
+      return false;
+    if (!write_text_file(routesDir / "RouteRegistry.cpp", tpl::make_backend_route_registry_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(middlewareDir / "MiddlewareRegistry.hpp", tpl::make_backend_middleware_registry_hpp(projName), err))
+      return false;
+    if (!write_text_file(middlewareDir / "MiddlewareRegistry.cpp", tpl::make_backend_middleware_registry_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(controllersDir / "HealthController.hpp", tpl::make_backend_health_controller_hpp(projName), err))
+      return false;
+    if (!write_text_file(controllersDir / "HealthController.cpp", tpl::make_backend_health_controller_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(testsDir / "test_basic.cpp", tpl::make_backend_basic_test_cpp(projName), err))
+      return false;
+
+    if (!write_text_file(publicDir / ".gitkeep", "", err))
+      return false;
+    if (!write_text_file(storageDir / ".gitkeep", "", err))
+      return false;
+    if (!write_text_file(migrationsDir / ".gitkeep", "", err))
+      return false;
+
+    if (!write_text_file(configDir / "production.json", tpl::make_backend_production_config_json(), err))
+      return false;
+
+    if (!write_text_file(projectDir / ".env.example", tpl::make_backend_env_example(), err))
+      return false;
+    if (!write_text_file(projectDir / "vix.app", tpl::make_project_manifest_backend(projName, features), err))
+      return false;
+    if (!write_text_file(projectDir / "vix.json", tpl::make_vix_json_backend(projName), err))
+      return false;
+    if (!write_text_file(projectDir / "README.md", tpl::make_readme_backend(projName), err))
+      return false;
+
+    return true;
+  }
+
+  // ------------------------------------------------------------------
+  // Game
+  // ------------------------------------------------------------------
+
   bool generate_game_project(
       const fs::path &projectDir,
       const std::string &projName,
@@ -336,6 +444,11 @@ namespace vix::commands::new_cmd::generator
       const std::string &projName)
   {
     out::print_creation_lib(projectDir, projName);
+  }
+
+  void print_next_steps_backend(const fs::path &projectDir, const std::string &projName)
+  {
+    output::print_creation_backend(projectDir, projName, FeaturesSelection{});
   }
 
   void print_next_steps_game(

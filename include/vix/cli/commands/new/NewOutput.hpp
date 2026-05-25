@@ -48,6 +48,12 @@ namespace vix::commands::new_cmd::output
       const std::filesystem::path &projectDir,
       const std::string &projName);
 
+  /// Full creation summary for a Backend project.
+  void print_creation_backend(
+      const std::filesystem::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features);
+
 } // namespace vix::commands::new_cmd::output
 
 #endif

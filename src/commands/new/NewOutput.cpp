@@ -107,6 +107,17 @@ namespace vix::commands::new_cmd::output
     print_command_step(3, "vix run", "start game");
   }
 
+  static void print_steps_backend(const std::string &projName)
+  {
+    section("next");
+
+    print_command_step(1, "cd " + projName + "/", "enter project");
+    print_command_step(2, "cp .env.example .env", "create local config");
+    print_command_step(3, "vix build", "compile");
+    print_command_step(4, "vix run", "start backend");
+    print_command_step(5, "curl http://localhost:8080/health", "check health");
+  }
+
   // ------------------------------------------------------------------
   // High-level entry points
   // ------------------------------------------------------------------
@@ -146,6 +157,16 @@ namespace vix::commands::new_cmd::output
     print_banner(projName, "game");
     sep();
     print_steps_game(projName);
+  }
+
+  void print_creation_backend(
+      const std::filesystem::path & /*projectDir*/,
+      const std::string &projName,
+      const FeaturesSelection & /*features*/)
+  {
+    print_banner(projName, "backend application");
+    sep();
+    print_steps_backend(projName);
   }
 
 } // namespace vix::commands::new_cmd::output

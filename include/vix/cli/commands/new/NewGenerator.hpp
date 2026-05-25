@@ -72,12 +72,19 @@ namespace vix::commands::new_cmd::generator
       const std::string &projName,
       std::string &err);
 
+  /// Generates all files for a production backend project under projectDir.
+  bool generate_backend_project(
+      const fs::path &projectDir,
+      const std::string &projName,
+      const FeaturesSelection &features,
+      std::string &err);
+
   // ------------------------------------------------------------------
   // Post-generation output
   // ------------------------------------------------------------------
-
   void print_next_steps_app(const fs::path &projectDir, const std::string &projName);
   void print_next_steps_vue(const fs::path &projectDir, const std::string &projName);
   void print_next_steps_lib(const fs::path &projectDir, const std::string &projName);
   void print_next_steps_game(const fs::path &projectDir, const std::string &projName);
+  void print_next_steps_backend(const fs::path &projectDir, const std::string &projName);
 } // namespace vix::commands::new_cmd::generator

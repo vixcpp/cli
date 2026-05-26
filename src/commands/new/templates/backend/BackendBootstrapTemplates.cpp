@@ -119,7 +119,10 @@ namespace vix::commands::new_cmd::templates
     s += "#include <" + projectName + "/presentation/routes/RouteRegistry.hpp>\n\n";
 
     s += "#include <vix.hpp>\n";
-    s += "#include <vix/log.hpp>\n\n";
+    s += "#include <vix/log.hpp>\n";
+    s += "#include <vix/middleware/app/adapter.hpp>\n";
+    s += "#include <vix/middleware/performance/compression.hpp>\n";
+    s += "#include <vix/middleware/performance/static_compression.hpp>\n\n";
 
     s += "namespace " + projectName + "::app\n";
     s += "{\n";
@@ -128,8 +131,41 @@ namespace vix::commands::new_cmd::templates
     s += "    vix::config::Config cfg{\".env\"};\n";
     s += "    vix::App app;\n\n";
 
-    s += "    app.templates(\"views\");\n";
-    s += "    app.static_dir(\"public\", \"/\");\n\n";
+    s += "    const std::string viewsPath = cfg.getString(\"templates.path\", \"views\");\n";
+    s += "    const std::string publicPath = cfg.getString(\"public.path\", \"public\");\n";
+    s += "    const std::string publicMount = cfg.getString(\"public.mount\", \"/\");\n";
+    s += "    const std::string publicIndex = cfg.getString(\"public.index\", \"index.html\");\n";
+    s += "    const std::string publicCacheControl = cfg.getString(\"public.cache_control\", \"public, max-age=3600\");\n";
+    s += "    const bool publicSpaFallback = cfg.getBool(\"public.spa_fallback\", false);\n";
+    s += "    const bool publicCompression = cfg.getBool(\"public.compression\", false);\n";
+    s += "    const int publicCompressionMinSize = cfg.getInt(\"public.compression_min_size\", 1024);\n\n";
+
+    s += "    if (publicCompression)\n";
+    s += "    {\n";
+    s += "      const auto compressionOptions = vix::middleware::performance::CompressionOptions{\n";
+    s += "          .min_size = static_cast<std::size_t>(publicCompressionMinSize),\n";
+    s += "          .add_vary = true,\n";
+    s += "          .enabled = true,\n";
+    s += "      };\n\n";
+
+    s += "      auto compressionMiddleware = vix::middleware::app::adapt_ctx(\n";
+    s += "          vix::middleware::performance::compression(compressionOptions));\n\n";
+
+    s += "      app.use(std::move(compressionMiddleware));\n\n";
+
+    s += "     vix::App::set_static_response_hook(\n";
+    s += "          vix::middleware::performance::compressed_static_response_hook(compressionOptions));\n";
+    s += "    }\n\n";
+
+    s += "    app.templates(viewsPath);\n";
+    s += "    app.static_dir(\n";
+    s += "        publicPath,\n";
+    s += "        publicMount,\n";
+    s += "        publicIndex,\n";
+    s += "        true,\n";
+    s += "        publicCacheControl,\n";
+    s += "        true,\n";
+    s += "        publicSpaFallback);\n\n";
 
     s += "    presentation::middleware::MiddlewareRegistry::register_all(app);\n";
     s += "    presentation::routes::RouteRegistry::register_all(app);\n\n";

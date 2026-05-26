@@ -45,6 +45,7 @@ namespace vix::commands::new_cmd::templates
     readme += "Open:\n\n";
     readme += "```txt\n";
     readme += "http://127.0.0.1:8080\n";
+    readme += "http://127.0.0.1:8080/status.html\n";
     readme += "```\n\n";
 
     readme += "Check the API:\n\n";
@@ -89,6 +90,9 @@ namespace vix::commands::new_cmd::templates
     readme += "  index.html\n";
     readme += "  app.css\n";
     readme += "  app.js\n";
+    readme += "  status.html\n";
+    readme += "  status.css\n";
+    readme += "  status.js\n";
     readme += "\n";
     readme += "views/\n";
     readme += "storage/\n";

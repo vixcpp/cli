@@ -44,6 +44,7 @@ namespace vix::commands::new_cmd::templates
     s += "    \"path\": \"public\",\n";
     s += "    \"mount\": \"/\",\n";
     s += "    \"index\": \"index.html\",\n";
+    s += "    \"cache_control\": \"public, max-age=3600\",\n";
     s += "    \"spa_fallback\": false\n";
     s += "  },\n";
     s += "  \"templates\": {\n";
@@ -110,10 +111,15 @@ namespace vix::commands::new_cmd::templates
     s += "LOGGING_QUEUE_MAX=20000\n";
     s += "LOGGING_DROP_ON_OVERFLOW=true\n\n";
 
-    s += "# ----------------------------------\n";
     s += "# Public files and templates\n";
     s += "# ----------------------------------\n";
     s += "PUBLIC_PATH=public\n";
+    s += "PUBLIC_MOUNT=/\n";
+    s += "PUBLIC_INDEX=index.html\n";
+    s += "PUBLIC_CACHE_CONTROL=public, max-age=3600\n";
+    s += "PUBLIC_SPA_FALLBACK=false\n";
+    s += "PUBLIC_COMPRESSION=false\n";
+    s += "PUBLIC_COMPRESSION_MIN_SIZE=1024\n";
     s += "VIEWS_PATH=views\n\n";
 
     s += "# ----------------------------------\n";

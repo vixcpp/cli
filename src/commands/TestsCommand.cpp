@@ -957,6 +957,44 @@ namespace
     return line.substr(begin, end - begin) + "s";
   }
 
+  static bool is_ctest_failure_line(const std::string &line)
+  {
+    return line.find("***Failed") != std::string::npos ||
+           line.find("***Exception") != std::string::npos ||
+           line.find("***Timeout") != std::string::npos ||
+           line.find("***Not Run") != std::string::npos ||
+           line.find("Subprocess aborted") != std::string::npos ||
+           line.find("SEGFAULT") != std::string::npos ||
+           line.find("SegFault") != std::string::npos;
+  }
+
+  static std::string extract_ctest_failure_reason(const std::string &line)
+  {
+    const std::vector<std::string> markers = {
+        "Subprocess aborted",
+        "***Failed",
+        "***Exception",
+        "***Timeout",
+        "***Not Run",
+        "SEGFAULT",
+        "SegFault",
+    };
+
+    std::size_t pos = std::string::npos;
+
+    for (const std::string &marker : markers)
+    {
+      const std::size_t p = line.find(marker);
+      if (p != std::string::npos && (pos == std::string::npos || p < pos))
+        pos = p;
+    }
+
+    if (pos == std::string::npos)
+      return {};
+
+    return trim_copy(line.substr(pos));
+  }
+
   static std::vector<CTestItem> parse_ctest_run_output(
       const std::string &output)
   {
@@ -982,7 +1020,7 @@ namespace
       std::string rest = trim_copy(trimmed.substr(colon + 1));
 
       const bool passed = rest.find(" Passed") != std::string::npos;
-      const bool failed = rest.find("***Failed") != std::string::npos;
+      const bool failed = is_ctest_failure_line(rest);
       const bool skipped = rest.find("Skipped") != std::string::npos ||
                            rest.find("Not Run") != std::string::npos;
 
@@ -1119,7 +1157,7 @@ namespace
   static std::optional<std::string> extract_failed_test_name_from_line(
       const std::string &line)
   {
-    if (line.find("***Failed") == std::string::npos)
+    if (!is_ctest_failure_line(line))
       return std::nullopt;
 
     const auto colon = line.find(':');
@@ -1132,9 +1170,25 @@ namespace
     if (dots != std::string::npos)
       rest = rest.substr(0, dots);
 
-    const auto failed = rest.find("***Failed");
-    if (failed != std::string::npos)
-      rest = rest.substr(0, failed);
+    const std::vector<std::string> markers = {
+        "Subprocess aborted",
+        "***Failed",
+        "***Exception",
+        "***Timeout",
+        "***Not Run",
+        "SEGFAULT",
+        "SegFault",
+    };
+
+    for (const std::string &marker : markers)
+    {
+      const auto markerPos = rest.find(marker);
+      if (markerPos != std::string::npos)
+      {
+        rest = rest.substr(0, markerPos);
+        break;
+      }
+    }
 
     rest = trim_copy(rest);
 
@@ -1175,6 +1229,11 @@ namespace
         flush();
 
         current.name = *name;
+
+        const std::string reason = extract_ctest_failure_reason(line);
+        if (!reason.empty())
+          current.message = reason;
+
         collecting = true;
         continue;
       }
@@ -1196,6 +1255,11 @@ namespace
         if (auto name = extract_failed_test_name_from_line(trimmed))
         {
           current.name = *name;
+
+          const std::string reason = extract_ctest_failure_reason(trimmed);
+          if (!reason.empty())
+            current.message = reason;
+
           collecting = true;
         }
 

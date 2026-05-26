@@ -218,6 +218,13 @@ namespace vix::commands::new_cmd::templates
     s += "        \"APP_NAME\",\n";
     s += "        \"APP_ENV\",\n";
     s += "        \"SERVER_PORT\",\n";
+    s += "        \"PUBLIC_PATH\",\n";
+    s += "        \"PUBLIC_MOUNT\",\n";
+    s += "        \"PUBLIC_INDEX\",\n";
+    s += "        \"PUBLIC_CACHE_CONTROL\",\n";
+    s += "        \"PUBLIC_SPA_FALLBACK\",\n";
+    s += "        \"PUBLIC_COMPRESSION\",\n";
+    s += "        \"PUBLIC_COMPRESSION_MIN_SIZE\",\n";
     s += "        \"DATABASE_ENGINE\",\n";
     s += "        \"DATABASE_SQLITE_PATH\"\n";
     s += "      ]\n";

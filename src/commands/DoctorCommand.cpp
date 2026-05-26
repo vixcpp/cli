@@ -1250,6 +1250,82 @@ namespace vix::commands
       }
     }
 
+    struct PublicAssetsInfo
+    {
+      fs::path publicDir{};
+      bool exists{false};
+      bool isDirectory{false};
+      bool indexHtmlExists{false};
+      bool appCssExists{false};
+      bool appJsExists{false};
+      bool statusHtmlExists{false};
+      bool statusCssExists{false};
+      bool statusJsExists{false};
+      std::vector<std::string> missingFiles{};
+    };
+
+    PublicAssetsInfo detect_public_assets()
+    {
+      PublicAssetsInfo info;
+      info.publicDir = fs::current_path() / "public";
+
+      std::error_code ec;
+
+      info.exists = fs::exists(info.publicDir, ec);
+      info.isDirectory = info.exists && fs::is_directory(info.publicDir, ec);
+
+      if (!info.isDirectory)
+      {
+        info.missingFiles.push_back("public/");
+        return info;
+      }
+
+      const fs::path indexHtml = info.publicDir / "index.html";
+      const fs::path appCss = info.publicDir / "app.css";
+      const fs::path appJs = info.publicDir / "app.js";
+      const fs::path statusHtml = info.publicDir / "status.html";
+      const fs::path statusCss = info.publicDir / "status.css";
+      const fs::path statusJs = info.publicDir / "status.js";
+
+      info.indexHtmlExists =
+          fs::exists(indexHtml, ec) && fs::is_regular_file(indexHtml, ec);
+
+      info.appCssExists =
+          fs::exists(appCss, ec) && fs::is_regular_file(appCss, ec);
+
+      info.appJsExists =
+          fs::exists(appJs, ec) && fs::is_regular_file(appJs, ec);
+
+      info.statusHtmlExists =
+          fs::exists(statusHtml, ec) && fs::is_regular_file(statusHtml, ec);
+
+      info.statusCssExists =
+          fs::exists(statusCss, ec) && fs::is_regular_file(statusCss, ec);
+
+      info.statusJsExists =
+          fs::exists(statusJs, ec) && fs::is_regular_file(statusJs, ec);
+
+      if (!info.indexHtmlExists)
+        info.missingFiles.push_back("public/index.html");
+
+      if (!info.appCssExists)
+        info.missingFiles.push_back("public/app.css");
+
+      if (!info.appJsExists)
+        info.missingFiles.push_back("public/app.js");
+
+      if (!info.statusHtmlExists)
+        info.missingFiles.push_back("public/status.html");
+
+      if (!info.statusCssExists)
+        info.missingFiles.push_back("public/status.css");
+
+      if (!info.statusJsExists)
+        info.missingFiles.push_back("public/status.js");
+
+      return info;
+    }
+
     int run_production_doctor(bool jsonOut)
     {
       vix::cli::util::section(std::cout, "Production Doctor");
@@ -1257,6 +1333,7 @@ namespace vix::commands
       const auto projectName = read_project_name().value_or("unknown");
       const auto buildDir = detect_build_dir();
       const auto binary = detect_binary_path(projectName);
+      const auto publicAssets = detect_public_assets();
 
       const auto service = detect_systemd_service(
           projectName,
@@ -1408,7 +1485,61 @@ namespace vix::commands
       vix::cli::util::kv(std::cout, "TLS", tls ? "enabled" : "unknown");
       vix::cli::util::kv(std::cout, "Local health", localHealth ? "ok" : "unknown");
       vix::cli::util::kv(std::cout, "Public health", publicHealth ? "ok" : "unknown");
-      vix::cli::util::section(std::cout, "Production Readiness");
+      vix::cli::util::section(std::cout, "Public Assets");
+
+      vix::cli::util::kv(
+          std::cout,
+          "Public assets",
+          publicAssets.isDirectory ? "detected" : "missing");
+
+      vix::cli::util::kv(
+          std::cout,
+          "Public directory",
+          publicAssets.publicDir.string());
+
+      vix::cli::util::kv(
+          std::cout,
+          "index.html",
+          publicAssets.indexHtmlExists ? "ok" : "missing");
+
+      vix::cli::util::kv(
+          std::cout,
+          "app.css",
+          publicAssets.appCssExists ? "ok" : "missing");
+
+      vix::cli::util::kv(
+          std::cout,
+          "app.js",
+          publicAssets.appJsExists ? "ok" : "missing");
+
+      vix::cli::util::kv(
+          std::cout,
+          "status.html",
+          publicAssets.statusHtmlExists ? "ok" : "missing");
+
+      vix::cli::util::kv(
+          std::cout,
+          "status.css",
+          publicAssets.statusCssExists ? "ok" : "missing");
+
+      vix::cli::util::kv(
+          std::cout,
+          "status.js",
+          publicAssets.statusJsExists ? "ok" : "missing");
+
+      if (!publicAssets.missingFiles.empty())
+      {
+        for (const auto &file : publicAssets.missingFiles)
+        {
+          vix::cli::util::warn_line(
+              std::cerr,
+              "Missing public asset: " + file);
+        }
+
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Fix: create the missing files in public/ or remove static UI expectations from this app.");
+      }
 
       vix::cli::util::kv(
           std::cout,
@@ -1483,6 +1614,15 @@ namespace vix::commands
         out["environment"] = environment.value_or("");
         out["websocket_port"] = websocketPort.value_or("");
         out["proxy_target"] = proxyTarget.value_or("");
+        out["public_assets_detected"] = publicAssets.isDirectory;
+        out["public_directory"] = publicAssets.publicDir.string();
+        out["public_index_html"] = publicAssets.indexHtmlExists;
+        out["public_app_css"] = publicAssets.appCssExists;
+        out["public_app_js"] = publicAssets.appJsExists;
+        out["public_status_html"] = publicAssets.statusHtmlExists;
+        out["public_status_css"] = publicAssets.statusCssExists;
+        out["public_status_js"] = publicAssets.statusJsExists;
+        out["public_missing_files"] = publicAssets.missingFiles;
 
         for (const auto &item : readiness)
         {

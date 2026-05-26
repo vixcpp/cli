@@ -1218,6 +1218,52 @@ namespace vix::cli::errors::build
     // Link-stage handlers
     // -------------------------------------------------------------------------
 
+    // [NEW] Build tool shared library missing
+    //
+    // Example:
+    //   /usr/bin/llvm-ar: error while loading shared libraries:
+    //   libLLVM-18.so.18.1: cannot open shared object file: No such file or directory
+    //
+    // This is not a C++ compile error and not a missing user-linked library.
+    // The build tool itself cannot start because its runtime dependency is broken.
+    bool handleBuildToolSharedLibraryMissing(std::string_view log)
+    {
+      const bool hasSharedLibraryFailure =
+          contains(log, "error while loading shared libraries") &&
+          contains(log, "cannot open shared object file");
+
+      if (!hasSharedLibraryFailure)
+        return false;
+
+      std::string tool = extract(
+          log,
+          std::regex(R"re((/[^\s:]+):\s*error while loading shared libraries)re"));
+
+      std::string library = extract(
+          log,
+          std::regex(R"re(error while loading shared libraries:\s*([^:\s]+))re"));
+
+      if (tool.empty())
+      {
+        tool = extract(
+            log,
+            std::regex(R"re((\S+):\s*error while loading shared libraries)re"));
+      }
+
+      print_error_title("build tool cannot start");
+
+      if (!tool.empty())
+        print_colored_field("tool: ", RED, tool);
+
+      if (!library.empty())
+        print_colored_field("missing library: ", RED, library);
+
+      print_hint("the selected build tool is installed but one of its runtime libraries is missing");
+      print_hint("reinstall the toolchain package or use another archiver/ranlib pair");
+
+      return true;
+    }
+
     // [NEW 6] Missing library during link
     //
     //   Must run BEFORE handleUndefinedSymbol — a missing -lfoo causes
@@ -1586,14 +1632,19 @@ namespace vix::cli::errors::build
     if (handleCppCompileError(log))
       return true; // NEW 5
 
-    // --- Link-stage errors (missing lib & duplicate sym & arch before
-    //     the generic undefined-symbol catch) ---------------------------
+    // --- Link-stage errors (build tool/runtime before normal linker issues) ----
+    if (handleBuildToolSharedLibraryMissing(log))
+      return true; // NEW
+
     if (handleMissingLinkedLibrary(log))
       return true; // NEW 6
+
     if (handleMultipleDefinition(log))
       return true; // NEW 7
+
     if (handleArchitectureMismatch(log))
       return true; // NEW 8
+
     if (handleUndefinedSymbol(log))
       return true;
 

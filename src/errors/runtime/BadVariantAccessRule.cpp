@@ -38,7 +38,9 @@ namespace vix::cli::errors::runtime
     {
       return {
           ".value()",
+          ".value(",
           "value()",
+          "value(",
           "std::get<",
           "std::get(",
       };
@@ -91,8 +93,8 @@ namespace vix::cli::errors::runtime
 
       print_runtime_hints_and_at(
           {
-              "check the result before calling .value()",
-              "use `if (!result)` and inspect `result.error()` before reading the value",
+              "check that the requested value is present before accessing it",
+              "avoid calling .value() or std::get<T>() when the active value is uncertain",
           },
           make_at_text(location, sourceFile));
 

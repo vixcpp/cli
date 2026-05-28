@@ -1447,6 +1447,7 @@ namespace vix::cli::errors
       rules.push_back(runtime::makePureVirtualCallRule());
 
       // Filesystem / OS / I/O / network
+      rules.push_back(runtime::makeResourceNotFoundRule());
       rules.push_back(runtime::makeFilesystemRuntimeRule());
       rules.push_back(runtime::makePermissionDeniedRule());
       rules.push_back(runtime::makeAddressAlreadyInUseRule());
@@ -1482,16 +1483,166 @@ namespace vix::cli::errors
       return false;
     }
 
+    std::string trim_copy(std::string text)
+    {
+      while (!text.empty() &&
+             std::isspace(static_cast<unsigned char>(text.front())) != 0)
+      {
+        text.erase(text.begin());
+      }
+
+      while (!text.empty() &&
+             std::isspace(static_cast<unsigned char>(text.back())) != 0)
+      {
+        text.pop_back();
+      }
+
+      return text;
+    }
+
+    std::string strip_runtime_log_prefix(std::string line)
+    {
+      line = trim_copy(line);
+
+      const std::size_t errorTag = line.find("[error]");
+      if (errorTag != std::string::npos)
+      {
+        line = line.substr(errorTag + std::string("[error]").size());
+        return trim_copy(line);
+      }
+
+      const std::size_t errorColon = line.find("error:");
+      if (errorColon != std::string::npos)
+      {
+        line = line.substr(errorColon + std::string("error:").size());
+        return trim_copy(line);
+      }
+
+      return line;
+    }
+
+    std::optional<std::string> extract_best_runtime_error_line(
+        const std::string &runtimeLog)
+    {
+      const auto lines = split_lines(runtimeLog);
+
+      for (const auto &rawLine : lines)
+      {
+        if (icontains(rawLine, "[error]"))
+        {
+          const std::string line = strip_runtime_log_prefix(rawLine);
+
+          if (!line.empty())
+            return line;
+        }
+      }
+
+      for (const auto &rawLine : lines)
+      {
+        if (icontains(rawLine, "error:") ||
+            icontains(rawLine, "failed") ||
+            icontains(rawLine, "not found") ||
+            icontains(rawLine, "cannot open") ||
+            icontains(rawLine, "could not open"))
+        {
+          const std::string line = strip_runtime_log_prefix(rawLine);
+
+          if (!line.empty())
+            return line;
+        }
+      }
+
+      return std::nullopt;
+    }
+
+    std::string simplify_runtime_error_title(std::string text)
+    {
+      text = trim_copy(text);
+
+      if (text.empty())
+        return "program reported an error";
+
+      if (icontains(text, "asset file not found"))
+        return "asset file not found";
+
+      if (icontains(text, "file not found"))
+        return "file not found";
+
+      if (icontains(text, "no such file or directory"))
+        return "file not found";
+
+      if (icontains(text, "permission denied"))
+        return "permission denied";
+
+      if (icontains(text, "failed to load scene"))
+        return "failed to load scene";
+
+      if (icontains(text, "load failed"))
+        return text;
+
+      if (icontains(text, "failed"))
+        return text;
+
+      return text;
+    }
+
+    std::string choose_generic_runtime_hint(
+        const std::string &runtimeLog,
+        const std::string &title)
+    {
+      if (icontains(title, "asset") ||
+          icontains(title, "file not found") ||
+          icontains(runtimeLog, "asset file not found") ||
+          icontains(runtimeLog, "no such file or directory"))
+      {
+        return "check the file path, working directory, or required runtime assets";
+      }
+
+      if (icontains(title, "permission denied") ||
+          icontains(runtimeLog, "permission denied"))
+      {
+        return "check file permissions and whether the process can access the resource";
+      }
+
+      if (icontains(title, "failed to load") ||
+          icontains(title, "load failed"))
+      {
+        return "check the resource path, configuration, and initialization order";
+      }
+
+      if (log_looks_sanitized(runtimeLog) ||
+          icontains(runtimeLog, "SIGSEGV") ||
+          icontains(runtimeLog, "SIGABRT") ||
+          icontains(runtimeLog, "Segmentation fault") ||
+          icontains(runtimeLog, "Aborted") ||
+          icontains(runtimeLog, "terminate called"))
+      {
+        return "inspect the runtime log or rerun with --san when possible";
+      }
+
+      return "inspect the error lines in the runtime log";
+    }
+
     bool handleGenericRuntimeFallback(
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
     {
+      const auto extracted = extract_best_runtime_error_line(runtimeLog);
+
+      const std::string title =
+          simplify_runtime_error_title(
+              extracted.value_or("program reported an error"));
+
+      const std::string hint =
+          choose_generic_runtime_hint(runtimeLog, title);
+
       std::cerr << RED
-                << "runtime error: unclassified runtime failure"
+                << "runtime error: "
+                << title
                 << RESET << "\n";
 
       print_hint_at_bottom(
-          "inspect the runtime log or rerun with --san when possible",
+          hint,
           !sourceFile.empty() ? "source: " + sourceFile.filename().string() : "");
 
       if (!runtimeLog.empty())

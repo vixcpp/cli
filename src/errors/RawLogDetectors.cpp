@@ -1442,6 +1442,7 @@ namespace vix::cli::errors
       rules.push_back(runtime::makeIntegerOverflowRule());
       rules.push_back(runtime::makeUninitializedMemoryRule());
       rules.push_back(runtime::makeMisalignedAccessRule());
+      rules.push_back(runtime::makeBadVariantAccessRule());
       rules.push_back(runtime::makeInvalidCastRule());
       rules.push_back(runtime::makePureVirtualCallRule());
 

@@ -78,6 +78,8 @@ namespace vix::cli::errors::runtime
 
   std::unique_ptr<IRuntimeErrorRule> makeSegfaultRule();
   std::unique_ptr<IRuntimeErrorRule> makeAbortRule();
+
+  std::unique_ptr<IRuntimeErrorRule> makeBadVariantAccessRule();
 } // namespace vix::cli::errors::runtime
 
 #endif

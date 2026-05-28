@@ -321,6 +321,7 @@ namespace vix::cli::errors::runtime
     opt.contextLines = 2;
     opt.maxLineWidth = 120;
     opt.tabWidth = 4;
+    opt.leadingBlankLine = false;
 
     printCodeFrame(err, ctx, opt);
   }

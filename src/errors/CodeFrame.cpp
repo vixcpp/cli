@@ -196,8 +196,12 @@ namespace vix::cli::errors
 
     const std::size_t width = std::to_string(to).size();
 
-    std::cerr << "\n"
-              << GRAY << "--> " << RESET
+    if (opt.leadingBlankLine)
+    {
+      std::cerr << "\n";
+    }
+
+    std::cerr << GRAY << "--> " << RESET
               << err.file << ":" << err.line << ":" << err.column << "\n";
 
     std::cerr << GRAY << "code:" << RESET << "\n";

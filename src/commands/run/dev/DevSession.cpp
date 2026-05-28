@@ -17,6 +17,7 @@
 #include <vix/cli/commands/run/dev/DevSession.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/async/core/io_context.hpp>
 #include <vix/async/core/timer.hpp>
 #include <vix/async/core/thread_pool.hpp>
@@ -35,6 +36,7 @@
 #include <fstream>
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -145,6 +147,47 @@ namespace vix::commands::RunCommand::dev
           continue;
 
         return true;
+      }
+    }
+#endif
+
+#ifndef _WIN32
+    bool set_nonblocking_fd(int fd)
+    {
+      const int flags = ::fcntl(fd, F_GETFL, 0);
+
+      if (flags < 0)
+        return false;
+
+      return ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    }
+
+    void drain_fd_live(int fd, std::string &out)
+    {
+      char buffer[4096];
+
+      while (true)
+      {
+        const ssize_t n = ::read(fd, buffer, sizeof(buffer));
+
+        if (n > 0)
+        {
+          out.append(buffer, static_cast<std::size_t>(n));
+          std::cout.write(buffer, n);
+          std::cout.flush();
+          continue;
+        }
+
+        if (n == 0)
+          return;
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+          return;
+
+        if (errno == EINTR)
+          continue;
+
+        return;
       }
     }
 #endif
@@ -820,9 +863,23 @@ namespace vix::commands::RunCommand::dev
 
     const auto childStart = Clock::now();
 
+    int outputPipe[2] = {-1, -1};
+
+    if (::pipe(outputPipe) != 0)
+    {
+      error("Failed to create dev output pipe.");
+
+      co_return DevChildRunResult{
+          1,
+          DevChildExitReason::Exited};
+    }
+
     pid_t pid = ::fork();
     if (pid < 0)
     {
+      ::close(outputPipe[0]);
+      ::close(outputPipe[1]);
+
       error("Failed to fork() for dev process.");
 
       co_return DevChildRunResult{
@@ -832,8 +889,20 @@ namespace vix::commands::RunCommand::dev
 
     if (pid == 0)
     {
+      ::close(outputPipe[0]);
+
+      ::dup2(outputPipe[1], STDOUT_FILENO);
+      ::dup2(outputPipe[1], STDERR_FILENO);
+
+      ::close(outputPipe[1]);
+
       exec_child_process(exePath);
     }
+
+    ::close(outputPipe[1]);
+    set_nonblocking_fd(outputPipe[0]);
+
+    std::string runtimeLog;
 
     if (!options_.quiet)
       print_dev_started(static_cast<int>(pid));
@@ -841,6 +910,7 @@ namespace vix::commands::RunCommand::dev
     while (!ct.is_cancelled())
     {
       co_await sleep_poll_interval(ctx, ct);
+      drain_fd_live(outputPipe[0], runtimeLog);
 
       std::vector<DevIndexedChange> indexedChanges = fileIndex_.poll_changes();
 
@@ -867,6 +937,9 @@ namespace vix::commands::RunCommand::dev
             static_cast<int>(pid),
             ct);
 
+        drain_fd_live(outputPipe[0], runtimeLog);
+        ::close(outputPipe[0]);
+
         co_return DevChildRunResult{
             0,
             DevChildExitReason::RestartRequested};
@@ -890,11 +963,27 @@ namespace vix::commands::RunCommand::dev
         else if (WIFSIGNALED(status))
           exitCode = 128 + WTERMSIG(status);
 
+        drain_fd_live(outputPipe[0], runtimeLog);
+        ::close(outputPipe[0]);
+
         if (exitCode != 0)
         {
-          error("Dev server exited with code " +
-                std::to_string(exitCode) +
-                " (lifetime ~" + std::to_string(ms) + "ms).");
+          bool handled = false;
+
+          if (!runtimeLog.empty())
+          {
+            handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                runtimeLog,
+                exePath,
+                "Dev server exited with code " + std::to_string(exitCode));
+          }
+
+          if (!handled)
+          {
+            error("Dev server exited with code " +
+                  std::to_string(exitCode) +
+                  " (lifetime ~" + std::to_string(ms) + "ms).");
+          }
         }
         else
         {

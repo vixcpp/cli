@@ -68,6 +68,7 @@ namespace vix::cli::errors::runtime
 
   std::unique_ptr<IRuntimeErrorRule> makeFilesystemRuntimeRule();
   std::unique_ptr<IRuntimeErrorRule> makePermissionDeniedRule();
+  std::unique_ptr<IRuntimeErrorRule> makeResourceNotFoundRule();
   std::unique_ptr<IRuntimeErrorRule> makeAddressAlreadyInUseRule();
   std::unique_ptr<IRuntimeErrorRule> makeBrokenPipeRule();
   std::unique_ptr<IRuntimeErrorRule> makeTimeoutRuntimeRule();

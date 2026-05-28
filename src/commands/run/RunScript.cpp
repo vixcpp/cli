@@ -42,6 +42,7 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <fcntl.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -236,6 +237,96 @@ namespace vix::commands::RunCommand::detail
 
       return false;
     }
+
+#ifndef _WIN32
+    bool set_nonblocking_fd_local(int fd)
+    {
+      const int flags = ::fcntl(fd, F_GETFL, 0);
+
+      if (flags < 0)
+        return false;
+
+      return ::fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    }
+
+    bool is_runtime_diagnostic_noise_line(std::string_view line) noexcept
+    {
+      while (!line.empty() &&
+             (line.front() == ' ' || line.front() == '\t' || line.front() == '\r'))
+      {
+        line.remove_prefix(1);
+      }
+
+      return line.find("terminate called after throwing") != std::string_view::npos ||
+             line.find("terminate called recursively") != std::string_view::npos ||
+             line.find("terminate called without an active exception") != std::string_view::npos ||
+             line.find("what():") != std::string_view::npos ||
+             line.find("Aborted") != std::string_view::npos ||
+             line.find("core dumped") != std::string_view::npos;
+    }
+
+    std::string drop_runtime_diagnostic_noise_lines(const std::string &chunk)
+    {
+      std::string visible;
+      visible.reserve(chunk.size());
+
+      std::size_t start = 0;
+
+      while (start < chunk.size())
+      {
+        const std::size_t nl = chunk.find('\n', start);
+        const std::size_t end = (nl == std::string::npos) ? chunk.size() : nl + 1;
+
+        std::string_view line(&chunk[start], end - start);
+
+        if (!is_runtime_diagnostic_noise_line(line))
+          visible.append(line.data(), line.size());
+
+        start = end;
+      }
+
+      return visible;
+    }
+
+    void drain_fd_live_local(int fd, std::string &out)
+    {
+      char buffer[4096];
+
+      while (true)
+      {
+        const ssize_t n = ::read(fd, buffer, sizeof(buffer));
+
+        if (n > 0)
+        {
+          const std::string chunk(buffer, static_cast<std::size_t>(n));
+
+          out += chunk;
+
+          const std::string visible =
+              drop_runtime_diagnostic_noise_lines(chunk);
+
+          if (!visible.empty())
+          {
+            std::cout << visible;
+            std::cout.flush();
+          }
+
+          continue;
+        }
+
+        if (n == 0)
+          return;
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+          return;
+
+        if (errno == EINTR)
+          continue;
+
+        return;
+      }
+    }
+#endif
 
 #ifndef _WIN32
     bool log_looks_like_sanitizer_or_ub(const std::string &log)
@@ -1527,17 +1618,37 @@ namespace vix::commands::RunCommand::detail
         return 1;
       }
 
-      pid_t pid = fork();
-      if (pid < 0)
+      int outputPipe[2] = {-1, -1};
+
+      if (::pipe(outputPipe) != 0)
       {
-        error("Failed to fork() for dev process.");
+        error("Failed to create dev output pipe.");
         ::close(gate[0]);
         ::close(gate[1]);
         return 1;
       }
 
+      pid_t pid = fork();
+      if (pid < 0)
+      {
+        error("Failed to fork() for dev process.");
+
+        ::close(outputPipe[0]);
+        ::close(outputPipe[1]);
+        ::close(gate[0]);
+        ::close(gate[1]);
+
+        return 1;
+      }
+
       if (pid == 0)
       {
+        ::close(outputPipe[0]);
+
+        ::dup2(outputPipe[1], STDOUT_FILENO);
+        ::dup2(outputPipe[1], STDERR_FILENO);
+
+        ::close(outputPipe[1]);
         ::close(gate[1]);
 
         char b = 0;
@@ -1585,6 +1696,13 @@ namespace vix::commands::RunCommand::detail
 
       ::close(gate[0]);
 
+      ::close(gate[0]);
+      ::close(outputPipe[1]);
+
+      set_nonblocking_fd_local(outputPipe[0]);
+
+      std::string runtimeLog;
+
       bool needRestart = false;
       bool running = true;
 
@@ -1605,6 +1723,8 @@ namespace vix::commands::RunCommand::detail
       while (running)
       {
         std::this_thread::sleep_for(300ms);
+
+        drain_fd_live_local(outputPipe[0], runtimeLog);
 
         auto nowWrite = fs::last_write_time(script, ec);
         if (!ec && nowWrite != lastWrite)
@@ -1651,13 +1771,39 @@ namespace vix::commands::RunCommand::detail
           const std::string label = isServer ? "dev server" : "script";
 
           if (needRestart)
+          {
+            drain_fd_live_local(outputPipe[0], runtimeLog);
+            ::close(outputPipe[0]);
             break;
+          }
+
+          drain_fd_live_local(outputPipe[0], runtimeLog);
+          ::close(outputPipe[0]);
 
           if (exitCode != 0)
           {
-            error(label + " exited with code " +
-                  std::to_string(exitCode) +
-                  " (lifetime ~" + std::to_string(ms) + "ms).");
+            bool handled = false;
+
+            if (!runtimeLog.empty())
+            {
+              handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+                  runtimeLog,
+                  script,
+                  label + " exited with code " + std::to_string(exitCode));
+
+              if (!handled &&
+                  vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))
+              {
+                handled = true;
+              }
+            }
+
+            if (!handled)
+            {
+              error(label + " exited with code " +
+                    std::to_string(exitCode) +
+                    " (lifetime ~" + std::to_string(ms) + "ms).");
+            }
           }
 
           for (;;)

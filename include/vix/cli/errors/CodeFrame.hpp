@@ -22,8 +22,9 @@ namespace vix::cli::errors
   struct CodeFrameOptions
   {
     int contextLines = 1;
-    int tabWidth = 4;       // tabs -> espaces
-    int maxLineWidth = 120; // tronquage
+    int tabWidth = 4;
+    int maxLineWidth = 120;
+    bool leadingBlankLine = true;
   };
 
   // Prints a compact code frame + caret under the error column.

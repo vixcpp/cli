@@ -35,7 +35,6 @@ namespace vix::cli::errors::runtime
       MemberCallOnAddress,
       BadDynamicCast,
       BadAnyCast,
-      BadVariantAccess,
       GenericInvalidCast,
     };
 
@@ -59,9 +58,6 @@ namespace vix::cli::errors::runtime
       if (icontains(log, "bad_any_cast"))
         return InvalidCastKind::BadAnyCast;
 
-      if (icontains(log, "bad_variant_access"))
-        return InvalidCastKind::BadVariantAccess;
-
       return InvalidCastKind::GenericInvalidCast;
     }
 
@@ -78,7 +74,6 @@ namespace vix::cli::errors::runtime
         return "bad dynamic cast";
 
       case InvalidCastKind::BadAnyCast:
-      case InvalidCastKind::BadVariantAccess:
       case InvalidCastKind::GenericInvalidCast:
       default:
         return "invalid cast";
@@ -112,8 +107,7 @@ namespace vix::cli::errors::runtime
       }
 
       if (icontains(log, "bad_cast") ||
-          icontains(log, "bad_any_cast") ||
-          icontains(log, "bad_variant_access"))
+          icontains(log, "bad_any_cast"))
       {
         return true;
       }

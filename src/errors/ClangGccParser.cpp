@@ -25,6 +25,7 @@
 #endif
 
 #include <cctype>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -99,6 +100,206 @@ namespace vix::cli::errors
       return !file.empty() && !is_virtual_file(file);
     }
 
+    const std::regex &re_diag_with_col()
+    {
+      static const std::regex r(
+          R"(^(.+?):([0-9]+):([0-9]+):\s*(fatal error|error|warning|note):\s*(.+)$)");
+      return r;
+    }
+
+    const std::regex &re_diag_no_col()
+    {
+      static const std::regex r(
+          R"(^(.+?):([0-9]+):\s*(fatal error|error|warning|note):\s*(.+)$)");
+      return r;
+    }
+
+    const std::regex &re_virtual_error()
+    {
+      static const std::regex r(
+          R"(^(<[^>]+>):\s*(fatal error|error):\s*(.+)$)");
+      return r;
+    }
+
+    const std::regex &re_include_from()
+    {
+      static const std::regex r(
+          R"(^(?:In file included from|from)\s+(.+?):([0-9]+)(?::[0-9]+)?[,:]?\s*$)");
+      return r;
+    }
+
+    bool contains_text(
+        const std::string &value,
+        const std::string &needle)
+    {
+      return value.find(needle) != std::string::npos;
+    }
+
+    bool is_system_header_location(const std::string &file)
+    {
+      if (file.empty())
+        return false;
+
+      return contains_text(file, "/usr/include/") ||
+             contains_text(file, "/usr/lib/gcc/") ||
+             contains_text(file, "/include/c++/") ||
+             contains_text(file, "\\include\\c++\\") ||
+             contains_text(file, "\\Microsoft Visual Studio\\") ||
+             contains_text(file, "\\Windows Kits\\");
+    }
+
+    bool is_user_source_location(const std::string &file)
+    {
+      if (!is_real_file_location(file))
+        return false;
+
+      if (is_system_header_location(file))
+        return false;
+
+      return true;
+    }
+
+    struct SourceLocationCandidate
+    {
+      std::string file;
+      int line{0};
+      int column{1};
+
+      [[nodiscard]] bool valid() const noexcept
+      {
+        return !file.empty() && line > 0;
+      }
+    };
+
+    bool looks_like_useful_template_location_note(const std::string &message)
+    {
+      return contains_text(message, "required from here") ||
+             contains_text(message, "required from") ||
+             contains_text(message, "in instantiation of") ||
+             contains_text(message, "instantiated from") ||
+             contains_text(message, "substitution failed") ||
+             contains_text(message, "constraints not satisfied");
+    }
+
+    std::optional<SourceLocationCandidate> find_user_location_in_raw(
+        const CompilerError &err)
+    {
+      std::istringstream input(err.raw);
+      std::string line;
+
+      std::optional<SourceLocationCandidate> firstUserLocation;
+      std::optional<SourceLocationCandidate> firstIncludeLocation;
+
+      while (std::getline(input, line))
+      {
+        line = strip_ansi(trim_copy(line));
+
+        if (line.empty())
+          continue;
+
+        std::smatch match;
+
+        if (std::regex_search(line, match, re_diag_with_col()))
+        {
+          const std::string file = trim_copy(match[1].str());
+          const int lineNumber = std::stoi(match[2].str());
+          const int columnNumber = std::stoi(match[3].str());
+          const std::string severity = trim_copy(match[4].str());
+          const std::string message = trim_copy(match[5].str());
+
+          if (!is_user_source_location(file))
+            continue;
+
+          SourceLocationCandidate candidate{
+              file,
+              lineNumber,
+              columnNumber > 0 ? columnNumber : 1};
+
+          if (is_note_severity(severity) &&
+              looks_like_useful_template_location_note(message))
+          {
+            return candidate;
+          }
+
+          if (!firstUserLocation)
+            firstUserLocation = candidate;
+
+          continue;
+        }
+
+        if (std::regex_search(line, match, re_diag_no_col()))
+        {
+          const std::string file = trim_copy(match[1].str());
+          const int lineNumber = std::stoi(match[2].str());
+          const std::string severity = trim_copy(match[3].str());
+          const std::string message = trim_copy(match[4].str());
+
+          if (!is_user_source_location(file))
+            continue;
+
+          SourceLocationCandidate candidate{
+              file,
+              lineNumber,
+              1};
+
+          if (is_note_severity(severity) &&
+              looks_like_useful_template_location_note(message))
+          {
+            return candidate;
+          }
+
+          if (!firstUserLocation)
+            firstUserLocation = candidate;
+
+          continue;
+        }
+
+        if (std::regex_search(line, match, re_include_from()))
+        {
+          const std::string file = trim_copy(match[1].str());
+          const int lineNumber = std::stoi(match[2].str());
+
+          if (!is_user_source_location(file))
+            continue;
+
+          if (!firstIncludeLocation)
+          {
+            firstIncludeLocation = SourceLocationCandidate{
+                file,
+                lineNumber,
+                1};
+          }
+
+          continue;
+        }
+      }
+
+      if (firstUserLocation)
+        return firstUserLocation;
+
+      return firstIncludeLocation;
+    }
+
+    void reanchor_system_header_errors(
+        std::vector<CompilerError> &errors)
+    {
+      for (CompilerError &err : errors)
+      {
+        if (!is_system_header_location(err.file))
+          continue;
+
+        const std::optional<SourceLocationCandidate> candidate =
+            find_user_location_in_raw(err);
+
+        if (!candidate || !candidate->valid())
+          continue;
+
+        err.file = candidate->file;
+        err.line = candidate->line;
+        err.column = candidate->column;
+      }
+    }
+
     bool is_caret_or_snippet_line(const std::string &line)
     {
       if (line.empty())
@@ -116,13 +317,6 @@ namespace vix::cli::errors
           R"(^[0-9]+\s*\|\s*)");
 
       return std::regex_search(line, gccSnippetRe);
-    }
-
-    bool contains_text(
-        const std::string &value,
-        const std::string &needle)
-    {
-      return value.find(needle) != std::string::npos;
     }
 
     bool looks_like_template_or_instantiation_note(
@@ -255,34 +449,6 @@ namespace vix::cli::errors
       }
 
       return {};
-    }
-
-    const std::regex &re_diag_with_col()
-    {
-      static const std::regex r(
-          R"(^(.+?):([0-9]+):([0-9]+):\s*(fatal error|error|warning|note):\s*(.+)$)");
-      return r;
-    }
-
-    const std::regex &re_diag_no_col()
-    {
-      static const std::regex r(
-          R"(^(.+?):([0-9]+):\s*(fatal error|error|warning|note):\s*(.+)$)");
-      return r;
-    }
-
-    const std::regex &re_virtual_error()
-    {
-      static const std::regex r(
-          R"(^(<[^>]+>):\s*(fatal error|error):\s*(.+)$)");
-      return r;
-    }
-
-    const std::regex &re_include_from()
-    {
-      static const std::regex r(
-          R"(^(?:In file included from|from)\s+(.+?):([0-9]+)(?::[0-9]+)?[,:]?\s*$)");
-      return r;
     }
 
     struct PendingError
@@ -597,6 +763,8 @@ namespace vix::cli::errors
     }
 
     discard_pending();
+
+    reanchor_system_header_errors(out);
 
     return out;
   }

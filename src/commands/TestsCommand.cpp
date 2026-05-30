@@ -1290,17 +1290,88 @@ namespace
     failure.assertion = trim_copy(match[4].str());
   }
 
+  static void enrich_failure_from_gtest_failure(
+      ParsedTestFailure &failure,
+      const std::vector<std::string> &lines,
+      std::size_t index)
+  {
+    static const std::regex failureRe(
+        R"((/[^:\n]+?\.(?:c|cc|cpp|cxx|h|hpp|hh|hxx)):(\d+):\s*Failure)",
+        std::regex::ECMAScript);
+
+    std::smatch match;
+
+    if (!std::regex_search(lines[index], match, failureRe))
+      return;
+
+    failure.file = fs::path(match[1].str());
+
+    try
+    {
+      failure.line = static_cast<std::size_t>(std::stoul(match[2].str()));
+    }
+    catch (...)
+    {
+      failure.line = 0;
+    }
+
+    failure.column = 1;
+
+    std::string valueOf;
+    std::string actual;
+    std::string expected;
+
+    for (std::size_t i = index + 1; i < lines.size() && i < index + 8; ++i)
+    {
+      const std::string current = trim_copy(lines[i]);
+
+      if (current.rfind("Value of:", 0) == 0)
+        valueOf = trim_copy(current.substr(std::string("Value of:").size()));
+
+      else if (current.rfind("Actual:", 0) == 0)
+        actual = trim_copy(current.substr(std::string("Actual:").size()));
+
+      else if (current.rfind("Expected:", 0) == 0)
+        expected = trim_copy(current.substr(std::string("Expected:").size()));
+
+      else if (current.rfind("[  FAILED  ]", 0) == 0 ||
+               current.rfind("[ RUN      ]", 0) == 0)
+        break;
+    }
+
+    if (!valueOf.empty())
+    {
+      failure.assertion = valueOf;
+      failure.message = "expected `" + valueOf + "` to be true";
+
+      if (!actual.empty())
+        failure.message += "\nactual: " + actual;
+
+      if (!expected.empty())
+        failure.message += "\nexpected: " + expected;
+    }
+  }
+
   static void enrich_failure_from_message(ParsedTestFailure &failure)
   {
     if (failure.message.empty())
       return;
 
-    std::istringstream lines(failure.message);
+    std::vector<std::string> lines;
+    std::istringstream input(failure.message);
     std::string line;
 
-    while (std::getline(lines, line))
+    while (std::getline(input, line))
+      lines.push_back(line);
+
+    for (std::size_t i = 0; i < lines.size(); ++i)
     {
-      enrich_failure_from_assertion_line(failure, line);
+      enrich_failure_from_assertion_line(failure, lines[i]);
+
+      if (failure.has_location())
+        return;
+
+      enrich_failure_from_gtest_failure(failure, lines, i);
 
       if (failure.has_location())
         return;
@@ -1320,8 +1391,15 @@ namespace
 
     if (failure.has_assertion())
     {
-      diagnostic.error =
-          "assertion failed: " + failure.assertion;
+      if (failure.message.find("actual:") != std::string::npos ||
+          failure.message.find("expected:") != std::string::npos)
+      {
+        diagnostic.error = failure.message;
+      }
+      else
+      {
+        diagnostic.error = "assertion failed: " + failure.assertion;
+      }
     }
     else if (!failure.message.empty())
     {

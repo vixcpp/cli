@@ -33,6 +33,7 @@
 #include <optional>
 #include <cstdlib>
 #include <algorithm>
+#include <regex>
 #include <cctype>
 
 #include <nlohmann/json.hpp>
@@ -908,6 +909,23 @@ namespace
   {
     std::string name;
     std::string message;
+
+    fs::path file;
+    std::size_t line{0};
+    std::size_t column{1};
+
+    std::string function;
+    std::string assertion;
+
+    bool has_location() const
+    {
+      return !file.empty() && line > 0;
+    }
+
+    bool has_assertion() const
+    {
+      return !assertion.empty();
+    }
   };
 
   static std::string trim_copy(std::string value)
@@ -1198,6 +1216,156 @@ namespace
     return rest;
   }
 
+  static std::vector<std::string> read_test_code_frame_lines(
+      const fs::path &file,
+      std::size_t line,
+      std::size_t contextLines,
+      std::size_t maxLineWidth)
+  {
+    std::vector<std::string> out;
+
+    if (file.empty() || line == 0)
+      return out;
+
+    std::ifstream in(file);
+    if (!in)
+      return out;
+
+    const std::size_t startLine =
+        line > contextLines ? line - contextLines : 1;
+
+    const std::size_t endLine = line + contextLines;
+
+    std::string current;
+    std::size_t currentLine = 0;
+
+    while (std::getline(in, current))
+    {
+      ++currentLine;
+
+      if (currentLine < startLine)
+        continue;
+
+      if (currentLine > endLine)
+        break;
+
+      if (maxLineWidth > 0 && current.size() > maxLineWidth)
+      {
+        current = current.substr(0, maxLineWidth);
+        current += "...";
+      }
+
+      out.push_back(current);
+    }
+
+    return out;
+  }
+
+  static void enrich_failure_from_assertion_line(
+      ParsedTestFailure &failure,
+      const std::string &line)
+  {
+    static const std::regex assertionRe(
+        R"((/[^:\n]+?\.(?:c|cc|cpp|cxx|h|hpp|hh|hxx)):(\d+):\s*(.*?):\s*Assertion\s+[`']([^`']+)[`']\s+failed\.?)",
+        std::regex::ECMAScript);
+
+    std::smatch match;
+
+    if (!std::regex_search(line, match, assertionRe))
+      return;
+
+    failure.file = fs::path(match[1].str());
+
+    try
+    {
+      failure.line = static_cast<std::size_t>(std::stoul(match[2].str()));
+    }
+    catch (...)
+    {
+      failure.line = 0;
+    }
+
+    failure.column = 1;
+    failure.function = trim_copy(match[3].str());
+    failure.assertion = trim_copy(match[4].str());
+  }
+
+  static void enrich_failure_from_message(ParsedTestFailure &failure)
+  {
+    if (failure.message.empty())
+      return;
+
+    std::istringstream lines(failure.message);
+    std::string line;
+
+    while (std::getline(lines, line))
+    {
+      enrich_failure_from_assertion_line(failure, line);
+
+      if (failure.has_location())
+        return;
+    }
+  }
+
+  static build::BuildDiagnostic make_test_failure_diagnostic(
+      const ParsedTestFailure &failure)
+  {
+    build::BuildDiagnostic diagnostic;
+
+    diagnostic.title = "Test failed";
+    diagnostic.message =
+        failure.name.empty()
+            ? "A test failed"
+            : failure.name;
+
+    if (failure.has_assertion())
+    {
+      diagnostic.error =
+          "assertion failed: " + failure.assertion;
+    }
+    else if (!failure.message.empty())
+    {
+      diagnostic.error = failure.message;
+    }
+    else
+    {
+      diagnostic.error = "test process failed";
+    }
+
+    if (!failure.function.empty())
+      diagnostic.hint = "check the failing test function: " + failure.function;
+    else
+      diagnostic.hint = "run `vix tests --raw` to inspect the full runner output";
+
+    if (failure.has_location())
+    {
+      diagnostic.location.file = failure.file;
+      diagnostic.location.line = failure.line;
+      diagnostic.location.column = failure.column;
+
+      diagnostic.codeFrame.location = diagnostic.location;
+      diagnostic.codeFrame.lines =
+          read_test_code_frame_lines(
+              failure.file,
+              failure.line,
+              2,
+              120);
+    }
+
+    return diagnostic;
+  }
+
+  static void print_test_failure_diagnostic(
+      const ParsedTestFailure &failure)
+  {
+    const build::BuildDiagnostic diagnostic =
+        make_test_failure_diagnostic(failure);
+
+    build::print_build_diagnostic(
+        std::cout,
+        diagnostic);
+  }
+
   static std::vector<ParsedTestFailure> parse_test_failures(
       const std::string &output)
   {
@@ -1215,6 +1383,7 @@ namespace
         return;
 
       current.message = trim_copy(current.message);
+      enrich_failure_from_message(current);
 
       failures.push_back(current);
       current = ParsedTestFailure{};
@@ -1303,11 +1472,21 @@ namespace
 
       const auto &first = failures.front();
 
-      if (!first.message.empty())
+      std::cout << "\n";
+
+      if (first.has_location())
       {
-        std::cout << "\n";
+        print_test_failure_diagnostic(first);
+      }
+      else if (!first.message.empty())
+      {
         std::cout << "  " << CYAN << "error:" << RESET << "\n";
-        std::cout << "    " << first.message << "\n";
+
+        std::istringstream lines(first.message);
+        std::string line;
+
+        while (std::getline(lines, line))
+          std::cout << "    " << line << "\n";
       }
     }
     else

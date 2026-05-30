@@ -24,7 +24,7 @@ namespace vix::cli::errors
     int contextLines = 1;
     int tabWidth = 4;
     int maxLineWidth = 120;
-    bool leadingBlankLine = true;
+    bool leadingBlankLine = false;
   };
 
   // Prints a compact code frame + caret under the error column.

@@ -1150,6 +1150,14 @@ namespace vix::commands::BuildCommand
       vars.emplace_back("CMAKE_BUILD_TYPE", p.buildType);
       vars.emplace_back("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
 
+#ifndef _WIN32
+      if (util::file_exists("/usr/bin/ar"))
+        vars.emplace_back("CMAKE_AR", "/usr/bin/ar");
+
+      if (util::file_exists("/usr/bin/ranlib"))
+        vars.emplace_back("CMAKE_RANLIB", "/usr/bin/ranlib");
+#endif
+
       if (opt.warningCheck)
       {
         const std::string cxxCompiler = warning_check_cxx_compiler();

@@ -325,8 +325,7 @@ namespace
 
     if (opt.verbose)
       cmd << " -v";
-
-    if (opt.quiet)
+    else
       cmd << " -q";
 
     if (opt.clean)
@@ -1172,6 +1171,9 @@ namespace
     if (buildCode != 0)
       return buildCode;
 
+    if (opt.checkOnly)
+      return 0;
+
     const int runCode =
         run_executable_direct(
             exePath,
@@ -1751,6 +1753,20 @@ namespace vix::commands::RunCommand
       break;
     }
 
+    const bool explicitTarget =
+        !opt.appName.empty() ||
+        opt.singleCpp ||
+        opt.manifestMode ||
+        !opt.dir.empty();
+
+    if (!explicitTarget && !opt.checkOnly)
+    {
+      hint("No run target provided.");
+      hint("Use `vix run <target>` to run an executable target.");
+      hint("Use `vix run --check` to check/build the current project without running it.");
+      return 0;
+    }
+
     const fs::path cwd = fs::current_path();
     auto projectDirOpt = choose_project_dir(opt, cwd);
     if (!projectDirOpt)
@@ -1833,6 +1849,7 @@ namespace vix::commands::RunCommand
     out << "  -j, --jobs <n>              Number of parallel build jobs\n";
     out << "  --jobs=<n>                  Same as --jobs <n>\n";
     out << "  --clean                     Clean/reconfigure before running\n";
+    out << "  --check                     Build/check the current project without running it\n";
     out << "  --replay                    Record this run under .vix/runs/\n\n";
 
     out << "Runtime arguments and environment:\n";

@@ -3288,11 +3288,7 @@ namespace vix::commands::BuildCommand
 
           totalMs += ms;
 
-          if (opt_.quiet)
-          {
-            success("Configured in " + util::format_seconds(ms));
-          }
-          else if (verboseMode)
+          if (!opt_.quiet && verboseMode)
           {
             out.print(PAD + std::string(GREEN) + "✔ Configured in " + RESET +
                       util::format_seconds(ms) + "\n");
@@ -3613,41 +3609,40 @@ namespace vix::commands::BuildCommand
           const std::size_t builtTargets =
               count_built_targets_from_log(buildLog);
 
-          if (opt_.quiet)
+          if (!opt_.quiet)
           {
-            success("Finished in " + util::format_seconds(totalMs));
-          }
-          else if (verboseMode)
-          {
-            const std::string profile =
-                (plan_.preset.buildType == "Release")
-                    ? "release [optimized]"
-                    : "dev [unoptimized + debuginfo]";
-
-            build::print_build_done(
-                std::cout,
-                profile,
-                util::format_seconds(ms));
-          }
-          else
-          {
-            if (configuredThisRun)
-              build::print_build_success(std::cout, "Configured");
-
-            if (builtTargets > 0)
+            if (verboseMode)
             {
-              build::print_build_success(
+              const std::string profile =
+                  (plan_.preset.buildType == "Release")
+                      ? "release [optimized]"
+                      : "dev [unoptimized + debuginfo]";
+
+              build::print_build_done(
                   std::cout,
-                  "Built (" + std::to_string(builtTargets) + " targets)");
+                  profile,
+                  util::format_seconds(ms));
             }
             else
             {
-              build::print_build_success(std::cout, "Built");
-            }
+              if (configuredThisRun)
+                build::print_build_success(std::cout, "Configured");
 
-            build::print_build_success(
-                std::cout,
-                "Done in " + util::format_seconds(totalMs));
+              if (builtTargets > 0)
+              {
+                build::print_build_success(
+                    std::cout,
+                    "Built (" + std::to_string(builtTargets) + " targets)");
+              }
+              else
+              {
+                build::print_build_success(std::cout, "Built");
+              }
+
+              build::print_build_success(
+                  std::cout,
+                  "Done in " + util::format_seconds(totalMs));
+            }
           }
         }
 

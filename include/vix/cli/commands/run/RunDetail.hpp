@@ -113,6 +113,7 @@ namespace vix::commands::RunCommand::detail
     std::string dir;
     int jobs = 0;
     bool clean = false;
+    bool checkOnly = false;
 
     // Output / UI
     bool quiet = false;

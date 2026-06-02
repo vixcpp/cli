@@ -119,6 +119,7 @@ namespace vix::commands::RunCommand::detail
              v == "--with-sqlite" ||
              v == "--with-mysql" ||
              v == "--clean" ||
+             v == "--check" ||
              v == "-j" || v == "--jobs";
     }
 
@@ -530,6 +531,10 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--clean")
       {
         opt.clean = true;
+      }
+      else if (a == "--check")
+      {
+        opt.checkOnly = true;
       }
       else if (a == "--cwd")
       {

@@ -1706,6 +1706,7 @@ namespace vix::commands::RunCommand::detail
     }
 
     if (!captureOnly &&
+        !passthroughRuntime &&
         printedRealOutput &&
         lastPrintedChar != '\n' &&
         ::isatty(STDOUT_FILENO) != 0)

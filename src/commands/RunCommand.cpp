@@ -369,13 +369,6 @@ namespace
             cmd.str(),
             "Building project");
 
-    std::cerr << "[VIX RUN DEBUG] build_project_with_vix_build()\n";
-    std::cerr << "[VIX RUN DEBUG] projectDir=" << projectDir.string() << "\n";
-    std::cerr << "[VIX RUN DEBUG] project folder name=" << projectDir.filename().string() << "\n";
-    std::cerr << "[VIX RUN DEBUG] opt.appName='" << opt.appName << "'\n";
-    std::cerr << "[VIX RUN DEBUG] requestedTarget='" << requestedTarget << "'\n";
-    std::cerr << "[VIX RUN DEBUG] build command=" << cmd.str() << "\n";
-
     const int buildExit =
         detail::normalize_exit_code(rawCode);
 
@@ -1691,9 +1684,6 @@ namespace vix::commands::RunCommand
   {
     Options opt = parse(args);
     const bool showUi = ui_enabled();
-
-    for (const auto &arg : args)
-      std::cerr << "'" << arg << "' ";
 
     if (opt.parseFailed)
       return opt.parseExitCode;

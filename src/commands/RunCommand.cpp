@@ -177,18 +177,11 @@ namespace
     return out;
   }
 
-  static std::optional<fs::path> resolve_runnable_executable(
+  static std::vector<fs::path> find_runnable_executables(
       const fs::path &buildDir,
-      const std::string &projectName)
+      bool includeTests = false)
   {
-    auto executable_name = [](const std::string &name) -> std::string
-    {
-#ifdef _WIN32
-      return name + ".exe";
-#else
-      return name;
-#endif
-    };
+    std::vector<fs::path> candidates;
 
     auto is_executable_candidate = [](const fs::path &p) -> bool
     {
@@ -219,25 +212,10 @@ namespace
              n.rfind("test_", 0) == 0;
     };
 
-    const std::string exeFileName = executable_name(projectName);
-
-    // 1) Exact common locations
-    const std::vector<fs::path> preferred = {
-        buildDir / exeFileName,
-        buildDir / "bin" / exeFileName,
-        buildDir / "src" / exeFileName};
-
-    for (const auto &p : preferred)
-    {
-      if (is_executable_candidate(p))
-        return p;
-    }
-
-    // 2) Recursive scan
-    std::vector<fs::path> exactNameCandidates;
-    std::vector<fs::path> otherCandidates;
-
     std::error_code ec{};
+    if (!fs::exists(buildDir, ec) || ec)
+      return candidates;
+
     for (auto it = fs::recursive_directory_iterator(
              buildDir,
              fs::directory_options::skip_permission_denied,
@@ -247,31 +225,28 @@ namespace
     {
       const fs::path p = it->path();
 
-      if (p.string().find("CMakeFiles") != std::string::npos)
+      const std::string pathString = p.string();
+
+      if (pathString.find("CMakeFiles") != std::string::npos)
+        continue;
+
+      if (pathString.find(".vix") != std::string::npos)
         continue;
 
       if (!is_executable_candidate(p))
         continue;
 
-      if (looks_like_test_binary(p))
+      if (!includeTests && looks_like_test_binary(p))
         continue;
 
-#ifdef _WIN32
-      const std::string baseName = p.stem().string();
-#else
-      const std::string baseName = p.filename().string();
-#endif
-
-      if (baseName == projectName)
-        exactNameCandidates.push_back(p);
-      else
-        otherCandidates.push_back(p);
+      candidates.push_back(p);
     }
 
-    auto prefer_bin_path = [](const fs::path &a, const fs::path &b) -> bool
+    auto prefer_short_bin_path = [](const fs::path &a, const fs::path &b) -> bool
     {
       const bool aBin = a.string().find("/bin/") != std::string::npos ||
                         a.string().find("\\bin\\") != std::string::npos;
+
       const bool bBin = b.string().find("/bin/") != std::string::npos ||
                         b.string().find("\\bin\\") != std::string::npos;
 
@@ -281,16 +256,49 @@ namespace
       return a.string().size() < b.string().size();
     };
 
-    if (!exactNameCandidates.empty())
+    std::sort(candidates.begin(), candidates.end(), prefer_short_bin_path);
+    return candidates;
+  }
+
+  static std::optional<fs::path> resolve_runnable_executable(
+      const fs::path &buildDir,
+      const std::string &preferredName = {})
+  {
+    const auto candidates = find_runnable_executables(buildDir, false);
+
+    if (!preferredName.empty())
     {
-      std::sort(exactNameCandidates.begin(), exactNameCandidates.end(), prefer_bin_path);
-      return exactNameCandidates.front();
+      for (const auto &p : candidates)
+      {
+#ifdef _WIN32
+        const std::string name = p.stem().string();
+#else
+        const std::string name = p.filename().string();
+#endif
+
+        if (name == preferredName)
+          return p;
+      }
     }
 
-    if (otherCandidates.size() == 1)
-      return otherCandidates.front();
+    if (candidates.size() == 1)
+      return candidates.front();
 
     return std::nullopt;
+  }
+
+  static void print_runnable_executable_candidates(
+      const fs::path &buildDir)
+  {
+    const auto candidates = find_runnable_executables(buildDir, false);
+
+    if (candidates.empty())
+      return;
+
+    hint("Runnable executables found:");
+
+    for (const auto &p : candidates)
+      step("  " + p.filename().string());
   }
 
   static int build_project_with_vix_build(
@@ -300,7 +308,14 @@ namespace
   {
     namespace detail = vix::commands::RunCommand::detail;
 
-    const std::string projectName = projectDir.filename().string();
+    std::string requestedTarget;
+
+    if (!opt.appName.empty() &&
+        opt.appName != projectDir.filename().string())
+    {
+      requestedTarget = opt.appName;
+    }
+
     const fs::path buildDir = projectDir / "build-ninja";
 
     std::ostringstream cmd;
@@ -308,13 +323,21 @@ namespace
 #ifdef _WIN32
     cmd << "cmd /C \"cd /D "
         << detail::quote(projectDir.string())
-        << " && vix build --build-target "
-        << detail::quote(projectName);
+        << " && vix build --build-target ";
+
+    if (!requestedTarget.empty())
+      cmd << detail::quote(requestedTarget);
+    else
+      cmd << "all";
 #else
     cmd << "cd "
         << detail::quote(projectDir.string())
-        << " && vix build --build-target "
-        << detail::quote(projectName);
+        << " && vix build --build-target ";
+
+    if (!requestedTarget.empty())
+      cmd << detail::quote(requestedTarget);
+    else
+      cmd << "all";
 #endif
 
     if (!opt.preset.empty())
@@ -346,6 +369,13 @@ namespace
             cmd.str(),
             "Building project");
 
+    std::cerr << "[VIX RUN DEBUG] build_project_with_vix_build()\n";
+    std::cerr << "[VIX RUN DEBUG] projectDir=" << projectDir.string() << "\n";
+    std::cerr << "[VIX RUN DEBUG] project folder name=" << projectDir.filename().string() << "\n";
+    std::cerr << "[VIX RUN DEBUG] opt.appName='" << opt.appName << "'\n";
+    std::cerr << "[VIX RUN DEBUG] requestedTarget='" << requestedTarget << "'\n";
+    std::cerr << "[VIX RUN DEBUG] build command=" << cmd.str() << "\n";
+
     const int buildExit =
         detail::normalize_exit_code(rawCode);
 
@@ -361,20 +391,40 @@ namespace
     auto exePath =
         resolve_runnable_executable(
             buildDir,
-            projectName);
+            requestedTarget);
 
     if (!exePath)
     {
-      error("Built executable not found for project: " + projectName);
-      hint("Resolved build directory: " + buildDir.string());
-      hint("If your executable has another name, use the project target name as the folder name for now.");
+      if (!requestedTarget.empty())
+      {
+        error("Built executable not found for target: " + requestedTarget);
+        hint("Resolved build directory: " + buildDir.string());
+        print_runnable_executable_candidates(buildDir);
+        return 1;
+      }
+
+      const auto candidates = find_runnable_executables(buildDir, false);
+
+      if (candidates.empty())
+      {
+        error("No runnable executable found.");
+        hint("Resolved build directory: " + buildDir.string());
+        hint("The project may only build libraries, tests, or non-runnable targets.");
+        return 1;
+      }
+
+      error("Multiple runnable executables found.");
+      hint("Run one explicitly:");
+
+      for (const auto &p : candidates)
+        step("  vix run " + p.filename().string());
+
       return 1;
     }
 
     outExecutable = *exePath;
     return 0;
   }
-
   void apply_manifest_auto_deps_includes(Options &opt, const fs::path &manifestFile)
   {
     const fs::path manifestDir = manifestFile.parent_path();
@@ -1030,7 +1080,7 @@ namespace
       oss << "cmd /C \"cmake --build "
           << quote(buildDir.string());
 
-      if (!resolved.targetName.empty())
+      if (resolved.generated && !resolved.targetName.empty())
         oss << " --target " << quote(resolved.targetName);
 
       oss << " --";
@@ -1043,7 +1093,7 @@ namespace
       oss << "cmake --build "
           << quote(buildDir.string());
 
-      if (!resolved.targetName.empty())
+      if (resolved.generated && !resolved.targetName.empty())
         oss << " --target " << quote(resolved.targetName);
 
       oss << " --";
@@ -1096,9 +1146,7 @@ namespace
     progress.phase_start("Run application");
 
     const std::string exeName =
-        !resolved.targetName.empty()
-            ? resolved.targetName
-            : resolved.userProjectDir.filename().string();
+        resolved.generated ? resolved.targetName : std::string{};
 
     auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
 
@@ -1120,7 +1168,10 @@ namespace
         return testRc;
       }
 
-      error("Built executable not found for target: " + exeName);
+      if (!exeName.empty())
+        error("Built executable not found for target: " + exeName);
+      else
+        error("Built executable not found.");
       hint("Resolved build directory: " + buildDir.string());
 
       if (resolved.generated)
@@ -1309,8 +1360,8 @@ namespace
     progress.phase_done("Build project", "completed (fallback)");
     std::cout << "\n";
 
-    const std::string exeName = projectDir.filename().string();
-    auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
+    const std::string exeName;
+    auto exePathOpt = resolve_runnable_executable(buildDir);
 
     if (!exePathOpt)
     {
@@ -1640,6 +1691,9 @@ namespace vix::commands::RunCommand
   {
     Options opt = parse(args);
     const bool showUi = ui_enabled();
+
+    for (const auto &arg : args)
+      std::cerr << "'" << arg << "' ";
 
     if (opt.parseFailed)
       return opt.parseExitCode;

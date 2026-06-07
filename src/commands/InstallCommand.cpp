@@ -1026,82 +1026,15 @@ namespace vix::commands
 
     static void print_next_steps(const std::vector<DepResolved> &deps)
     {
-      vix::cli::util::one_line_spacer(std::cout);
-
       vix::cli::util::ok_line(std::cout, "Dependencies ready");
-      vix::cli::util::info(std::cout, std::to_string(deps.size()) + " package(s) installed");
-      vix::cli::util::info(std::cout, "CMake integration generated");
-      std::cout << "\n";
 
-      if (project_uses_vix_app())
-      {
-        vix::cli::util::warn_line(std::cout, "Next:");
-        std::cout << "  " << GRAY << "• " << RESET
-                  << "run "
-                  << CYAN << BOLD << "vix build" << RESET
-                  << "\n\n";
+      const std::string packageWord = deps.size() == 1 ? "package" : "packages";
 
-        return;
-      }
+      vix::cli::util::info(
+          std::cout,
+          std::to_string(deps.size()) + " " + packageWord + " installed");
 
-      std::vector<std::string> aliases;
-      aliases.reserve(deps.size());
-
-      for (const auto &d : deps)
-      {
-        const fs::path depCMake = d.linkDir / "CMakeLists.txt";
-        const fs::path depIncludeDir = d.linkDir / d.include;
-
-        const bool hasCMake = fs::exists(depCMake);
-        const bool hasIncludeDir = fs::exists(depIncludeDir);
-
-        const bool isHeaderOnly =
-            d.type == "header-only" ||
-            d.type == "header_only" ||
-            d.type == "headers";
-
-        const bool isCompiledLike =
-            d.type == "library" ||
-            d.type == "header-and-source" ||
-            d.type == "header_and_source" ||
-            d.type == "headers-and-sources";
-
-        // We only suggest aliases that are expected to exist after include(.vix/vix_deps.cmake):
-        // - header-only fallback packages created by Vix
-        // - CMake-based packages that should expose their public alias/target
-        if ((isHeaderOnly && hasIncludeDir) || hasCMake || isCompiledLike)
-          aliases.push_back(cmake_alias_target(d.id));
-      }
-
-      std::sort(aliases.begin(), aliases.end());
-      aliases.erase(std::unique(aliases.begin(), aliases.end()), aliases.end());
-
-      vix::cli::util::warn_line(std::cout, "Next:");
-      std::cout << "  " << GRAY << "• " << RESET
-                << "Add this to your "
-                << CYAN << BOLD << "CMakeLists.txt" << RESET
-                << ":\n\n";
-
-      std::cout << "    include(.vix/vix_deps.cmake)\n";
-      std::cout << "    add_executable(app main.cpp)\n";
-
-      if (!aliases.empty())
-      {
-        std::cout << "    target_link_libraries(app PRIVATE";
-
-        for (const auto &alias : aliases)
-          std::cout << " " << alias;
-
-        std::cout << ")\n";
-      }
-
-      std::cout << "\n";
-
-      std::cout << "  " << GRAY << "• " << RESET
-                << "Link only the packages your target actually uses.\n";
-      std::cout << "  " << GRAY << "• " << RESET
-                << "Packages with their own CMakeLists.txt are loaded automatically through "
-                << CYAN << ".vix/vix_deps.cmake" << RESET << ".\n\n";
+      vix::cli::util::info(std::cout, "Generated .vix/vix_deps.cmake");
     }
 
     static int install_global_package(const std::string &specRaw)
@@ -1297,7 +1230,6 @@ namespace vix::commands
           if (!printedHeader)
           {
             vix::cli::util::section(std::cout, "Installing dependencies");
-            vix::cli::util::one_line_spacer(std::cout);
             printedHeader = true;
           }
 
@@ -1344,7 +1276,6 @@ namespace vix::commands
           if (!printedHeader)
           {
             vix::cli::util::section(std::cout, "Installing dependencies");
-            vix::cli::util::one_line_spacer(std::cout);
             printedHeader = true;
           }
 

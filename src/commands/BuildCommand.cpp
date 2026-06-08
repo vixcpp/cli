@@ -547,6 +547,7 @@ namespace vix::commands::BuildCommand
         else if (a == "--verbose" || a == "-v")
         {
           o.verbose = true;
+          o.cmakeVerbose = true;
         }
         else if (a == "--explain")
         {

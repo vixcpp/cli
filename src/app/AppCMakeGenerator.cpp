@@ -688,8 +688,15 @@ namespace vix::cli::app
             "$<TARGET_FILE_DIR:" + targetName + ">/" + destName;
         const std::string quotedDst = cmake_quote(dstPath);
 
-        // Pick the right command at configure time using IS_DIRECTORY
-        // so the same resource entry works for both files and folders.
+        // Validate the resource at configure time so missing resources do not
+        // fail later during the link/post-build step with a huge raw command.
+        out << "if(NOT EXISTS " << quotedSrc << ")\n";
+        out << "  message(FATAL_ERROR \"VIX_APP_RESOURCE_NOT_FOUND "
+            << "resource=" << destName
+            << " path=" << cmake_path(absoluteSource)
+            << "\")\n";
+        out << "endif()\n\n";
+
         out << "if(IS_DIRECTORY " << quotedSrc << ")\n";
         out << "  add_custom_command(TARGET " << targetName
             << " POST_BUILD\n";

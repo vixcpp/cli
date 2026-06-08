@@ -215,6 +215,25 @@ namespace vix::commands
       return id.substr(0, slash) + "::" + id.substr(slash + 1);
     }
 
+    static std::vector<std::string> cmake_dependency_aliases(const DepResolved &dep)
+    {
+      std::vector<std::string> aliases;
+      aliases.reserve(dep.dependencies.size());
+
+      for (const std::string &id : dep.dependencies)
+      {
+        const std::string alias = cmake_alias_target(id);
+
+        if (!alias.empty())
+          aliases.push_back(alias);
+      }
+
+      std::sort(aliases.begin(), aliases.end());
+      aliases.erase(std::unique(aliases.begin(), aliases.end()), aliases.end());
+
+      return aliases;
+    }
+
     static fs::path store_checkout_path(const std::string &id, const std::string &commit)
     {
       return store_git_dir() / sanitize_id_dot(id) / commit;
@@ -363,8 +382,15 @@ namespace vix::commands
     static void remove_all_if_exists(const fs::path &p)
     {
       std::error_code ec;
-      if (fs::exists(p, ec))
-        fs::remove_all(p, ec);
+
+      const auto status = fs::symlink_status(p, ec);
+      if (ec)
+        return;
+
+      if (status.type() == fs::file_type::not_found)
+        return;
+
+      fs::remove_all(p, ec);
     }
 
     static void ensure_symlink_or_copy_dir(const fs::path &src, const fs::path &dst)
@@ -1014,6 +1040,21 @@ namespace vix::commands
           }
         }
 
+        const std::vector<std::string> dependencyAliases =
+            cmake_dependency_aliases(dep);
+
+        if (!dependencyAliases.empty())
+        {
+          out << "if(TARGET " << safe << ")\n";
+          out << "  target_link_libraries(" << safe << " INTERFACE\n";
+
+          for (const std::string &aliasDep : dependencyAliases)
+            out << "    " << aliasDep << "\n";
+
+          out << "  )\n";
+          out << "endif()\n";
+        }
+
         out << "\n";
       }
     }
@@ -1164,6 +1205,38 @@ namespace vix::commands
       return 0;
     }
 
+    static bool dependency_link_needs_update(
+        const fs::path &link,
+        const fs::path &expectedTarget)
+    {
+      std::error_code ec;
+
+      const auto status = fs::symlink_status(link, ec);
+      if (ec || status.type() == fs::file_type::not_found)
+        return true;
+
+#ifndef _WIN32
+      if (fs::is_symlink(status))
+      {
+        fs::path actualTarget = fs::read_symlink(link, ec);
+        if (ec)
+          return true;
+
+        if (actualTarget.is_relative())
+          actualTarget = fs::absolute(link.parent_path() / actualTarget).lexically_normal();
+        else
+          actualTarget = fs::absolute(actualTarget).lexically_normal();
+
+        const fs::path expected =
+            fs::absolute(expectedTarget).lexically_normal();
+
+        return actualTarget != expected;
+      }
+#endif
+
+      return true;
+    }
+
     static int install_project_dependencies()
     {
       bool didWork = false;
@@ -1224,6 +1297,7 @@ namespace vix::commands
 
         const bool checkoutExistedBefore = fs::exists(dep.checkout);
         const bool linkExistedBefore = fs::exists(link);
+        const bool linkNeedsUpdate = dependency_link_needs_update(link, dep.checkout);
 
         if (!checkoutExistedBefore)
         {
@@ -1265,7 +1339,7 @@ namespace vix::commands
           return 1;
         }
 
-        if (!linkExistedBefore)
+        if (!linkExistedBefore || linkNeedsUpdate)
           didWork = true;
 
         dep.linkDir = link;

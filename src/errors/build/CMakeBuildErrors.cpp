@@ -1496,6 +1496,50 @@ namespace vix::cli::errors::build
       return true;
     }
 
+    bool handleMissingVixDepsCMake(std::string_view log)
+    {
+      const bool hasVixAppDeps =
+          contains(log, "vix.app dependencies are declared");
+
+      const bool hasMissingDepsFile =
+          contains(log, ".vix/vix_deps.cmake was not found") ||
+          contains(log, "vix_deps.cmake was not found");
+
+      if (!hasVixAppDeps && !hasMissingDepsFile)
+        return false;
+
+      print_error_title("vix.app dependencies are not installed");
+      print_colored_field("missing: ", RED, ".vix/vix_deps.cmake");
+      print_hint("run vix install before building this vix.app project");
+
+      return true;
+    }
+
+    bool handleVixAppResourceNotFound(std::string_view log)
+    {
+      constexpr std::string_view marker = "VIX_APP_RESOURCE_NOT_FOUND";
+
+      if (!contains(log, marker))
+        return false;
+
+      const std::string resource = extract(
+          log,
+          std::regex(R"re(VIX_APP_RESOURCE_NOT_FOUND\s+resource=([^\s]+))re"));
+
+      const std::string path = extract(
+          log,
+          std::regex(R"re(VIX_APP_RESOURCE_NOT_FOUND\s+resource=[^\s]+\s+path=([^\s]+))re"));
+
+      print_error_title("vix.app resource not found");
+
+      print_field("resource: ", resource);
+      print_colored_field("path: ", RED, path);
+
+      print_hint("create the missing file/directory or remove it from resources in vix.app");
+
+      return true;
+    }
+
     // 16. Generic fallback — must run last
     //     Extracts the first real CMake Error block and never uses noise lines.
     bool handleGenericCMakeError(std::string_view log)
@@ -1659,6 +1703,13 @@ namespace vix::cli::errors::build
       return true;
     if (handleToolchainNotFound(log))
       return true;
+
+    if (handleVixAppResourceNotFound(log))
+      return true;
+
+    if (handleMissingVixDepsCMake(log))
+      return true;
+
     if (handleGenericCMakeError(log))
       return true;
 

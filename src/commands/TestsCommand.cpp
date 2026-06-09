@@ -953,6 +953,63 @@ namespace
     return value;
   }
 
+  static bool is_test_runner_noise_line(const std::string &line)
+  {
+    const std::string trimmed = trim_copy(line);
+
+    if (trimmed.empty())
+      return true;
+
+    if (trimmed.rfind("Running main() from ", 0) == 0)
+      return true;
+
+    if (trimmed.rfind("Note: Google Test filter =", 0) == 0)
+      return true;
+
+    if (trimmed.rfind("[==========]", 0) == 0 ||
+        trimmed.rfind("[----------]", 0) == 0 ||
+        trimmed.rfind("[ RUN      ]", 0) == 0 ||
+        trimmed.rfind("[       OK ]", 0) == 0 ||
+        trimmed.rfind("[  PASSED  ]", 0) == 0 ||
+        trimmed.rfind("[  FAILED  ]", 0) == 0)
+    {
+      return true;
+    }
+
+    return false;
+  }
+
+  static bool looks_like_useful_failure_detail(const std::string &line)
+  {
+    const std::string trimmed = trim_copy(line);
+
+    if (trimmed.empty())
+      return false;
+
+    if (trimmed.rfind("Expected:", 0) == 0)
+      return true;
+
+    if (trimmed.rfind("Actual:", 0) == 0)
+      return true;
+
+    if (trimmed.rfind("Value of:", 0) == 0)
+      return true;
+
+    if (trimmed.rfind("Which is:", 0) == 0)
+      return true;
+
+    if (trimmed.rfind("Expected equality of these values:", 0) == 0)
+      return true;
+
+    if (trimmed.find("Assertion") != std::string::npos &&
+        trimmed.find("failed") != std::string::npos)
+    {
+      return true;
+    }
+
+    return false;
+  }
+
   static std::string extract_ctest_duration(const std::string &line)
   {
     const std::string marker = " sec";
@@ -1317,38 +1374,38 @@ namespace
 
     failure.column = 1;
 
-    std::string valueOf;
-    std::string actual;
-    std::string expected;
+    std::string message;
+    bool started = false;
 
-    for (std::size_t i = index + 1; i < lines.size() && i < index + 8; ++i)
+    for (std::size_t i = index + 1; i < lines.size() && i < index + 12; ++i)
     {
       const std::string current = trim_copy(lines[i]);
 
-      if (current.rfind("Value of:", 0) == 0)
-        valueOf = trim_copy(current.substr(std::string("Value of:").size()));
-
-      else if (current.rfind("Actual:", 0) == 0)
-        actual = trim_copy(current.substr(std::string("Actual:").size()));
-
-      else if (current.rfind("Expected:", 0) == 0)
-        expected = trim_copy(current.substr(std::string("Expected:").size()));
-
-      else if (current.rfind("[  FAILED  ]", 0) == 0 ||
-               current.rfind("[ RUN      ]", 0) == 0)
+      if (current.rfind("[  FAILED  ]", 0) == 0 ||
+          current.rfind("[ RUN      ]", 0) == 0 ||
+          current.rfind("[       OK ]", 0) == 0)
+      {
         break;
+      }
+
+      if (is_test_runner_noise_line(current))
+        continue;
+
+      if (!started && !looks_like_useful_failure_detail(current))
+        continue;
+
+      started = true;
+
+      if (!message.empty())
+        message += "\n";
+
+      message += current;
     }
 
-    if (!valueOf.empty())
+    if (!message.empty())
     {
-      failure.assertion = valueOf;
-      failure.message = "expected `" + valueOf + "` to be true";
-
-      if (!actual.empty())
-        failure.message += "\nactual: " + actual;
-
-      if (!expected.empty())
-        failure.message += "\nexpected: " + expected;
+      failure.assertion = message;
+      failure.message = message;
     }
   }
 
@@ -1391,15 +1448,9 @@ namespace
 
     if (failure.has_assertion())
     {
-      if (failure.message.find("actual:") != std::string::npos ||
-          failure.message.find("expected:") != std::string::npos)
-      {
-        diagnostic.error = failure.message;
-      }
-      else
-      {
-        diagnostic.error = "assertion failed: " + failure.assertion;
-      }
+      diagnostic.error = failure.message.empty()
+                             ? failure.assertion
+                             : failure.message;
     }
     else if (!failure.message.empty())
     {

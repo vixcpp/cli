@@ -186,9 +186,6 @@ namespace vix::cli::errors::build
       return message;
     }
 
-    // Returns the single most informative line from the first CMake Error block.
-    // Prefers the content after the first colon on the opening "CMake Error" line;
-    // falls back to the entire block if the opening line is content-free.
     std::string first_cmake_error_message(std::string_view log)
     {
       const std::size_t pos = log.find("CMake Error");
@@ -196,24 +193,82 @@ namespace vix::cli::errors::build
         return {};
 
       const std::size_t lineEnd = log.find('\n', pos);
+
       const std::string firstLine =
           (lineEnd == std::string_view::npos)
               ? std::string(log.substr(pos))
               : std::string(log.substr(pos, lineEnd - pos));
 
-      // Try to get the message that follows the first colon on the error line.
-      const std::size_t colon = firstLine.find(':');
-      if (colon != std::string::npos && colon + 1 < firstLine.size())
+      // CMake form:
+      //   CMake Error at CMakeLists.txt:135 (message):
+      //
+      // Do not split at the first ':' because that belongs to file:line.
+      // Only use same-line text after the final "):" when it exists.
+      const std::size_t commandEnd = firstLine.find("):");
+      if (commandEnd != std::string::npos)
       {
-        std::string sameLine = trim_copy(firstLine.substr(colon + 1));
+        const std::string sameLine =
+            trim_copy(firstLine.substr(commandEnd + 2));
+
         if (!sameLine.empty() && !is_cmake_noise_line(sameLine))
           return sameLine;
       }
 
-      // Fall back: collect a multi-line block, skipping noise.
+      // CMake form:
+      //   CMake Error: some message
+      //
+      // This one has no file:line prefix, so splitting after "CMake Error:"
+      // is safe.
+      constexpr std::string_view directPrefix = "CMake Error:";
+      if (starts_with(firstLine, directPrefix))
+      {
+        const std::string sameLine =
+            trim_copy(firstLine.substr(directPrefix.size()));
+
+        if (!sameLine.empty() && !is_cmake_noise_line(sameLine))
+          return sameLine;
+      }
+
+      if (lineEnd == std::string_view::npos)
+        return first_cmake_error_block(log);
+
+      std::istringstream stream{
+          std::string(log.substr(lineEnd + 1))};
+
+      std::string message;
+      std::string line;
+
+      while (std::getline(stream, line))
+      {
+        const std::string trimmed = trim_copy(line);
+
+        if (trimmed.empty())
+          continue;
+
+        if (starts_with(trimmed, "CMake Error"))
+          break;
+
+        if (is_cmake_noise_line(trimmed))
+          break;
+
+        if (starts_with(trimmed, "-- Configuring incomplete") ||
+            starts_with(trimmed, "-- Configuring done") ||
+            starts_with(trimmed, "-- Generating done"))
+        {
+          break;
+        }
+
+        if (!message.empty())
+          message += '\n';
+
+        message += trimmed;
+      }
+
+      if (!message.empty())
+        return message;
+
       return first_cmake_error_block(log);
     }
-
     // -------------------------------------------------------------------------
     // Output helpers  (preserve existing Vix CLI style)
     // -------------------------------------------------------------------------
@@ -244,7 +299,30 @@ namespace vix::cli::errors::build
       if (value.empty())
         return;
 
-      std::cerr << PAD << label << value << "\n";
+      const std::string text(value);
+
+      const std::size_t firstNewline = text.find('\n');
+
+      if (firstNewline == std::string::npos)
+      {
+        std::cerr << PAD << label << text << "\n";
+        return;
+      }
+
+      std::cerr << PAD << label << "\n";
+
+      std::istringstream in(text);
+      std::string line;
+
+      while (std::getline(in, line))
+      {
+        const std::string trimmed = trim_copy(line);
+
+        if (trimmed.empty())
+          continue;
+
+        std::cerr << PAD << "  " << trimmed << "\n";
+      }
     }
 
     void print_colored_field(std::string_view label,
@@ -254,12 +332,38 @@ namespace vix::cli::errors::build
       if (value.empty())
         return;
 
-      std::cerr << PAD
-                << label
-                << color
-                << value
-                << RESET
-                << "\n";
+      const std::string text(value);
+
+      if (text.find('\n') == std::string::npos)
+      {
+        std::cerr << PAD
+                  << label
+                  << color
+                  << text
+                  << RESET
+                  << "\n";
+        return;
+      }
+
+      std::cerr << PAD << label << "\n";
+
+      std::istringstream in(text);
+      std::string line;
+
+      while (std::getline(in, line))
+      {
+        const std::string trimmed = trim_copy(line);
+
+        if (trimmed.empty())
+          continue;
+
+        std::cerr << PAD
+                  << "  "
+                  << color
+                  << trimmed
+                  << RESET
+                  << "\n";
+      }
     }
 
     // -------------------------------------------------------------------------
@@ -1569,7 +1673,7 @@ namespace vix::cli::errors::build
           "reason: ",
           message.empty() ? "unclassified CMake error" : message);
 
-      print_hint("run vix build --verbose to inspect the full CMake output");
+      print_hint("check the CMake message above or inspect build-ninja/configure.log");
       return true;
     }
 

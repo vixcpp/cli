@@ -547,7 +547,6 @@ namespace vix::commands::BuildCommand
         else if (a == "--verbose" || a == "-v")
         {
           o.verbose = true;
-          o.cmakeVerbose = true;
         }
         else if (a == "--explain")
         {
@@ -3261,6 +3260,12 @@ namespace vix::commands::BuildCommand
                     log,
                     plan_.cmakeSourceDir / "CMakeLists.txt",
                     "CMake configure failed");
+
+            if (opt_.verbose && !log.empty())
+            {
+              std::cerr << "\nCMake output:\n";
+              std::cerr << log << "\n";
+            }
 
             if (!opt_.quiet)
             {

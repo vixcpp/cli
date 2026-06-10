@@ -799,6 +799,79 @@ namespace vix::commands
       return r.exitCode == 0 && trim_copy(r.out) == "true";
     }
 
+    static int normalize_registry_worktree_for_publish(const fs::path &regRepo)
+    {
+      {
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "fetch", "-q", "origin", "--prune"});
+
+        if (r.exitCode != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to fetch registry origin");
+
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+
+          return r.exitCode;
+        }
+      }
+
+      {
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "checkout", "-q", "-B", "main", "origin/main"});
+
+        if (r.exitCode != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to checkout registry main branch");
+
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+
+          return r.exitCode;
+        }
+      }
+
+      {
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "reset", "-q", "--hard", "origin/main"});
+
+        if (r.exitCode != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to reset registry to origin/main");
+
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+
+          return r.exitCode;
+        }
+      }
+
+      {
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "clean", "-q", "-fd", "--", "index"});
+
+        if (r.exitCode != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to clean untracked registry files");
+
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+
+          return r.exitCode;
+        }
+      }
+
+      return 0;
+    }
+
     static bool command_exists_on_path(const std::string &exe)
     {
       // No shell: just try to execute "<exe> --version"
@@ -1022,6 +1095,22 @@ namespace vix::commands
         return 1;
       }
 
+      {
+        const int rc = normalize_registry_worktree_for_publish(regRepo);
+        if (rc != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to prepare local registry repo");
+
+          vix::cli::util::tip_line(
+              std::cerr,
+              "Check network access or run: vix registry sync");
+
+          return rc;
+        }
+      }
+
       const fs::path entryPath = regIndex / registry_file_name(*ns, *name);
       vix::cli::util::kv(std::cout, "entry", entryPath.string());
 
@@ -1074,10 +1163,18 @@ namespace vix::commands
 
         if (entry["versions"].contains(resolvedVersion))
         {
-          vix::cli::util::err_line(std::cerr,
-                                   "version already registered: " + pkgId + "@" + resolvedVersion);
-          vix::cli::util::warn_line(std::cerr,
-                                    "This tag/version is already present in the registry.");
+          vix::cli::util::err_line(
+              std::cerr,
+              "version already exists in registry main: " + pkgId + "@" + resolvedVersion);
+
+          vix::cli::util::warn_line(
+              std::cerr,
+              "This version is already present in the registry index.");
+
+          vix::cli::util::warn_line(
+              std::cerr,
+              "If a previous publish failed before PR merge, run: vix registry sync");
+
           return 1;
         }
       }
@@ -1252,6 +1349,21 @@ namespace vix::commands
         return 0;
       }
 
+      const std::string branch = branch_name(*ns, *name, resolvedVersion);
+      vix::cli::util::kv(std::cout, "branch", branch);
+
+      {
+        const auto r = run_process_retry_debug(
+            {"git", "-C", regRepo.string(), "checkout", "-B", branch, "-q"});
+        if (r.exitCode != 0)
+        {
+          vix::cli::util::err_line(std::cerr, "failed to create branch: " + branch);
+          if (!r.err.empty())
+            vix::cli::util::warn_line(std::cerr, r.err);
+          return r.exitCode;
+        }
+      }
+
       std::error_code ec;
       fs::create_directories(entryPath.parent_path(), ec);
 
@@ -1264,39 +1376,6 @@ namespace vix::commands
         vix::cli::util::err_line(std::cerr,
                                  std::string("failed to write registry entry: ") + ex.what());
         return 1;
-      }
-
-      const std::string branch = branch_name(*ns, *name, resolvedVersion);
-      vix::cli::util::kv(std::cout, "branch", branch);
-
-      {
-        const auto r = run_process_retry_debug(
-            {"git", "-C", regRepo.string(), "pull", "-q", "--ff-only"});
-        if (r.exitCode != 0)
-        {
-          vix::cli::util::err_line(std::cerr,
-                                   "failed to update local registry repo (pull --ff-only)");
-
-          if (!r.err.empty())
-            vix::cli::util::warn_line(std::cerr, r.err);
-
-          vix::cli::util::tip_line(std::cerr,
-                                   "Run 'vix registry sync' to reset the local registry.");
-
-          return r.exitCode;
-        }
-      }
-
-      {
-        const auto r = run_process_retry_debug(
-            {"git", "-C", regRepo.string(), "checkout", "-B", branch, "-q"});
-        if (r.exitCode != 0)
-        {
-          vix::cli::util::err_line(std::cerr, "failed to create branch: " + branch);
-          if (!r.err.empty())
-            vix::cli::util::warn_line(std::cerr, r.err);
-          return r.exitCode;
-        }
       }
 
       {

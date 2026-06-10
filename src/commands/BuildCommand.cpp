@@ -2454,11 +2454,11 @@ namespace vix::commands::BuildCommand
 
       if (!store_project_target_artifact(projectArtifact, opt, plan) &&
           !opt.quiet &&
-          opt.verbose)
+          debug_build_details_enabled())
       {
         build::print_build_info(
             std::cout,
-            "Artifact cache store skipped");
+            "Artifact cache skipped: no main executable artifact found");
       }
 
       const auto state =
@@ -3407,11 +3407,11 @@ namespace vix::commands::BuildCommand
           {
             if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
                 !opt_.quiet &&
-                opt_.verbose)
+                debug_build_details_enabled())
             {
               build::print_build_info(
                   std::cout,
-                  "Artifact cache store skipped");
+                  "Artifact cache skipped: no main executable artifact found");
             }
 
             std::string lastBinary;
@@ -3567,11 +3567,11 @@ namespace vix::commands::BuildCommand
 
           if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
               !opt_.quiet &&
-              opt_.verbose)
+              debug_build_details_enabled())
           {
             build::print_build_info(
                 std::cout,
-                "Artifact cache store skipped");
+                "Artifact cache skipped: no main executable artifact found");
           }
           std::string lastBinary;
 

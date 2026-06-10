@@ -837,21 +837,6 @@ namespace vix::commands
       out << "  set(ENABLE_DOCS OFF CACHE BOOL \"\" FORCE)\n";
       out << "  set(DOCS OFF CACHE BOOL \"\" FORCE)\n";
       out << "\n";
-      out << "  # Namespace-specific knobs, e.g. CNERIUM_BUILD_TESTS\n";
-      out << "  set(${_VIX_NS_UPPER}_BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_ENABLE_TESTS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_TESTS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_UNIT_TESTS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_BUILD_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_ENABLE_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_EXAMPLES OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_BUILD_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_BENCHMARKS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_BUILD_DOCS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_ENABLE_DOCS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "  set(${_VIX_NS_UPPER}_DOCS OFF CACHE BOOL \"\" FORCE)\n";
-      out << "\n";
       out << "  # Package-specific knobs, e.g. CNERIUM_HTTP_BUILD_TESTS\n";
       out << "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
       out << "  set(${_VIX_NS_UPPER}_${_VIX_NAME_UPPER}_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
@@ -1065,17 +1050,31 @@ namespace vix::commands
              !fs::exists(fs::current_path() / "CMakeLists.txt");
     }
 
-    static void print_next_steps(const std::vector<DepResolved> &deps)
+    static void print_next_steps(
+        std::size_t installedCount,
+        std::size_t checkedCount,
+        bool generatedCmake)
     {
       vix::cli::util::ok_line(std::cout, "Dependencies ready");
 
-      const std::string packageWord = deps.size() == 1 ? "package" : "packages";
+      if (installedCount > 0)
+      {
+        const std::string packageWord =
+            installedCount == 1 ? "package" : "packages";
+
+        vix::cli::util::info(
+            std::cout,
+            std::to_string(installedCount) + " " + packageWord + " installed");
+      }
 
       vix::cli::util::info(
           std::cout,
-          std::to_string(deps.size()) + " " + packageWord + " installed");
+          "checked " + std::to_string(checkedCount) + " package(s)");
 
-      vix::cli::util::info(std::cout, "Generated .vix/vix_deps.cmake");
+      if (generatedCmake)
+      {
+        vix::cli::util::info(std::cout, "Generated .vix/vix_deps.cmake");
+      }
     }
 
     static int install_global_package(const std::string &specRaw)
@@ -1241,6 +1240,7 @@ namespace vix::commands
     {
       bool didWork = false;
       bool printedHeader = false;
+      std::size_t installedCount = 0;
 
       const fs::path lp = lock_path();
 
@@ -1340,12 +1340,15 @@ namespace vix::commands
         }
 
         if (!linkExistedBefore || linkNeedsUpdate)
+        {
           didWork = true;
+          installedCount++;
+        }
 
         dep.linkDir = link;
         resolved.push_back(dep);
 
-        if (!checkoutExistedBefore || !linkExistedBefore)
+        if (!checkoutExistedBefore || !linkExistedBefore || linkNeedsUpdate)
         {
           if (!printedHeader)
           {
@@ -1385,7 +1388,11 @@ namespace vix::commands
         return 0;
       }
 
-      print_next_steps(resolved);
+      print_next_steps(
+          installedCount,
+          resolved.size(),
+          true);
+
       return 0;
     }
 

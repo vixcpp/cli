@@ -654,8 +654,8 @@ namespace vix::commands
       if (!git_remote_tag_exists(tag))
       {
         throw std::runtime_error(
-            "latest local tag exists but is not on origin: " + tag +
-            ". Push it first with: git push origin " + tag);
+            "local tag exists, but it has not been pushed to origin: " + tag +
+            ". Run: git push origin " + tag);
       }
 
       return detected;
@@ -1029,9 +1029,18 @@ namespace vix::commands
 
       if (!git_remote_tag_exists(tag))
       {
-        vix::cli::util::err_line(std::cerr, "tag not found on remote origin: " + tag);
-        vix::cli::util::warn_line(std::cerr, "Fix: git push origin " + tag);
-        vix::cli::util::warn_line(std::cerr, "Or:  git push --tags");
+        vix::cli::util::err_line(
+            std::cerr,
+            "local tag exists, but it has not been pushed to origin: " + tag);
+
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Run: git push origin " + tag);
+
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Or:  git push --tags");
+
         return 1;
       }
 

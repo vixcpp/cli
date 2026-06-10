@@ -62,8 +62,10 @@ namespace vix::commands
       std::string rawSpec;
       std::string id;
       std::string beforeVersion;
+      std::string latestVersion;
       std::string afterVersion;
       bool changed{false};
+      bool skipped{false};
     };
 
     fs::path lock_path()
@@ -256,6 +258,59 @@ namespace vix::commands
       return {};
     }
 
+    std::string read_latest_registry_version(const std::string &id)
+    {
+      const auto slash = id.find('/');
+      if (slash == std::string::npos)
+      {
+        return {};
+      }
+
+      const std::string ns = id.substr(0, slash);
+      const std::string name = id.substr(slash + 1);
+
+      if (ns.empty() || name.empty())
+      {
+        return {};
+      }
+
+      const fs::path registryEntry =
+          fs::path(std::getenv("HOME")) /
+          ".vix" /
+          "registry" /
+          "index" /
+          "index" /
+          (ns + "." + name + ".json");
+
+      if (!fs::exists(registryEntry))
+      {
+        return {};
+      }
+
+      const json entry = read_json_or_throw(registryEntry);
+
+      if (!entry.contains("versions") || !entry["versions"].is_object())
+      {
+        return {};
+      }
+
+      std::vector<std::string> versions;
+
+      for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
+      {
+        versions.push_back(it.key());
+      }
+
+      if (versions.empty())
+      {
+        return {};
+      }
+
+      std::sort(versions.begin(), versions.end());
+
+      return versions.back();
+    }
+
     std::vector<UpdateItem> collect_targets(
         const std::vector<vix::cli::util::manifest::Dependency> &manifestDeps,
         const json &lock,
@@ -416,59 +471,95 @@ namespace vix::commands
 
       for (auto &item : items)
       {
+        PkgSpec requestedSpec;
+        if (!parse_pkg_spec(item.rawSpec, requestedSpec))
+        {
+          vix::cli::util::err_line(std::cerr, "invalid package spec");
+          return 1;
+        }
+
+        if (!requestedSpec.requestedVersion.empty())
+        {
+          item.latestVersion = requestedSpec.requestedVersion;
+        }
+        else
+        {
+          item.latestVersion = read_latest_registry_version(item.id);
+        }
+
+        if (item.latestVersion.empty())
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to resolve latest version for: " + item.id);
+          return 1;
+        }
+
+        if (item.beforeVersion == item.latestVersion)
+        {
+          item.afterVersion = item.beforeVersion;
+          item.changed = false;
+          item.skipped = true;
+
+          continue;
+        }
+
         if (!opt.jsonOutput)
         {
           if (opt.dryRun)
           {
-            vix::cli::util::step("checking " + item.rawSpec + "...");
+            vix::cli::util::step(
+                "would update " + item.id + " " + item.beforeVersion + " -> " +
+                item.latestVersion);
           }
           else
           {
-            vix::cli::util::step("updating " + item.rawSpec + "...");
+            vix::cli::util::step(
+                "updating " + item.id + " " + item.beforeVersion + " -> " +
+                item.latestVersion);
           }
         }
 
-        if (!opt.dryRun)
+        if (opt.dryRun)
         {
-          PkgSpec requestedSpec;
-          if (!parse_pkg_spec(item.rawSpec, requestedSpec))
-          {
-            vix::cli::util::err_line(std::cerr, "invalid package spec");
-            return 1;
-          }
+          item.afterVersion = item.latestVersion;
+          item.changed = true;
+          continue;
+        }
 
-          if (!requestedSpec.requestedVersion.empty())
-          {
-            vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
-                manifest_path(),
-                vix::cli::util::manifest::Dependency{
-                    requestedSpec.id(),
-                    requestedSpec.requestedVersion});
-          }
+        if (!requestedSpec.requestedVersion.empty())
+        {
+          vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
+              manifest_path(),
+              vix::cli::util::manifest::Dependency{
+                  requestedSpec.id(),
+                  requestedSpec.requestedVersion});
+        }
 
-          const int rc = AddCommand::run({item.rawSpec});
-          if (rc != 0)
-          {
-            return rc;
-          }
+        const int rc = AddCommand::run({item.rawSpec});
+        if (rc != 0)
+        {
+          return rc;
         }
 
         const json refreshedLock = read_lock_or_throw();
         item.afterVersion = read_locked_version(refreshedLock, item.id);
 
-        if (opt.dryRun)
+        item.changed =
+            !item.afterVersion.empty() &&
+            item.afterVersion != item.beforeVersion;
+      }
+      std::size_t changedCount = 0;
+
+      for (const auto &item : items)
+      {
+        if (item.changed)
         {
-          item.afterVersion = item.beforeVersion;
-          item.changed = false;
-        }
-        else
-        {
-          item.changed =
-              !item.afterVersion.empty() && item.afterVersion != item.beforeVersion;
+          changedCount++;
         }
       }
 
-      if (opt.installAfter && !opt.dryRun)
+      if (opt.installAfter && !opt.dryRun && changedCount > 0)
       {
         if (!opt.jsonOutput)
         {
@@ -488,53 +579,39 @@ namespace vix::commands
         return 0;
       }
 
-      std::size_t changedCount = 0;
-
       for (const auto &item : items)
       {
-        if (item.changed)
+        if (item.skipped)
         {
-          changedCount++;
+          continue;
         }
 
-        if (opt.dryRun)
-        {
-          if (item.rawSpec == item.id)
-          {
-            vix::cli::util::ok_line(
-                std::cout,
-                item.id + ": " + item.beforeVersion + " -> latest");
-          }
-          else
-          {
-            vix::cli::util::ok_line(
-                std::cout,
-                item.id + ": " + item.beforeVersion + " -> " + item.rawSpec);
-          }
-        }
-        else
-        {
-          const std::string after =
-              item.afterVersion.empty() ? item.beforeVersion : item.afterVersion;
+        const std::string after =
+            item.afterVersion.empty() ? item.beforeVersion : item.afterVersion;
 
-          vix::cli::util::ok_line(
-              std::cout,
-              item.id + ": " + item.beforeVersion + " -> " + after);
-        }
+        vix::cli::util::ok_line(
+            std::cout,
+            item.id + ": " + item.beforeVersion + " -> " + after);
       }
 
       vix::cli::util::ok_line(
           std::cout,
-          "processed " + std::to_string(items.size()) + " package(s), changed " +
+          "checked " + std::to_string(items.size()) + " package(s), changed " +
               std::to_string(changedCount));
 
-      if (!opt.installAfter && !opt.dryRun)
+      if (changedCount == 0)
+      {
+        vix::cli::util::ok_line(
+            std::cout,
+            "all packages are already current");
+      }
+
+      if (!opt.installAfter && !opt.dryRun && changedCount > 0)
       {
         vix::cli::util::warn_line(
             std::cout,
             "Run: vix install to regenerate dependencies");
       }
-
       return 0;
     }
     catch (const std::exception &ex)

@@ -61,10 +61,17 @@ namespace vix::commands
     {
       std::string rawSpec;
       std::string id;
+
       std::string beforeVersion;
+      std::string beforeHash;
+
       std::string latestVersion;
+
       std::string afterVersion;
-      bool changed{false};
+      std::string afterHash;
+
+      bool versionChanged{false};
+      bool lockChanged{false};
       bool skipped{false};
     };
 
@@ -258,6 +265,24 @@ namespace vix::commands
       return {};
     }
 
+    std::string read_locked_hash(const json &lock, const std::string &id)
+    {
+      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
+      {
+        return {};
+      }
+
+      for (const auto &d : lock["dependencies"])
+      {
+        if (d.value("id", "") == id)
+        {
+          return d.value("hash", "");
+        }
+      }
+
+      return {};
+    }
+
     std::string read_latest_registry_version(const std::string &id)
     {
       const auto slash = id.find('/');
@@ -327,19 +352,18 @@ namespace vix::commands
           UpdateItem item;
           item.id = dep.id;
 
-          // Important:
-          // vix update without an explicit version must resolve the latest
-          // available version from the registry, not reuse the old requested
-          // version from vix.json.
-          item.rawSpec = dep.id;
+          // Respect the version/range declared in vix.json.
+          // If vix.json says rix/rix@0.6.1, update must not jump to 0.9.0.
+          // If vix.json says "*", then resolving latest is expected.
+          item.rawSpec = make_raw_spec(dep.id, dep.requested);
 
           item.beforeVersion = read_locked_version(lock, dep.id);
+          item.beforeHash = read_locked_hash(lock, dep.id);
           items.push_back(item);
         }
 
         return items;
       }
-
       std::set<std::string> uniqueRaw(opt.rawTargets.begin(), opt.rawTargets.end());
 
       for (const auto &raw : uniqueRaw)
@@ -367,6 +391,7 @@ namespace vix::commands
         UpdateItem item;
         item.id = id;
         item.beforeVersion = read_locked_version(lock, id);
+        item.beforeHash = read_locked_hash(lock, id);
 
         if (!spec.requestedVersion.empty())
         {
@@ -374,10 +399,10 @@ namespace vix::commands
         }
         else
         {
-          // Important:
-          // vix update namespace/name must also resolve the latest version.
-          // Do not reuse the old version range from vix.json here.
-          item.rawSpec = id;
+          const std::string manifestRequested =
+              read_manifest_requested(manifestDeps, id);
+
+          item.rawSpec = make_raw_spec(id, manifestRequested);
         }
         items.push_back(item);
       }
@@ -402,7 +427,8 @@ namespace vix::commands
         row["id"] = item.id;
         row["before"] = item.beforeVersion;
         row["after"] = item.afterVersion;
-        row["changed"] = item.changed;
+        row["version_changed"] = item.versionChanged;
+        row["lock_changed"] = item.lockChanged;
         out["updated"].push_back(row);
       }
 
@@ -495,35 +521,47 @@ namespace vix::commands
           return 1;
         }
 
-        if (item.beforeVersion == item.latestVersion)
-        {
-          item.afterVersion = item.beforeVersion;
-          item.changed = false;
-          item.skipped = true;
-
-          continue;
-        }
+        item.versionChanged = item.beforeVersion != item.latestVersion;
 
         if (!opt.jsonOutput)
         {
           if (opt.dryRun)
           {
-            vix::cli::util::step(
-                "would update " + item.id + " " + item.beforeVersion + " -> " +
-                item.latestVersion);
+            if (item.versionChanged)
+            {
+              vix::cli::util::step(
+                  "would update " + item.id + " " + item.beforeVersion + " -> " +
+                  item.latestVersion);
+            }
+            else
+            {
+              vix::cli::util::step(
+                  "would refresh " + item.id + "@" + item.latestVersion +
+                  " lock metadata");
+            }
           }
           else
           {
-            vix::cli::util::step(
-                "updating " + item.id + " " + item.beforeVersion + " -> " +
-                item.latestVersion);
+            if (item.versionChanged)
+            {
+              vix::cli::util::step(
+                  "updating " + item.id + " " + item.beforeVersion + " -> " +
+                  item.latestVersion);
+            }
+            else
+            {
+              vix::cli::util::step(
+                  "refreshing " + item.id + "@" + item.latestVersion +
+                  " lock metadata");
+            }
           }
         }
 
         if (opt.dryRun)
         {
           item.afterVersion = item.latestVersion;
-          item.changed = true;
+          item.afterHash = item.beforeHash;
+          item.lockChanged = false;
           continue;
         }
 
@@ -543,23 +581,40 @@ namespace vix::commands
         }
 
         const json refreshedLock = read_lock_or_throw();
-        item.afterVersion = read_locked_version(refreshedLock, item.id);
 
-        item.changed =
+        item.afterVersion = read_locked_version(refreshedLock, item.id);
+        item.afterHash = read_locked_hash(refreshedLock, item.id);
+
+        item.versionChanged =
             !item.afterVersion.empty() &&
             item.afterVersion != item.beforeVersion;
+
+        item.lockChanged =
+            item.afterVersion != item.beforeVersion ||
+            item.afterHash != item.beforeHash;
+
+        item.skipped =
+            !item.versionChanged &&
+            !item.lockChanged;
       }
-      std::size_t changedCount = 0;
+
+      std::size_t versionChangedCount = 0;
+      std::size_t lockChangedCount = 0;
 
       for (const auto &item : items)
       {
-        if (item.changed)
+        if (item.versionChanged)
         {
-          changedCount++;
+          versionChangedCount++;
+        }
+
+        if (item.lockChanged)
+        {
+          lockChangedCount++;
         }
       }
 
-      if (opt.installAfter && !opt.dryRun && changedCount > 0)
+      if (opt.installAfter && !opt.dryRun && lockChangedCount > 0)
       {
         if (!opt.jsonOutput)
         {
@@ -589,24 +644,36 @@ namespace vix::commands
         const std::string after =
             item.afterVersion.empty() ? item.beforeVersion : item.afterVersion;
 
-        vix::cli::util::ok_line(
-            std::cout,
-            item.id + ": " + item.beforeVersion + " -> " + after);
+        if (item.versionChanged)
+        {
+          vix::cli::util::ok_line(
+              std::cout,
+              item.id + ": " + item.beforeVersion + " -> " + after);
+        }
+        else if (item.lockChanged)
+        {
+          vix::cli::util::ok_line(
+              std::cout,
+              item.id + ": lock metadata refreshed");
+        }
       }
 
       vix::cli::util::ok_line(
           std::cout,
-          "checked " + std::to_string(items.size()) + " package(s), changed " +
-              std::to_string(changedCount));
+          "checked " + std::to_string(items.size()) +
+              " package(s), version changes " +
+              std::to_string(versionChangedCount) +
+              ", lock updates " +
+              std::to_string(lockChangedCount));
 
-      if (changedCount == 0)
+      if (versionChangedCount == 0 && lockChangedCount == 0)
       {
         vix::cli::util::ok_line(
             std::cout,
             "all packages are already current");
       }
 
-      if (!opt.installAfter && !opt.dryRun && changedCount > 0)
+      if (!opt.installAfter && !opt.dryRun && lockChangedCount > 0)
       {
         vix::cli::util::warn_line(
             std::cout,

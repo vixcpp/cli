@@ -39,6 +39,7 @@ namespace vix::commands
     {
       bool jsonOutput{false};
       bool strict{false};
+      bool all{false};
       std::vector<std::string> rawTargets;
     };
 
@@ -68,6 +69,11 @@ namespace vix::commands
     fs::path lock_path()
     {
       return fs::current_path() / "vix.lock";
+    }
+
+    fs::path manifest_path()
+    {
+      return fs::current_path() / "vix.json";
     }
 
     fs::path home_dir()
@@ -128,18 +134,6 @@ namespace vix::commands
       return read_json_or_throw(p);
     }
 
-    bool ensure_registry_present()
-    {
-      if (fs::exists(registry_dir()) && fs::exists(registry_index_dir()))
-      {
-        return true;
-      }
-
-      vix::cli::util::err_line(std::cerr, "registry not synced");
-      vix::cli::util::warn_line(std::cerr, "Run: vix registry sync");
-      return false;
-    }
-
     std::string trim_copy(std::string s)
     {
       auto isws = [](unsigned char c)
@@ -156,6 +150,66 @@ namespace vix::commands
       }
 
       return s;
+    }
+
+    json read_manifest_or_throw()
+    {
+      const fs::path p = manifest_path();
+      if (!fs::exists(p))
+      {
+        throw std::runtime_error("vix.json not found");
+      }
+
+      return read_json_or_throw(p);
+    }
+
+    std::set<std::string> read_manifest_dependency_ids_or_throw()
+    {
+      const json manifest = read_manifest_or_throw();
+
+      std::set<std::string> ids;
+
+      if (!manifest.contains("deps") || !manifest["deps"].is_array())
+      {
+        return ids;
+      }
+
+      for (const auto &dep : manifest["deps"])
+      {
+        if (dep.is_string())
+        {
+          const std::string id = trim_copy(dep.get<std::string>());
+          if (!id.empty())
+          {
+            ids.insert(id);
+          }
+
+          continue;
+        }
+
+        if (dep.is_object())
+        {
+          const std::string id = trim_copy(dep.value("id", ""));
+          if (!id.empty())
+          {
+            ids.insert(id);
+          }
+        }
+      }
+
+      return ids;
+    }
+
+    bool ensure_registry_present()
+    {
+      if (fs::exists(registry_dir()) && fs::exists(registry_index_dir()))
+      {
+        return true;
+      }
+
+      vix::cli::util::err_line(std::cerr, "registry not synced");
+      vix::cli::util::warn_line(std::cerr, "Run: vix registry sync");
+      return false;
     }
 
     bool is_flag(const std::string &arg)
@@ -225,6 +279,10 @@ namespace vix::commands
         else if (arg == "--strict")
         {
           opt.strict = true;
+        }
+        else if (arg == "--all")
+        {
+          opt.all = true;
         }
         else if (arg == "-h" || arg == "--help")
         {
@@ -308,7 +366,11 @@ namespace vix::commands
       return {};
     }
 
-    std::vector<OutdatedItem> collect_targets(const json &lock, const Options &opt, int &rc)
+    std::vector<OutdatedItem> collect_targets(
+        const json &lock,
+        const std::set<std::string> &directIds,
+        const Options &opt,
+        int &rc)
     {
       rc = 0;
       std::vector<OutdatedItem> items;
@@ -325,19 +387,25 @@ namespace vix::commands
           const std::string id = d.value("id", "");
           const std::string version = d.value("version", "");
 
-          if (!id.empty())
+          if (id.empty())
           {
-            OutdatedItem item;
-            item.rawSpec = id;
-            item.id = id;
-            item.currentVersion = version;
-            items.push_back(item);
+            continue;
           }
+
+          if (!opt.all && directIds.find(id) == directIds.end())
+          {
+            continue;
+          }
+
+          OutdatedItem item;
+          item.rawSpec = id;
+          item.id = id;
+          item.currentVersion = version;
+          items.push_back(item);
         }
 
         return items;
       }
-
       std::set<std::string> uniqueRaw(opt.rawTargets.begin(), opt.rawTargets.end());
 
       for (const auto &raw : uniqueRaw)
@@ -504,8 +572,14 @@ namespace vix::commands
 
       const json lock = read_lock_or_throw();
 
+      std::set<std::string> directIds;
+      if (!opt.all)
+      {
+        directIds = read_manifest_dependency_ids_or_throw();
+      }
+
       int targetRc = 0;
-      auto items = collect_targets(lock, opt, targetRc);
+      auto items = collect_targets(lock, directIds, opt, targetRc);
       if (targetRc != 0)
       {
         return targetRc;
@@ -569,7 +643,8 @@ namespace vix::commands
 
         vix::cli::util::ok_line(
             std::cout,
-            "checked " + std::to_string(items.size()) + " package(s), outdated " +
+            "checked " + std::to_string(items.size()) +
+                (opt.all ? " locked package(s), outdated " : " direct package(s), outdated ") +
                 std::to_string(outdatedCount));
 
         if (missingCount > 0)

@@ -109,6 +109,11 @@ namespace vix::commands
       return registry_repo_dir() / "index";
     }
 
+    static std::string registry_repo_url()
+    {
+      return "https://github.com/vixcpp/registry.git";
+    }
+
     static std::string iso_utc_now()
     {
       using namespace std::chrono;
@@ -799,6 +804,57 @@ namespace vix::commands
       return r.exitCode == 0 && trim_copy(r.out) == "true";
     }
 
+    static int ensure_registry_repo_for_publish(const fs::path &regRepo)
+    {
+      const fs::path regIndex = regRepo / "index";
+
+      if (fs::exists(regRepo) && is_git_repo(regRepo) && fs::exists(regIndex))
+      {
+        return 0;
+      }
+
+      if (fs::exists(regRepo) && !is_git_repo(regRepo))
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            "registry path exists but is not a git repository: " + regRepo.string());
+
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Remove this directory or run: vix registry sync");
+
+        return 1;
+      }
+
+      fs::create_directories(regRepo.parent_path());
+
+      vix::cli::util::step("registry not found, cloning registry index...");
+
+      const auto r = run_process_retry_debug(
+          {"git", "clone", "-q", "--depth", "1", registry_repo_url(), regRepo.string()});
+
+      if (r.exitCode != 0)
+      {
+        vix::cli::util::err_line(std::cerr, "failed to clone registry index");
+
+        if (!r.err.empty())
+          vix::cli::util::warn_line(std::cerr, r.err);
+
+        return r.exitCode;
+      }
+
+      if (!fs::exists(regIndex))
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            "invalid registry clone: missing index directory");
+
+        return 1;
+      }
+
+      return 0;
+    }
+
     static int normalize_registry_worktree_for_publish(const fs::path &regRepo)
     {
       {
@@ -1088,11 +1144,16 @@ namespace vix::commands
 
       vix::cli::util::kv(std::cout, "registry", regRepo.string());
 
-      if (!fs::exists(regRepo) || !is_git_repo(regRepo) || !fs::exists(regIndex))
       {
-        vix::cli::util::err_line(std::cerr, "registry is not available locally: " + regRepo.string());
-        vix::cli::util::warn_line(std::cerr, "Run: vix registry sync");
-        return 1;
+        const int rc = ensure_registry_repo_for_publish(regRepo);
+        if (rc != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to prepare registry index for publishing");
+
+          return rc;
+        }
       }
 
       {
@@ -1173,7 +1234,7 @@ namespace vix::commands
 
           vix::cli::util::warn_line(
               std::cerr,
-              "If a previous publish failed before PR merge, run: vix registry sync");
+              "Use a new version tag before publishing again.");
 
           return 1;
         }

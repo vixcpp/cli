@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <regex>
 #include <cctype>
+#include <mutex>
 
 #include <nlohmann/json.hpp>
 
@@ -67,11 +68,17 @@ namespace
   void on_sigint(int)
   {
     g_stop.store(true);
+
+#ifndef _WIN32
+    static constexpr char clearLine[] = "\r\033[2K";
+    (void)::write(STDOUT_FILENO, clearLine, sizeof(clearLine) - 1);
+#endif
   }
 
   struct TestExecResult
   {
     int code{0};
+    bool interrupted{false};
     std::string output;
   };
 
@@ -425,6 +432,22 @@ namespace
     return false;
   }
 
+  static bool has_ctest_timeout_arg(const std::vector<std::string> &args)
+  {
+    for (std::size_t i = 0; i < args.size(); ++i)
+    {
+      const std::string &arg = args[i];
+
+      if (arg == "--timeout")
+        return true;
+
+      if (arg.rfind("--timeout=", 0) == 0)
+        return true;
+    }
+
+    return false;
+  }
+
   static std::optional<int> extract_ctest_total_count(const std::string &output)
   {
     const std::string marker = " tests failed out of ";
@@ -587,9 +610,129 @@ namespace
     return oss.str();
   }
 
+  static std::string format_elapsed_seconds(
+      std::chrono::steady_clock::time_point start)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    const auto sec =
+        std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+
+    if (sec < 60)
+      return std::to_string(sec) + "s";
+
+    const auto min = sec / 60;
+    const auto rem = sec % 60;
+
+    return std::to_string(min) + "m" + std::to_string(rem) + "s";
+  }
+
+  static std::string trim_copy(std::string value)
+  {
+    while (!value.empty() &&
+           (value.back() == ' ' ||
+            value.back() == '\t' ||
+            value.back() == '\n' ||
+            value.back() == '\r'))
+    {
+      value.pop_back();
+    }
+
+    std::size_t i = 0;
+    while (i < value.size() &&
+           (value[i] == ' ' ||
+            value[i] == '\t' ||
+            value[i] == '\n' ||
+            value[i] == '\r'))
+    {
+      ++i;
+    }
+
+    value.erase(0, i);
+    return value;
+  }
+
+  static std::optional<std::string> extract_ctest_start_name(
+      const std::string &line)
+  {
+    static const std::regex re(
+        R"(^\s*Start\s+[0-9]+:\s*(.+)\s*$)");
+
+    std::smatch match;
+    if (!std::regex_search(line, match, re))
+      return std::nullopt;
+
+    return trim_copy(match[1].str());
+  }
+
+  static std::optional<std::string> extract_ctest_done_name(
+      const std::string &line)
+  {
+    const std::string marker = "Test #";
+    const auto markerPos = line.find(marker);
+    if (markerPos == std::string::npos)
+      return std::nullopt;
+
+    const auto colon = line.find(':', markerPos);
+    if (colon == std::string::npos)
+      return std::nullopt;
+
+    std::string rest = trim_copy(line.substr(colon + 1));
+
+    const auto dots = rest.find("...");
+    if (dots != std::string::npos)
+      rest = rest.substr(0, dots);
+
+    rest = trim_copy(rest);
+
+    if (rest.empty())
+      return std::nullopt;
+
+    return rest;
+  }
+
+  static std::optional<std::pair<int, int>> extract_ctest_progress_counts(
+      const std::string &line)
+  {
+    static const std::regex re(
+        R"(^\s*([0-9]+)\s*/\s*([0-9]+)\s+Test\s+#)");
+
+    std::smatch match;
+    if (!std::regex_search(line, match, re))
+      return std::nullopt;
+
+    try
+    {
+      const int done = std::stoi(match[1].str());
+      const int total = std::stoi(match[2].str());
+
+      if (done < 0 || total <= 0)
+        return std::nullopt;
+
+      return std::make_pair(done, total);
+    }
+    catch (...)
+    {
+      return std::nullopt;
+    }
+  }
+
+  static void clear_progress_line(bool newline = false)
+  {
+    std::cout << "\r"
+              << std::string(140, ' ')
+              << "\r";
+
+    if (newline)
+      std::cout << "\n";
+
+    std::cout << std::flush;
+  }
+
   static TestExecResult run_in_dir_capture(
       const fs::path &cwd,
-      const std::vector<std::string> &argv)
+      const std::vector<std::string> &argv,
+      bool progress = false,
+      std::string progressLabel = "Running tests")
   {
     TestExecResult result;
 
@@ -605,13 +748,123 @@ namespace
       return result;
     }
 
+    std::atomic<bool> done{false};
+    std::atomic<int> completed{0};
+    std::atomic<int> started{0};
+    std::atomic<int> total{0};
+
+    std::mutex currentMutex;
+    std::string currentTest;
+
+    const auto begin = std::chrono::steady_clock::now();
+
+    std::thread heartbeat;
+
+    if (progress)
+    {
+      heartbeat = std::thread(
+          [&]()
+          {
+            const char frames[] = {'|', '/', '-', '\\'};
+            std::size_t frame = 0;
+
+            while (!done.load() && !g_stop.load())
+            {
+              std::string current;
+
+              {
+                std::lock_guard<std::mutex> lock(currentMutex);
+                current = currentTest;
+              }
+
+              const int doneCount = completed.load();
+              const int startedCount = started.load();
+              const int totalCount = total.load();
+              const int runningCount = std::max(0, startedCount - doneCount);
+
+              std::cout << "\r\033[2K"
+                        << "  "
+                        << CYAN << frames[frame % 4] << RESET
+                        << " "
+                        << progressLabel
+                        << " "
+                        << GRAY
+                        << "(";
+
+              if (totalCount > 0)
+                std::cout << doneCount << "/" << totalCount << " done";
+              else
+                std::cout << doneCount << " done";
+
+              if (startedCount > 0)
+                std::cout << ", " << runningCount << " running";
+
+              std::cout << ", " << format_elapsed_seconds(begin) << ")"
+                        << RESET;
+
+              if (!current.empty())
+                std::cout << " " << current;
+
+              std::cout << "   " << std::flush;
+
+              ++frame;
+              std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            }
+          });
+    }
+
     char buffer[4096];
 
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
-      result.output += buffer;
+    {
+      const std::string line(buffer);
+      result.output += line;
+
+      const std::string trimmed = trim_copy(line);
+
+      bool countedCompletion = false;
+
+      if (auto counts = extract_ctest_progress_counts(trimmed))
+      {
+        completed.store(std::max(completed.load(), counts->first));
+        total.store(std::max(total.load(), counts->second));
+        countedCompletion = true;
+      }
+
+      if (auto name = extract_ctest_start_name(trimmed))
+      {
+        started.fetch_add(1);
+
+        std::lock_guard<std::mutex> lock(currentMutex);
+        currentTest = *name;
+      }
+      else if (auto name = extract_ctest_done_name(trimmed))
+      {
+        if (!countedCompletion)
+          completed.fetch_add(1);
+
+        std::lock_guard<std::mutex> lock(currentMutex);
+        currentTest = *name;
+      }
+    }
 
     const int raw = VIX_TESTS_PCLOSE(pipe);
+
+    done.store(true);
+
+    if (heartbeat.joinable())
+      heartbeat.join();
+
+    if (progress)
+      clear_progress_line(false);
+
     result.code = vix::cli::process::normalize_exit_code(raw);
+
+    if (g_stop.load() || result.code == 130)
+    {
+      result.interrupted = true;
+      result.code = 130;
+    }
 
     return result;
   }
@@ -927,31 +1180,6 @@ namespace
       return !assertion.empty();
     }
   };
-
-  static std::string trim_copy(std::string value)
-  {
-    while (!value.empty() &&
-           (value.back() == ' ' ||
-            value.back() == '\t' ||
-            value.back() == '\n' ||
-            value.back() == '\r'))
-    {
-      value.pop_back();
-    }
-
-    std::size_t i = 0;
-    while (i < value.size() &&
-           (value[i] == ' ' ||
-            value[i] == '\t' ||
-            value[i] == '\n' ||
-            value[i] == '\r'))
-    {
-      ++i;
-    }
-
-    value.erase(0, i);
-    return value;
-  }
 
   static bool is_test_runner_noise_line(const std::string &line)
   {
@@ -1677,13 +1905,23 @@ namespace
     print_test_header(opt);
 
     const auto start = std::chrono::steady_clock::now();
-    const TestExecResult result = run_in_dir_capture(buildDir, argv);
+    const TestExecResult result = run_in_dir_capture(
+        buildDir,
+        argv,
+        !opt.raw,
+        "Running test runner");
     const auto end = std::chrono::steady_clock::now();
 
     const auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     const bool ok = result.code == 0;
+
+    if (result.interrupted)
+    {
+      hint("Tests interrupted by user.");
+      return 130;
+    }
 
     if (ok)
     {
@@ -1738,17 +1976,34 @@ namespace
       argv.push_back(std::to_string(default_test_jobs()));
     }
 
+    if (!has_ctest_timeout_arg(opt.ctestArgs))
+    {
+      argv.push_back("--timeout");
+      argv.push_back("60");
+    }
+
     for (const auto &a : opt.ctestArgs)
       argv.push_back(a);
 
     const auto start = std::chrono::steady_clock::now();
-    const TestExecResult result = run_in_dir_capture(buildDir, argv);
+    const TestExecResult result = run_in_dir_capture(
+        buildDir,
+        argv,
+        !opt.raw && !opt.list,
+        "Running CTest");
     const auto end = std::chrono::steady_clock::now();
 
     const auto ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
     const bool ok = result.code == 0;
+
+    if (result.interrupted)
+    {
+      print_test_header(opt);
+      hint("Tests interrupted by user.");
+      return 130;
+    }
 
     if (ok && opt.list)
     {
@@ -1887,10 +2142,15 @@ namespace vix::commands::TestsCommand
   int run(const std::vector<std::string> &args)
   {
     const auto opt = vix::commands::TestsCommand::detail::parse(args);
+    g_stop.store(false);
+    std::signal(SIGINT, on_sigint);
 
     if (!opt.watch)
     {
       const int code = run_tests_once(opt);
+
+      if (code == 130)
+        return 0;
 
       if (opt.runAfter)
       {

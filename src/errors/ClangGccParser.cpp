@@ -60,6 +60,24 @@ namespace vix::cli::errors
       return text;
     }
 
+    std::string join_recent_lines(const std::vector<std::string> &lines)
+    {
+      std::string out;
+
+      for (const std::string &line : lines)
+      {
+        if (line.empty())
+          continue;
+
+        if (!out.empty())
+          out += '\n';
+
+        out += line;
+      }
+
+      return out;
+    }
+
     std::string strip_ansi(std::string text)
     {
       static const std::regex ansiRe(
@@ -125,6 +143,13 @@ namespace vix::cli::errors
     {
       static const std::regex r(
           R"(^(?:In file included from|from)\s+(.+?):([0-9]+)(?::[0-9]+)?[,:]?\s*$)");
+      return r;
+    }
+
+    const std::regex &re_required_location()
+    {
+      static const std::regex r(
+          R"(^(.+?):([0-9]+):([0-9]+):\s+.*required from)");
       return r;
     }
 
@@ -198,6 +223,30 @@ namespace vix::cli::errors
           continue;
 
         std::smatch match;
+
+        if (std::regex_search(line, match, re_required_location()))
+        {
+          const std::string file = trim_copy(match[1].str());
+          const int lineNumber = std::stoi(match[2].str());
+          const int columnNumber = std::stoi(match[3].str());
+
+          if (!is_user_source_location(file))
+            continue;
+
+          SourceLocationCandidate candidate{
+              file,
+              lineNumber,
+              columnNumber > 0 ? columnNumber : 1};
+
+          // Prefer the direct user call site when GCC says "required from here".
+          if (contains_text(line, "required from here"))
+            return candidate;
+
+          if (!firstUserLocation)
+            firstUserLocation = candidate;
+
+          continue;
+        }
 
         if (std::regex_search(line, match, re_diag_with_col()))
         {
@@ -596,6 +645,7 @@ namespace vix::cli::errors
 
     std::istringstream input(buildLog);
     std::string line;
+    std::vector<std::string> recentLines;
 
     while (std::getline(input, line))
     {
@@ -609,6 +659,11 @@ namespace vix::cli::errors
 
       if (is_caret_or_snippet_line(line))
         continue;
+
+      recentLines.push_back(line);
+
+      if (recentLines.size() > 60)
+        recentLines.erase(recentLines.begin());
 
       std::smatch match;
 
@@ -688,7 +743,7 @@ namespace vix::cli::errors
                 columnNumber,
                 severity,
                 message,
-                line,
+                join_recent_lines(recentLines),
                 includeStack));
 
         includeStack.clear();
@@ -745,7 +800,7 @@ namespace vix::cli::errors
                 1,
                 severity,
                 message,
-                line,
+                join_recent_lines(recentLines),
                 includeStack));
 
         includeStack.clear();

@@ -19,6 +19,7 @@
 #include <vix/cli/manifest/RunManifestMerge.hpp>
 #include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/app/AppProjectResolver.hpp>
+#include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -177,130 +178,6 @@ namespace
     return out;
   }
 
-  static std::vector<fs::path> find_runnable_executables(
-      const fs::path &buildDir,
-      bool includeTests = false)
-  {
-    std::vector<fs::path> candidates;
-
-    auto is_executable_candidate = [](const fs::path &p) -> bool
-    {
-      std::error_code ec{};
-
-      if (!fs::is_regular_file(p, ec) || ec)
-        return false;
-
-#ifdef _WIN32
-      return p.extension() == ".exe";
-#else
-      const auto perms = fs::status(p, ec).permissions();
-      if (ec)
-        return false;
-
-      using pr = fs::perms;
-      return (perms & pr::owner_exec) != pr::none ||
-             (perms & pr::group_exec) != pr::none ||
-             (perms & pr::others_exec) != pr::none;
-#endif
-    };
-
-    auto looks_like_test_binary = [](const fs::path &p) -> bool
-    {
-      const std::string n = p.filename().string();
-      return n.find("_test") != std::string::npos ||
-             n.find("_tests") != std::string::npos ||
-             n.rfind("test_", 0) == 0;
-    };
-
-    std::error_code ec{};
-    if (!fs::exists(buildDir, ec) || ec)
-      return candidates;
-
-    for (auto it = fs::recursive_directory_iterator(
-             buildDir,
-             fs::directory_options::skip_permission_denied,
-             ec);
-         !ec && it != fs::recursive_directory_iterator();
-         ++it)
-    {
-      const fs::path p = it->path();
-
-      const std::string pathString = p.string();
-
-      if (pathString.find("CMakeFiles") != std::string::npos)
-        continue;
-
-      if (pathString.find(".vix") != std::string::npos)
-        continue;
-
-      if (!is_executable_candidate(p))
-        continue;
-
-      if (!includeTests && looks_like_test_binary(p))
-        continue;
-
-      candidates.push_back(p);
-    }
-
-    auto prefer_short_bin_path = [](const fs::path &a, const fs::path &b) -> bool
-    {
-      const bool aBin = a.string().find("/bin/") != std::string::npos ||
-                        a.string().find("\\bin\\") != std::string::npos;
-
-      const bool bBin = b.string().find("/bin/") != std::string::npos ||
-                        b.string().find("\\bin\\") != std::string::npos;
-
-      if (aBin != bBin)
-        return aBin;
-
-      return a.string().size() < b.string().size();
-    };
-
-    std::sort(candidates.begin(), candidates.end(), prefer_short_bin_path);
-    return candidates;
-  }
-
-  static std::optional<fs::path> resolve_runnable_executable(
-      const fs::path &buildDir,
-      const std::string &preferredName = {})
-  {
-    const auto candidates = find_runnable_executables(buildDir, false);
-
-    if (!preferredName.empty())
-    {
-      for (const auto &p : candidates)
-      {
-#ifdef _WIN32
-        const std::string name = p.stem().string();
-#else
-        const std::string name = p.filename().string();
-#endif
-
-        if (name == preferredName)
-          return p;
-      }
-    }
-
-    if (candidates.size() == 1)
-      return candidates.front();
-
-    return std::nullopt;
-  }
-
-  static void print_runnable_executable_candidates(
-      const fs::path &buildDir)
-  {
-    const auto candidates = find_runnable_executables(buildDir, false);
-
-    if (candidates.empty())
-      return;
-
-    hint("Runnable executables found:");
-
-    for (const auto &p : candidates)
-      step("  " + p.filename().string());
-  }
-
   static int build_project_with_vix_build(
       const fs::path &projectDir,
       const Options &opt,
@@ -382,7 +259,7 @@ namespace
       return buildExit;
 
     auto exePath =
-        resolve_runnable_executable(
+        detail::resolve_runnable_executable(
             buildDir,
             requestedTarget);
 
@@ -392,11 +269,11 @@ namespace
       {
         error("Built executable not found for target: " + requestedTarget);
         hint("Resolved build directory: " + buildDir.string());
-        print_runnable_executable_candidates(buildDir);
+        detail::print_runnable_executable_candidates(buildDir);
         return 1;
       }
 
-      const auto candidates = find_runnable_executables(buildDir, false);
+      const auto candidates = detail::find_runnable_executables(buildDir, false);
 
       if (candidates.empty())
       {
@@ -410,7 +287,7 @@ namespace
       hint("Run one explicitly:");
 
       for (const auto &p : candidates)
-        step("  vix run " + p.filename().string());
+        step("  vix run " + detail::runnable_executable_display_path(p));
 
       return 1;
     }
@@ -1145,6 +1022,28 @@ namespace
 
     if (!exePathOpt)
     {
+      const auto candidates = find_runnable_executables(buildDir, false);
+
+      if (candidates.size() > 1)
+      {
+        error("Multiple runnable executables found.");
+        hint("Resolved build directory: " + buildDir.string());
+        hint("Run one explicitly:");
+
+        for (const auto &p : candidates)
+        {
+          std::error_code relEc;
+          fs::path rel = fs::relative(p, fs::current_path(), relEc);
+
+          const std::string runnable =
+              relEc ? p.string() : rel.string();
+
+          step("  vix run " + runnable);
+        }
+
+        return 1;
+      }
+
       const int testRc = run_test_binary_if_present(
           buildDir,
           opt.runArgs,
@@ -1165,14 +1064,15 @@ namespace
         error("Built executable not found for target: " + exeName);
       else
         error("Built executable not found.");
+
       hint("Resolved build directory: " + buildDir.string());
+      hint("No runnable application target could be resolved automatically.");
 
       if (resolved.generated)
         hint("Generated CMake source: " + resolved.cmakeSourceDir.string());
 
       return 1;
     }
-
     const int runRc = run_executable_direct(
         *exePathOpt,
         opt,
@@ -1358,11 +1258,37 @@ namespace
 
     if (!exePathOpt)
     {
-      error("Built executable not found for project: " + exeName);
-      hint("Resolved build directory: " + buildDir.string());
-      hint("No runnable application target could be resolved automatically.");
-      hint("If your executable uses a custom output path or custom target name, add a manifest field to specify it.");
-      return 1;
+      const auto candidates = find_runnable_executables(buildDir, false);
+
+      if (candidates.empty())
+      {
+        error("Built executable not found.");
+        hint("Resolved build directory: " + buildDir.string());
+        hint("No runnable application target could be resolved automatically.");
+        return 1;
+      }
+
+      if (candidates.size() > 1)
+      {
+        error("Multiple runnable executables found.");
+        hint("Resolved build directory: " + buildDir.string());
+        hint("Run one explicitly:");
+
+        for (const auto &p : candidates)
+        {
+          std::error_code ec;
+          fs::path rel = fs::relative(p, fs::current_path(), ec);
+
+          const std::string runnable =
+              ec ? p.string() : rel.string();
+
+          step("  vix run " + runnable);
+        }
+
+        return 1;
+      }
+
+      exePathOpt = candidates.front();
     }
 
     fs::path exePath = *exePathOpt;

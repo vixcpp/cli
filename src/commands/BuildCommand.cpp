@@ -3261,7 +3261,7 @@ namespace vix::commands::BuildCommand
                     plan_.cmakeSourceDir / "CMakeLists.txt",
                     "CMake configure failed");
 
-            if (opt_.verbose && !log.empty())
+            if (!handled && opt_.verbose && !log.empty())
             {
               std::cerr << "\nCMake output:\n";
               std::cerr << log << "\n";

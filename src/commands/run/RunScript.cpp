@@ -24,6 +24,7 @@
 #include <vix/cli/util/Ui.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/commands/run/dev/DevSession.hpp>
+#include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -2133,16 +2134,31 @@ namespace vix::commands::RunCommand::detail
         watch_spinner_finish();
       }
 
-      const std::string exeName = projectDir.filename().string();
-      fs::path exePath = buildDir / exeName;
+      auto exePathOpt = resolve_runnable_executable(buildDir);
 
-      if (!fs::exists(exePath))
+      if (!exePathOpt)
       {
-        error("Dev executable not found in build-dev/: " + exePath.string());
-        hint("Make sure your CMakeLists.txt defines an executable named '" + exeName + "'.");
+        const auto candidates = find_runnable_executables(buildDir, false);
+
+        if (candidates.empty())
+        {
+          error("No runnable executable found.");
+          hint("Resolved build directory: " + buildDir.string());
+          hint("The project may only build libraries, tests, or non-runnable targets.");
+          return 1;
+        }
+
+        error("Multiple runnable executables found.");
+        hint("Resolved build directory: " + buildDir.string());
+        hint("Run one explicitly:");
+
+        for (const auto &p : candidates)
+          step("  vix run " + runnable_executable_display_path(p));
+
         return 1;
       }
 
+      fs::path exePath = *exePathOpt;
       const auto childStart = Clock::now();
 
       pid_t pid = ::fork();

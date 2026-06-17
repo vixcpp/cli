@@ -895,39 +895,42 @@ namespace vix::commands::RunCommand::detail
   {
     const auto runs = list_presets(dir, "build");
 
+    if (runs.empty())
+    {
+      if (!userRunPreset.empty())
+        return userRunPreset;
+
+      if (configurePreset.rfind("dev-", 0) == 0)
+        return "run-" + configurePreset.substr(4);
+
+      return "run-ninja";
+    }
+
     auto has = [&](const std::string &n)
     {
       return std::find(runs.begin(), runs.end(), n) != runs.end();
     };
 
-    if (!userRunPreset.empty() && (runs.empty() || has(userRunPreset)))
+    if (!userRunPreset.empty() && has(userRunPreset))
       return userRunPreset;
 
-    if (!runs.empty())
-    {
-      if (has("run-" + configurePreset))
-        return "run-" + configurePreset;
-
-      if (configurePreset.rfind("dev-", 0) == 0)
-      {
-        const std::string mapped = "run-" + configurePreset.substr(4);
-        if (has(mapped))
-          return mapped;
-      }
-
-      if (has("run-ninja"))
-        return "run-ninja";
-
-      if (has("build-ninja"))
-        return "build-ninja";
-
-      return runs.front();
-    }
+    if (has("run-" + configurePreset))
+      return "run-" + configurePreset;
 
     if (configurePreset.rfind("dev-", 0) == 0)
-      return "run-" + configurePreset.substr(4);
+    {
+      const std::string mapped = "run-" + configurePreset.substr(4);
+      if (has(mapped))
+        return mapped;
+    }
 
-    return "run-ninja";
+    if (has("run-ninja"))
+      return "run-ninja";
+
+    if (has("build-ninja"))
+      return "build-ninja";
+
+    return runs[0];
   }
 
   bool has_cmake_cache(const fs::path &buildDir)

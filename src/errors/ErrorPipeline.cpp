@@ -35,6 +35,7 @@ namespace vix::cli::errors
     templateRules_.push_back(vix::cli::errors::template_rules::makeSubstitutionFailureRule());
 
     // Compile-time evaluation family
+    templateRules_.push_back(vix::cli::errors::template_rules::makeAllocatorValueTypeMismatchRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeStaticAssertFailureRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeConstexprEvaluationFailureRule());
 
@@ -52,7 +53,6 @@ namespace vix::cli::errors
     templateRules_.push_back(vix::cli::errors::template_rules::makeMissingBeginEndRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeAmbiguousOverloadRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeOperatorNotFoundRule());
-    templateRules_.push_back(vix::cli::errors::template_rules::makeAllocatorValueTypeMismatchRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeTupleVariantAccessRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidUseOfVoidRule());
 
@@ -93,15 +93,39 @@ namespace vix::cli::errors
 
   static bool isSystemPath(const std::string &p)
   {
-    return p.rfind("/usr/include/", 0) == 0 ||
-           p.rfind("/usr/local/include/", 0) == 0 ||
-           p.rfind("/usr/lib/", 0) == 0;
+    return p.find("/usr/include/") != std::string::npos ||
+           p.find("/usr/local/include/") != std::string::npos ||
+           p.find("/usr/lib/") != std::string::npos ||
+           p.find("/usr/lib/gcc/") != std::string::npos ||
+           p.find("/include/c++/") != std::string::npos ||
+           p.find("/Library/Developer/CommandLineTools/") != std::string::npos ||
+           p.find("/Applications/Xcode.app/") != std::string::npos ||
+           p.find("\\include\\c++\\") != std::string::npos ||
+           p.find("\\Microsoft Visual Studio\\") != std::string::npos ||
+           p.find("\\Windows Kits\\") != std::string::npos;
   }
 
   static bool isUserFirst(const CompilerError &e, const ErrorContext &ctx)
   {
-    if (!ctx.sourceFile.empty() && e.file == ctx.sourceFile.string())
-      return true;
+    if (!ctx.sourceFile.empty())
+    {
+      const std::string source = ctx.sourceFile.string();
+
+      if (e.file == source)
+        return true;
+
+      if (!source.empty() &&
+          e.file.size() >= source.size() &&
+          e.file.compare(e.file.size() - source.size(), source.size(), source) == 0)
+      {
+        return true;
+      }
+
+      const std::string filename = ctx.sourceFile.filename().string();
+
+      if (!filename.empty() && e.file.find(filename) != std::string::npos)
+        return true;
+    }
 
     if (isSystemPath(e.file))
       return false;

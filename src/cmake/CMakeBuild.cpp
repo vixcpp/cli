@@ -397,13 +397,9 @@ namespace vix::cli::build
       if (quiet || !progressVisible)
         return;
 
-      const std::size_t width = terminal_width();
-
       std::string clear;
-      clear += "\r";
-      clear.append(width, ' ');
-      clear += "\n\r";
-      clear.append(width, ' ');
+      clear += "\r\033[2K";
+      clear += "\n\r\033[2K";
       clear += "\033[1A\r";
 
       write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
@@ -417,22 +413,12 @@ namespace vix::cli::build
       if (quiet || !progressVisible)
         return;
 
-      const std::size_t width = terminal_width();
-
       std::string clear;
 
-      // Cursor is below the 2-line progress block.
-      // Move to the first progress line.
       clear += "\033[2A\r";
-
-      // Clear first line.
-      clear.append(width, ' ');
-
-      // Move to second progress line and clear it.
+      clear += "\033[2K";
       clear += "\n\r";
-      clear.append(width, ' ');
-
-      // Return to the first progress line before rendering again.
+      clear += "\033[2K";
       clear += "\033[1A\r";
 
       write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
@@ -485,10 +471,20 @@ namespace vix::cli::build
       }
 
       const std::size_t width = terminal_width();
-      const int barWidth = width > 90 ? 28 : 18;
+
+      int barWidth = 28;
+
+      if (width < 90)
+        barWidth = 18;
+
+      if (width < 60)
+        barWidth = 10;
+
+      if (width < 45)
+        barWidth = 0;
 
       const int filled =
-          total > 0
+          total > 0 && barWidth > 0
               ? std::clamp(
                     static_cast<int>(
                         (static_cast<double>(current) / static_cast<double>(total)) *
@@ -498,26 +494,33 @@ namespace vix::cli::build
               : 0;
 
       std::string bar;
-      bar += style::GRAY;
-      bar += "[";
-      bar += style::CYAN;
-      bar.append(static_cast<std::size_t>(filled), '=');
-      bar += style::GRAY;
-      bar.append(static_cast<std::size_t>(barWidth - filled), '-');
-      bar += "]";
-      bar += style::RESET;
+
+      if (barWidth > 0)
+      {
+        bar += style::GRAY;
+        bar += "[";
+        bar += style::CYAN;
+        bar.append(static_cast<std::size_t>(filled), '=');
+        bar += style::GRAY;
+        bar.append(static_cast<std::size_t>(barWidth - filled), '-');
+        bar += "]";
+        bar += style::RESET;
+      }
 
       const std::string action =
           truncate_progress_text(
               rest,
-              width > 6 ? width - 6 : width);
+              width > 8 ? width - 8 : width);
 
       std::ostringstream lineOut;
+
       lineOut << "  "
-              << style::CYAN << "build " << style::RESET
-              << bar
-              << " "
-              << style::CYAN << current << "/" << total << style::RESET
+              << style::CYAN << "build " << style::RESET;
+
+      if (!bar.empty())
+        lineOut << bar << " ";
+
+      lineOut << style::CYAN << current << "/" << total << style::RESET
               << "\n"
               << "  "
               << style::CYAN << "› " << style::RESET
@@ -540,7 +543,17 @@ namespace vix::cli::build
         return;
 
       const std::size_t width = terminal_width();
-      const int barWidth = width > 90 ? 28 : 18;
+
+      int barWidth = 28;
+
+      if (width < 90)
+        barWidth = 18;
+
+      if (width < 60)
+        barWidth = 10;
+
+      if (width < 45)
+        barWidth = 0;
 
       clear_rendered_progress_lines();
 
@@ -548,10 +561,14 @@ namespace vix::cli::build
       out += "  ";
       out += style::CYAN;
       out += "build ";
-      out += "[";
-      out.append(static_cast<std::size_t>(barWidth), '=');
-      out += "]";
-      out += " done";
+      if (barWidth > 0)
+      {
+        out += "[";
+        out.append(static_cast<std::size_t>(barWidth), '=');
+        out += "] ";
+      }
+
+      out += "done";
       out += style::RESET;
       out += "\n";
 

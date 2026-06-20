@@ -320,7 +320,7 @@ namespace vix::cli
     using namespace vix::cli::errors;
 
     const std::string cleanedLog = ::trim_build_preamble(buildLog);
-    auto errors = ClangGccParser::parse(cleanedLog);
+    auto errors = ClangGccParser::parse(buildLog);
 
     if (errors.empty())
     {
@@ -380,7 +380,7 @@ namespace vix::cli
       return false;
     }
 
-    ErrorContext ctx{sourceFile, contextMessage, cleanedLog};
+    ErrorContext ctx{sourceFile, contextMessage, buildLog};
     ErrorPipeline pipeline;
 
     if (pipeline.tryHandle(errors, ctx))

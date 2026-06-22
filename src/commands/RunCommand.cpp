@@ -1469,29 +1469,39 @@ namespace
     {
       fs::path p = opt.appName;
 
-      if (fs::exists(p))
+      std::error_code ec;
+
+      if (fs::exists(p, ec) && !ec)
       {
-        if (fs::is_regular_file(p))
+        const fs::path resolvedPath =
+            fs::absolute(p, ec).lexically_normal();
+
+        if (ec)
+          return t;
+
+        if (fs::is_regular_file(resolvedPath, ec) && !ec)
         {
-          if (p.extension() == ".cpp")
+          const std::string ext = resolvedPath.extension().string();
+
+          if (ext == ".cpp" || ext == ".cc" || ext == ".cxx")
           {
             t.kind = RunTargetKind::Script;
-            t.path = p;
+            t.path = resolvedPath;
             return t;
           }
 
-          if (is_executable_file(p))
+          if (is_executable_file(resolvedPath))
           {
             t.kind = RunTargetKind::Binary;
-            t.path = p;
+            t.path = resolvedPath;
             return t;
           }
         }
 
-        if (fs::is_directory(p))
+        if (fs::is_directory(resolvedPath, ec) && !ec)
         {
           t.kind = RunTargetKind::Project;
-          t.path = p;
+          t.path = resolvedPath;
           return t;
         }
       }
@@ -1499,25 +1509,46 @@ namespace
 
     if (auto bin = read_last_binary())
     {
-      if (fs::exists(*bin))
+      std::error_code ec;
+
+      if (fs::exists(*bin, ec) && !ec)
       {
         t.kind = RunTargetKind::Binary;
-        t.path = *bin;
+        t.path = fs::absolute(*bin, ec).lexically_normal();
+
+        if (ec)
+          t.path = bin->lexically_normal();
+
         return t;
       }
     }
 
-    if (fs::exists("CMakeLists.txt") || fs::exists("vix.app"))
     {
-      t.kind = RunTargetKind::Project;
-      t.path = fs::current_path();
-      return t;
+      std::error_code ec;
+
+      if ((fs::exists("CMakeLists.txt", ec) && !ec) ||
+          (fs::exists("vix.app", ec) && !ec))
+      {
+        t.kind = RunTargetKind::Project;
+        t.path = fs::current_path(ec).lexically_normal();
+
+        if (ec)
+          t.path = fs::current_path().lexically_normal();
+
+        return t;
+      }
     }
 
     if (auto bin = find_local_binary())
     {
+      std::error_code ec;
+
       t.kind = RunTargetKind::Binary;
-      t.path = *bin;
+      t.path = fs::absolute(*bin, ec).lexically_normal();
+
+      if (ec)
+        t.path = bin->lexically_normal();
+
       return t;
     }
 

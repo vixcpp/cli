@@ -25,6 +25,7 @@
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
+#include <vix/cli/commands/NoteCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
@@ -283,6 +284,8 @@ namespace vix
     { return commands::TestsCommand::run(args); };
     commands_["repl"] = [](auto args)
     { return commands::ReplCommand::run(args); };
+    commands_["note"] = [](auto args)
+    { return commands::NoteCommand::run(args); };
     commands_["cache"] = [](auto args)
     { return commands::CacheCommand::run(args); };
     commands_["info"] = [](auto args)
@@ -529,6 +532,8 @@ namespace vix
         return commands::TestsCommand::help();
       if (cmd == "repl")
         return commands::ReplCommand::help();
+      if (cmd == "note")
+        return commands::NoteCommand::help();
       if (cmd == "fmt")
         return commands::FmtCommand::help();
       if (cmd == "clean")
@@ -673,6 +678,7 @@ namespace vix
     out << indent(3) << "tests              Run tests\n";
     out << indent(3) << "test               Alias for tests\n";
     out << indent(3) << "repl               Start interactive REPL\n";
+    out << indent(3) << "note               Open a .vixnote document in a local UI\n";
     out << indent(3) << "fmt                Format C++ source files\n";
     out << indent(3) << "clean              Remove local cache directories\n";
     out << indent(3) << "reset              Clean cache and reinstall dependencies\n";
@@ -740,6 +746,7 @@ namespace vix
     out << indent(1) << "Examples:\n";
     out << indent(2) << "vix new hello\n";
     out << indent(2) << "vix run main.cpp\n";
+    out << indent(2) << "vix note examples/hello.vixnote\n";
     out << indent(2) << "vix build main.cpp --out app\n";
     out << indent(2) << "vix make:class User\n";
     out << indent(2) << "vix add @cnerium/app\n";

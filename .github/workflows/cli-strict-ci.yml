@@ -124,7 +124,8 @@ jobs:
             ../sync \
             ../cache \
             ../p2p \
-            ../agent
+            ../agent \
+            ../note
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/path.git ../path
@@ -145,6 +146,7 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
 
       - name: Prepare Asio for modules
         run: |
@@ -168,7 +170,10 @@ jobs:
 
           test -f ../error/CMakeLists.txt
           test -f ../path/CMakeLists.txt
+          test -f ../fs/CMakeLists.txt
+          test -f ../io/CMakeLists.txt
           test -f ../env/CMakeLists.txt
+          test -f ../os/CMakeLists.txt
           test -f ../process/CMakeLists.txt
           test -f ../utils/CMakeLists.txt
           test -f ../json/CMakeLists.txt
@@ -176,13 +181,17 @@ jobs:
           test -f ../core/CMakeLists.txt
           test -f ../net/CMakeLists.txt
           test -f ../crypto/CMakeLists.txt
+          test -f ../note/CMakeLists.txt
 
       - name: Configure CLI
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DVIX_ENABLE_LTO=OFF
+            -DVIX_ENABLE_LTO=OFF \
+            -DVIX_NOTE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF \
+            -DVIX_NOTE_INSTALL=OFF
 
       - name: Build CLI
         run: |
@@ -190,10 +199,14 @@ jobs:
 
       - name: Verify CLI binary
         run: |
+          set -euxo pipefail
+
           test -f build/vix
           ./build/vix --version || ./build/vix version || true
           ./build/vix --help >/tmp/vix-help.txt
           head -n 40 /tmp/vix-help.txt
+          ./build/vix note --help >/tmp/vix-note-help.txt
+          head -n 80 /tmp/vix-note-help.txt
 
   install-check:
     name: Install CLI binary
@@ -248,7 +261,8 @@ jobs:
             ../sync \
             ../cache \
             ../p2p \
-            ../agent
+            ../agent \
+            ../note
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/path.git ../path
@@ -269,10 +283,13 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
 
       - name: Prepare Asio for modules
         run: |
           set -euxo pipefail
+
+          test -f /usr/include/asio.hpp
 
           for module in ../async ../p2p; do
             if [ -d "$module" ]; then
@@ -280,14 +297,37 @@ jobs:
               rm -rf "$module/third_party/asio/include"
               mkdir -p "$module/third_party/asio/include"
               cp -r /usr/include/asio* "$module/third_party/asio/include/" || true
+              test -f "$module/third_party/asio/include/asio.hpp"
             fi
           done
+
+      - name: Verify sibling layout
+        run: |
+          set -euxo pipefail
+
+          test -f ../error/CMakeLists.txt
+          test -f ../path/CMakeLists.txt
+          test -f ../fs/CMakeLists.txt
+          test -f ../io/CMakeLists.txt
+          test -f ../env/CMakeLists.txt
+          test -f ../os/CMakeLists.txt
+          test -f ../process/CMakeLists.txt
+          test -f ../utils/CMakeLists.txt
+          test -f ../json/CMakeLists.txt
+          test -f ../async/CMakeLists.txt
+          test -f ../core/CMakeLists.txt
+          test -f ../net/CMakeLists.txt
+          test -f ../crypto/CMakeLists.txt
+          test -f ../note/CMakeLists.txt
 
       - name: Configure installable CLI
         run: |
           cmake -S . -B build-install -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DVIX_ENABLE_LTO=OFF \
+            -DVIX_NOTE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF \
+            -DVIX_NOTE_INSTALL=OFF \
             -DCMAKE_INSTALL_PREFIX="${PWD}/.ci-install"
 
       - name: Build installable CLI
@@ -300,7 +340,12 @@ jobs:
 
       - name: Verify installed CLI
         run: |
+          set -euxo pipefail
+
           find .ci-install -maxdepth 6 -type f | sort
           test -f .ci-install/bin/vix
           .ci-install/bin/vix --version || .ci-install/bin/vix version || true
           .ci-install/bin/vix --help >/tmp/vix-installed-help.txt
+          head -n 40 /tmp/vix-installed-help.txt
+          .ci-install/bin/vix note --help >/tmp/vix-installed-note-help.txt
+          head -n 80 /tmp/vix-installed-note-help.txt

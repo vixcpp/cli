@@ -22,6 +22,7 @@
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
+#include <vix/cli/commands/NoteCommand.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/DbCommand.hpp>
@@ -167,6 +168,14 @@ namespace vix::cli::dispatch
          { return vix::commands::ReplCommand::run(a); },
          []()
          { return vix::commands::ReplCommand::help(); }});
+
+    add({"note",
+         "Project",
+         "Open a Vix Note document in a local UI",
+         [](const Args &a)
+         { return vix::commands::NoteCommand::run(a); },
+         []()
+         { return vix::commands::NoteCommand::help(); }});
 
     add({"p2p",
          "Network",

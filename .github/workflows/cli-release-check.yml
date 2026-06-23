@@ -193,7 +193,8 @@ jobs:
             ../p2p \
             ../agent \
             ../websocket \
-            ../db
+            ../db \
+            ../note
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/path.git ../path
@@ -216,6 +217,7 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/websocket.git ../websocket || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/db.git ../db || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
 
       - name: Fetch sibling modules (Windows)
         if: runner.os == 'Windows'
@@ -244,7 +246,8 @@ jobs:
             "p2p",
             "agent",
             "websocket",
-            "db"
+            "db",
+            "note"
           )
 
           foreach ($m in $modules) {
@@ -275,6 +278,7 @@ jobs:
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/agent.git ..\agent
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/websocket.git ..\websocket
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/db.git ..\db
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/note.git ..\note
 
       - name: Prepare Asio for modules (Windows)
         if: runner.os == 'Windows'
@@ -372,6 +376,7 @@ jobs:
           test -f ../core/CMakeLists.txt
           test -f ../net/CMakeLists.txt
           test -f ../crypto/CMakeLists.txt
+          test -f ../note/CMakeLists.txt
 
       - name: Verify sibling layout (Windows)
         if: runner.os == 'Windows'
@@ -390,7 +395,8 @@ jobs:
             "..\async\CMakeLists.txt",
             "..\core\CMakeLists.txt",
             "..\net\CMakeLists.txt",
-            "..\crypto\CMakeLists.txt"
+            "..\crypto\CMakeLists.txt",
+            "..\note\CMakeLists.txt"
           )
 
           foreach ($file in $required) {
@@ -414,6 +420,9 @@ jobs:
             -DVIX_DB_USE_MYSQL=OFF
             -DVIX_CORE_WITH_MYSQL=OFF
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
+            -DVIX_NOTE_BUILD_TESTS=OFF
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF
+            -DVIX_NOTE_INSTALL=OFF
           )
 
           if [ "${{ runner.os }}" = "macOS" ]; then
@@ -440,6 +449,9 @@ jobs:
             -DVIX_DB_USE_MYSQL=OFF `
             -DVIX_CORE_WITH_MYSQL=OFF `
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF `
+            -DVIX_NOTE_BUILD_TESTS=OFF `
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF `
+            -DVIX_NOTE_INSTALL=OFF `
             -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
@@ -479,6 +491,8 @@ jobs:
           "$BIN" --version || "$BIN" version || true
           "$BIN" --help >/tmp/vix-help.txt
           head -n 40 /tmp/vix-help.txt
+          "$BIN" note --help >/tmp/vix-note-help.txt
+          head -n 80 /tmp/vix-note-help.txt
 
       - name: Smoke test CLI (Windows)
         if: runner.os == 'Windows'
@@ -508,6 +522,7 @@ jobs:
 
           & $bin --version
           & $bin --help | Select-Object -First 40
+          & $bin note --help | Select-Object -First 80
 
       - name: Upload build logs
         if: always()

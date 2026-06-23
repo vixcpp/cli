@@ -56,6 +56,9 @@ if (VIX_CLI_BUILD_TESTS)
   set(VIX_CACHE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_P2P_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_AGENT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_NOTE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_NOTE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(VIX_NOTE_INSTALL OFF CACHE BOOL "" FORCE)
 endif()
 
 file(GLOB_RECURSE CLI_SOURCES
@@ -109,10 +112,20 @@ endfunction()
 # - Load it before umbrella/core short-circuit branches.
 # ----------------------------------------------------
 get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+
 set(_VIX_REPLY_DIR "${_VIX_MODULES_DIR}/reply")
+set(_VIX_NOTE_DIR  "${_VIX_MODULES_DIR}/note")
 
 if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
   add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
+endif()
+
+if (EXISTS "${_VIX_NOTE_DIR}/CMakeLists.txt" AND NOT TARGET vix::note)
+  set(VIX_NOTE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_NOTE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(VIX_NOTE_INSTALL OFF CACHE BOOL "" FORCE)
+
+  add_subdirectory("${_VIX_NOTE_DIR}" "${CMAKE_BINARY_DIR}/_vix_note")
 endif()
 
 # ----------------------------------------------------
@@ -154,6 +167,7 @@ else()
   set(_VIX_AGENT_DIR     "${_VIX_MODULES_DIR}/agent")
   set(_VIX_DB_DIR        "${_VIX_MODULES_DIR}/db")
   set(_VIX_WEBSOCKET_DIR "${_VIX_MODULES_DIR}/websocket")
+  set(_VIX_NOTE_DIR      "${_VIX_MODULES_DIR}/note")
 
   set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
@@ -280,6 +294,10 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::p2p)
     endif()
 
+    if (TARGET vix::note)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::note)
+    endif()
+
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UTILS_DIR}/include")
@@ -295,6 +313,7 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_DB_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_WEBSOCKET_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_NOTE_DIR}/include")
 
     if (_VIX_LOCAL_LINK_TARGETS)
       list(REMOVE_DUPLICATES _VIX_LOCAL_LINK_TARGETS)
@@ -317,6 +336,7 @@ else()
     find_package(Vix CONFIG QUIET)
     find_package(vixcrypto CONFIG QUIET)
     find_package(vixp2p CONFIG QUIET)
+    find_package(vix_note CONFIG QUIET)
 
     if (TARGET vix::vix)
       message(STATUS "[cli] Using installed package target vix::vix")
@@ -394,6 +414,17 @@ endif()
 
 if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
   target_link_libraries(vix_cli PRIVATE vix_sanitizers)
+endif()
+
+# ----------------------------------------------------
+# Optional note command support
+# ----------------------------------------------------
+if (TARGET vix::note)
+  message(STATUS "[cli] Note command enabled")
+  target_link_libraries(vix_cli PRIVATE vix::note)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_NOTE=1)
+else()
+  message(STATUS "[cli] Note command disabled: vix::note target not found")
 endif()
 
 # ----------------------------------------------------

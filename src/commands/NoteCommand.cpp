@@ -64,6 +64,163 @@ namespace
     out = static_cast<std::uint16_t>(port);
     return true;
   }
+
+  int run_export_command(const std::vector<std::string> &args)
+  {
+    using namespace vix::cli::style;
+
+    if (args.empty() || is_help_arg(args[0]))
+    {
+      std::cout
+          << "Usage:\n"
+          << "  vix note export <file.vixnote> --out <file.html> [options]\n\n"
+
+          << "Description:\n"
+          << "  Export a Vix Note document to a standalone HTML lesson.\n\n"
+
+          << "Options:\n"
+          << "  --out <file.html>       Output HTML file\n"
+          << "  --out=<file.html>       Same as --out <file.html>\n"
+          << "  --no-outputs            Export without cell outputs\n"
+          << "  --with-outputs          Export with cell outputs, default\n"
+          << "  -h, --help              Show this help\n\n"
+
+          << "Examples:\n"
+          << "  vix note export examples/hello.vixnote --out hello.html\n"
+          << "  vix note export lessons/pointers.vixnote --out pointers.html --no-outputs\n";
+
+      return args.empty() ? 1 : 0;
+    }
+
+    fs::path notePath;
+    fs::path outPath;
+    bool includeOutputs = true;
+
+    for (std::size_t i = 0; i < args.size(); ++i)
+    {
+      const std::string &arg = args[i];
+
+      if (is_help_arg(arg))
+      {
+        return run_export_command({"--help"});
+      }
+
+      if (arg == "--out")
+      {
+        if (i + 1 >= args.size())
+        {
+          error("Missing value for --out.");
+          hint("Usage: vix note export <file.vixnote> --out <file.html>");
+          return 1;
+        }
+
+        outPath = args[++i];
+        continue;
+      }
+
+      constexpr const char outPrefix[] = "--out=";
+
+      if (arg.rfind(outPrefix, 0) == 0)
+      {
+        outPath = arg.substr(sizeof(outPrefix) - 1);
+        continue;
+      }
+
+      if (arg == "--no-outputs")
+      {
+        includeOutputs = false;
+        continue;
+      }
+
+      if (arg == "--with-outputs")
+      {
+        includeOutputs = true;
+        continue;
+      }
+
+      if (!notePath.empty())
+      {
+        error("Unexpected argument: " + arg);
+        hint("Usage: vix note export <file.vixnote> --out <file.html>");
+        return 1;
+      }
+
+      notePath = arg;
+    }
+
+    if (notePath.empty())
+    {
+      error("No Vix Note file provided.");
+      hint("Usage: vix note export <file.vixnote> --out <file.html>");
+      return 1;
+    }
+
+    if (outPath.empty())
+    {
+      error("No output HTML file provided.");
+      hint("Use --out <file.html>.");
+      return 1;
+    }
+
+    std::error_code ec;
+
+    if (!fs::exists(notePath, ec) || ec)
+    {
+      error("Note file not found: " + notePath.string());
+      return 1;
+    }
+
+    if (!fs::is_regular_file(notePath, ec) || ec)
+    {
+      error("Note path is not a file: " + notePath.string());
+      return 1;
+    }
+
+    if (notePath.extension() != ".vixnote")
+    {
+      error("Invalid note file extension: " + notePath.string());
+      hint("Expected a .vixnote file.");
+      return 1;
+    }
+
+    vix::note::NoteLoadResult loaded =
+        vix::note::load_note(notePath);
+
+    if (!loaded.ok)
+    {
+      error("Unable to load note file.");
+      hint(loaded.error.empty() ? notePath.string() : loaded.error);
+      return 1;
+    }
+
+    vix::note::HtmlExporterOptions exportOptions;
+    exportOptions.includeOutputs = includeOutputs;
+    exportOptions.standalone = true;
+    exportOptions.includeDocumentMetadata = true;
+    exportOptions.includeTableOfContents = true;
+    exportOptions.includeOutputLabels = true;
+    exportOptions.printableLayout = true;
+
+    vix::note::HtmlExporter exporter(exportOptions);
+
+    vix::note::NoteResult exported =
+        exporter.export_to_file(loaded.document, outPath);
+
+    if (!exported.ok())
+    {
+      error("Unable to export note.");
+      hint(exported.message().empty()
+               ? outPath.string()
+               : exported.message());
+
+      return exported.exit_code() == 0 ? 1 : exported.exit_code();
+    }
+
+    success("Vix Note exported.");
+    step(outPath.string());
+
+    return 0;
+  }
 }
 
 namespace vix::commands
@@ -75,6 +232,15 @@ namespace vix::commands
     if (!args.empty() && is_help_arg(args[0]))
     {
       return help();
+    }
+
+    if (!args.empty() && args[0] == "export")
+    {
+      std::vector<std::string> exportArgs(
+          args.begin() + 1,
+          args.end());
+
+      return run_export_command(exportArgs);
     }
 
     fs::path notePath;
@@ -207,10 +373,14 @@ namespace vix::commands
       return 1;
     }
 
+    vix::note::ProjectContext projectContext =
+        vix::note::detect_project_context(notePath);
+
     vix::note::NoteServerOptions options;
     options.host = host;
     options.port = port;
     options.openBrowser = false;
+    options.routeOptions.kernelOptions.projectContext = projectContext;
 
     vix::note::NoteServer server(
         std::move(loaded.document),
@@ -231,6 +401,14 @@ namespace vix::commands
     success("Vix Note started.");
     info("Open this URL in your browser:");
     step(server.url());
+
+    if (projectContext.enabled)
+    {
+      info("Project context:");
+      step(projectContext.projectName.empty()
+               ? projectContext.projectRoot.string()
+               : projectContext.projectName);
+    }
 
     std::cout << "\n";
     hint("Press Ctrl+C to stop the note server.");
@@ -253,23 +431,28 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix note <file.vixnote> [options]\n\n"
+        << "  vix note <file.vixnote> [options]\n"
+        << "  vix note export <file.vixnote> --out <file.html> [options]\n\n"
 
         << "Description:\n"
         << "  Open a Vix Note document in a local browser UI.\n"
         << "  The command loads a .vixnote file, starts a local note server,\n"
-        << "  and exposes the visual workspace through HTTP.\n\n"
+        << "  and exposes the visual workspace through HTTP.\n"
+        << "  It can also export a .vixnote file to a standalone HTML lesson.\n\n"
 
         << "Options:\n"
         << "  --host <host>       Host used by the local server. Default: 127.0.0.1\n"
         << "  --host=<host>       Same as --host <host>\n"
         << "  --port <port>       Port used by the local server. Default: 5179\n"
         << "  --port=<port>       Same as --port <port>\n"
+        << "  export              Export a .vixnote document to HTML\n"
         << "  -h, --help          Show this help\n\n"
 
         << "Examples:\n"
         << "  vix note examples/hello.vixnote\n"
         << "  vix note lessons/pointers.vixnote --port 5180\n"
+        << "  vix note export examples/hello.vixnote --out hello.html\n"
+        << "  vix note export examples/hello.vixnote --out hello.html --no-outputs\n"
         << "  vix note examples/hello.vixnote --host 127.0.0.1 --port 5179\n\n"
 
         << "Routes:\n"

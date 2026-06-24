@@ -381,6 +381,7 @@ namespace vix::commands
     options.port = port;
     options.openBrowser = false;
     options.routeOptions.kernelOptions.projectContext = projectContext;
+    options.logRequests = true;
 
     vix::note::NoteServer server(
         std::move(loaded.document),

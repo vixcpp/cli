@@ -156,6 +156,46 @@ namespace vix::commands::RunCommand::detail
       return false;
     }
 
+    fs::path find_script_project_root(const fs::path &cppFile)
+    {
+      std::error_code ec;
+
+      fs::path current =
+          cppFile.has_parent_path()
+              ? fs::absolute(cppFile.parent_path(), ec).lexically_normal()
+              : fs::current_path(ec).lexically_normal();
+
+      if (ec)
+      {
+        current = cppFile.parent_path();
+      }
+
+      while (!current.empty())
+      {
+        if (fs::exists(current / "vix.lock") ||
+            fs::exists(current / "vix.json") ||
+            fs::exists(current / "vix.app") ||
+            fs::exists(current / ".vix" / "vix_deps.cmake") ||
+            fs::exists(current / ".vix" / "deps"))
+        {
+          return current;
+        }
+
+        const fs::path parent = current.parent_path();
+
+        if (parent == current)
+        {
+          break;
+        }
+
+        current = parent;
+      }
+
+      return cppFile.has_parent_path()
+                 ? fs::absolute(cppFile.parent_path()).lexically_normal()
+                 : fs::current_path();
+    }
+
     int prepare_script_options_common(Options &opt)
     {
       print_double_dash_warning_if_needed(opt);
@@ -164,15 +204,13 @@ namespace vix::commands::RunCommand::detail
         return 1;
 
       const fs::path projectDir =
-          opt.cppFile.has_parent_path()
-              ? fs::absolute(opt.cppFile.parent_path()).lexically_normal()
-              : fs::current_path();
+          find_script_project_root(opt.cppFile);
 
       if (!ensure_registry_deps_installed_if_needed(projectDir))
         return 1;
 
       if (opt.autoDeps != AutoDepsMode::None)
-        apply_auto_deps_includes_from_deps_folder(opt, opt.cppFile.parent_path());
+        apply_auto_deps_includes_from_deps_folder(opt, projectDir);
 
       return 0;
     }

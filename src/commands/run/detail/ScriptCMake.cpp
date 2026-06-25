@@ -78,6 +78,46 @@ namespace vix::commands::RunCommand::detail
       return depId;
     }
 
+    fs::path find_script_project_root(const fs::path &cppPath)
+    {
+      std::error_code ec;
+
+      fs::path current =
+          cppPath.has_parent_path()
+              ? fs::absolute(cppPath.parent_path(), ec).lexically_normal()
+              : fs::current_path(ec).lexically_normal();
+
+      if (ec)
+      {
+        current = cppPath.parent_path();
+      }
+
+      while (!current.empty())
+      {
+        if (fs::exists(current / "vix.lock") ||
+            fs::exists(current / "vix.json") ||
+            fs::exists(current / "vix.app") ||
+            fs::exists(current / ".vix" / "vix_deps.cmake") ||
+            fs::exists(current / ".vix" / "deps"))
+        {
+          return current;
+        }
+
+        const fs::path parent = current.parent_path();
+
+        if (parent == current)
+        {
+          break;
+        }
+
+        current = parent;
+      }
+
+      return cppPath.has_parent_path()
+                 ? fs::absolute(cppPath.parent_path()).lexically_normal()
+                 : fs::current_path();
+    }
+
     std::optional<std::string> home_dir()
     {
 #ifdef _WIN32
@@ -610,8 +650,9 @@ namespace vix::commands::RunCommand::detail
     {
       ResolvedScriptDeps resolved;
 
-      const fs::path depsRoot = cppPath.parent_path() / ".vix" / "deps";
-      const fs::path lockPath = cppPath.parent_path() / "vix.lock";
+      const fs::path projectRoot = find_script_project_root(cppPath);
+      const fs::path depsRoot = projectRoot / ".vix" / "deps";
+      const fs::path lockPath = projectRoot / "vix.lock";
 
       resolved.orderedDepIds = load_ordered_packages_from_lock(lockPath);
 
@@ -727,12 +768,14 @@ namespace vix::commands::RunCommand::detail
 
     fs::path local_vix_deps_cmake_path(const fs::path &cppPath)
     {
-      return cppPath.parent_path() / ".vix" / "vix_deps.cmake";
+      const fs::path projectRoot = find_script_project_root(cppPath);
+      return projectRoot / ".vix" / "vix_deps.cmake";
     }
 
     bool has_local_vix_deps_cmake(const fs::path &cppPath)
     {
-      return fs::exists(local_vix_deps_cmake_path(cppPath));
+      const fs::path projectRoot = find_script_project_root(cppPath);
+      return fs::exists(projectRoot / ".vix" / "vix_deps.cmake");
     }
 
     void append_local_vix_deps_include(
@@ -1043,6 +1086,16 @@ namespace vix::commands::RunCommand::detail
       append_line(s);
     }
 
+    void append_vix_deps_link(
+        std::string &s,
+        const std::string &targetName)
+    {
+      append_line(s, "if (TARGET vix::deps)");
+      append_line(s, "  target_link_libraries(" + targetName + " PRIVATE vix::deps)");
+      append_line(s, "endif()");
+      append_line(s);
+    }
+
     void append_base_warning_and_platform_flags(std::string &s, const std::string &targetName)
     {
       append_line(s, "if (MSVC)");
@@ -1262,12 +1315,20 @@ namespace vix::commands::RunCommand::detail
 
     if (useLocalVixDepsCmake)
     {
-      const fs::path lockPath = cppPath.parent_path() / "vix.lock";
+      const fs::path projectRoot = find_script_project_root(cppPath);
+      const fs::path lockPath = projectRoot / "vix.lock";
+
       scriptDepAliases = lock_package_ids_to_aliases(
           load_ordered_packages_from_lock(lockPath));
     }
 
     append_bridged_dep_links(s, targetName, scriptDepAliases);
+
+    if (useLocalVixDepsCmake)
+    {
+      append_vix_deps_link(s, targetName);
+    }
+
     append_target_compile_definitions(s, targetName, cf.defines);
     append_target_compile_options(s, targetName, cf.compileOpts);
     append_target_link_directories(s, targetName, lf.libDirs);

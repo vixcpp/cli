@@ -60,12 +60,18 @@ namespace vix::commands::RunCommand::detail
 
     bool should_skip_path(const fs::path &p)
     {
-      const std::string s = p.string();
+      for (const auto &part : p)
+      {
+        const std::string value = part.string();
 
-      return s.find("CMakeFiles") != std::string::npos ||
-             s.find(".vix") != std::string::npos ||
-             s.find("/Testing/") != std::string::npos ||
-             s.find("\\Testing\\") != std::string::npos;
+        if (value == "CMakeFiles" ||
+            value == "Testing")
+        {
+          return true;
+        }
+      }
+
+      return false;
     }
   }
 

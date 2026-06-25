@@ -1042,6 +1042,32 @@ namespace vix::commands
 
         out << "\n";
       }
+
+      out << "# ------------------------------------------------------\n";
+      out << "# Vix aggregate dependency target\n";
+      out << "# ------------------------------------------------------\n\n";
+
+      out << "if(NOT TARGET vix__deps)\n";
+      out << "  add_library(vix__deps INTERFACE)\n";
+      out << "endif()\n\n";
+
+      out << "if(NOT TARGET vix::deps)\n";
+      out << "  add_library(vix::deps ALIAS vix__deps)\n";
+      out << "endif()\n\n";
+
+      for (const auto &dep : deps)
+      {
+        const std::string alias = cmake_alias_target(dep.id);
+
+        if (alias.empty())
+          continue;
+
+        out << "if(TARGET " << alias << ")\n";
+        out << "  target_link_libraries(vix__deps INTERFACE " << alias << ")\n";
+        out << "endif()\n";
+      }
+
+      out << "\n";
     }
 
     static bool project_uses_vix_app()

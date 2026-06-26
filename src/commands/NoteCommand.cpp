@@ -23,6 +23,12 @@
 
 #include <vix/note/note.hpp>
 
+#ifdef VIX_CLI_HAS_UI
+#include <vix/ui/platform/Platform.hpp>
+#include <vix/ui/shell/AppShell.hpp>
+#include <vix/ui/shell/ShellConfig.hpp>
+#endif
+
 #include <charconv>
 #include <cstdint>
 #include <filesystem>
@@ -62,6 +68,34 @@ namespace
     }
 
     out = static_cast<std::uint16_t>(port);
+    return true;
+  }
+
+  bool parse_positive_int(const std::string &value, int &out)
+  {
+    if (value.empty())
+    {
+      return false;
+    }
+
+    int parsed = 0;
+
+    const char *begin = value.data();
+    const char *end = value.data() + value.size();
+
+    auto result = std::from_chars(begin, end, parsed);
+
+    if (result.ec != std::errc{} || result.ptr != end)
+    {
+      return false;
+    }
+
+    if (parsed <= 0)
+    {
+      return false;
+    }
+
+    out = parsed;
     return true;
   }
 
@@ -221,6 +255,69 @@ namespace
 
     return 0;
   }
+
+#ifdef VIX_CLI_HAS_UI
+  int run_note_desktop_shell(
+      vix::note::NoteServer &server,
+      const fs::path &notePath,
+      int width,
+      int height,
+      bool devtools,
+      bool fullscreen,
+      bool resizable)
+  {
+    using namespace vix::cli::style;
+
+    vix::ui::ShellConfig shellConfig;
+
+    shellConfig
+        .set_name("Vix Note")
+        .set_title("Vix Note - " + notePath.filename().string())
+        .set_app_id("com.vixcpp.note")
+        .set_vendor("Vix.cpp")
+        .set_url(server.url())
+        .set_platform(vix::ui::Platform::current())
+        .set_width(width)
+        .set_height(height)
+        .set_resizable(resizable)
+        .set_fullscreen(fullscreen)
+        .set_devtools(devtools)
+        .set_start_server(false)
+        .set_wait_for_server(false);
+
+    vix::ui::AppShell shell(shellConfig);
+
+    info("Opening Vix Note desktop shell:");
+    step(server.url());
+
+    vix::ui::Result<void> shellResult = shell.start();
+
+    vix::note::NoteResult stopped = server.stop();
+
+    if (shellResult.is_failed())
+    {
+      error("Unable to start Vix Note desktop shell.");
+      hint(shellResult.error_message().empty()
+               ? "Unknown desktop shell error."
+               : shellResult.error_message());
+
+      return 1;
+    }
+
+    if (!stopped.ok())
+    {
+      error("Vix Note server stopped with an error.");
+      hint(stopped.message().empty()
+               ? "Unknown note server error."
+               : stopped.message());
+
+      return stopped.exit_code() == 0 ? 1 : stopped.exit_code();
+    }
+
+    success("Vix Note desktop shell closed.");
+    return 0;
+  }
+#endif
 }
 
 namespace vix::commands
@@ -246,6 +343,14 @@ namespace vix::commands
     fs::path notePath;
     std::string host = "127.0.0.1";
     std::uint16_t port = 5179;
+
+    bool desktopShell = false;
+    bool devtools = false;
+    bool fullscreen = false;
+    bool resizable = true;
+
+    int shellWidth = 1280;
+    int shellHeight = 820;
 
     for (std::size_t i = 0; i < args.size(); ++i)
     {
@@ -318,6 +423,114 @@ namespace vix::commands
         {
           error("Invalid note server port.");
           hint("Port must be between 1 and 65535.");
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (arg == "--desktop" || arg == "--shell")
+      {
+        desktopShell = true;
+        continue;
+      }
+
+      if (arg == "--browser")
+      {
+        desktopShell = false;
+        continue;
+      }
+
+      if (arg == "--devtools")
+      {
+        devtools = true;
+        continue;
+      }
+
+      if (arg == "--no-devtools")
+      {
+        devtools = false;
+        continue;
+      }
+
+      if (arg == "--fullscreen")
+      {
+        fullscreen = true;
+        continue;
+      }
+
+      if (arg == "--resizable")
+      {
+        resizable = true;
+        continue;
+      }
+
+      if (arg == "--no-resizable")
+      {
+        resizable = false;
+        continue;
+      }
+
+      if (arg == "--width")
+      {
+        if (i + 1 >= args.size())
+        {
+          error("Missing value for --width.");
+          hint("Usage: vix note <file.vixnote> --desktop --width 1280");
+          return 1;
+        }
+
+        if (!parse_positive_int(args[++i], shellWidth))
+        {
+          error("Invalid desktop shell width.");
+          hint("Width must be greater than zero.");
+          return 1;
+        }
+
+        continue;
+      }
+
+      constexpr const char widthPrefix[] = "--width=";
+
+      if (arg.rfind(widthPrefix, 0) == 0)
+      {
+        if (!parse_positive_int(arg.substr(sizeof(widthPrefix) - 1), shellWidth))
+        {
+          error("Invalid desktop shell width.");
+          hint("Width must be greater than zero.");
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (arg == "--height")
+      {
+        if (i + 1 >= args.size())
+        {
+          error("Missing value for --height.");
+          hint("Usage: vix note <file.vixnote> --desktop --height 820");
+          return 1;
+        }
+
+        if (!parse_positive_int(args[++i], shellHeight))
+        {
+          error("Invalid desktop shell height.");
+          hint("Height must be greater than zero.");
+          return 1;
+        }
+
+        continue;
+      }
+
+      constexpr const char heightPrefix[] = "--height=";
+
+      if (arg.rfind(heightPrefix, 0) == 0)
+      {
+        if (!parse_positive_int(arg.substr(sizeof(heightPrefix) - 1), shellHeight))
+        {
+          error("Invalid desktop shell height.");
+          hint("Height must be greater than zero.");
           return 1;
         }
 
@@ -400,8 +613,6 @@ namespace vix::commands
     }
 
     success("Vix Note started.");
-    info("Open this URL in your browser:");
-    step(server.url());
 
     if (projectContext.enabled)
     {
@@ -410,6 +621,31 @@ namespace vix::commands
                ? projectContext.projectRoot.string()
                : projectContext.projectName);
     }
+
+    if (desktopShell)
+    {
+#ifdef VIX_CLI_HAS_UI
+      return run_note_desktop_shell(
+          server,
+          notePath,
+          shellWidth,
+          shellHeight,
+          devtools,
+          fullscreen,
+          resizable);
+#else
+      (void)server.stop();
+
+      error("Vix Note desktop shell is not available in this build.");
+      hint("Build the CLI with the vix::ui module enabled.");
+      hint("Expected compile definition: VIX_CLI_HAS_UI=1");
+
+      return 1;
+#endif
+    }
+
+    info("Open this URL in your browser:");
+    step(server.url());
 
     std::cout << "\n";
     hint("Press Ctrl+C to stop the note server.");
@@ -436,7 +672,7 @@ namespace vix::commands
         << "  vix note export <file.vixnote> --out <file.html> [options]\n\n"
 
         << "Description:\n"
-        << "  Open a Vix Note document in a local browser UI.\n"
+        << "  Open a Vix Note document in a local browser UI or desktop WebView shell.\n"
         << "  The command loads a .vixnote file, starts a local note server,\n"
         << "  and exposes the visual workspace through HTTP.\n"
         << "  It can also export a .vixnote file to a standalone HTML lesson.\n\n"
@@ -447,6 +683,14 @@ namespace vix::commands
         << "  --port <port>       Port used by the local server. Default: 5179\n"
         << "  --port=<port>       Same as --port <port>\n"
         << "  export              Export a .vixnote document to HTML\n"
+        << "  --desktop           Open the note UI in a desktop WebView shell\n"
+        << "  --shell             Alias for --desktop\n"
+        << "  --browser           Keep browser/server mode, default\n"
+        << "  --width <px>        Desktop shell width. Default: 1280\n"
+        << "  --height <px>       Desktop shell height. Default: 820\n"
+        << "  --devtools          Enable WebView developer tools when supported\n"
+        << "  --fullscreen        Start desktop shell fullscreen\n"
+        << "  --no-resizable      Disable desktop shell resizing\n"
         << "  -h, --help          Show this help\n\n"
 
         << "Examples:\n"
@@ -454,6 +698,9 @@ namespace vix::commands
         << "  vix note lessons/pointers.vixnote --port 5180\n"
         << "  vix note export examples/hello.vixnote --out hello.html\n"
         << "  vix note export examples/hello.vixnote --out hello.html --no-outputs\n"
+        << "  vix note examples/hello.vixnote --desktop\n"
+        << "  vix note lessons/pointers.vixnote --desktop --devtools\n"
+        << "  vix note examples/hello.vixnote --desktop --width 1400 --height 900\n"
         << "  vix note examples/hello.vixnote --host 127.0.0.1 --port 5179\n\n"
 
         << "Routes:\n"

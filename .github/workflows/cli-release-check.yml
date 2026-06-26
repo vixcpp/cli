@@ -417,6 +417,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
             -DVIX_ENABLE_LTO=OFF
+            -DVIX_CLI_ENABLE_DESKTOP=OFF
             -DVIX_DB_USE_MYSQL=OFF
             -DVIX_CORE_WITH_MYSQL=OFF
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
@@ -446,6 +447,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
             -DVIX_ENABLE_LTO=OFF `
+            -DVIX_CLI_ENABLE_DESKTOP=OFF `
             -DVIX_DB_USE_MYSQL=OFF `
             -DVIX_CORE_WITH_MYSQL=OFF `
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF `

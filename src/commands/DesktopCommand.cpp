@@ -17,9 +17,26 @@
 #include <vix/cli/commands/DesktopCommand.hpp>
 #include <vix/cli/Style.hpp>
 
+#include <algorithm>
+#include <charconv>
+#include <chrono>
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+namespace fs = std::filesystem;
 
 namespace
 {
@@ -27,52 +44,54 @@ namespace
   {
     return arg == "-h" || arg == "--help" || arg == "help";
   }
-}
 
-#ifdef VIX_CLI_HAS_UI
-
-#include <vix/ui/platform/Platform.hpp>
-#include <vix/ui/shell/AppShell.hpp>
-#include <vix/ui/shell/ShellConfig.hpp>
-
-#include <charconv>
-#include <chrono>
-#include <cstdint>
-#include <filesystem>
-#include <system_error>
-
-namespace fs = std::filesystem;
-
-namespace
-{
-  struct DesktopOptions
+  bool is_command_arg(const std::string &arg)
   {
-    std::string name{"Vix Desktop"};
-    std::string title{"Vix Desktop"};
-    std::string appId{};
-    std::string appVersion{};
-    std::string vendor{"Vix.cpp"};
-    std::string iconPath{};
+    return arg == "run" ||
+           arg == "build" ||
+           arg == "package";
+  }
 
-    std::string url{};
-    std::string readinessUrl{};
-    std::string host{"127.0.0.1"};
-    std::uint16_t port{8080};
+  bool parse_prefixed_value(
+      const std::string &arg,
+      const char *prefix,
+      std::string &out)
+  {
+    const std::string p(prefix);
 
-    int width{1200};
-    int height{800};
+    if (arg.rfind(p, 0) != 0)
+    {
+      return false;
+    }
 
-    bool resizable{true};
-    bool fullscreen{false};
-    bool devtools{false};
+    out = arg.substr(p.size());
+    return true;
+  }
 
-    bool startServer{false};
-    bool waitForServer{true};
-    std::chrono::milliseconds startupTimeout{30000};
+  bool consume_value(
+      const std::vector<std::string> &args,
+      std::size_t &index,
+      const std::string &option,
+      std::string &out)
+  {
+    using namespace vix::cli::style;
 
-    std::string serverCommand{};
-    std::string serverWorkingDirectory{};
-  };
+    if (index + 1 >= args.size())
+    {
+      error("Missing value for " + option + ".");
+      return false;
+    }
+
+    out = args[++index];
+
+    if (out.empty())
+    {
+      error("Value for " + option + " cannot be empty.");
+      return false;
+    }
+
+    return true;
+  }
 
   bool parse_port(const std::string &value, std::uint16_t &out)
   {
@@ -100,53 +119,6 @@ namespace
 
     out = static_cast<std::uint16_t>(port);
     return true;
-  }
-
-  std::string shell_quote_env_value(const std::string &value)
-  {
-    std::string out;
-    out.reserve(value.size() + 2);
-
-    out += "'";
-
-    for (char ch : value)
-    {
-      if (ch == '\'')
-      {
-        out += "'\\''";
-      }
-      else
-      {
-        out += ch;
-      }
-    }
-
-    out += "'";
-    return out;
-  }
-
-  std::string with_desktop_server_env(
-      const DesktopOptions &options,
-      const std::string &command)
-  {
-    if (command.empty())
-    {
-      return command;
-    }
-
-    std::string out;
-
-    out += "SERVER_HOST=";
-    out += shell_quote_env_value(options.host);
-    out += " ";
-
-    out += "SERVER_PORT=";
-    out += std::to_string(options.port);
-    out += " ";
-
-    out += command;
-
-    return out;
   }
 
   bool parse_positive_int(const std::string &value, int &out)
@@ -205,45 +177,251 @@ namespace
     return true;
   }
 
-  bool consume_value(
-      const std::vector<std::string> &args,
-      std::size_t &index,
-      const std::string &option,
-      std::string &out)
+  std::string shell_quote(const std::string &value)
   {
-    using namespace vix::cli::style;
+    std::string out;
+    out.reserve(value.size() + 2);
 
-    if (index + 1 >= args.size())
+    out += "'";
+
+    for (char ch : value)
     {
-      error("Missing value for " + option + ".");
-      return false;
+      if (ch == '\'')
+      {
+        out += "'\\''";
+      }
+      else
+      {
+        out += ch;
+      }
     }
 
-    out = args[++index];
+    out += "'";
+    return out;
+  }
+
+  std::string json_escape(const std::string &value)
+  {
+    std::string out;
+    out.reserve(value.size() + 16);
+
+    for (char ch : value)
+    {
+      switch (ch)
+      {
+      case '\\':
+        out += "\\\\";
+        break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        out += ch;
+        break;
+      }
+    }
+
+    return out;
+  }
+
+  std::string slugify(std::string value)
+  {
+    std::string out;
+    out.reserve(value.size());
+
+    bool lastDash = false;
+
+    for (char ch : value)
+    {
+      const unsigned char c = static_cast<unsigned char>(ch);
+
+      if (std::isalnum(c))
+      {
+        out.push_back(static_cast<char>(std::tolower(c)));
+        lastDash = false;
+        continue;
+      }
+
+      if (!lastDash)
+      {
+        out.push_back('-');
+        lastDash = true;
+      }
+    }
+
+    while (!out.empty() && out.front() == '-')
+    {
+      out.erase(out.begin());
+    }
+
+    while (!out.empty() && out.back() == '-')
+    {
+      out.pop_back();
+    }
 
     if (out.empty())
     {
-      error("Value for " + option + " cannot be empty.");
-      return false;
+      out = "vix-desktop-app";
     }
 
-    return true;
+    return out;
   }
 
-  bool parse_prefixed_value(
-      const std::string &arg,
-      const char *prefix,
-      std::string &out)
+  std::string bool_text(bool value)
   {
-    const std::string p(prefix);
+    return value ? "true" : "false";
+  }
 
-    if (arg.rfind(p, 0) != 0)
+  bool is_cpp_file(const fs::path &path)
+  {
+    return path.extension() == ".cpp" ||
+           path.extension() == ".cc" ||
+           path.extension() == ".cxx" ||
+           path.extension() == ".C";
+  }
+
+  bool is_regular_executable(const fs::path &path)
+  {
+    std::error_code ec;
+
+    if (!fs::is_regular_file(path, ec) || ec)
     {
       return false;
     }
 
-    out = arg.substr(p.size());
-    return true;
+#ifdef _WIN32
+    return path.extension() == ".exe";
+#else
+    const fs::perms perms = fs::status(path, ec).permissions();
+
+    if (ec)
+    {
+      return false;
+    }
+
+    using pr = fs::perms;
+
+    return (perms & pr::owner_exec) != pr::none ||
+           (perms & pr::group_exec) != pr::none ||
+           (perms & pr::others_exec) != pr::none;
+#endif
+  }
+
+  void make_executable(const fs::path &path)
+  {
+    std::error_code ec;
+
+    fs::permissions(
+        path,
+        fs::perms::owner_exec |
+            fs::perms::group_exec |
+            fs::perms::others_exec,
+        fs::perm_options::add,
+        ec);
+  }
+
+  std::optional<fs::path> current_executable_path()
+  {
+#ifdef _WIN32
+    return std::nullopt;
+#else
+    std::error_code ec;
+    fs::path path = fs::read_symlink("/proc/self/exe", ec);
+
+    if (ec || path.empty())
+    {
+      return std::nullopt;
+    }
+
+    return path;
+#endif
+  }
+
+  std::string local_url(const std::string &host, std::uint16_t port)
+  {
+    return "http://" + host + ":" + std::to_string(port);
+  }
+
+  enum class DesktopAction
+  {
+    Run,
+    Build,
+    Package
+  };
+
+  struct DesktopOptions
+  {
+    DesktopAction action{DesktopAction::Run};
+
+    std::string name{"Vix Desktop"};
+    std::string title{"Vix Desktop"};
+    std::string appId{};
+    std::string appVersion{"1.0.0"};
+    std::string vendor{"Vix.cpp"};
+    std::string iconPath{};
+
+    std::string target{};
+    std::string url{};
+    std::string readinessUrl{};
+    std::string host{"127.0.0.1"};
+    std::uint16_t port{8080};
+
+    int width{1200};
+    int height{800};
+
+    bool resizable{true};
+    bool fullscreen{false};
+    bool devtools{false};
+
+    bool startServer{false};
+    bool waitForServer{true};
+    std::chrono::milliseconds startupTimeout{30000};
+
+    std::string serverCommand{};
+    std::string serverWorkingDirectory{};
+
+    std::string outputDirectory{};
+    std::string packageTarget{"dir"};
+    std::string binaryPath{};
+
+    bool clean{false};
+    bool withSqlite{false};
+    bool withMySql{false};
+    bool localCache{false};
+    int jobs{0};
+  };
+
+  std::string with_desktop_server_env(
+      const DesktopOptions &options,
+      const std::string &command)
+  {
+    if (command.empty())
+    {
+      return command;
+    }
+
+    std::string out;
+
+    out += "SERVER_HOST=";
+    out += shell_quote(options.host);
+    out += " ";
+
+    out += "SERVER_PORT=";
+    out += std::to_string(options.port);
+    out += " ";
+
+    out += command;
+
+    return out;
   }
 
   int parse_options(
@@ -291,9 +469,9 @@ namespace
         continue;
       }
 
-      if (arg == "--app-version")
+      if (arg == "--app-version" || arg == "--version")
       {
-        if (!consume_value(args, i, "--app-version", options.appVersion))
+        if (!consume_value(args, i, arg, options.appVersion))
         {
           return 1;
         }
@@ -450,6 +628,55 @@ namespace
         continue;
       }
 
+      if (arg == "--out" || arg == "-o")
+      {
+        if (!consume_value(args, i, arg, options.outputDirectory))
+        {
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (arg == "--target")
+      {
+        if (!consume_value(args, i, "--target", options.packageTarget))
+        {
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (arg == "--binary" || arg == "--server-binary")
+      {
+        if (!consume_value(args, i, arg, options.binaryPath))
+        {
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (arg == "-j" || arg == "--jobs")
+      {
+        std::string value;
+
+        if (!consume_value(args, i, arg, value))
+        {
+          return 1;
+        }
+
+        if (!parse_non_negative_int(value, options.jobs))
+        {
+          error("Invalid jobs value.");
+          hint("Jobs must be a non-negative integer.");
+          return 1;
+        }
+
+        continue;
+      }
+
       if (arg == "--devtools")
       {
         options.devtools = true;
@@ -492,6 +719,30 @@ namespace
         continue;
       }
 
+      if (arg == "--clean")
+      {
+        options.clean = true;
+        continue;
+      }
+
+      if (arg == "--with-sqlite")
+      {
+        options.withSqlite = true;
+        continue;
+      }
+
+      if (arg == "--with-mysql")
+      {
+        options.withMySql = true;
+        continue;
+      }
+
+      if (arg == "--local-cache")
+      {
+        options.localCache = true;
+        continue;
+      }
+
       std::string value;
 
       if (parse_prefixed_value(arg, "--name=", value))
@@ -524,7 +775,8 @@ namespace
         continue;
       }
 
-      if (parse_prefixed_value(arg, "--app-version=", value))
+      if (parse_prefixed_value(arg, "--app-version=", value) ||
+          parse_prefixed_value(arg, "--version=", value))
       {
         options.appVersion = value;
         continue;
@@ -643,14 +895,91 @@ namespace
         continue;
       }
 
+      if (parse_prefixed_value(arg, "--out=", value))
+      {
+        if (value.empty())
+        {
+          error("Value for --out cannot be empty.");
+          return 1;
+        }
+
+        options.outputDirectory = value;
+        continue;
+      }
+
+      if (parse_prefixed_value(arg, "--target=", value))
+      {
+        if (value.empty())
+        {
+          error("Value for --target cannot be empty.");
+          return 1;
+        }
+
+        options.packageTarget = value;
+        continue;
+      }
+
+      if (parse_prefixed_value(arg, "--binary=", value) ||
+          parse_prefixed_value(arg, "--server-binary=", value))
+      {
+        if (value.empty())
+        {
+          error("Value for --binary cannot be empty.");
+          return 1;
+        }
+
+        options.binaryPath = value;
+        continue;
+      }
+
+      if (parse_prefixed_value(arg, "--jobs=", value) ||
+          parse_prefixed_value(arg, "-j=", value))
+      {
+        if (!parse_non_negative_int(value, options.jobs))
+        {
+          error("Invalid jobs value.");
+          hint("Jobs must be a non-negative integer.");
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (!arg.empty() && arg[0] != '-')
+      {
+        if (options.target.empty())
+        {
+          options.target = arg;
+          continue;
+        }
+
+        error("Unexpected positional argument: " + arg);
+        return 1;
+      }
+
       error("Unexpected argument: " + arg);
-      hint("Usage: vix desktop run [options]");
+      hint("Usage: vix desktop <run|build|package> [target] [options]");
       return 1;
+    }
+
+    if (options.title == "Vix Desktop" && options.name != "Vix Desktop")
+    {
+      options.title = options.name;
     }
 
     return 0;
   }
+}
 
+#ifdef VIX_CLI_HAS_UI
+
+#include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/ui/platform/Platform.hpp>
+#include <vix/ui/shell/AppShell.hpp>
+#include <vix/ui/shell/ShellConfig.hpp>
+
+namespace
+{
   vix::ui::ShellConfig make_shell_config(const DesktopOptions &options)
   {
     vix::ui::ShellConfig config;
@@ -710,22 +1039,30 @@ namespace
     return config;
   }
 
-  int run_desktop_command(const std::vector<std::string> &args)
+  int run_desktop_app(DesktopOptions options)
   {
     using namespace vix::cli::style;
 
-    DesktopOptions options;
-
-    const int parseResult = parse_options(args, options);
-
-    if (parseResult == 2)
+    if (!options.target.empty() && options.serverCommand.empty())
     {
-      return vix::commands::DesktopCommand::help();
+      fs::path targetPath = options.target;
+
+      if (is_cpp_file(targetPath))
+      {
+        options.serverCommand =
+            "vix run --force-server " + shell_quote(targetPath.string());
+      }
+      else
+      {
+        options.serverCommand = shell_quote(targetPath.string());
+      }
+
+      options.startServer = true;
     }
 
-    if (parseResult != 0)
+    if (options.url.empty())
     {
-      return parseResult;
+      options.url = local_url(options.host, options.port);
     }
 
     vix::ui::ShellConfig config = make_shell_config(options);
@@ -750,6 +1087,503 @@ namespace
     success("Vix desktop shell closed.");
     return 0;
   }
+
+  int build_server_executable(
+      const DesktopOptions &options,
+      fs::path &serverExecutable)
+  {
+    using namespace vix::cli::style;
+
+    if (!options.binaryPath.empty())
+    {
+      serverExecutable = fs::absolute(options.binaryPath).lexically_normal();
+
+      if (!fs::exists(serverExecutable))
+      {
+        error("Server binary not found: " + serverExecutable.string());
+        return 1;
+      }
+
+      if (!is_regular_executable(serverExecutable))
+      {
+        error("Server binary is not executable: " + serverExecutable.string());
+        return 1;
+      }
+
+      return 0;
+    }
+
+    if (options.target.empty())
+    {
+      error("Desktop build requires a C++ file or --binary.");
+      hint("Usage: vix desktop build app.cpp --name \"My App\"");
+      hint("Or:    vix desktop build --binary ./build/app --name \"My App\"");
+      return 1;
+    }
+
+    const fs::path targetPath =
+        fs::absolute(options.target).lexically_normal();
+
+    if (!fs::exists(targetPath))
+    {
+      error("Desktop target not found: " + targetPath.string());
+      return 1;
+    }
+
+    if (!is_cpp_file(targetPath))
+    {
+      if (is_regular_executable(targetPath))
+      {
+        serverExecutable = targetPath;
+        return 0;
+      }
+
+      error("Desktop build target must be a C++ file or executable binary.");
+      hint("Received: " + targetPath.string());
+      return 1;
+    }
+
+    vix::commands::RunCommand::detail::Options runOptions;
+
+    runOptions.singleCpp = true;
+    runOptions.cppFile = targetPath;
+    runOptions.forceServerLike = true;
+    runOptions.clean = options.clean;
+    runOptions.jobs = options.jobs;
+    runOptions.withSqlite = options.withSqlite;
+    runOptions.withMySql = options.withMySql;
+    runOptions.localCache = options.localCache;
+
+    info("Building desktop server:");
+    step(targetPath.string());
+
+    const int buildCode =
+        vix::commands::RunCommand::detail::build_script_executable(
+            runOptions,
+            serverExecutable);
+
+    if (buildCode != 0)
+    {
+      return buildCode;
+    }
+
+    if (!fs::exists(serverExecutable))
+    {
+      error("Built server executable was not found.");
+      hint("Resolved path: " + serverExecutable.string());
+      return 1;
+    }
+
+    return 0;
+  }
+
+  fs::path resolve_output_directory(const DesktopOptions &options)
+  {
+    if (!options.outputDirectory.empty())
+    {
+      return fs::absolute(options.outputDirectory).lexically_normal();
+    }
+
+    return fs::absolute(fs::path("dist") / slugify(options.name))
+        .lexically_normal();
+  }
+
+  int write_desktop_manifest(
+      const DesktopOptions &options,
+      const fs::path &bundleDir,
+      const std::string &serverName,
+      const std::string &launcherName,
+      const std::string &iconName)
+  {
+    using namespace vix::cli::style;
+
+    const fs::path manifestPath = bundleDir / "vix-desktop.json";
+
+    std::ofstream out(manifestPath, std::ios::trunc);
+
+    if (!out)
+    {
+      error("Unable to write desktop manifest: " + manifestPath.string());
+      return 1;
+    }
+
+    const std::string url =
+        options.url.empty()
+            ? local_url(options.host, options.port)
+            : options.url;
+
+    const std::string readinessUrl =
+        options.readinessUrl.empty()
+            ? url
+            : options.readinessUrl;
+
+    out << "{\n";
+    out << "  \"name\": \"" << json_escape(options.name) << "\",\n";
+    out << "  \"title\": \"" << json_escape(options.title) << "\",\n";
+    out << "  \"app_id\": \"" << json_escape(options.appId) << "\",\n";
+    out << "  \"version\": \"" << json_escape(options.appVersion) << "\",\n";
+    out << "  \"vendor\": \"" << json_escape(options.vendor) << "\",\n";
+    out << "  \"launcher\": \"./" << json_escape(launcherName) << "\",\n";
+    out << "  \"server\": \"./bin/" << json_escape(serverName) << "\",\n";
+    out << "  \"host\": \"" << json_escape(options.host) << "\",\n";
+    out << "  \"port\": " << options.port << ",\n";
+    out << "  \"url\": \"" << json_escape(url) << "\",\n";
+    out << "  \"readiness_url\": \"" << json_escape(readinessUrl) << "\",\n";
+    out << "  \"width\": " << options.width << ",\n";
+    out << "  \"height\": " << options.height << ",\n";
+    out << "  \"resizable\": " << bool_text(options.resizable) << ",\n";
+    out << "  \"fullscreen\": " << bool_text(options.fullscreen) << ",\n";
+    out << "  \"devtools\": " << bool_text(options.devtools) << ",\n";
+    out << "  \"icon\": ";
+
+    if (iconName.empty())
+    {
+      out << "null\n";
+    }
+    else
+    {
+      out << "\"./resources/" << json_escape(iconName) << "\"\n";
+    }
+
+    out << "}\n";
+
+    return 0;
+  }
+
+  int write_launcher_script(
+      const DesktopOptions &options,
+      const fs::path &bundleDir,
+      const std::string &serverName,
+      const std::string &launcherName)
+  {
+    using namespace vix::cli::style;
+
+    const fs::path launcherPath = bundleDir / launcherName;
+
+    std::ofstream out(launcherPath, std::ios::trunc);
+
+    if (!out)
+    {
+      error("Unable to write launcher: " + launcherPath.string());
+      return 1;
+    }
+
+    const std::string url =
+        options.url.empty()
+            ? local_url(options.host, options.port)
+            : options.url;
+
+    const std::string readinessUrl =
+        options.readinessUrl.empty()
+            ? url
+            : options.readinessUrl;
+
+    out << "#!/usr/bin/env sh\n";
+    out << "set -eu\n";
+    out << "APP_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n";
+    out << "cd \"$APP_DIR\"\n";
+    out << "exec \"$APP_DIR/bin/vix\" desktop run \\\n";
+    out << "  --server \"$APP_DIR/bin/" << serverName << "\" \\\n";
+    out << "  --url " << shell_quote(url) << " \\\n";
+    out << "  --readiness-url " << shell_quote(readinessUrl) << " \\\n";
+    out << "  --host " << shell_quote(options.host) << " \\\n";
+    out << "  --port " << options.port << " \\\n";
+    out << "  --name " << shell_quote(options.name) << " \\\n";
+    out << "  --title " << shell_quote(options.title) << " \\\n";
+    out << "  --vendor " << shell_quote(options.vendor) << " \\\n";
+
+    if (!options.appId.empty())
+    {
+      out << "  --app-id " << shell_quote(options.appId) << " \\\n";
+    }
+
+    if (!options.appVersion.empty())
+    {
+      out << "  --app-version " << shell_quote(options.appVersion) << " \\\n";
+    }
+
+    out << "  --width " << options.width << " \\\n";
+    out << "  --height " << options.height << " \\\n";
+    out << "  --timeout-ms " << options.startupTimeout.count();
+
+    if (options.fullscreen)
+    {
+      out << " \\\n  --fullscreen";
+    }
+
+    if (options.resizable)
+    {
+      out << " \\\n  --resizable";
+    }
+    else
+    {
+      out << " \\\n  --no-resizable";
+    }
+
+    if (options.devtools)
+    {
+      out << " \\\n  --devtools";
+    }
+    else
+    {
+      out << " \\\n  --no-devtools";
+    }
+
+    out << "\n";
+
+    make_executable(launcherPath);
+    return 0;
+  }
+
+  int write_linux_desktop_file(
+      const DesktopOptions &options,
+      const fs::path &bundleDir,
+      const std::string &launcherName,
+      const std::string &desktopFileName,
+      const std::string &iconName)
+  {
+    using namespace vix::cli::style;
+
+    const fs::path desktopPath = bundleDir / desktopFileName;
+
+    std::ofstream out(desktopPath, std::ios::trunc);
+
+    if (!out)
+    {
+      error("Unable to write .desktop file: " + desktopPath.string());
+      return 1;
+    }
+
+    out << "[Desktop Entry]\n";
+    out << "Type=Application\n";
+    out << "Name=" << options.name << "\n";
+    out << "Comment=" << options.title << "\n";
+    out << "Exec=" << (bundleDir / launcherName).string() << "\n";
+    out << "Terminal=false\n";
+    out << "Categories=Development;\n";
+
+    if (!iconName.empty())
+    {
+      out << "Icon=" << (bundleDir / "resources" / iconName).string() << "\n";
+    }
+
+    make_executable(desktopPath);
+    return 0;
+  }
+
+  int copy_optional_icon(
+      const DesktopOptions &options,
+      const fs::path &resourcesDir,
+      std::string &iconName)
+  {
+    using namespace vix::cli::style;
+
+    iconName.clear();
+
+    if (options.iconPath.empty())
+    {
+      return 0;
+    }
+
+    const fs::path iconPath =
+        fs::absolute(options.iconPath).lexically_normal();
+
+    if (!fs::exists(iconPath))
+    {
+      error("Icon file not found: " + iconPath.string());
+      return 1;
+    }
+
+    iconName = iconPath.filename().string();
+
+    std::error_code ec;
+    fs::copy_file(
+        iconPath,
+        resourcesDir / iconName,
+        fs::copy_options::overwrite_existing,
+        ec);
+
+    if (ec)
+    {
+      error("Unable to copy icon: " + ec.message());
+      return 1;
+    }
+
+    return 0;
+  }
+
+  int build_desktop_bundle(const DesktopOptions &options)
+  {
+    using namespace vix::cli::style;
+
+    if (options.packageTarget != "dir")
+    {
+      error("Unsupported desktop package target: " + options.packageTarget);
+      hint("Supported now: --target dir");
+      hint("AppImage, deb and rpm should be added as separate packaging backends.");
+      return 1;
+    }
+
+    fs::path serverExecutable;
+
+    const int serverCode = build_server_executable(options, serverExecutable);
+
+    if (serverCode != 0)
+    {
+      return serverCode;
+    }
+
+    const auto selfPath = current_executable_path();
+
+    if (!selfPath)
+    {
+      error("Unable to locate current vix executable for bundling.");
+      hint("The first desktop package backend currently supports Linux.");
+      return 1;
+    }
+
+    const fs::path bundleDir = resolve_output_directory(options);
+    const fs::path binDir = bundleDir / "bin";
+    const fs::path resourcesDir = bundleDir / "resources";
+
+    std::error_code ec;
+
+    fs::create_directories(binDir, ec);
+    if (ec)
+    {
+      error("Unable to create bundle bin directory: " + ec.message());
+      return 1;
+    }
+
+    fs::create_directories(resourcesDir, ec);
+    if (ec)
+    {
+      error("Unable to create bundle resources directory: " + ec.message());
+      return 1;
+    }
+
+    const std::string appSlug = slugify(options.name);
+
+    std::string serverName = serverExecutable.filename().string();
+
+    if (serverName.empty())
+    {
+      serverName = appSlug + "-server";
+    }
+
+    const fs::path bundledServer = binDir / serverName;
+    const fs::path bundledVix = binDir / "vix";
+
+    fs::copy_file(
+        serverExecutable,
+        bundledServer,
+        fs::copy_options::overwrite_existing,
+        ec);
+
+    if (ec)
+    {
+      error("Unable to copy server executable: " + ec.message());
+      return 1;
+    }
+
+    fs::copy_file(
+        *selfPath,
+        bundledVix,
+        fs::copy_options::overwrite_existing,
+        ec);
+
+    if (ec)
+    {
+      error("Unable to copy vix desktop runtime: " + ec.message());
+      return 1;
+    }
+
+    make_executable(bundledServer);
+    make_executable(bundledVix);
+
+    std::string iconName;
+    const int iconCode = copy_optional_icon(options, resourcesDir, iconName);
+
+    if (iconCode != 0)
+    {
+      return iconCode;
+    }
+
+    const std::string launcherName = appSlug;
+    const std::string desktopFileName = appSlug + ".desktop";
+
+    const int manifestCode =
+        write_desktop_manifest(
+            options,
+            bundleDir,
+            serverName,
+            launcherName,
+            iconName);
+
+    if (manifestCode != 0)
+    {
+      return manifestCode;
+    }
+
+    const int launcherCode =
+        write_launcher_script(
+            options,
+            bundleDir,
+            serverName,
+            launcherName);
+
+    if (launcherCode != 0)
+    {
+      return launcherCode;
+    }
+
+    const int desktopCode =
+        write_linux_desktop_file(
+            options,
+            bundleDir,
+            launcherName,
+            desktopFileName,
+            iconName);
+
+    if (desktopCode != 0)
+    {
+      return desktopCode;
+    }
+
+    success("Desktop bundle created.");
+    step(bundleDir.string());
+    hint("Run:");
+    step((bundleDir / launcherName).string());
+
+    return 0;
+  }
+
+  int run_desktop_command(
+      DesktopAction action,
+      const std::vector<std::string> &args)
+  {
+    DesktopOptions options;
+    options.action = action;
+
+    const int parseResult = parse_options(args, options);
+
+    if (parseResult == 2)
+    {
+      return vix::commands::DesktopCommand::help();
+    }
+
+    if (parseResult != 0)
+    {
+      return parseResult;
+    }
+
+    if (action == DesktopAction::Run)
+    {
+      return run_desktop_app(std::move(options));
+    }
+
+    return build_desktop_bundle(options);
+  }
 }
 
 #endif // VIX_CLI_HAS_UI
@@ -765,23 +1599,49 @@ namespace vix::commands
       return help();
     }
 
+    DesktopAction action = DesktopAction::Run;
     std::vector<std::string> commandArgs = args;
 
-    if (!commandArgs.empty() && commandArgs[0] == "run")
+    if (!commandArgs.empty() && is_command_arg(commandArgs[0]))
     {
+      const std::string command = commandArgs[0];
       commandArgs.erase(commandArgs.begin());
+
+      if (command == "run")
+      {
+        action = DesktopAction::Run;
+      }
+      else if (command == "build")
+      {
+        action = DesktopAction::Build;
+      }
+      else if (command == "package")
+      {
+        action = DesktopAction::Package;
+      }
     }
-    else if (!commandArgs.empty() && commandArgs[0] != "run")
+    else if (!commandArgs.empty() && commandArgs[0].rfind("-", 0) == 0)
     {
-      error("Unknown desktop command: " + commandArgs[0]);
-      hint("Usage: vix desktop run [options]");
-      hint("Run: vix desktop --help");
-      return 1;
+      action = DesktopAction::Run;
+    }
+    else if (!commandArgs.empty())
+    {
+      /*
+       * Simple default:
+       *
+       *   vix desktop ui.cpp
+       *
+       * behaves like:
+       *
+       *   vix desktop run ui.cpp
+       */
+      action = DesktopAction::Run;
     }
 
 #ifdef VIX_CLI_HAS_UI
-    return run_desktop_command(commandArgs);
+    return run_desktop_command(action, commandArgs);
 #else
+    (void)action;
     (void)commandArgs;
 
     error("Vix desktop is not available in this build.");
@@ -796,56 +1656,73 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix desktop [options]\n"
-        << "  vix desktop run [options]\n\n"
+        << "  vix desktop run [target.cpp] [options]\n"
+        << "  vix desktop build <target.cpp|binary> [options]\n"
+        << "  vix desktop package <target.cpp|binary> [options]\n"
+        << "  vix desktop [target.cpp] [options]\n\n"
 
         << "Description:\n"
-        << "  Open a Vix web UI application inside a desktop shell.\n"
-        << "  The command builds a vix::ui::ShellConfig and starts vix::ui::AppShell.\n"
-        << "  It can either open an existing URL or start a local server command first.\n\n"
+        << "  Open, build, or package a Vix web UI application as a desktop app.\n"
+        << "  `run` is for development. `build` and `package --target dir` create\n"
+        << "  a distributable desktop folder with a launcher and compiled server.\n\n"
 
-        << "Options:\n"
-        << "  --url <url>                 Target URL to open\n"
-        << "  --url=<url>                 Same as --url <url>\n"
-        << "  --host <host>               Local host used when --url is not set. Default: 127.0.0.1\n"
-        << "  --host=<host>               Same as --host <host>\n"
-        << "  --port <port>               Local port used when --url is not set. Default: 8080\n"
-        << "  --port=<port>               Same as --port <port>\n"
-        << "  --readiness-url <url>       URL checked before opening the shell\n"
-        << "  --readiness-url=<url>       Same as --readiness-url <url>\n\n"
+        << "Simple examples:\n"
+        << "  vix desktop run ui_dashboard.cpp\n"
+        << "  vix desktop ui_dashboard.cpp\n"
+        << "  vix desktop build ui_dashboard.cpp --name \"Vix UI Dashboard\"\n"
+        << "  vix desktop package ui_dashboard.cpp --target dir --name \"Vix UI Dashboard\"\n\n"
+
+        << "Run examples:\n"
+        << "  vix desktop run --url http://127.0.0.1:8080\n"
+        << "  vix desktop run --server \"vix run --force-server main.cpp\" --port 8080\n"
+        << "  vix desktop run ./build/my_server --title \"My App\"\n\n"
+
+        << "Build/package examples:\n"
+        << "  vix desktop build ui_dashboard.cpp --name \"Vix UI Dashboard\"\n"
+        << "  vix desktop build ui_dashboard.cpp --out dist/dashboard\n"
+        << "  vix desktop build --binary ./build/ui_dashboard --name \"Vix UI Dashboard\"\n"
+        << "  vix desktop package ui_dashboard.cpp --target dir --icon assets/icon.png\n\n"
+
+        << "Common options:\n"
+        << "  --name <name>               Application name. Default: Vix Desktop\n"
+        << "  --title <title>             Window title. Default: same as name\n"
+        << "  --app-id <id>               Stable desktop application id\n"
+        << "  --app-version <version>     Application version. Default: 1.0.0\n"
+        << "  --version <version>         Same as --app-version\n"
+        << "  --vendor <name>             Vendor name. Default: Vix.cpp\n"
+        << "  --icon <path>               Desktop icon path\n\n"
 
         << "Window options:\n"
-        << "  --name <name>               Application name. Default: Vix Desktop\n"
-        << "  --title <title>             Window title. Default: Vix Desktop\n"
         << "  --width <px>                Window width. Default: 1200\n"
         << "  --height <px>               Window height. Default: 800\n"
-        << "  --icon <path>               Desktop window icon path\n"
         << "  --fullscreen                Start fullscreen\n"
         << "  --resizable                 Allow resizing, default\n"
         << "  --no-resizable              Disable resizing\n"
         << "  --devtools                  Enable WebView developer tools when supported\n"
         << "  --no-devtools               Disable developer tools, default\n\n"
 
-        << "Local server options:\n"
-        << "  --server <command>          Start this command before opening the shell\n"
-        << "  --server=<command>          Same as --server <command>\n"
+        << "Server options:\n"
+        << "  --url <url>                 Target URL to open\n"
+        << "  --host <host>               Local host. Default: 127.0.0.1\n"
+        << "  --port <port>               Local port. Default: 8080\n"
+        << "  --readiness-url <url>       URL checked before opening the shell\n"
+        << "  --server <command>          Dev mode server command\n"
         << "  --cwd <dir>                 Working directory for --server\n"
-        << "  --cwd=<dir>                 Same as --cwd <dir>\n"
-        << "  --working-directory <dir>   Same as --cwd <dir>\n"
-        << "  --wait                      Wait for the server to become reachable, default\n"
+        << "  --working-directory <dir>   Same as --cwd\n"
+        << "  --wait                      Wait for server readiness, default\n"
         << "  --no-wait                   Do not wait for server readiness\n"
         << "  --timeout-ms <ms>           Server startup timeout. Default: 30000\n\n"
 
-        << "Metadata options:\n"
-        << "  --app-id <id>               Stable desktop application id\n"
-        << "  --app-version <version>     Application version metadata\n"
-        << "  --vendor <name>             Vendor name. Default: Vix.cpp\n\n"
-
-        << "Examples:\n"
-        << "  vix desktop run --url http://127.0.0.1:8080\n"
-        << "  vix desktop run --port 8080 --title \"My Vix App\"\n"
-        << "  vix desktop run --server \"vix run main.cpp\" --port 8080\n"
-        << "  vix desktop run --server \"vix run main.cpp -- --port 8080\" --url http://127.0.0.1:8080\n";
+        << "Build/package options:\n"
+        << "  --out <dir>                 Output directory. Default: dist/<app-name>\n"
+        << "  --target <target>           Package target. Supported now: dir\n"
+        << "  --binary <path>             Use an already-built server binary\n"
+        << "  --server-binary <path>      Same as --binary\n"
+        << "  --clean                     Clean/rebuild script cache before build\n"
+        << "  -j, --jobs <n>              Parallel build jobs\n"
+        << "  --with-sqlite               Enable SQLite support for script build\n"
+        << "  --with-mysql                Enable MySQL support for script build\n"
+        << "  --local-cache               Use local .vix-scripts cache\n\n";
 
     return 0;
   }

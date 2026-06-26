@@ -393,6 +393,9 @@ namespace
     std::string packageTarget{"dir"};
     std::string binaryPath{};
 
+    std::vector<std::string> resourcePaths{};
+    bool autoResources{true};
+
     bool clean{false};
     bool withSqlite{false};
     bool withMySql{false};
@@ -743,6 +746,25 @@ namespace
         continue;
       }
 
+      if (arg == "--resources" || arg == "--resource")
+      {
+        std::string value;
+
+        if (!consume_value(args, i, arg, value))
+        {
+          return 1;
+        }
+
+        options.resourcePaths.push_back(value);
+        continue;
+      }
+
+      if (arg == "--no-auto-resources")
+      {
+        options.autoResources = false;
+        continue;
+      }
+
       std::string value;
 
       if (parse_prefixed_value(arg, "--name=", value))
@@ -929,6 +951,19 @@ namespace
         }
 
         options.binaryPath = value;
+        continue;
+      }
+
+      if (parse_prefixed_value(arg, "--resources=", value) ||
+          parse_prefixed_value(arg, "--resource=", value))
+      {
+        if (value.empty())
+        {
+          error("Value for --resources cannot be empty.");
+          return 1;
+        }
+
+        options.resourcePaths.push_back(value);
         continue;
       }
 
@@ -1412,6 +1447,303 @@ namespace
     return 0;
   }
 
+  std::vector<std::string> default_desktop_resource_names()
+  {
+    return {
+        "templates",
+        "assets",
+        "static",
+        "public",
+        "views",
+        "resources",
+        "wwwroot"};
+  }
+
+  fs::path resolve_desktop_resource_base_directory(
+      const DesktopOptions &options,
+      const fs::path &serverExecutable)
+  {
+    if (!options.target.empty())
+    {
+      std::error_code ec;
+      const fs::path targetPath =
+          fs::absolute(options.target, ec).lexically_normal();
+
+      if (!ec && fs::exists(targetPath, ec) && fs::is_regular_file(targetPath, ec))
+      {
+        return targetPath.parent_path();
+      }
+    }
+
+    if (!options.serverWorkingDirectory.empty())
+    {
+      std::error_code ec;
+      return fs::absolute(options.serverWorkingDirectory, ec).lexically_normal();
+    }
+
+    if (!serverExecutable.empty())
+    {
+      return serverExecutable.parent_path();
+    }
+
+    return fs::current_path();
+  }
+
+  bool same_path(const fs::path &a, const fs::path &b)
+  {
+    std::error_code ec;
+
+    if (fs::equivalent(a, b, ec) && !ec)
+    {
+      return true;
+    }
+
+    return fs::absolute(a).lexically_normal() ==
+           fs::absolute(b).lexically_normal();
+  }
+
+  bool path_is_inside(const fs::path &child, const fs::path &parent)
+  {
+    std::error_code ec;
+
+    const fs::path childPath =
+        fs::weakly_canonical(child, ec);
+
+    if (ec)
+    {
+      return false;
+    }
+
+    const fs::path parentPath =
+        fs::weakly_canonical(parent, ec);
+
+    if (ec)
+    {
+      return false;
+    }
+
+    auto childIt = childPath.begin();
+    auto parentIt = parentPath.begin();
+
+    for (; parentIt != parentPath.end(); ++parentIt, ++childIt)
+    {
+      if (childIt == childPath.end() || *childIt != *parentIt)
+      {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  int copy_path_recursive(
+      const fs::path &source,
+      const fs::path &destination)
+  {
+    using namespace vix::cli::style;
+
+    std::error_code ec;
+
+    if (!fs::exists(source, ec) || ec)
+    {
+      return 0;
+    }
+
+    if (fs::is_regular_file(source, ec) && !ec)
+    {
+      fs::create_directories(destination.parent_path(), ec);
+
+      if (ec)
+      {
+        error("Unable to create resource directory: " + ec.message());
+        return 1;
+      }
+
+      fs::copy_file(
+          source,
+          destination,
+          fs::copy_options::overwrite_existing,
+          ec);
+
+      if (ec)
+      {
+        error("Unable to copy resource file: " + source.string());
+        hint(ec.message());
+        return 1;
+      }
+
+      return 0;
+    }
+
+    if (!fs::is_directory(source, ec) || ec)
+    {
+      return 0;
+    }
+
+    fs::create_directories(destination, ec);
+
+    if (ec)
+    {
+      error("Unable to create resource directory: " + ec.message());
+      return 1;
+    }
+
+    for (auto it = fs::recursive_directory_iterator(
+             source,
+             fs::directory_options::skip_permission_denied,
+             ec);
+         !ec && it != fs::recursive_directory_iterator();
+         ++it)
+    {
+      const fs::path current = it->path();
+
+      std::error_code relEc;
+      const fs::path relative =
+          fs::relative(current, source, relEc);
+
+      if (relEc)
+      {
+        continue;
+      }
+
+      const fs::path target = destination / relative;
+
+      if (it->is_directory(ec) && !ec)
+      {
+        fs::create_directories(target, ec);
+
+        if (ec)
+        {
+          error("Unable to create resource subdirectory: " + target.string());
+          hint(ec.message());
+          return 1;
+        }
+
+        continue;
+      }
+
+      if (!it->is_regular_file(ec) || ec)
+      {
+        continue;
+      }
+
+      fs::create_directories(target.parent_path(), ec);
+
+      if (ec)
+      {
+        error("Unable to create resource parent directory: " + ec.message());
+        return 1;
+      }
+
+      fs::copy_file(
+          current,
+          target,
+          fs::copy_options::overwrite_existing,
+          ec);
+
+      if (ec)
+      {
+        error("Unable to copy resource: " + current.string());
+        hint(ec.message());
+        return 1;
+      }
+    }
+
+    if (ec)
+    {
+      error("Unable to copy resource directory: " + source.string());
+      hint(ec.message());
+      return 1;
+    }
+
+    return 0;
+  }
+
+  int copy_desktop_runtime_resources(
+      const DesktopOptions &options,
+      const fs::path &bundleDir,
+      const fs::path &serverExecutable)
+  {
+    using namespace vix::cli::style;
+
+    const fs::path baseDir =
+        resolve_desktop_resource_base_directory(options, serverExecutable);
+
+    std::vector<fs::path> sources;
+
+    if (options.autoResources)
+    {
+      for (const std::string &name : default_desktop_resource_names())
+      {
+        const fs::path source = baseDir / name;
+
+        std::error_code ec;
+        if (fs::exists(source, ec) && !ec)
+        {
+          sources.push_back(source);
+        }
+      }
+    }
+
+    for (const std::string &resourcePath : options.resourcePaths)
+    {
+      fs::path source = resourcePath;
+
+      if (source.is_relative())
+      {
+        source = fs::current_path() / source;
+      }
+
+      source = fs::absolute(source).lexically_normal();
+
+      std::error_code ec;
+      if (!fs::exists(source, ec) || ec)
+      {
+        error("Resource path not found: " + source.string());
+        return 1;
+      }
+
+      bool duplicate = false;
+
+      for (const fs::path &existing : sources)
+      {
+        if (same_path(existing, source))
+        {
+          duplicate = true;
+          break;
+        }
+      }
+
+      if (!duplicate)
+      {
+        sources.push_back(source);
+      }
+    }
+
+    for (const fs::path &source : sources)
+    {
+      if (path_is_inside(source, bundleDir))
+      {
+        continue;
+      }
+
+      const fs::path destination =
+          bundleDir / source.filename();
+
+      const int copyCode =
+          copy_path_recursive(source, destination);
+
+      if (copyCode != 0)
+      {
+        return copyCode;
+      }
+
+      step("resource: " + source.filename().string());
+    }
+
+    return 0;
+  }
+
   int build_desktop_bundle(const DesktopOptions &options)
   {
     using namespace vix::cli::style;
@@ -1500,6 +1832,17 @@ namespace
 
     make_executable(bundledServer);
     make_executable(bundledVix);
+
+    const int resourcesCode =
+        copy_desktop_runtime_resources(
+            options,
+            bundleDir,
+            serverExecutable);
+
+    if (resourcesCode != 0)
+    {
+      return resourcesCode;
+    }
 
     std::string iconName;
     const int iconCode = copy_optional_icon(options, resourcesDir, iconName);
@@ -1722,6 +2065,9 @@ namespace vix::commands
         << "  -j, --jobs <n>              Parallel build jobs\n"
         << "  --with-sqlite               Enable SQLite support for script build\n"
         << "  --with-mysql                Enable MySQL support for script build\n"
+        << "  --resources <path>          Copy an extra runtime resource file or directory\n"
+        << "  --resource <path>           Same as --resources\n"
+        << "  --no-auto-resources         Do not auto-copy templates/assets/static/public/views/resources\n"
         << "  --local-cache               Use local .vix-scripts cache\n\n";
 
     return 0;

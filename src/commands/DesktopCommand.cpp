@@ -1074,27 +1074,66 @@ namespace
     return config;
   }
 
+  int build_server_executable(
+      const DesktopOptions &options,
+      fs::path &serverExecutable);
+
   int run_desktop_app(DesktopOptions options)
   {
     using namespace vix::cli::style;
 
     if (!options.target.empty() && options.serverCommand.empty())
     {
-      fs::path targetPath = options.target;
+      fs::path targetPath =
+          fs::absolute(options.target).lexically_normal();
 
       if (is_cpp_file(targetPath))
       {
+        fs::path serverExecutable;
+
+        const int buildCode =
+            build_server_executable(options, serverExecutable);
+
+        if (buildCode != 0)
+        {
+          return buildCode;
+        }
+
         options.serverCommand =
-            "vix run --force-server " + shell_quote(targetPath.string());
+            shell_quote(serverExecutable.string());
+
+        if (options.serverWorkingDirectory.empty())
+        {
+          options.serverWorkingDirectory =
+              targetPath.parent_path().string();
+        }
       }
       else
       {
-        options.serverCommand = shell_quote(targetPath.string());
+        if (!fs::exists(targetPath))
+        {
+          error("Desktop server target not found: " + targetPath.string());
+          return 1;
+        }
+
+        if (!is_regular_executable(targetPath))
+        {
+          error("Desktop server target is not executable: " + targetPath.string());
+          return 1;
+        }
+
+        options.serverCommand =
+            shell_quote(targetPath.string());
+
+        if (options.serverWorkingDirectory.empty())
+        {
+          options.serverWorkingDirectory =
+              targetPath.parent_path().string();
+        }
       }
 
       options.startServer = true;
     }
-
     if (options.url.empty())
     {
       options.url = local_url(options.host, options.port);

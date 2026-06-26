@@ -68,7 +68,7 @@ namespace
 
     bool startServer{false};
     bool waitForServer{true};
-    std::chrono::milliseconds startupTimeout{5000};
+    std::chrono::milliseconds startupTimeout{30000};
 
     std::string serverCommand{};
     std::string serverWorkingDirectory{};
@@ -100,6 +100,53 @@ namespace
 
     out = static_cast<std::uint16_t>(port);
     return true;
+  }
+
+  std::string shell_quote_env_value(const std::string &value)
+  {
+    std::string out;
+    out.reserve(value.size() + 2);
+
+    out += "'";
+
+    for (char ch : value)
+    {
+      if (ch == '\'')
+      {
+        out += "'\\''";
+      }
+      else
+      {
+        out += ch;
+      }
+    }
+
+    out += "'";
+    return out;
+  }
+
+  std::string with_desktop_server_env(
+      const DesktopOptions &options,
+      const std::string &command)
+  {
+    if (command.empty())
+    {
+      return command;
+    }
+
+    std::string out;
+
+    out += "SERVER_HOST=";
+    out += shell_quote_env_value(options.host);
+    out += " ";
+
+    out += "SERVER_PORT=";
+    out += std::to_string(options.port);
+    out += " ";
+
+    out += command;
+
+    return out;
   }
 
   bool parse_positive_int(const std::string &value, int &out)
@@ -651,7 +698,8 @@ namespace
 
     if (!options.serverCommand.empty())
     {
-      config.set_server_command(options.serverCommand);
+      config.set_server_command(
+          with_desktop_server_env(options, options.serverCommand));
     }
 
     if (!options.serverWorkingDirectory.empty())
@@ -684,8 +732,8 @@ namespace
 
     vix::ui::AppShell shell(config);
 
-    info("Starting Vix desktop shell.");
-    step(shell.target_url());
+    info("Preparing Vix desktop shell.");
+    step("target: " + shell.target_url());
 
     vix::ui::Result<void> result = shell.start();
 
@@ -786,7 +834,7 @@ namespace vix::commands
         << "  --working-directory <dir>   Same as --cwd <dir>\n"
         << "  --wait                      Wait for the server to become reachable, default\n"
         << "  --no-wait                   Do not wait for server readiness\n"
-        << "  --timeout-ms <ms>           Server startup timeout. Default: 5000\n\n"
+        << "  --timeout-ms <ms>           Server startup timeout. Default: 30000\n\n"
 
         << "Metadata options:\n"
         << "  --app-id <id>               Stable desktop application id\n"

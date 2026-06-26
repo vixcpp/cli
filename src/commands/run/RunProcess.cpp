@@ -191,11 +191,13 @@ namespace vix::commands::RunCommand::detail
 
   namespace
   {
-    static volatile sig_atomic_t g_sigint_requested = 0;
+    static volatile sig_atomic_t g_signal_requested = 0;
+    static volatile sig_atomic_t g_requested_signal = 0;
 
-    void on_sigint(int)
+    void on_runtime_signal(int sig)
     {
-      g_sigint_requested = 1;
+      g_signal_requested = 1;
+      g_requested_signal = sig;
     }
 
     bool is_runtime_crash_noise_line(std::string_view line) noexcept
@@ -236,28 +238,58 @@ namespace vix::commands::RunCommand::detail
       return out;
     }
 
-    struct SigintGuard
+    struct RuntimeSignalGuard
     {
-      struct sigaction oldAction{};
-      bool installed = false;
+      struct sigaction oldInt{};
+      struct sigaction oldTerm{};
+      struct sigaction oldHup{};
 
-      SigintGuard()
+      bool installedInt = false;
+      bool installedTerm = false;
+      bool installedHup = false;
+
+      RuntimeSignalGuard()
       {
-        g_sigint_requested = 0;
+        g_signal_requested = 0;
+        g_requested_signal = 0;
 
         struct sigaction sa{};
-        sa.sa_handler = on_sigint;
+        sa.sa_handler = on_runtime_signal;
         sigemptyset(&sa.sa_mask);
         sa.sa_flags = 0;
 
-        if (sigaction(SIGINT, &sa, &oldAction) == 0)
-          installed = true;
+        if (sigaction(SIGINT, &sa, &oldInt) == 0)
+        {
+          installedInt = true;
+        }
+
+        if (sigaction(SIGTERM, &sa, &oldTerm) == 0)
+        {
+          installedTerm = true;
+        }
+
+        if (sigaction(SIGHUP, &sa, &oldHup) == 0)
+        {
+          installedHup = true;
+        }
       }
 
-      ~SigintGuard()
+      ~RuntimeSignalGuard()
       {
-        if (installed)
-          sigaction(SIGINT, &oldAction, nullptr);
+        if (installedInt)
+        {
+          sigaction(SIGINT, &oldInt, nullptr);
+        }
+
+        if (installedTerm)
+        {
+          sigaction(SIGTERM, &oldTerm, nullptr);
+        }
+
+        if (installedHup)
+        {
+          sigaction(SIGHUP, &oldHup, nullptr);
+        }
       }
     };
 
@@ -1297,7 +1329,7 @@ namespace vix::commands::RunCommand::detail
       bool captureOnly,
       vix::commands::replay::ReplayCapture *replayCapture)
   {
-    SigintGuard sigGuard;
+    RuntimeSignalGuard signalGuard;
     LiveRunResult result;
 
     PtySession pty;
@@ -1465,10 +1497,15 @@ namespace vix::commands::RunCommand::detail
 
     while (running)
     {
-      if (!sentInt && g_sigint_requested)
+      if (!sentInt && g_signal_requested)
       {
-        userInterrupted = true;
-        kill_group_or_pid(pid, SIGINT);
+        const int requestedSignal =
+            g_requested_signal > 0 ? static_cast<int>(g_requested_signal) : SIGTERM;
+
+        userInterrupted = requestedSignal == SIGINT;
+
+        kill_group_or_pid(pid, requestedSignal);
+
         sentInt = true;
         intTime = std::chrono::steady_clock::now();
       }

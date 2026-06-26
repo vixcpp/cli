@@ -1088,12 +1088,23 @@ namespace vix::commands::RunCommand::detail
           (rr.terminatedBySignal && rr.termSignal == SIGINT) ||
           log_looks_like_interrupt(runtimeLog);
 
+      const bool stoppedByDesktopOrSupervisor =
+          opt.forceServerLike &&
+          ((rr.terminatedBySignal &&
+            (rr.termSignal == SIGTERM || rr.termSignal == SIGHUP)) ||
+           runCode == 143 ||
+           runCode == 129);
+
       if (interruptedBySigint)
       {
         hint("ℹ Program interrupted by user (SIGINT).");
         return 0;
       }
 
+      if (stoppedByDesktopOrSupervisor)
+      {
+        return 0;
+      }
       const bool looksSanOrUb =
           !runtimeLog.empty() && log_looks_like_sanitizer_or_ub(runtimeLog);
 

@@ -24,6 +24,7 @@
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/NoteCommand.hpp>
 #include <vix/cli/commands/DesktopCommand.hpp>
+#include <vix/cli/commands/MobileCommand.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/DbCommand.hpp>
@@ -185,6 +186,14 @@ namespace vix::cli::dispatch
          { return vix::commands::DesktopCommand::run(a); },
          []()
          { return vix::commands::DesktopCommand::help(); }});
+
+    add({"mobile",
+         "Project",
+         "Generate mobile WebView shells for Vix web apps",
+         [](const Args &a)
+         { return vix::commands::MobileCommand::run(a); },
+         []()
+         { return vix::commands::MobileCommand::help(); }});
 
     add({"p2p",
          "Network",

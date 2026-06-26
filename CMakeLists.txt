@@ -31,6 +31,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VIX_ENABLE_LTO "Enable LTO in Release builds" OFF)
+option(VIX_CLI_ENABLE_DESKTOP "Enable vix desktop support through vix::ui" OFF)
 
 # ----------------------------------------------------
 # CLI test isolation
@@ -115,6 +116,7 @@ get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUT
 
 set(_VIX_REPLY_DIR "${_VIX_MODULES_DIR}/reply")
 set(_VIX_NOTE_DIR  "${_VIX_MODULES_DIR}/note")
+set(_VIX_UI_DIR    "${_VIX_MODULES_DIR}/ui")
 
 if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
   add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
@@ -126,6 +128,14 @@ if (EXISTS "${_VIX_NOTE_DIR}/CMakeLists.txt" AND NOT TARGET vix::note)
   set(VIX_NOTE_INSTALL OFF CACHE BOOL "" FORCE)
 
   add_subdirectory("${_VIX_NOTE_DIR}" "${CMAKE_BINARY_DIR}/_vix_note")
+endif()
+
+if (VIX_CLI_ENABLE_DESKTOP AND EXISTS "${_VIX_UI_DIR}/CMakeLists.txt" AND NOT TARGET vix::ui)
+  set(VIX_UI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_UI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(VIX_UI_INSTALL OFF CACHE BOOL "" FORCE)
+
+  add_subdirectory("${_VIX_UI_DIR}" "${CMAKE_BINARY_DIR}/_vix_ui")
 endif()
 
 # ----------------------------------------------------
@@ -168,6 +178,7 @@ else()
   set(_VIX_DB_DIR        "${_VIX_MODULES_DIR}/db")
   set(_VIX_WEBSOCKET_DIR "${_VIX_MODULES_DIR}/websocket")
   set(_VIX_NOTE_DIR      "${_VIX_MODULES_DIR}/note")
+  set(_VIX_UI_DIR        "${_VIX_MODULES_DIR}/ui")
 
   set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
@@ -298,6 +309,10 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::note)
     endif()
 
+    if (VIX_CLI_ENABLE_DESKTOP AND TARGET vix::ui)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ui)
+    endif()
+
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UTILS_DIR}/include")
@@ -314,6 +329,9 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_WEBSOCKET_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_NOTE_DIR}/include")
+    if (VIX_CLI_ENABLE_DESKTOP)
+      vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UI_DIR}/include")
+    endif()
 
     if (_VIX_LOCAL_LINK_TARGETS)
       list(REMOVE_DUPLICATES _VIX_LOCAL_LINK_TARGETS)
@@ -425,6 +443,21 @@ if (TARGET vix::note)
   target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_NOTE=1)
 else()
   message(STATUS "[cli] Note command disabled: vix::note target not found")
+endif()
+
+# ----------------------------------------------------
+# Optional UI desktop command support
+# ----------------------------------------------------
+if (VIX_CLI_ENABLE_DESKTOP AND TARGET vix::ui)
+  message(STATUS "[cli] UI desktop command enabled")
+  target_link_libraries(vix_cli PRIVATE vix::ui)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_UI=1)
+else()
+  if (VIX_CLI_ENABLE_DESKTOP)
+    message(STATUS "[cli] UI desktop command disabled: vix::ui target not found")
+  else()
+    message(STATUS "[cli] UI desktop command disabled: VIX_CLI_ENABLE_DESKTOP=OFF")
+  endif()
 endif()
 
 # ----------------------------------------------------

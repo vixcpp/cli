@@ -189,6 +189,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF
@@ -325,6 +326,7 @@ jobs:
           cmake -S . -B build-install -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \

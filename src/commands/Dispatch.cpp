@@ -23,6 +23,7 @@
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/NoteCommand.hpp>
+#include <vix/cli/commands/DesktopCommand.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/OrmCommand.hpp>
 #include <vix/cli/commands/DbCommand.hpp>
@@ -176,6 +177,14 @@ namespace vix::cli::dispatch
          { return vix::commands::NoteCommand::run(a); },
          []()
          { return vix::commands::NoteCommand::help(); }});
+
+    add({"desktop",
+         "Project",
+         "Open a Vix web UI app in a desktop shell",
+         [](const Args &a)
+         { return vix::commands::DesktopCommand::run(a); },
+         []()
+         { return vix::commands::DesktopCommand::help(); }});
 
     add({"p2p",
          "Network",

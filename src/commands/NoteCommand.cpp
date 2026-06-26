@@ -99,6 +99,78 @@ namespace
     return true;
   }
 
+  std::string default_workspace_title()
+  {
+    std::error_code ec;
+    fs::path cwd = fs::current_path(ec);
+
+    if (!ec)
+    {
+      const std::string name = cwd.filename().string();
+
+      if (!name.empty())
+      {
+        return name;
+      }
+    }
+
+    return "Untitled Note";
+  }
+
+  fs::path next_untitled_note_path()
+  {
+    for (int i = 0; i < 1000; ++i)
+    {
+      fs::path candidate =
+          i == 0
+              ? fs::path("Untitled.vixnote")
+              : fs::path("Untitled-" + std::to_string(i) + ".vixnote");
+
+      std::error_code ec;
+
+      if (!fs::exists(candidate, ec) && !ec)
+      {
+        return candidate;
+      }
+    }
+
+    return fs::path("Untitled.vixnote");
+  }
+
+  vix::note::NoteDocument make_workspace_note_document()
+  {
+    const std::string title = default_workspace_title();
+
+    vix::note::NoteDocument document(title);
+    document.set_path(next_untitled_note_path().string());
+
+    document.add_cell(
+        vix::note::NoteCell(
+            "intro",
+            vix::note::NoteCellKind::Markdown,
+            "# " + title + "\n\nStart writing your note here."));
+
+    return document;
+  }
+
+  fs::path note_context_path(const fs::path &notePath)
+  {
+    if (!notePath.empty())
+    {
+      return notePath;
+    }
+
+    std::error_code ec;
+    fs::path cwd = fs::current_path(ec);
+
+    if (!ec)
+    {
+      return cwd;
+    }
+
+    return fs::path(".");
+  }
+
   int run_export_command(const std::vector<std::string> &args)
   {
     using namespace vix::cli::style;
@@ -547,47 +619,55 @@ namespace vix::commands
       notePath = arg;
     }
 
-    if (notePath.empty())
-    {
-      error("No Vix Note file provided.");
-      hint("Usage: vix note <file.vixnote> [options]");
-      hint("Example: vix note examples/hello.vixnote");
-      return 1;
-    }
+    const bool workspaceMode = notePath.empty();
 
     std::error_code ec;
+    vix::note::NoteDocument document;
 
-    if (!fs::exists(notePath, ec) || ec)
+    if (workspaceMode)
     {
-      error("Note file not found: " + notePath.string());
-      hint("Create a .vixnote file or pass the correct path.");
-      return 1;
+      document = make_workspace_note_document();
+
+      info("Starting Vix Note workspace:");
+      step(fs::current_path(ec).string());
     }
-
-    if (!fs::is_regular_file(notePath, ec) || ec)
+    else
     {
-      error("Note path is not a file: " + notePath.string());
-      return 1;
-    }
+      if (!fs::exists(notePath, ec) || ec)
+      {
+        error("Note file not found: " + notePath.string());
+        hint("Create a .vixnote file or pass the correct path.");
+        return 1;
+      }
 
-    if (notePath.extension() != ".vixnote")
-    {
-      error("Invalid note file extension: " + notePath.string());
-      hint("Expected a .vixnote file.");
-      return 1;
-    }
+      if (!fs::is_regular_file(notePath, ec) || ec)
+      {
+        error("Note path is not a file: " + notePath.string());
+        return 1;
+      }
 
-    vix::note::NoteLoadResult loaded = vix::note::load_note(notePath);
+      if (notePath.extension() != ".vixnote")
+      {
+        error("Invalid note file extension: " + notePath.string());
+        hint("Expected a .vixnote file.");
+        return 1;
+      }
 
-    if (!loaded.ok)
-    {
-      error("Unable to load note file.");
-      hint(loaded.error.empty() ? notePath.string() : loaded.error);
-      return 1;
+      vix::note::NoteLoadResult loaded =
+          vix::note::load_note(notePath);
+
+      if (!loaded.ok)
+      {
+        error("Unable to load note file.");
+        hint(loaded.error.empty() ? notePath.string() : loaded.error);
+        return 1;
+      }
+
+      document = std::move(loaded.document);
     }
 
     vix::note::ProjectContext projectContext =
-        vix::note::detect_project_context(notePath);
+        vix::note::detect_project_context(note_context_path(notePath));
 
     vix::note::NoteServerOptions options;
     options.host = host;
@@ -597,7 +677,7 @@ namespace vix::commands
     options.logRequests = true;
 
     vix::note::NoteServer server(
-        std::move(loaded.document),
+        std::move(document),
         options);
 
     vix::note::NoteResult started = server.start();
@@ -627,7 +707,7 @@ namespace vix::commands
 #ifdef VIX_CLI_HAS_UI
       return run_note_desktop_shell(
           server,
-          notePath,
+          workspaceMode ? note_context_path(notePath) : notePath,
           shellWidth,
           shellHeight,
           devtools,
@@ -668,12 +748,13 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix note <file.vixnote> [options]\n"
+        << "  vix note [file.vixnote] [options]\n"
         << "  vix note export <file.vixnote> --out <file.html> [options]\n\n"
 
         << "Description:\n"
         << "  Open a Vix Note document in a local browser UI or desktop WebView shell.\n"
-        << "  The command loads a .vixnote file, starts a local note server,\n"
+        << "  Without a file, the command starts a Vix Note workspace in the current directory.\n"
+        << "  With a .vixnote file, it loads that document and starts a local note server.\n"
         << "  and exposes the visual workspace through HTTP.\n"
         << "  It can also export a .vixnote file to a standalone HTML lesson.\n\n"
 
@@ -691,9 +772,12 @@ namespace vix::commands
         << "  --devtools          Enable WebView developer tools when supported\n"
         << "  --fullscreen        Start desktop shell fullscreen\n"
         << "  --no-resizable      Disable desktop shell resizing\n"
+        << "  file.vixnote         Optional note file to open. If omitted, starts in the current directory\n"
         << "  -h, --help          Show this help\n\n"
 
         << "Examples:\n"
+        << "  vix note\n"
+        << "  vix note --desktop\n"
         << "  vix note examples/hello.vixnote\n"
         << "  vix note lessons/pointers.vixnote --port 5180\n"
         << "  vix note export examples/hello.vixnote --out hello.html\n"

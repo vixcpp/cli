@@ -45,6 +45,8 @@ namespace
     return arg == "-h" || arg == "--help" || arg == "help";
   }
 
+#ifdef VIX_CLI_HAS_UI
+
   bool is_command_arg(const std::string &arg)
   {
     return arg == "run" ||
@@ -1004,6 +1006,7 @@ namespace
 
     return 0;
   }
+#endif
 }
 
 #ifdef VIX_CLI_HAS_UI
@@ -1981,6 +1984,7 @@ namespace vix::commands
       return help();
     }
 
+#ifdef VIX_CLI_HAS_UI
     DesktopAction action = DesktopAction::Run;
     std::vector<std::string> commandArgs = args;
 
@@ -2020,12 +2024,8 @@ namespace vix::commands
       action = DesktopAction::Run;
     }
 
-#ifdef VIX_CLI_HAS_UI
     return run_desktop_command(action, commandArgs);
 #else
-    (void)action;
-    (void)commandArgs;
-
     error("Vix desktop is not available in this build.");
     hint("Build the CLI with the vix::ui module enabled.");
     hint("Expected compile definition: VIX_CLI_HAS_UI=1");

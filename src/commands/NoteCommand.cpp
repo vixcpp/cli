@@ -714,6 +714,12 @@ namespace vix::commands
           fullscreen,
           resizable);
 #else
+      (void)devtools;
+      (void)fullscreen;
+      (void)resizable;
+      (void)shellWidth;
+      (void)shellHeight;
+
       (void)server.stop();
 
       error("Vix Note desktop shell is not available in this build.");

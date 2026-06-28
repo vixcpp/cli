@@ -96,6 +96,7 @@ namespace vix::commands
       bool sdkInfo{false};
 
       std::string sdkProfile{"default"};
+      std::vector<std::string> sdkProfiles;
       std::optional<std::string> version;
       std::optional<std::string> globalSpec;
     };
@@ -326,6 +327,47 @@ namespace vix::commands
       std::cout << j.dump(2) << "\n";
     }
 
+    std::vector<std::string> split_sdk_profiles(const std::string &raw)
+    {
+      std::vector<std::string> out;
+      std::string cur;
+
+      auto push = [&]()
+      {
+        std::string v = to_lower(trim_copy(cur));
+        cur.clear();
+
+        if (!v.empty())
+          out.push_back(v);
+      };
+
+      for (char c : raw)
+      {
+        if (c == ',' || c == ';')
+        {
+          push();
+          continue;
+        }
+
+        cur.push_back(c);
+      }
+
+      push();
+      return out;
+    }
+
+    void add_sdk_profile_arg(Options &o, const std::string &raw)
+    {
+      for (const auto &profile : split_sdk_profiles(raw))
+      {
+        if (!profile.empty())
+          o.sdkProfiles.push_back(profile);
+      }
+
+      if (!o.sdkProfiles.empty())
+        o.sdkProfile = o.sdkProfiles.front();
+    }
+
     namespace ansi
     {
       constexpr const char *reset = "\033[0m";
@@ -458,7 +500,7 @@ namespace vix::commands
         const std::string &cmdLabel,
         const std::vector<std::pair<std::string, std::string>> &fields)
     {
-      os << "  " << f.hdr() << "  " << f.bold_("vix") << "  "
+      os << "  " << f.hdr() << "  " << f.grn(f.bold_("vix")) << "  "
          << f.dim_(cmdLabel) << "\n";
       os << "  " << f.dim_(std::string(36, '-')) << "\n";
 
@@ -1899,7 +1941,7 @@ namespace vix::commands
             }
             else
             {
-              o.sdkProfile = value;
+              add_sdk_profile_arg(o, value);
             }
           }
           else
@@ -1975,11 +2017,20 @@ namespace vix::commands
           }
           else if (o.sdkMode)
           {
-            if (!o.version.has_value())
+            if (is_sdk_info_token(a))
             {
-              o.version = a;
+              o.sdkInfo = true;
               continue;
             }
+
+            if (is_sdk_list_token(a))
+            {
+              o.sdkList = true;
+              continue;
+            }
+
+            add_sdk_profile_arg(o, a);
+            continue;
           }
           else
           {
@@ -1999,6 +2050,14 @@ namespace vix::commands
 
       if (o.sdkList && o.sdkInfo)
         throw std::runtime_error("--sdk list cannot be used with --sdk info");
+
+      if (o.sdkMode && o.sdkProfiles.empty() && !o.sdkList && !o.sdkInfo)
+      {
+        o.sdkProfiles.push_back(o.sdkProfile.empty() ? "default" : o.sdkProfile);
+      }
+
+      if (!o.sdkProfiles.empty())
+        o.sdkProfile = o.sdkProfiles.front();
 
       return o;
     }
@@ -3453,6 +3512,190 @@ namespace vix::commands
       }
     }
 
+    int run_sdk_upgrade_many(const Options &opt)
+    {
+      if (opt.sdkProfiles.size() <= 1)
+        return -1;
+
+      json result;
+      result["command"] = "upgrade";
+      result["mode"] = "sdk";
+      result["action"] = opt.check ? "check" : opt.dryRun ? "dry-run"
+                                                          : "upgrade";
+      result["profiles"] = json::array();
+
+      int rc = 0;
+
+      Platform platform = detect_platform();
+      const std::string repoStr = repo();
+
+      std::string version;
+
+      try
+      {
+        version = opt.version.has_value() ? *opt.version : resolve_latest_tag_github_api(repoStr);
+      }
+      catch (const std::exception &ex)
+      {
+        result["status"] = "error";
+        result["message"] = ex.what();
+
+        if (opt.jsonOut)
+        {
+          print_json(result);
+        }
+        else
+        {
+          Fmt f(std::cerr);
+          styled_error(
+              std::cerr,
+              f,
+              "Unable to resolve SDK version.",
+              "reason: " + std::string(ex.what()));
+        }
+
+        return 1;
+      }
+
+      result["repo"] = repoStr;
+      result["version"] = version;
+      result["platform"] = platform.label();
+      result["os"] = platform.os;
+      result["arch"] = platform.arch;
+
+      Fmt f(std::cout);
+
+      if (!opt.jsonOut)
+      {
+        const std::string targetKey = opt.version.has_value() ? "target" : "latest";
+
+        print_header_box(
+            std::cout,
+            f,
+            "upgrade --sdk",
+            {
+                {"profiles", f.blu(f.bold_(join_strings(opt.sdkProfiles, " ")))},
+                {targetKey, f.grn(f.bold_(version))},
+                {"platform", f.dim_(platform.label())},
+            });
+      }
+
+      auto short_sdk_reason = [&](const UpgradePlan &plan) -> std::string
+      {
+        if (plan.unsupportedReason == "unknown sdk profile")
+          return "unknown profile";
+
+        if (plan.unsupportedReason == "sdk asset not found")
+          return "not available for " + plan.version;
+
+        if (plan.unsupportedReason == "sdk asset not available for platform")
+          return "not available for " + plan.platform.label();
+
+        if (!plan.unsupportedReason.empty())
+          return plan.unsupportedReason;
+
+        return "not available";
+      };
+
+      for (const auto &profile : opt.sdkProfiles)
+      {
+        Options one = opt;
+        one.sdkProfile = profile;
+        one.sdkProfiles.clear();
+        one.version = version;
+
+        try
+        {
+          UpgradePlan plan = make_sdk_plan(one);
+          json item = plan_to_json(plan, one);
+          item["profile"] = profile;
+
+          if (!plan.supported)
+          {
+            item["status"] = "error";
+            item["message"] = plan.unsupportedReason;
+            rc = 1;
+
+            if (!opt.jsonOut)
+            {
+              sym_line(
+                  std::cout,
+                  f.err(),
+                  f.blu(f.bold_(profile)) + f.dim_(" — ") + short_sdk_reason(plan));
+            }
+          }
+          else if (plan.currentVersion.has_value() && *plan.currentVersion == plan.version && !one.check && !one.dryRun)
+          {
+            item["status"] = "ok";
+            item["action"] = "noop";
+            item["installed"] = *plan.currentVersion;
+            item["message"] = "already installed";
+
+            if (!opt.jsonOut)
+            {
+              sym_line(
+                  std::cout,
+                  f.ok(),
+                  f.blu(f.bold_(profile)) + f.dim_(" — already up to date (" + plan.version + ")"));
+            }
+          }
+          else if (one.check || one.dryRun)
+          {
+            item["status"] = "ok";
+            item["action"] = one.check ? "check" : "dry-run";
+            item["message"] = one.check ? "check mode: no download, no install" : "dry-run: no download, no install";
+
+            if (!opt.jsonOut)
+            {
+              sym_line(
+                  std::cout,
+                  f.dot(),
+                  f.blu(f.bold_(profile)) + f.dim_(one.check ? " — no files changed" : " — dry run, no files changed"));
+            }
+          }
+          else
+          {
+            if (!opt.jsonOut)
+            {
+              sym_line(
+                  std::cout,
+                  f.dot(),
+                  f.blu(f.bold_(profile)));
+            }
+
+            install_sdk(plan, one, item);
+          }
+
+          result["profiles"].push_back(item);
+        }
+        catch (const std::exception &ex)
+        {
+          rc = 1;
+
+          result["profiles"].push_back({
+              {"profile", profile},
+              {"status", "error"},
+              {"message", ex.what()},
+          });
+
+          if (!opt.jsonOut)
+          {
+            sym_line(
+                std::cout,
+                f.err(),
+                f.blu(f.bold_(profile)) + f.dim_(" — ") + std::string(ex.what()));
+          }
+        }
+      }
+
+      result["status"] = rc == 0 ? "ok" : "error";
+
+      if (opt.jsonOut)
+        print_json(result);
+
+      return rc;
+    }
+
     int run_sdk_upgrade(const Options &opt)
     {
       json result;
@@ -3462,6 +3705,9 @@ namespace vix::commands
 
       if (opt.sdkInfo)
         return run_sdk_info(opt);
+
+      if (opt.sdkProfiles.size() > 1)
+        return run_sdk_upgrade_many(opt);
 
       try
       {
@@ -3728,6 +3974,8 @@ namespace vix::commands
         << "  vix upgrade --sdk info [profile]\n"
         << "  vix upgrade --sdk [profile] --version vX.Y.Z\n"
         << "  vix upgrade --sdk-info <profile>\n"
+        << "  vix upgrade --sdk <profile...>\n"
+        << "  vix upgrade --sdk web data desktop\n"
         << "  vix upgrade -g [@]namespace/name[@version]\n\n"
 
         << "SDK profiles\n"
@@ -3753,6 +4001,8 @@ namespace vix::commands
         << "  vix upgrade --sdk web --info\n"
         << "  vix upgrade --sdk all --version v2.7.0\n"
         << "  vix upgrade --sdk-info desktop\n"
+        << "  vix upgrade --sdk web data\n"
+        << "  vix upgrade --sdk web,data,desktop\n"
         << "  vix upgrade -g gk/jwt\n"
         << "  vix upgrade -g gk/jwt@1.0.0\n"
         << "  vix upgrade -g @gk/jwt\n\n"
@@ -3781,6 +4031,8 @@ namespace vix::commands
         << "  • SDK info shows modules, required system dependencies and documentation links\n"
         << "  • Global package upgrades use the registry + ~/.vix/global/installed.json\n"
         << "  • On Unix, minisign is verified if available; sha256 is always required\n"
+        << "  • Multiple SDK profiles can be installed at once: vix upgrade --sdk web data\n"
+        << "  • The `all` profile is a complete SDK profile, not a batch alias\n"
         << "  • SDK docs: https://vixcpp.com/sdks/\n";
 
     return 0;

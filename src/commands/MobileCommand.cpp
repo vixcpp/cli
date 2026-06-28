@@ -15,26 +15,251 @@
  */
 
 #include <vix/cli/commands/MobileCommand.hpp>
-#include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <vector>
-#include <cstdlib>
+
+#ifdef _WIN32
+#include <io.h>
+#define VIX_MOB_ISATTY(fd) _isatty(fd)
+#define VIX_MOB_FILENO(stream) _fileno(stream)
+#else
+#include <unistd.h>
+#define VIX_MOB_ISATTY(fd) ::isatty(fd)
+#define VIX_MOB_FILENO(stream) ::fileno(stream)
+#endif
 
 namespace fs = std::filesystem;
 
 namespace
 {
+  // -------------------------------------------------------------------------
+  //  Color handling (ANSI), auto-detected and overridable.
+  // -------------------------------------------------------------------------
+
+  struct MobileTheme
+  {
+    bool color = true;
+
+    std::string_view reset() const { return color ? "\x1b[0m" : ""; }
+    std::string_view dim() const { return color ? "\x1b[2m" : ""; }
+    std::string_view bold() const { return color ? "\x1b[1m" : ""; }
+
+    std::string_view green() const { return color ? "\x1b[32m" : ""; }
+    std::string_view cyan() const { return color ? "\x1b[36m" : ""; }
+    std::string_view yellow() const { return color ? "\x1b[33m" : ""; }
+    std::string_view red() const { return color ? "\x1b[31m" : ""; }
+    std::string_view gray() const { return color ? "\x1b[90m" : ""; }
+  };
+
+  bool mob_detect_color(std::ostream &os)
+  {
+    if (std::getenv("NO_COLOR") != nullptr)
+    {
+      return false;
+    }
+
+    if (std::getenv("FORCE_COLOR") != nullptr)
+    {
+      return true;
+    }
+
+    std::FILE *target = (&os == &std::cerr) ? stderr : stdout;
+
+    return VIX_MOB_ISATTY(VIX_MOB_FILENO(target)) != 0;
+  }
+
+  // -------------------------------------------------------------------------
+  //  Output verbosity, controlled by CLI flags (modern-runtime style).
+  // -------------------------------------------------------------------------
+
+  enum class MobileLogMode
+  {
+    Normal,
+    Quiet,
+    Json
+  };
+
+  struct MobileReporter
+  {
+    MobileTheme theme;
+    MobileLogMode mode = MobileLogMode::Normal;
+
+    bool normal() const { return mode == MobileLogMode::Normal; }
+    bool json() const { return mode == MobileLogMode::Json; }
+
+    void banner(std::string_view title) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << '\n'
+                << "  " << theme.green() << theme.bold() << title << theme.reset()
+                << '\n';
+    }
+
+    void row(std::string_view key, std::string_view value,
+             std::string_view valueColor = {}) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      constexpr std::size_t keyWidth = 9;
+
+      std::string label(key);
+      if (label.size() < keyWidth)
+      {
+        label.append(keyWidth - label.size(), ' ');
+      }
+
+      std::cout << "  " << theme.dim() << label << theme.reset() << "  "
+                << (valueColor.empty() ? theme.reset() : valueColor)
+                << value << theme.reset() << '\n';
+    }
+
+    void info_line(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.cyan() << "info" << theme.reset()
+                << "  " << message << '\n';
+    }
+
+    void step(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.gray() << "\u2022 " << theme.reset()
+                << message << '\n';
+    }
+
+    void hint(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.gray() << message << theme.reset() << '\n';
+    }
+
+    void success(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.green() << "\u2714" << theme.reset()
+                << " " << message << '\n';
+    }
+
+    // Errors always print (even in quiet mode), to stderr.
+    void error(std::string_view message) const
+    {
+      std::cerr << "  " << theme.red() << theme.bold() << "error" << theme.reset()
+                << "  " << message << '\n';
+    }
+
+    void error_hint(std::string_view message) const
+    {
+      if (message.empty())
+      {
+        return;
+      }
+
+      std::cerr << "  " << theme.gray() << message << theme.reset() << '\n';
+    }
+
+    void event(std::string_view name, std::string_view key = {},
+               std::string_view value = {}) const
+    {
+      if (!json())
+      {
+        return;
+      }
+
+      std::cout << "{\"event\":\"" << name << "\"";
+
+      if (!key.empty())
+      {
+        std::cout << ",\"" << key << "\":\"" << value << "\"";
+      }
+
+      std::cout << "}\n";
+      std::cout.flush();
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  //  Output-flag parsing (--quiet / --json / --color), shared by subcommands.
+  // -------------------------------------------------------------------------
+
+  bool mob_take_output_flag(const std::string &arg,
+                            MobileLogMode &mode,
+                            int &colorOverride) // -1 auto, 0 off, 1 on
+  {
+    if (arg == "--quiet" || arg == "-q" || arg == "--silent")
+    {
+      mode = MobileLogMode::Quiet;
+      return true;
+    }
+
+    if (arg == "--json")
+    {
+      mode = MobileLogMode::Json;
+      return true;
+    }
+
+    if (arg == "--no-color" || arg == "--no-colour")
+    {
+      colorOverride = 0;
+      return true;
+    }
+
+    if (arg == "--color" || arg == "--colour")
+    {
+      colorOverride = 1;
+      return true;
+    }
+
+    return false;
+  }
+
+  void mob_finalize_reporter(MobileReporter &out, MobileLogMode mode, int colorOverride)
+  {
+    out.mode = mode;
+    out.theme.color =
+        (colorOverride == -1) ? mob_detect_color(std::cout) : (colorOverride == 1);
+  }
+
+  // -------------------------------------------------------------------------
+  //  Option structures
+  // -------------------------------------------------------------------------
+
   struct AndroidMobileOptions
   {
     std::string name{"Vix Mobile"};
@@ -54,6 +279,9 @@ namespace
 
     bool allowCleartext{false};
     bool force{false};
+
+    MobileLogMode logMode{MobileLogMode::Normal};
+    int colorOverride{-1};
   };
 
   bool is_help_arg(const std::string &arg)
@@ -74,7 +302,7 @@ namespace
       return false;
     }
 
-    int parsed = 0;
+    long parsed = 0;
 
     const char *begin = value.data();
     const char *end = value.data() + value.size();
@@ -86,34 +314,33 @@ namespace
       return false;
     }
 
-    if (parsed <= 0)
+    if (parsed <= 0 || parsed > 100000000)
     {
       return false;
     }
 
-    out = parsed;
+    out = static_cast<int>(parsed);
     return true;
   }
 
   bool consume_value(
+      const MobileReporter &out,
       const std::vector<std::string> &args,
       std::size_t &index,
       const std::string &option,
-      std::string &out)
+      std::string &value)
   {
-    using namespace vix::cli::style;
-
     if (index + 1 >= args.size())
     {
-      error("Missing value for " + option + ".");
+      out.error("Missing value for " + option + ".");
       return false;
     }
 
-    out = args[++index];
+    value = args[++index];
 
-    if (out.empty())
+    if (value.empty())
     {
-      error("Value for " + option + " cannot be empty.");
+      out.error("Value for " + option + " cannot be empty.");
       return false;
     }
 
@@ -812,6 +1039,9 @@ android.useAndroidX=false
     bool release{false};
     bool skipInstall{false};
     bool force{false};
+
+    MobileLogMode logMode{MobileLogMode::Normal};
+    int colorOverride{-1};
   };
 
   void resolve_android_project_directory(AndroidProjectCommandOptions &options)
@@ -937,18 +1167,16 @@ android.useAndroidX=false
     return 1;
   }
 
-  int run_android_devices()
+  int run_android_devices(const MobileReporter &out)
   {
-    using namespace vix::cli::style;
-
-    info("Connected Android devices:");
+    out.info_line("Connected Android devices:");
 
     const int result = run_system_command("adb devices");
 
     if (result != 0)
     {
-      error("Unable to list Android devices.");
-      hint("Make sure adb is installed and available in PATH.");
+      out.error("Unable to list Android devices.");
+      out.error_hint("Make sure adb is installed and available in PATH.");
       return result;
     }
 
@@ -1065,11 +1293,10 @@ android.useAndroidX=false
   }
 
   int parse_android_project_command_options(
+      const MobileReporter &out,
       const std::vector<std::string> &args,
       AndroidProjectCommandOptions &options)
   {
-    using namespace vix::cli::style;
-
     for (std::size_t i = 0; i < args.size(); ++i)
     {
       const std::string &arg = args[i];
@@ -1079,11 +1306,16 @@ android.useAndroidX=false
         return 2;
       }
 
+      if (mob_take_output_flag(arg, options.logMode, options.colorOverride))
+      {
+        continue;
+      }
+
       if (arg == "--project")
       {
         std::string value;
 
-        if (!consume_value(args, i, "--project", value))
+        if (!consume_value(out, args, i, "--project", value))
         {
           return 1;
         }
@@ -1095,7 +1327,7 @@ android.useAndroidX=false
 
       if (arg == "--package")
       {
-        if (!consume_value(args, i, "--package", options.packageName))
+        if (!consume_value(out, args, i, "--package", options.packageName))
         {
           return 1;
         }
@@ -1105,7 +1337,7 @@ android.useAndroidX=false
 
       if (arg == "--gradle")
       {
-        if (!consume_value(args, i, "--gradle", options.gradleCommand))
+        if (!consume_value(out, args, i, "--gradle", options.gradleCommand))
         {
           return 1;
         }
@@ -1133,7 +1365,7 @@ android.useAndroidX=false
 
       if (arg == "--gradle-version")
       {
-        if (!consume_value(args, i, "--gradle-version", options.gradleVersion))
+        if (!consume_value(out, args, i, "--gradle-version", options.gradleVersion))
         {
           return 1;
         }
@@ -1143,7 +1375,7 @@ android.useAndroidX=false
 
       if (arg == "--distribution-type")
       {
-        if (!consume_value(args, i, "--distribution-type", options.distributionType))
+        if (!consume_value(out, args, i, "--distribution-type", options.distributionType))
         {
           return 1;
         }
@@ -1190,24 +1422,24 @@ android.useAndroidX=false
         continue;
       }
 
-      error("Unexpected mobile android argument: " + arg);
-      hint("Usage: vix mobile build android [--project mobile/android]");
-      hint("Usage: vix mobile run android [--project mobile/android]");
+      out.error("Unexpected mobile android argument: " + arg);
+      out.error_hint("Usage: vix mobile build android [--project mobile/android]");
+      out.error_hint("Usage: vix mobile run android [--project mobile/android]");
 
       return 1;
     }
 
     if (options.gradleVersion.empty())
     {
-      error("Gradle wrapper version cannot be empty.");
+      out.error("Gradle wrapper version cannot be empty.");
       return 1;
     }
 
     if (options.distributionType != "bin" &&
         options.distributionType != "all")
     {
-      error("Invalid Gradle wrapper distribution type.");
-      hint("Allowed values: bin, all");
+      out.error("Invalid Gradle wrapper distribution type.");
+      out.error_hint("Allowed values: bin, all");
       return 1;
     }
 
@@ -1216,12 +1448,13 @@ android.useAndroidX=false
 
   int run_build_android(const std::vector<std::string> &args)
   {
-    using namespace vix::cli::style;
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
 
     AndroidProjectCommandOptions options;
 
     const int parsed =
-        parse_android_project_command_options(args, options);
+        parse_android_project_command_options(out, args, options);
 
     if (parsed == 2)
     {
@@ -1233,6 +1466,8 @@ android.useAndroidX=false
       return parsed;
     }
 
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+
     resolve_android_project_directory(options);
 
     const fs::path appBuildFile =
@@ -1242,9 +1477,9 @@ android.useAndroidX=false
 
     if (!fs::exists(appBuildFile, ec) || ec)
     {
-      error("Android mobile project not found.");
-      hint("Expected file: " + appBuildFile.string());
-      hint("Run: vix mobile init android --name \"My App\" --url https://example.com");
+      out.error("Android mobile project not found.");
+      out.error_hint("Expected file: " + appBuildFile.string());
+      out.error_hint("Run: vix mobile init android --name \"My App\" --url https://example.com");
 
       return 1;
     }
@@ -1254,8 +1489,11 @@ android.useAndroidX=false
             ? ":app:assembleRelease"
             : ":app:assembleDebug";
 
-    info("Building Android mobile shell:");
-    step(options.projectDirectory.string());
+    out.event("build_start", "project", options.projectDirectory.string());
+
+    out.banner("Vix Mobile \u00b7 build");
+    out.row("project", options.projectDirectory.string());
+    out.row("variant", options.release ? "release" : "debug");
 
     const int result =
         run_system_command(
@@ -1266,35 +1504,34 @@ android.useAndroidX=false
 
     if (result != 0)
     {
-      error("Android mobile build failed.");
-      hint("Check the Gradle error above.");
-      hint("If it says SDK location not found, create local.properties with sdk.dir.");
-      hint("If it says mipmap/ic_launcher not found, regenerate the project after updating Vix.");
+      out.error("Android mobile build failed.");
+      out.error_hint("Check the Gradle error above.");
+      out.error_hint("If it says SDK location not found, create local.properties with sdk.dir.");
+      out.error_hint("If it says mipmap/ic_launcher not found, regenerate the project after updating Vix.");
       return result;
     }
 
-    success("Android mobile build completed.");
+    const fs::path apkDir =
+        options.release
+            ? options.projectDirectory / "app" / "build" / "outputs" / "apk" / "release"
+            : options.projectDirectory / "app" / "build" / "outputs" / "apk" / "debug";
 
-    if (options.release)
-    {
-      step((options.projectDirectory / "app" / "build" / "outputs" / "apk" / "release").string());
-    }
-    else
-    {
-      step((options.projectDirectory / "app" / "build" / "outputs" / "apk" / "debug").string());
-    }
+    out.event("build_done", "apk", apkDir.string());
+    out.success("Android mobile build completed.");
+    out.row("apk", apkDir.string(), out.theme.cyan());
 
     return 0;
   }
 
   int run_wrapper_android(const std::vector<std::string> &args)
   {
-    using namespace vix::cli::style;
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
 
     AndroidProjectCommandOptions options;
 
     const int parsed =
-        parse_android_project_command_options(args, options);
+        parse_android_project_command_options(out, args, options);
 
     if (parsed == 2)
     {
@@ -1306,6 +1543,8 @@ android.useAndroidX=false
       return parsed;
     }
 
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+
     resolve_android_project_directory(options);
 
     const fs::path appBuildFile =
@@ -1315,9 +1554,9 @@ android.useAndroidX=false
 
     if (!fs::exists(appBuildFile, ec) || ec)
     {
-      error("Android mobile project not found.");
-      hint("Expected file: " + appBuildFile.string());
-      hint("Run: vix mobile init android --name \"My App\" --url https://example.com");
+      out.error("Android mobile project not found.");
+      out.error_hint("Expected file: " + appBuildFile.string());
+      out.error_hint("Run: vix mobile init android --name \"My App\" --url https://example.com");
 
       return 1;
     }
@@ -1325,10 +1564,9 @@ android.useAndroidX=false
     if (android_project_has_gradle_wrapper(options.projectDirectory) &&
         !options.force)
     {
-      success("Gradle wrapper already exists.");
-      info("Project:");
-      step(options.projectDirectory.string());
-      hint("Use --force to regenerate the wrapper.");
+      out.success("Gradle wrapper already exists.");
+      out.row("project", options.projectDirectory.string());
+      out.hint("Use --force to regenerate the wrapper.");
 
       return 0;
     }
@@ -1342,8 +1580,9 @@ android.useAndroidX=false
         << " --distribution-type "
         << shell_quote(options.distributionType);
 
-    info("Generating Gradle wrapper:");
-    step(options.projectDirectory.string());
+    out.banner("Vix Mobile \u00b7 wrapper");
+    out.row("project", options.projectDirectory.string());
+    out.row("gradle", options.gradleVersion);
 
     const int result =
         run_system_command(
@@ -1354,30 +1593,32 @@ android.useAndroidX=false
 
     if (result != 0)
     {
-      error("Gradle wrapper generation failed.");
-      hint("The Gradle wrapper requires Gradle to be installed once.");
-      hint("Install Gradle, add it to PATH, or pass --gradle <command>.");
-      hint("Example: vix mobile wrapper android --gradle gradle");
+      out.error("Gradle wrapper generation failed.");
+      out.error_hint("The Gradle wrapper requires Gradle to be installed once.");
+      out.error_hint("Install Gradle, add it to PATH, or pass --gradle <command>.");
+      out.error_hint("Example: vix mobile wrapper android --gradle gradle");
       return result;
     }
 
-    success("Gradle wrapper generated.");
-    step((options.projectDirectory / "gradlew").string());
-    step((options.projectDirectory / "gradle" / "wrapper").string());
+    out.event("wrapper_done", "project", options.projectDirectory.string());
+    out.success("Gradle wrapper generated.");
+    out.step((options.projectDirectory / "gradlew").string());
+    out.step((options.projectDirectory / "gradle" / "wrapper").string());
 
-    hint("Next: vix mobile build android --project " + options.projectDirectory.string());
+    out.hint("Next: vix mobile build android --project " + options.projectDirectory.string());
 
     return 0;
   }
 
   int run_run_android(const std::vector<std::string> &args)
   {
-    using namespace vix::cli::style;
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
 
     AndroidProjectCommandOptions options;
 
     const int parsed =
-        parse_android_project_command_options(args, options);
+        parse_android_project_command_options(out, args, options);
 
     if (parsed == 2)
     {
@@ -1389,6 +1630,8 @@ android.useAndroidX=false
       return parsed;
     }
 
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+
     resolve_android_project_directory(options);
 
     const fs::path appBuildFile =
@@ -1398,9 +1641,9 @@ android.useAndroidX=false
 
     if (!fs::exists(appBuildFile, ec) || ec)
     {
-      error("Android mobile project not found.");
-      hint("Expected file: " + appBuildFile.string());
-      hint("Run: vix mobile init android --name \"My App\" --url https://example.com");
+      out.error("Android mobile project not found.");
+      out.error_hint("Expected file: " + appBuildFile.string());
+      out.error_hint("Run: vix mobile init android --name \"My App\" --url https://example.com");
 
       return 1;
     }
@@ -1412,8 +1655,8 @@ android.useAndroidX=false
             options.packageName,
             err))
     {
-      error("Unable to resolve Android package name.");
-      hint(err.empty() ? "Pass --package <name>." : err);
+      out.error("Unable to resolve Android package name.");
+      out.error_hint(err.empty() ? "Pass --package <name>." : err);
       return 1;
     }
 
@@ -1422,10 +1665,14 @@ android.useAndroidX=false
             ? ":app:installRelease"
             : ":app:installDebug";
 
+    out.banner("Vix Mobile \u00b7 run");
+    out.row("project", options.projectDirectory.string());
+    out.row("package", options.packageName, out.theme.cyan());
+    out.row("variant", options.release ? "release" : "debug");
+
     if (!options.skipInstall)
     {
-      info("Installing Android mobile shell:");
-      step(options.projectDirectory.string());
+      out.info_line("Installing Android mobile shell...");
 
       const int installResult =
           run_system_command(
@@ -1436,16 +1683,15 @@ android.useAndroidX=false
 
       if (installResult != 0)
       {
-        error("Android mobile install failed.");
-        hint("Make sure Gradle, Android SDK, and adb are installed.");
-        hint("Make sure an Android device or emulator is connected.");
-        hint("You can pass --gradle <command> if Gradle is not in PATH.");
+        out.error("Android mobile install failed.");
+        out.error_hint("Make sure Gradle, Android SDK, and adb are installed.");
+        out.error_hint("Make sure an Android device or emulator is connected.");
+        out.error_hint("You can pass --gradle <command> if Gradle is not in PATH.");
         return installResult;
       }
     }
 
-    info("Launching Android mobile shell:");
-    step(options.packageName);
+    out.info_line("Launching Android mobile shell...");
 
     std::ostringstream launchCommand;
 
@@ -1458,23 +1704,22 @@ android.useAndroidX=false
 
     if (launchResult != 0)
     {
-      error("Android mobile launch failed.");
-      hint("Make sure adb is installed and a device is connected.");
+      out.error("Android mobile launch failed.");
+      out.error_hint("Make sure adb is installed and a device is connected.");
       return launchResult;
     }
 
-    success("Android mobile shell launched.");
-    info("Package:");
-    step(options.packageName);
+    out.event("launched", "package", options.packageName);
+    out.success("Android mobile shell launched.");
+    out.row("package", options.packageName, out.theme.cyan());
     return 0;
   }
 
   int parse_android_init_options(
+      const MobileReporter &out,
       const std::vector<std::string> &args,
       AndroidMobileOptions &options)
   {
-    using namespace vix::cli::style;
-
     options.allowCleartext = starts_with(options.url, "http://");
 
     for (std::size_t i = 0; i < args.size(); ++i)
@@ -1486,9 +1731,14 @@ android.useAndroidX=false
         return 2;
       }
 
+      if (mob_take_output_flag(arg, options.logMode, options.colorOverride))
+      {
+        continue;
+      }
+
       if (arg == "--name")
       {
-        if (!consume_value(args, i, "--name", options.name))
+        if (!consume_value(out, args, i, "--name", options.name))
         {
           return 1;
         }
@@ -1498,7 +1748,7 @@ android.useAndroidX=false
 
       if (arg == "--url")
       {
-        if (!consume_value(args, i, "--url", options.url))
+        if (!consume_value(out, args, i, "--url", options.url))
         {
           return 1;
         }
@@ -1509,7 +1759,7 @@ android.useAndroidX=false
 
       if (arg == "--package")
       {
-        if (!consume_value(args, i, "--package", options.packageName))
+        if (!consume_value(out, args, i, "--package", options.packageName))
         {
           return 1;
         }
@@ -1521,7 +1771,7 @@ android.useAndroidX=false
       {
         std::string value;
 
-        if (!consume_value(args, i, arg, value))
+        if (!consume_value(out, args, i, arg, value))
         {
           return 1;
         }
@@ -1534,14 +1784,14 @@ android.useAndroidX=false
       {
         std::string value;
 
-        if (!consume_value(args, i, "--min-sdk", value))
+        if (!consume_value(out, args, i, "--min-sdk", value))
         {
           return 1;
         }
 
         if (!parse_positive_int(value, options.minSdk))
         {
-          error("Invalid --min-sdk value.");
+          out.error("Invalid --min-sdk value.");
           return 1;
         }
 
@@ -1552,14 +1802,14 @@ android.useAndroidX=false
       {
         std::string value;
 
-        if (!consume_value(args, i, "--target-sdk", value))
+        if (!consume_value(out, args, i, "--target-sdk", value))
         {
           return 1;
         }
 
         if (!parse_positive_int(value, options.targetSdk))
         {
-          error("Invalid --target-sdk value.");
+          out.error("Invalid --target-sdk value.");
           return 1;
         }
 
@@ -1570,14 +1820,14 @@ android.useAndroidX=false
       {
         std::string value;
 
-        if (!consume_value(args, i, "--compile-sdk", value))
+        if (!consume_value(out, args, i, "--compile-sdk", value))
         {
           return 1;
         }
 
         if (!parse_positive_int(value, options.compileSdk))
         {
-          error("Invalid --compile-sdk value.");
+          out.error("Invalid --compile-sdk value.");
           return 1;
         }
 
@@ -1588,14 +1838,14 @@ android.useAndroidX=false
       {
         std::string value;
 
-        if (!consume_value(args, i, "--version-code", value))
+        if (!consume_value(out, args, i, "--version-code", value))
         {
           return 1;
         }
 
         if (!parse_positive_int(value, options.versionCode))
         {
-          error("Invalid --version-code value.");
+          out.error("Invalid --version-code value.");
           return 1;
         }
 
@@ -1604,7 +1854,7 @@ android.useAndroidX=false
 
       if (arg == "--version-name")
       {
-        if (!consume_value(args, i, "--version-name", options.versionName))
+        if (!consume_value(out, args, i, "--version-name", options.versionName))
         {
           return 1;
         }
@@ -1614,7 +1864,7 @@ android.useAndroidX=false
 
       if (arg == "--agp")
       {
-        if (!consume_value(args, i, "--agp", options.androidGradlePluginVersion))
+        if (!consume_value(out, args, i, "--agp", options.androidGradlePluginVersion))
         {
           return 1;
         }
@@ -1671,7 +1921,7 @@ android.useAndroidX=false
       {
         if (!parse_positive_int(value, options.minSdk))
         {
-          error("Invalid --min-sdk value.");
+          out.error("Invalid --min-sdk value.");
           return 1;
         }
 
@@ -1682,7 +1932,7 @@ android.useAndroidX=false
       {
         if (!parse_positive_int(value, options.targetSdk))
         {
-          error("Invalid --target-sdk value.");
+          out.error("Invalid --target-sdk value.");
           return 1;
         }
 
@@ -1693,7 +1943,7 @@ android.useAndroidX=false
       {
         if (!parse_positive_int(value, options.compileSdk))
         {
-          error("Invalid --compile-sdk value.");
+          out.error("Invalid --compile-sdk value.");
           return 1;
         }
 
@@ -1704,7 +1954,7 @@ android.useAndroidX=false
       {
         if (!parse_positive_int(value, options.versionCode))
         {
-          error("Invalid --version-code value.");
+          out.error("Invalid --version-code value.");
           return 1;
         }
 
@@ -1723,35 +1973,35 @@ android.useAndroidX=false
         continue;
       }
 
-      error("Unexpected mobile init android argument: " + arg);
-      hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
+      out.error("Unexpected mobile init android argument: " + arg);
+      out.error_hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
       return 1;
     }
 
     if (options.url.empty())
     {
-      error("Mobile app URL cannot be empty.");
+      out.error("Mobile app URL cannot be empty.");
       return 1;
     }
 
     if (!is_valid_package_name(options.packageName))
     {
-      error("Invalid Android package name: " + options.packageName);
-      hint("Example: com.softadastra.app");
+      out.error("Invalid Android package name: " + options.packageName);
+      out.error_hint("Example: com.softadastra.app");
       return 1;
     }
 
     if (options.minSdk > options.targetSdk)
     {
-      error("Invalid Android SDK configuration.");
-      hint("--min-sdk cannot be greater than --target-sdk.");
+      out.error("Invalid Android SDK configuration.");
+      out.error_hint("--min-sdk cannot be greater than --target-sdk.");
       return 1;
     }
 
     if (options.targetSdk > options.compileSdk)
     {
-      error("Invalid Android SDK configuration.");
-      hint("--target-sdk cannot be greater than --compile-sdk.");
+      out.error("Invalid Android SDK configuration.");
+      out.error_hint("--target-sdk cannot be greater than --compile-sdk.");
       return 1;
     }
 
@@ -1760,12 +2010,13 @@ android.useAndroidX=false
 
   int run_init_android(const std::vector<std::string> &args)
   {
-    using namespace vix::cli::style;
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
 
     AndroidMobileOptions options;
 
     const int parsed =
-        parse_android_init_options(args, options);
+        parse_android_init_options(out, args, options);
 
     if (parsed == 2)
     {
@@ -1777,6 +2028,8 @@ android.useAndroidX=false
       return parsed;
     }
 
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+
     std::string err;
 
     if (!output_directory_is_safe(
@@ -1784,28 +2037,29 @@ android.useAndroidX=false
             options.force,
             err))
     {
-      error(err);
-      hint("Use --force to overwrite generated files in this directory.");
+      out.error(err);
+      out.error_hint("Use --force to overwrite generated files in this directory.");
       return 1;
     }
 
     if (!write_android_project(options, err))
     {
-      error("Failed to generate Android mobile shell.");
-      hint(err.empty() ? "Unknown file generation error." : err);
+      out.error("Failed to generate Android mobile shell.");
+      out.error_hint(err.empty() ? "Unknown file generation error." : err);
       return 1;
     }
 
-    success("Android mobile shell generated.");
-    info("Output:");
-    step(options.outputDirectory.string());
+    out.event("generated", "out", options.outputDirectory.string());
 
-    info("App URL:");
-    step(options.url);
+    out.banner("Vix Mobile \u00b7 android");
+    out.row("app", options.name);
+    out.row("out", options.outputDirectory.string(), out.theme.cyan());
+    out.row("url", options.url, out.theme.cyan());
 
-    std::cout << "\n";
-    hint("Next: cd " + options.outputDirectory.string() + " && gradle :app:assembleDebug");
-    hint("Later this will be wrapped by: vix mobile build android");
+    out.success("Android mobile shell generated.");
+
+    out.hint("Next: cd " + options.outputDirectory.string() + " && gradle :app:assembleDebug");
+    out.hint("Later this will be wrapped by: vix mobile build android");
 
     return 0;
   }
@@ -1816,7 +2070,8 @@ namespace vix::commands
 {
   int MobileCommand::run(const std::vector<std::string> &args)
   {
-    using namespace vix::cli::style;
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
 
     if (args.empty())
     {
@@ -1832,15 +2087,15 @@ namespace vix::commands
     {
       if (args.size() < 2)
       {
-        error("Missing mobile target.");
-        hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
+        out.error("Missing mobile target.");
+        out.error_hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
         return 1;
       }
 
       if (args[1] != "android")
       {
-        error("Unsupported mobile init target: " + args[1]);
-        hint("Supported target: android");
+        out.error("Unsupported mobile init target: " + args[1]);
+        out.error_hint("Supported target: android");
         return 1;
       }
 
@@ -1864,8 +2119,8 @@ namespace vix::commands
       }
       else if (args.size() >= 2 && args[1] == "ios")
       {
-        error("Unsupported mobile build target: ios");
-        hint("Supported target: android");
+        out.error("Unsupported mobile build target: ios");
+        out.error_hint("Supported target: android");
         return 1;
       }
       else
@@ -1878,7 +2133,7 @@ namespace vix::commands
 
     if (args[0] == "devices")
     {
-      return run_android_devices();
+      return run_android_devices(out);
     }
 
     if (args[0] == "wrapper")
@@ -1891,8 +2146,8 @@ namespace vix::commands
       }
       else if (args.size() >= 2 && args[1] == "ios")
       {
-        error("Unsupported mobile wrapper target: ios");
-        hint("Supported target: android");
+        out.error("Unsupported mobile wrapper target: ios");
+        out.error_hint("Supported target: android");
         return 1;
       }
       else
@@ -1913,8 +2168,8 @@ namespace vix::commands
       }
       else if (args.size() >= 2 && args[1] == "ios")
       {
-        error("Unsupported mobile run target: ios");
-        hint("Supported target: android");
+        out.error("Unsupported mobile run target: ios");
+        out.error_hint("Supported target: android");
         return 1;
       }
       else
@@ -1925,8 +2180,8 @@ namespace vix::commands
       return run_run_android(rest);
     }
 
-    error("Unknown mobile command: " + args[0]);
-    hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
+    out.error("Unknown mobile command: " + args[0]);
+    out.error_hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
     return 1;
   }
 
@@ -1968,12 +2223,17 @@ namespace vix::commands
         << "Wrapper/build/run options:\n"
         << "  --project <dir>            Android project directory. Default: mobile/android\n"
         << "  --package <name>           Android package name used by run\n"
-        << "  --debug                    Build/install debug variant, default\n"
+        << "  --debug                    Build/install debug variant (default)\n"
         << "  --release                  Build/install release variant\n"
         << "  --gradle <command>         Gradle command to use. Default: ./gradlew or gradle\n"
         << "  --gradle-version <version> Gradle wrapper version. Default: 8.14.4\n"
         << "  --distribution-type <type> Wrapper distribution type: bin or all. Default: bin\n"
         << "  --no-install               Run without installing first\n\n"
+
+        << "Output options:\n"
+        << "  --quiet, -q                Only print errors\n"
+        << "  --json                     Emit machine-readable lifecycle events\n"
+        << "  --no-color                 Disable ANSI colors (also honors NO_COLOR)\n\n"
 
         << "Examples:\n"
         << "  vix mobile init android --name \"My App\" --url https://example.com\n"

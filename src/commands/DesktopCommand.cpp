@@ -15,31 +15,209 @@
  */
 
 #include <vix/cli/commands/DesktopCommand.hpp>
-#include <vix/cli/Style.hpp>
 
 #include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <ostream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <io.h>
+#define VIX_DESK_ISATTY(fd) _isatty(fd)
+#define VIX_DESK_FILENO(stream) _fileno(stream)
+#else
 #include <unistd.h>
+#define VIX_DESK_ISATTY(fd) ::isatty(fd)
+#define VIX_DESK_FILENO(stream) ::fileno(stream)
 #endif
 
 namespace fs = std::filesystem;
 
 namespace
 {
+  // -------------------------------------------------------------------------
+  //  Color handling (ANSI), auto-detected and overridable.
+  // -------------------------------------------------------------------------
+
+  struct DesktopTheme
+  {
+    bool color = true;
+
+    std::string_view reset() const { return color ? "\x1b[0m" : ""; }
+    std::string_view dim() const { return color ? "\x1b[2m" : ""; }
+    std::string_view bold() const { return color ? "\x1b[1m" : ""; }
+
+    std::string_view green() const { return color ? "\x1b[32m" : ""; }
+    std::string_view cyan() const { return color ? "\x1b[36m" : ""; }
+    std::string_view yellow() const { return color ? "\x1b[33m" : ""; }
+    std::string_view red() const { return color ? "\x1b[31m" : ""; }
+    std::string_view gray() const { return color ? "\x1b[90m" : ""; }
+  };
+
+  // Honor NO_COLOR (https://no-color.org), FORCE_COLOR, and TTY detection.
+  bool desk_detect_color(std::ostream &os)
+  {
+    if (std::getenv("NO_COLOR") != nullptr)
+    {
+      return false;
+    }
+
+    if (std::getenv("FORCE_COLOR") != nullptr)
+    {
+      return true;
+    }
+
+    std::FILE *target = (&os == &std::cerr) ? stderr : stdout;
+
+    return VIX_DESK_ISATTY(VIX_DESK_FILENO(target)) != 0;
+  }
+
+  // -------------------------------------------------------------------------
+  //  Output verbosity, controlled by CLI flags (modern-runtime style).
+  // -------------------------------------------------------------------------
+
+  enum class DesktopLogMode
+  {
+    Normal, // banner + lifecycle lines
+    Quiet,  // errors only
+    Json    // machine-readable single-line events on stdout
+  };
+
+  struct DesktopReporter
+  {
+    DesktopTheme theme;
+    DesktopLogMode mode = DesktopLogMode::Normal;
+
+    bool normal() const { return mode == DesktopLogMode::Normal; }
+    bool json() const { return mode == DesktopLogMode::Json; }
+
+    void banner(std::string_view title) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << '\n'
+                << "  " << theme.green() << theme.bold() << title << theme.reset()
+                << '\n';
+    }
+
+    // key/value row, padded so values align in a column.
+    void row(std::string_view key, std::string_view value,
+             std::string_view valueColor = {}) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      constexpr std::size_t keyWidth = 9;
+
+      std::string label(key);
+      if (label.size() < keyWidth)
+      {
+        label.append(keyWidth - label.size(), ' ');
+      }
+
+      std::cout << "  " << theme.dim() << label << theme.reset() << "  "
+                << (valueColor.empty() ? theme.reset() : valueColor)
+                << value << theme.reset() << '\n';
+    }
+
+    void info_line(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.cyan() << "info" << theme.reset()
+                << "  " << message << '\n';
+    }
+
+    void step(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.gray() << "\u2022 " << theme.reset()
+                << message << '\n';
+    }
+
+    void hint(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.gray() << message << theme.reset() << '\n';
+    }
+
+    void success(std::string_view message) const
+    {
+      if (!normal())
+      {
+        return;
+      }
+
+      std::cout << "  " << theme.green() << "\u2714" << theme.reset()
+                << " " << message << '\n';
+    }
+
+    // Errors always print (even in quiet mode), to stderr.
+    void error(std::string_view message) const
+    {
+      std::cerr << "  " << theme.red() << theme.bold() << "error" << theme.reset()
+                << "  " << message << '\n';
+    }
+
+    void error_hint(std::string_view message) const
+    {
+      if (message.empty())
+      {
+        return;
+      }
+
+      std::cerr << "  " << theme.gray() << message << theme.reset() << '\n';
+    }
+
+    void event(std::string_view name, std::string_view key = {},
+               std::string_view value = {}) const
+    {
+      if (!json())
+      {
+        return;
+      }
+
+      std::cout << "{\"event\":\"" << name << "\"";
+
+      if (!key.empty())
+      {
+        std::cout << ",\"" << key << "\":\"" << value << "\"";
+      }
+
+      std::cout << "}\n";
+      std::cout.flush();
+    }
+  };
+
   bool is_help_arg(const std::string &arg)
   {
     return arg == "-h" || arg == "--help" || arg == "help";
@@ -70,25 +248,63 @@ namespace
     return true;
   }
 
-  bool consume_value(
-      const std::vector<std::string> &args,
-      std::size_t &index,
-      const std::string &option,
-      std::string &out)
+  std::string trim_left_copy(std::string value)
   {
-    using namespace vix::cli::style;
+    value.erase(
+        value.begin(),
+        std::find_if(
+            value.begin(),
+            value.end(),
+            [](unsigned char ch)
+            {
+              return !std::isspace(ch);
+            }));
 
-    if (index + 1 >= args.size())
+    return value;
+  }
+
+  bool is_vix_run_server_command(const std::string &command)
+  {
+    const std::string value = trim_left_copy(command);
+
+    return value == "vix run" ||
+           value.rfind("vix run ", 0) == 0 ||
+           value.find(" vix run ") != std::string::npos;
+  }
+
+  bool reject_vix_run_server_command(
+      const DesktopReporter &out,
+      const std::string &command)
+  {
+    if (!is_vix_run_server_command(command))
     {
-      error("Missing value for " + option + ".");
       return false;
     }
 
-    out = args[++index];
+    out.error("Use the C++ file directly.");
+    out.error_hint("Run: vix desktop run ui_dashboard.cpp --port 8080");
 
-    if (out.empty())
+    return true;
+  }
+
+  bool consume_value(
+      const DesktopReporter &out,
+      const std::vector<std::string> &args,
+      std::size_t &index,
+      const std::string &option,
+      std::string &value)
+  {
+    if (index + 1 >= args.size())
     {
-      error("Value for " + option + " cannot be empty.");
+      out.error("Missing value for " + option + ".");
+      return false;
+    }
+
+    value = args[++index];
+
+    if (value.empty())
+    {
+      out.error("Value for " + option + " cannot be empty.");
       return false;
     }
 
@@ -102,7 +318,7 @@ namespace
       return false;
     }
 
-    unsigned int port = 0;
+    unsigned long port = 0;
 
     const char *begin = value.data();
     const char *end = value.data() + value.size();
@@ -130,7 +346,7 @@ namespace
       return false;
     }
 
-    int parsed = 0;
+    long parsed = 0;
 
     const char *begin = value.data();
     const char *end = value.data() + value.size();
@@ -142,12 +358,12 @@ namespace
       return false;
     }
 
-    if (parsed <= 0)
+    if (parsed <= 0 || parsed > 1000000)
     {
       return false;
     }
 
-    out = parsed;
+    out = static_cast<int>(parsed);
     return true;
   }
 
@@ -158,7 +374,7 @@ namespace
       return false;
     }
 
-    int parsed = 0;
+    long parsed = 0;
 
     const char *begin = value.data();
     const char *end = value.data() + value.size();
@@ -170,12 +386,12 @@ namespace
       return false;
     }
 
-    if (parsed < 0)
+    if (parsed < 0 || parsed > 100000000)
     {
       return false;
     }
 
-    out = parsed;
+    out = static_cast<int>(parsed);
     return true;
   }
 
@@ -352,6 +568,22 @@ namespace
   {
     return "http://" + host + ":" + std::to_string(port);
   }
+  bool desktop_shell_backend_available()
+  {
+#if defined(_WIN32)
+    return true;
+#elif defined(__APPLE__)
+    return true;
+#elif defined(__linux__)
+#if defined(VIX_UI_ENABLE_LINUX_WEBVIEW) && VIX_UI_ENABLE_LINUX_WEBVIEW
+    return true;
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+  }
 
   enum class DesktopAction
   {
@@ -403,6 +635,9 @@ namespace
     bool withMySql{false};
     bool localCache{false};
     int jobs{0};
+
+    DesktopLogMode logMode{DesktopLogMode::Normal};
+    int colorOverride{-1}; // -1 auto, 0 off, 1 on
   };
 
   std::string with_desktop_server_env(
@@ -429,12 +664,42 @@ namespace
     return out;
   }
 
+  // Shared output-flag parsing (--quiet / --json / --color).
+  // Returns true if `arg` was an output flag and was consumed.
+  bool take_output_flag(const std::string &arg, DesktopOptions &options)
+  {
+    if (arg == "--quiet" || arg == "-q" || arg == "--silent")
+    {
+      options.logMode = DesktopLogMode::Quiet;
+      return true;
+    }
+
+    if (arg == "--json")
+    {
+      options.logMode = DesktopLogMode::Json;
+      return true;
+    }
+
+    if (arg == "--no-color" || arg == "--no-colour")
+    {
+      options.colorOverride = 0;
+      return true;
+    }
+
+    if (arg == "--color" || arg == "--colour")
+    {
+      options.colorOverride = 1;
+      return true;
+    }
+
+    return false;
+  }
+
   int parse_options(
+      const DesktopReporter &out,
       const std::vector<std::string> &args,
       DesktopOptions &options)
   {
-    using namespace vix::cli::style;
-
     for (std::size_t i = 0; i < args.size(); ++i)
     {
       const std::string &arg = args[i];
@@ -444,9 +709,14 @@ namespace
         return 2;
       }
 
+      if (take_output_flag(arg, options))
+      {
+        continue;
+      }
+
       if (arg == "--name")
       {
-        if (!consume_value(args, i, "--name", options.name))
+        if (!consume_value(out, args, i, "--name", options.name))
         {
           return 1;
         }
@@ -456,7 +726,7 @@ namespace
 
       if (arg == "--title")
       {
-        if (!consume_value(args, i, "--title", options.title))
+        if (!consume_value(out, args, i, "--title", options.title))
         {
           return 1;
         }
@@ -466,7 +736,7 @@ namespace
 
       if (arg == "--app-id")
       {
-        if (!consume_value(args, i, "--app-id", options.appId))
+        if (!consume_value(out, args, i, "--app-id", options.appId))
         {
           return 1;
         }
@@ -476,7 +746,7 @@ namespace
 
       if (arg == "--app-version" || arg == "--version")
       {
-        if (!consume_value(args, i, arg, options.appVersion))
+        if (!consume_value(out, args, i, arg, options.appVersion))
         {
           return 1;
         }
@@ -486,7 +756,7 @@ namespace
 
       if (arg == "--vendor")
       {
-        if (!consume_value(args, i, "--vendor", options.vendor))
+        if (!consume_value(out, args, i, "--vendor", options.vendor))
         {
           return 1;
         }
@@ -496,7 +766,7 @@ namespace
 
       if (arg == "--icon")
       {
-        if (!consume_value(args, i, "--icon", options.iconPath))
+        if (!consume_value(out, args, i, "--icon", options.iconPath))
         {
           return 1;
         }
@@ -506,7 +776,7 @@ namespace
 
       if (arg == "--url")
       {
-        if (!consume_value(args, i, "--url", options.url))
+        if (!consume_value(out, args, i, "--url", options.url))
         {
           return 1;
         }
@@ -516,7 +786,7 @@ namespace
 
       if (arg == "--readiness-url")
       {
-        if (!consume_value(args, i, "--readiness-url", options.readinessUrl))
+        if (!consume_value(out, args, i, "--readiness-url", options.readinessUrl))
         {
           return 1;
         }
@@ -526,7 +796,7 @@ namespace
 
       if (arg == "--host")
       {
-        if (!consume_value(args, i, "--host", options.host))
+        if (!consume_value(out, args, i, "--host", options.host))
         {
           return 1;
         }
@@ -538,15 +808,15 @@ namespace
       {
         std::string value;
 
-        if (!consume_value(args, i, "--port", value))
+        if (!consume_value(out, args, i, "--port", value))
         {
           return 1;
         }
 
         if (!parse_port(value, options.port))
         {
-          error("Invalid desktop port.");
-          hint("Port must be between 1 and 65535.");
+          out.error("Invalid desktop port.");
+          out.error_hint("Port must be between 1 and 65535.");
           return 1;
         }
 
@@ -557,15 +827,15 @@ namespace
       {
         std::string value;
 
-        if (!consume_value(args, i, "--width", value))
+        if (!consume_value(out, args, i, "--width", value))
         {
           return 1;
         }
 
         if (!parse_positive_int(value, options.width))
         {
-          error("Invalid desktop width.");
-          hint("Width must be greater than zero.");
+          out.error("Invalid desktop width.");
+          out.error_hint("Width must be greater than zero.");
           return 1;
         }
 
@@ -576,15 +846,15 @@ namespace
       {
         std::string value;
 
-        if (!consume_value(args, i, "--height", value))
+        if (!consume_value(out, args, i, "--height", value))
         {
           return 1;
         }
 
         if (!parse_positive_int(value, options.height))
         {
-          error("Invalid desktop height.");
-          hint("Height must be greater than zero.");
+          out.error("Invalid desktop height.");
+          out.error_hint("Height must be greater than zero.");
           return 1;
         }
 
@@ -593,18 +863,26 @@ namespace
 
       if (arg == "--server")
       {
-        if (!consume_value(args, i, "--server", options.serverCommand))
+        std::string value;
+
+        if (!consume_value(out, args, i, "--server", value))
         {
           return 1;
         }
 
+        if (reject_vix_run_server_command(out, value))
+        {
+          return 1;
+        }
+
+        options.serverCommand = std::move(value);
         options.startServer = true;
         continue;
       }
 
       if (arg == "--cwd" || arg == "--working-directory")
       {
-        if (!consume_value(args, i, arg, options.serverWorkingDirectory))
+        if (!consume_value(out, args, i, arg, options.serverWorkingDirectory))
         {
           return 1;
         }
@@ -617,15 +895,15 @@ namespace
         std::string value;
         int timeout = 0;
 
-        if (!consume_value(args, i, "--timeout-ms", value))
+        if (!consume_value(out, args, i, "--timeout-ms", value))
         {
           return 1;
         }
 
         if (!parse_non_negative_int(value, timeout))
         {
-          error("Invalid desktop startup timeout.");
-          hint("Timeout must be a non-negative number of milliseconds.");
+          out.error("Invalid desktop startup timeout.");
+          out.error_hint("Timeout must be a non-negative number of milliseconds.");
           return 1;
         }
 
@@ -635,7 +913,7 @@ namespace
 
       if (arg == "--out" || arg == "-o")
       {
-        if (!consume_value(args, i, arg, options.outputDirectory))
+        if (!consume_value(out, args, i, arg, options.outputDirectory))
         {
           return 1;
         }
@@ -645,7 +923,7 @@ namespace
 
       if (arg == "--target")
       {
-        if (!consume_value(args, i, "--target", options.packageTarget))
+        if (!consume_value(out, args, i, "--target", options.packageTarget))
         {
           return 1;
         }
@@ -655,7 +933,7 @@ namespace
 
       if (arg == "--binary" || arg == "--server-binary")
       {
-        if (!consume_value(args, i, arg, options.binaryPath))
+        if (!consume_value(out, args, i, arg, options.binaryPath))
         {
           return 1;
         }
@@ -667,15 +945,15 @@ namespace
       {
         std::string value;
 
-        if (!consume_value(args, i, arg, value))
+        if (!consume_value(out, args, i, arg, value))
         {
           return 1;
         }
 
         if (!parse_non_negative_int(value, options.jobs))
         {
-          error("Invalid jobs value.");
-          hint("Jobs must be a non-negative integer.");
+          out.error("Invalid jobs value.");
+          out.error_hint("Jobs must be a non-negative integer.");
           return 1;
         }
 
@@ -752,7 +1030,7 @@ namespace
       {
         std::string value;
 
-        if (!consume_value(args, i, arg, value))
+        if (!consume_value(out, args, i, arg, value))
         {
           return 1;
         }
@@ -773,7 +1051,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --name cannot be empty.");
+          out.error("Value for --name cannot be empty.");
           return 1;
         }
 
@@ -785,7 +1063,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --title cannot be empty.");
+          out.error("Value for --title cannot be empty.");
           return 1;
         }
 
@@ -822,7 +1100,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --url cannot be empty.");
+          out.error("Value for --url cannot be empty.");
           return 1;
         }
 
@@ -840,7 +1118,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --host cannot be empty.");
+          out.error("Value for --host cannot be empty.");
           return 1;
         }
 
@@ -852,8 +1130,8 @@ namespace
       {
         if (!parse_port(value, options.port))
         {
-          error("Invalid desktop port.");
-          hint("Port must be between 1 and 65535.");
+          out.error("Invalid desktop port.");
+          out.error_hint("Port must be between 1 and 65535.");
           return 1;
         }
 
@@ -864,8 +1142,8 @@ namespace
       {
         if (!parse_positive_int(value, options.width))
         {
-          error("Invalid desktop width.");
-          hint("Width must be greater than zero.");
+          out.error("Invalid desktop width.");
+          out.error_hint("Width must be greater than zero.");
           return 1;
         }
 
@@ -876,8 +1154,8 @@ namespace
       {
         if (!parse_positive_int(value, options.height))
         {
-          error("Invalid desktop height.");
-          hint("Height must be greater than zero.");
+          out.error("Invalid desktop height.");
+          out.error_hint("Height must be greater than zero.");
           return 1;
         }
 
@@ -888,7 +1166,12 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --server cannot be empty.");
+          out.error("Value for --server cannot be empty.");
+          return 1;
+        }
+
+        if (reject_vix_run_server_command(out, value))
+        {
           return 1;
         }
 
@@ -910,8 +1193,8 @@ namespace
 
         if (!parse_non_negative_int(value, timeout))
         {
-          error("Invalid desktop startup timeout.");
-          hint("Timeout must be a non-negative number of milliseconds.");
+          out.error("Invalid desktop startup timeout.");
+          out.error_hint("Timeout must be a non-negative number of milliseconds.");
           return 1;
         }
 
@@ -923,7 +1206,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --out cannot be empty.");
+          out.error("Value for --out cannot be empty.");
           return 1;
         }
 
@@ -935,7 +1218,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --target cannot be empty.");
+          out.error("Value for --target cannot be empty.");
           return 1;
         }
 
@@ -948,7 +1231,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --binary cannot be empty.");
+          out.error("Value for --binary cannot be empty.");
           return 1;
         }
 
@@ -961,7 +1244,7 @@ namespace
       {
         if (value.empty())
         {
-          error("Value for --resources cannot be empty.");
+          out.error("Value for --resources cannot be empty.");
           return 1;
         }
 
@@ -974,8 +1257,8 @@ namespace
       {
         if (!parse_non_negative_int(value, options.jobs))
         {
-          error("Invalid jobs value.");
-          hint("Jobs must be a non-negative integer.");
+          out.error("Invalid jobs value.");
+          out.error_hint("Jobs must be a non-negative integer.");
           return 1;
         }
 
@@ -990,12 +1273,12 @@ namespace
           continue;
         }
 
-        error("Unexpected positional argument: " + arg);
+        out.error("Unexpected positional argument: " + arg);
         return 1;
       }
 
-      error("Unexpected argument: " + arg);
-      hint("Usage: vix desktop <run|build|package> [target] [options]");
+      out.error("Unexpected argument: " + arg);
+      out.error_hint("Usage: vix desktop <run|build|package> [target] [options]");
       return 1;
     }
 
@@ -1078,13 +1361,12 @@ namespace
   }
 
   int build_server_executable(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       fs::path &serverExecutable);
 
-  int run_desktop_app(DesktopOptions options)
+  int run_desktop_app(const DesktopReporter &out, DesktopOptions options)
   {
-    using namespace vix::cli::style;
-
     if (!options.target.empty() && options.serverCommand.empty())
     {
       fs::path targetPath =
@@ -1095,7 +1377,7 @@ namespace
         fs::path serverExecutable;
 
         const int buildCode =
-            build_server_executable(options, serverExecutable);
+            build_server_executable(out, options, serverExecutable);
 
         if (buildCode != 0)
         {
@@ -1115,13 +1397,13 @@ namespace
       {
         if (!fs::exists(targetPath))
         {
-          error("Desktop server target not found: " + targetPath.string());
+          out.error("Desktop server target not found: " + targetPath.string());
           return 1;
         }
 
         if (!is_regular_executable(targetPath))
         {
-          error("Desktop server target is not executable: " + targetPath.string());
+          out.error("Desktop server target is not executable: " + targetPath.string());
           return 1;
         }
 
@@ -1137,6 +1419,7 @@ namespace
 
       options.startServer = true;
     }
+
     if (options.url.empty())
     {
       options.url = local_url(options.host, options.port);
@@ -1146,44 +1429,66 @@ namespace
 
     vix::ui::AppShell shell(config);
 
-    info("Preparing Vix desktop shell.");
-    step("target: " + shell.target_url());
+    out.event("starting", "url", shell.target_url());
+
+    out.banner("Vix Desktop");
+    out.row("app", options.name);
+    out.row("target", shell.target_url(), out.theme.cyan());
+
+    if (options.startServer && !options.serverCommand.empty())
+    {
+      out.row("mode", "dev (managed server)");
+    }
+    else
+    {
+      out.row("mode", "attach");
+    }
+
+    const auto shellStart = std::chrono::steady_clock::now();
 
     vix::ui::Result<void> result = shell.start();
 
+    const auto shellEnd = std::chrono::steady_clock::now();
+
+    const auto shellLifetimeMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            shellEnd - shellStart)
+            .count();
+
     if (result.is_failed())
     {
-      error("Unable to start Vix desktop shell.");
-      hint(result.error_message().empty()
-               ? "Unknown desktop shell error."
-               : result.error_message());
-
+      out.error("Desktop shell unavailable.");
       return 1;
     }
 
-    success("Vix desktop shell closed.");
+    if (shellLifetimeMs < 800)
+    {
+      out.error("Desktop shell unavailable.");
+      return 1;
+    }
+
+    out.event("closed");
     return 0;
   }
 
   int build_server_executable(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       fs::path &serverExecutable)
   {
-    using namespace vix::cli::style;
-
     if (!options.binaryPath.empty())
     {
       serverExecutable = fs::absolute(options.binaryPath).lexically_normal();
 
       if (!fs::exists(serverExecutable))
       {
-        error("Server binary not found: " + serverExecutable.string());
+        out.error("Server binary not found: " + serverExecutable.string());
         return 1;
       }
 
       if (!is_regular_executable(serverExecutable))
       {
-        error("Server binary is not executable: " + serverExecutable.string());
+        out.error("Server binary is not executable: " + serverExecutable.string());
         return 1;
       }
 
@@ -1192,9 +1497,9 @@ namespace
 
     if (options.target.empty())
     {
-      error("Desktop build requires a C++ file or --binary.");
-      hint("Usage: vix desktop build app.cpp --name \"My App\"");
-      hint("Or:    vix desktop build --binary ./build/app --name \"My App\"");
+      out.error("Desktop build requires a C++ file or --binary.");
+      out.error_hint("Usage: vix desktop build app.cpp --name \"My App\"");
+      out.error_hint("Or:    vix desktop build --binary ./build/app --name \"My App\"");
       return 1;
     }
 
@@ -1203,7 +1508,7 @@ namespace
 
     if (!fs::exists(targetPath))
     {
-      error("Desktop target not found: " + targetPath.string());
+      out.error("Desktop target not found: " + targetPath.string());
       return 1;
     }
 
@@ -1215,8 +1520,8 @@ namespace
         return 0;
       }
 
-      error("Desktop build target must be a C++ file or executable binary.");
-      hint("Received: " + targetPath.string());
+      out.error("Desktop build target must be a C++ file or executable binary.");
+      out.error_hint("Received: " + targetPath.string());
       return 1;
     }
 
@@ -1231,8 +1536,8 @@ namespace
     runOptions.withMySql = options.withMySql;
     runOptions.localCache = options.localCache;
 
-    info("Building desktop server:");
-    step(targetPath.string());
+    out.info_line("Building desktop server:");
+    out.step(targetPath.string());
 
     const int buildCode =
         vix::commands::RunCommand::detail::build_script_executable(
@@ -1246,8 +1551,8 @@ namespace
 
     if (!fs::exists(serverExecutable))
     {
-      error("Built server executable was not found.");
-      hint("Resolved path: " + serverExecutable.string());
+      out.error("Built server executable was not found.");
+      out.error_hint("Resolved path: " + serverExecutable.string());
       return 1;
     }
 
@@ -1266,21 +1571,20 @@ namespace
   }
 
   int write_desktop_manifest(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       const fs::path &bundleDir,
       const std::string &serverName,
       const std::string &launcherName,
       const std::string &iconName)
   {
-    using namespace vix::cli::style;
-
     const fs::path manifestPath = bundleDir / "vix-desktop.json";
 
-    std::ofstream out(manifestPath, std::ios::trunc);
+    std::ofstream file(manifestPath, std::ios::trunc);
 
-    if (!out)
+    if (!file)
     {
-      error("Unable to write desktop manifest: " + manifestPath.string());
+      out.error("Unable to write desktop manifest: " + manifestPath.string());
       return 1;
     }
 
@@ -1294,54 +1598,53 @@ namespace
             ? url
             : options.readinessUrl;
 
-    out << "{\n";
-    out << "  \"name\": \"" << json_escape(options.name) << "\",\n";
-    out << "  \"title\": \"" << json_escape(options.title) << "\",\n";
-    out << "  \"app_id\": \"" << json_escape(options.appId) << "\",\n";
-    out << "  \"version\": \"" << json_escape(options.appVersion) << "\",\n";
-    out << "  \"vendor\": \"" << json_escape(options.vendor) << "\",\n";
-    out << "  \"launcher\": \"./" << json_escape(launcherName) << "\",\n";
-    out << "  \"server\": \"./bin/" << json_escape(serverName) << "\",\n";
-    out << "  \"host\": \"" << json_escape(options.host) << "\",\n";
-    out << "  \"port\": " << options.port << ",\n";
-    out << "  \"url\": \"" << json_escape(url) << "\",\n";
-    out << "  \"readiness_url\": \"" << json_escape(readinessUrl) << "\",\n";
-    out << "  \"width\": " << options.width << ",\n";
-    out << "  \"height\": " << options.height << ",\n";
-    out << "  \"resizable\": " << bool_text(options.resizable) << ",\n";
-    out << "  \"fullscreen\": " << bool_text(options.fullscreen) << ",\n";
-    out << "  \"devtools\": " << bool_text(options.devtools) << ",\n";
-    out << "  \"icon\": ";
+    file << "{\n";
+    file << "  \"name\": \"" << json_escape(options.name) << "\",\n";
+    file << "  \"title\": \"" << json_escape(options.title) << "\",\n";
+    file << "  \"app_id\": \"" << json_escape(options.appId) << "\",\n";
+    file << "  \"version\": \"" << json_escape(options.appVersion) << "\",\n";
+    file << "  \"vendor\": \"" << json_escape(options.vendor) << "\",\n";
+    file << "  \"launcher\": \"./" << json_escape(launcherName) << "\",\n";
+    file << "  \"server\": \"./bin/" << json_escape(serverName) << "\",\n";
+    file << "  \"host\": \"" << json_escape(options.host) << "\",\n";
+    file << "  \"port\": " << options.port << ",\n";
+    file << "  \"url\": \"" << json_escape(url) << "\",\n";
+    file << "  \"readiness_url\": \"" << json_escape(readinessUrl) << "\",\n";
+    file << "  \"width\": " << options.width << ",\n";
+    file << "  \"height\": " << options.height << ",\n";
+    file << "  \"resizable\": " << bool_text(options.resizable) << ",\n";
+    file << "  \"fullscreen\": " << bool_text(options.fullscreen) << ",\n";
+    file << "  \"devtools\": " << bool_text(options.devtools) << ",\n";
+    file << "  \"icon\": ";
 
     if (iconName.empty())
     {
-      out << "null\n";
+      file << "null\n";
     }
     else
     {
-      out << "\"./resources/" << json_escape(iconName) << "\"\n";
+      file << "\"./resources/" << json_escape(iconName) << "\"\n";
     }
 
-    out << "}\n";
+    file << "}\n";
 
     return 0;
   }
 
   int write_launcher_script(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       const fs::path &bundleDir,
       const std::string &serverName,
       const std::string &launcherName)
   {
-    using namespace vix::cli::style;
-
     const fs::path launcherPath = bundleDir / launcherName;
 
-    std::ofstream out(launcherPath, std::ios::trunc);
+    std::ofstream file(launcherPath, std::ios::trunc);
 
-    if (!out)
+    if (!file)
     {
-      error("Unable to write launcher: " + launcherPath.string());
+      out.error("Unable to write launcher: " + launcherPath.string());
       return 1;
     }
 
@@ -1355,93 +1658,92 @@ namespace
             ? url
             : options.readinessUrl;
 
-    out << "#!/usr/bin/env sh\n";
-    out << "set -eu\n";
-    out << "APP_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n";
-    out << "cd \"$APP_DIR\"\n";
-    out << "exec \"$APP_DIR/bin/vix\" desktop run \\\n";
-    out << "  --server \"$APP_DIR/bin/" << serverName << "\" \\\n";
-    out << "  --url " << shell_quote(url) << " \\\n";
-    out << "  --readiness-url " << shell_quote(readinessUrl) << " \\\n";
-    out << "  --host " << shell_quote(options.host) << " \\\n";
-    out << "  --port " << options.port << " \\\n";
-    out << "  --name " << shell_quote(options.name) << " \\\n";
-    out << "  --title " << shell_quote(options.title) << " \\\n";
-    out << "  --vendor " << shell_quote(options.vendor) << " \\\n";
+    file << "#!/usr/bin/env sh\n";
+    file << "set -eu\n";
+    file << "APP_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n";
+    file << "cd \"$APP_DIR\"\n";
+    file << "exec \"$APP_DIR/bin/vix\" desktop run \\\n";
+    file << "  --server \"$APP_DIR/bin/" << serverName << "\" \\\n";
+    file << "  --url " << shell_quote(url) << " \\\n";
+    file << "  --readiness-url " << shell_quote(readinessUrl) << " \\\n";
+    file << "  --host " << shell_quote(options.host) << " \\\n";
+    file << "  --port " << options.port << " \\\n";
+    file << "  --name " << shell_quote(options.name) << " \\\n";
+    file << "  --title " << shell_quote(options.title) << " \\\n";
+    file << "  --vendor " << shell_quote(options.vendor) << " \\\n";
 
     if (!options.appId.empty())
     {
-      out << "  --app-id " << shell_quote(options.appId) << " \\\n";
+      file << "  --app-id " << shell_quote(options.appId) << " \\\n";
     }
 
     if (!options.appVersion.empty())
     {
-      out << "  --app-version " << shell_quote(options.appVersion) << " \\\n";
+      file << "  --app-version " << shell_quote(options.appVersion) << " \\\n";
     }
 
-    out << "  --width " << options.width << " \\\n";
-    out << "  --height " << options.height << " \\\n";
-    out << "  --timeout-ms " << options.startupTimeout.count();
+    file << "  --width " << options.width << " \\\n";
+    file << "  --height " << options.height << " \\\n";
+    file << "  --timeout-ms " << options.startupTimeout.count();
 
     if (options.fullscreen)
     {
-      out << " \\\n  --fullscreen";
+      file << " \\\n  --fullscreen";
     }
 
     if (options.resizable)
     {
-      out << " \\\n  --resizable";
+      file << " \\\n  --resizable";
     }
     else
     {
-      out << " \\\n  --no-resizable";
+      file << " \\\n  --no-resizable";
     }
 
     if (options.devtools)
     {
-      out << " \\\n  --devtools";
+      file << " \\\n  --devtools";
     }
     else
     {
-      out << " \\\n  --no-devtools";
+      file << " \\\n  --no-devtools";
     }
 
-    out << "\n";
+    file << "\n";
 
     make_executable(launcherPath);
     return 0;
   }
 
   int write_linux_desktop_file(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       const fs::path &bundleDir,
       const std::string &launcherName,
       const std::string &desktopFileName,
       const std::string &iconName)
   {
-    using namespace vix::cli::style;
-
     const fs::path desktopPath = bundleDir / desktopFileName;
 
-    std::ofstream out(desktopPath, std::ios::trunc);
+    std::ofstream file(desktopPath, std::ios::trunc);
 
-    if (!out)
+    if (!file)
     {
-      error("Unable to write .desktop file: " + desktopPath.string());
+      out.error("Unable to write .desktop file: " + desktopPath.string());
       return 1;
     }
 
-    out << "[Desktop Entry]\n";
-    out << "Type=Application\n";
-    out << "Name=" << options.name << "\n";
-    out << "Comment=" << options.title << "\n";
-    out << "Exec=" << (bundleDir / launcherName).string() << "\n";
-    out << "Terminal=false\n";
-    out << "Categories=Development;\n";
+    file << "[Desktop Entry]\n";
+    file << "Type=Application\n";
+    file << "Name=" << options.name << "\n";
+    file << "Comment=" << options.title << "\n";
+    file << "Exec=" << (bundleDir / launcherName).string() << "\n";
+    file << "Terminal=false\n";
+    file << "Categories=Development;\n";
 
     if (!iconName.empty())
     {
-      out << "Icon=" << (bundleDir / "resources" / iconName).string() << "\n";
+      file << "Icon=" << (bundleDir / "resources" / iconName).string() << "\n";
     }
 
     make_executable(desktopPath);
@@ -1449,12 +1751,11 @@ namespace
   }
 
   int copy_optional_icon(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       const fs::path &resourcesDir,
       std::string &iconName)
   {
-    using namespace vix::cli::style;
-
     iconName.clear();
 
     if (options.iconPath.empty())
@@ -1467,7 +1768,7 @@ namespace
 
     if (!fs::exists(iconPath))
     {
-      error("Icon file not found: " + iconPath.string());
+      out.error("Icon file not found: " + iconPath.string());
       return 1;
     }
 
@@ -1482,7 +1783,7 @@ namespace
 
     if (ec)
     {
-      error("Unable to copy icon: " + ec.message());
+      out.error("Unable to copy icon: " + ec.message());
       return 1;
     }
 
@@ -1579,11 +1880,10 @@ namespace
   }
 
   int copy_path_recursive(
+      const DesktopReporter &out,
       const fs::path &source,
       const fs::path &destination)
   {
-    using namespace vix::cli::style;
-
     std::error_code ec;
 
     if (!fs::exists(source, ec) || ec)
@@ -1597,7 +1897,7 @@ namespace
 
       if (ec)
       {
-        error("Unable to create resource directory: " + ec.message());
+        out.error("Unable to create resource directory: " + ec.message());
         return 1;
       }
 
@@ -1609,8 +1909,8 @@ namespace
 
       if (ec)
       {
-        error("Unable to copy resource file: " + source.string());
-        hint(ec.message());
+        out.error("Unable to copy resource file: " + source.string());
+        out.error_hint(ec.message());
         return 1;
       }
 
@@ -1626,7 +1926,7 @@ namespace
 
     if (ec)
     {
-      error("Unable to create resource directory: " + ec.message());
+      out.error("Unable to create resource directory: " + ec.message());
       return 1;
     }
 
@@ -1656,8 +1956,8 @@ namespace
 
         if (ec)
         {
-          error("Unable to create resource subdirectory: " + target.string());
-          hint(ec.message());
+          out.error("Unable to create resource subdirectory: " + target.string());
+          out.error_hint(ec.message());
           return 1;
         }
 
@@ -1673,7 +1973,7 @@ namespace
 
       if (ec)
       {
-        error("Unable to create resource parent directory: " + ec.message());
+        out.error("Unable to create resource parent directory: " + ec.message());
         return 1;
       }
 
@@ -1685,16 +1985,16 @@ namespace
 
       if (ec)
       {
-        error("Unable to copy resource: " + current.string());
-        hint(ec.message());
+        out.error("Unable to copy resource: " + current.string());
+        out.error_hint(ec.message());
         return 1;
       }
     }
 
     if (ec)
     {
-      error("Unable to copy resource directory: " + source.string());
-      hint(ec.message());
+      out.error("Unable to copy resource directory: " + source.string());
+      out.error_hint(ec.message());
       return 1;
     }
 
@@ -1702,12 +2002,11 @@ namespace
   }
 
   int copy_desktop_runtime_resources(
+      const DesktopReporter &out,
       const DesktopOptions &options,
       const fs::path &bundleDir,
       const fs::path &serverExecutable)
   {
-    using namespace vix::cli::style;
-
     const fs::path baseDir =
         resolve_desktop_resource_base_directory(options, serverExecutable);
 
@@ -1741,7 +2040,7 @@ namespace
       std::error_code ec;
       if (!fs::exists(source, ec) || ec)
       {
-        error("Resource path not found: " + source.string());
+        out.error("Resource path not found: " + source.string());
         return 1;
       }
 
@@ -1773,34 +2072,32 @@ namespace
           bundleDir / source.filename();
 
       const int copyCode =
-          copy_path_recursive(source, destination);
+          copy_path_recursive(out, source, destination);
 
       if (copyCode != 0)
       {
         return copyCode;
       }
 
-      step("resource: " + source.filename().string());
+      out.step("resource: " + source.filename().string());
     }
 
     return 0;
   }
 
-  int build_desktop_bundle(const DesktopOptions &options)
+  int build_desktop_bundle(const DesktopReporter &out, const DesktopOptions &options)
   {
-    using namespace vix::cli::style;
-
     if (options.packageTarget != "dir")
     {
-      error("Unsupported desktop package target: " + options.packageTarget);
-      hint("Supported now: --target dir");
-      hint("AppImage, deb and rpm should be added as separate packaging backends.");
+      out.error("Unsupported desktop package target: " + options.packageTarget);
+      out.error_hint("Supported now: --target dir");
+      out.error_hint("AppImage, deb and rpm should be added as separate packaging backends.");
       return 1;
     }
 
     fs::path serverExecutable;
 
-    const int serverCode = build_server_executable(options, serverExecutable);
+    const int serverCode = build_server_executable(out, options, serverExecutable);
 
     if (serverCode != 0)
     {
@@ -1811,8 +2108,8 @@ namespace
 
     if (!selfPath)
     {
-      error("Unable to locate current vix executable for bundling.");
-      hint("The first desktop package backend currently supports Linux.");
+      out.error("Unable to locate current vix executable for bundling.");
+      out.error_hint("The first desktop package backend currently supports Linux.");
       return 1;
     }
 
@@ -1825,16 +2122,20 @@ namespace
     fs::create_directories(binDir, ec);
     if (ec)
     {
-      error("Unable to create bundle bin directory: " + ec.message());
+      out.error("Unable to create bundle bin directory: " + ec.message());
       return 1;
     }
 
     fs::create_directories(resourcesDir, ec);
     if (ec)
     {
-      error("Unable to create bundle resources directory: " + ec.message());
+      out.error("Unable to create bundle resources directory: " + ec.message());
       return 1;
     }
+
+    out.banner("Vix Desktop \u00b7 package");
+    out.row("app", options.name);
+    out.row("out", bundleDir.string(), out.theme.cyan());
 
     const std::string appSlug = slugify(options.name);
 
@@ -1856,7 +2157,7 @@ namespace
 
     if (ec)
     {
-      error("Unable to copy server executable: " + ec.message());
+      out.error("Unable to copy server executable: " + ec.message());
       return 1;
     }
 
@@ -1868,7 +2169,7 @@ namespace
 
     if (ec)
     {
-      error("Unable to copy vix desktop runtime: " + ec.message());
+      out.error("Unable to copy vix desktop runtime: " + ec.message());
       return 1;
     }
 
@@ -1877,6 +2178,7 @@ namespace
 
     const int resourcesCode =
         copy_desktop_runtime_resources(
+            out,
             options,
             bundleDir,
             serverExecutable);
@@ -1887,7 +2189,7 @@ namespace
     }
 
     std::string iconName;
-    const int iconCode = copy_optional_icon(options, resourcesDir, iconName);
+    const int iconCode = copy_optional_icon(out, options, resourcesDir, iconName);
 
     if (iconCode != 0)
     {
@@ -1899,6 +2201,7 @@ namespace
 
     const int manifestCode =
         write_desktop_manifest(
+            out,
             options,
             bundleDir,
             serverName,
@@ -1912,6 +2215,7 @@ namespace
 
     const int launcherCode =
         write_launcher_script(
+            out,
             options,
             bundleDir,
             serverName,
@@ -1924,6 +2228,7 @@ namespace
 
     const int desktopCode =
         write_linux_desktop_file(
+            out,
             options,
             bundleDir,
             launcherName,
@@ -1935,10 +2240,9 @@ namespace
       return desktopCode;
     }
 
-    success("Desktop bundle created.");
-    step(bundleDir.string());
-    hint("Run:");
-    step((bundleDir / launcherName).string());
+    out.event("packaged", "out", bundleDir.string());
+    out.success("Desktop bundle created.");
+    out.row("run", (bundleDir / launcherName).string(), out.theme.cyan());
 
     return 0;
   }
@@ -1950,7 +2254,11 @@ namespace
     DesktopOptions options;
     options.action = action;
 
-    const int parseResult = parse_options(args, options);
+    // First-pass reporter so parse errors are styled with sensible defaults.
+    DesktopReporter out;
+    out.theme.color = desk_detect_color(std::cout);
+
+    const int parseResult = parse_options(out, args, options);
 
     if (parseResult == 2)
     {
@@ -1962,12 +2270,24 @@ namespace
       return parseResult;
     }
 
-    if (action == DesktopAction::Run)
+    // Apply final verbosity / color now that flags are known.
+    out.mode = options.logMode;
+    out.theme.color =
+        (options.colorOverride == -1) ? desk_detect_color(std::cout)
+                                      : (options.colorOverride == 1);
+
+    if (!desktop_shell_backend_available())
     {
-      return run_desktop_app(std::move(options));
+      out.error("Desktop shell unavailable.");
+      return 1;
     }
 
-    return build_desktop_bundle(options);
+    if (action == DesktopAction::Run)
+    {
+      return run_desktop_app(out, std::move(options));
+    }
+
+    return build_desktop_bundle(out, options);
   }
 }
 
@@ -1977,8 +2297,6 @@ namespace vix::commands
 {
   int DesktopCommand::run(const std::vector<std::string> &args)
   {
-    using namespace vix::cli::style;
-
     if (!args.empty() && is_help_arg(args[0]))
     {
       return help();
@@ -2026,9 +2344,11 @@ namespace vix::commands
 
     return run_desktop_command(action, commandArgs);
 #else
-    error("Vix desktop is not available in this build.");
-    hint("Build the CLI with the vix::ui module enabled.");
-    hint("Expected compile definition: VIX_CLI_HAS_UI=1");
+    DesktopReporter out;
+    out.theme.color = desk_detect_color(std::cout);
+
+    out.error("Desktop shell unavailable.");
+    out.error_hint("Build with desktop WebView enabled.");
 
     return 1;
 #endif
@@ -2056,7 +2376,7 @@ namespace vix::commands
 
         << "Run examples:\n"
         << "  vix desktop run --url http://127.0.0.1:8080\n"
-        << "  vix desktop run --server \"vix run --force-server main.cpp\" --port 8080\n"
+        << "  vix desktop run main.cpp --port 8080\n"
         << "  vix desktop run ./build/my_server --title \"My App\"\n\n"
 
         << "Build/package examples:\n"
@@ -2078,10 +2398,10 @@ namespace vix::commands
         << "  --width <px>                Window width. Default: 1200\n"
         << "  --height <px>               Window height. Default: 800\n"
         << "  --fullscreen                Start fullscreen\n"
-        << "  --resizable                 Allow resizing, default\n"
+        << "  --resizable                 Allow resizing (default)\n"
         << "  --no-resizable              Disable resizing\n"
         << "  --devtools                  Enable WebView developer tools when supported\n"
-        << "  --no-devtools               Disable developer tools, default\n\n"
+        << "  --no-devtools               Disable developer tools (default)\n\n"
 
         << "Server options:\n"
         << "  --url <url>                 Target URL to open\n"
@@ -2091,7 +2411,7 @@ namespace vix::commands
         << "  --server <command>          Dev mode server command\n"
         << "  --cwd <dir>                 Working directory for --server\n"
         << "  --working-directory <dir>   Same as --cwd\n"
-        << "  --wait                      Wait for server readiness, default\n"
+        << "  --wait                      Wait for server readiness (default)\n"
         << "  --no-wait                   Do not wait for server readiness\n"
         << "  --timeout-ms <ms>           Server startup timeout. Default: 30000\n\n"
 
@@ -2107,7 +2427,12 @@ namespace vix::commands
         << "  --resources <path>          Copy an extra runtime resource file or directory\n"
         << "  --resource <path>           Same as --resources\n"
         << "  --no-auto-resources         Do not auto-copy templates/assets/static/public/views/resources\n"
-        << "  --local-cache               Use local .vix-scripts cache\n\n";
+        << "  --local-cache               Use local .vix-scripts cache\n\n"
+
+        << "Output options:\n"
+        << "  --quiet, -q                 Only print errors\n"
+        << "  --json                      Emit machine-readable lifecycle events\n"
+        << "  --no-color                  Disable ANSI colors (also honors NO_COLOR)\n\n";
 
     return 0;
   }

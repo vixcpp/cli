@@ -678,6 +678,75 @@ namespace vix::commands
       return sdk_profile_root(profile) / "current";
     }
 
+    fs::path cmake_user_package_registry_dir()
+    {
+#ifdef _WIN32
+      if (const char *appdata = vix::utils::vix_getenv("APPDATA"))
+        return fs::path(appdata) / "CMake" / "packages" / "Vix";
+
+      return fs::current_path() / "CMake" / "packages" / "Vix";
+#else
+      if (const char *home = vix::utils::vix_getenv("HOME"))
+        return fs::path(home) / ".cmake" / "packages" / "Vix";
+
+      return fs::current_path() / ".cmake" / "packages" / "Vix";
+#endif
+    }
+
+    std::string sanitize_cmake_registry_entry_name(std::string s)
+    {
+      for (char &c : s)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+
+        if (!(std::isalnum(uc) || c == '.' || c == '_' || c == '-'))
+          c = '_';
+      }
+
+      if (s.empty())
+        return "vix-sdk";
+
+      return s;
+    }
+
+    void register_sdk_with_cmake_user_registry(
+        const std::string &profile,
+        const fs::path &installDir)
+    {
+      const fs::path configDir = installDir / "lib" / "cmake" / "Vix";
+      const fs::path configFile = configDir / "VixConfig.cmake";
+
+      std::error_code ec;
+
+      if (!fs::exists(configFile, ec) || ec)
+      {
+        throw std::runtime_error(
+            "installed SDK is missing VixConfig.cmake: " + configFile.string());
+      }
+
+      const fs::path registryDir = cmake_user_package_registry_dir();
+      fs::create_directories(registryDir, ec);
+
+      if (ec)
+      {
+        throw std::runtime_error(
+            "failed to create CMake user package registry: " + registryDir.string());
+      }
+
+      const fs::path entry =
+          registryDir / sanitize_cmake_registry_entry_name("vix-sdk-" + profile);
+
+      std::ofstream out(entry);
+
+      if (!out)
+      {
+        throw std::runtime_error(
+            "failed to write CMake package registry entry: " + entry.string());
+      }
+
+      out << configDir.string() << "\n";
+    }
+
     fs::path stats_file()
     {
 #ifdef _WIN32
@@ -2479,6 +2548,7 @@ namespace vix::commands
 
       update_current_pointer(plan.sdkProfile, plan.installDir);
       write_sdk_metadata(plan.sdkProfile, plan.version, plan.platform, plan.installDir, plan.asset);
+      register_sdk_with_cmake_user_registry(plan.sdkProfile, plan.installDir);
 
       result["status"] = "ok";
       result["action"] = "upgrade";

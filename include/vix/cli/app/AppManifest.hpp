@@ -118,6 +118,64 @@ namespace vix::cli::app
   };
 
   /**
+   * @brief Internal application module declared in vix.app.
+   *
+   * Preferred syntax:
+   *
+   * [module.auth]
+   * enabled = true
+   * path = modules/auth
+   * kind = backend
+   * depends = users, projects
+   */
+  struct AppModule
+  {
+    /**
+     * @brief Stable module name.
+     *
+     * Example:
+     * - auth
+     * - projects
+     * - builds
+     */
+    std::string name;
+
+    /**
+     * @brief Whether this module is enabled.
+     *
+     * Disabled modules are parsed, but they are not linked into the
+     * generated application target.
+     */
+    bool enabled{true};
+
+    /**
+     * @brief Module path relative to the project directory.
+     *
+     * Default:
+     * modules/<name>
+     */
+    std::string path;
+
+    /**
+     * @brief Module kind.
+     *
+     * Example:
+     * - backend
+     * - library
+     * - frontend
+     */
+    std::string kind;
+
+    /**
+     * @brief Internal module dependencies by module name.
+     *
+     * Example:
+     * projects depends on auth
+     */
+    std::vector<std::string> depends;
+  };
+
+  /**
    * @brief Simple C++ application manifest.
    *
    * This structure represents the content of a vix.app file.
@@ -187,6 +245,19 @@ namespace vix::cli::app
     std::vector<std::string> modules;
 
     /**
+     * @brief Full internal application module definitions.
+     *
+     * Preferred vix.app syntax:
+     *
+     * [module.auth]
+     * enabled = true
+     * path = modules/auth
+     * kind = backend
+     * depends = users
+     */
+    std::vector<AppModule> appModules;
+
+    /**
      * @brief External dependencies from the Vix Registry.
      *
      * Each entry uses the same package syntax as `vix add`:
@@ -239,6 +310,17 @@ namespace vix::cli::app
      * of the generated target are pointed at this location.
      */
     std::string outputDir;
+
+    /**
+     * @brief High-level application kind.
+     *
+     * This is different from the generated CMake target type.
+     *
+     * Example:
+     * - app
+     * - backend
+     */
+    std::string appKind{"app"};
 
     /**
      * @brief Returns true when the manifest has the minimum valid fields.

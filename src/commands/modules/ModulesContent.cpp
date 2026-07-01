@@ -79,6 +79,39 @@ namespace vix::commands::modules_cmd::content
     return reserved.find(name) != reserved.end();
   }
 
+  std::string module_class_name(const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+
+    std::string out;
+    bool upperNext = true;
+
+    for (char c : normalized)
+    {
+      if (c == '_' || c == '-')
+      {
+        upperNext = true;
+        continue;
+      }
+
+      if (upperNext)
+      {
+        out.push_back(static_cast<char>(
+            std::toupper(static_cast<unsigned char>(c))));
+        upperNext = false;
+      }
+      else
+      {
+        out.push_back(c);
+      }
+    }
+
+    if (out.empty())
+      out = "Module";
+
+    return out;
+  }
+
   // ------------------------------------------------------------------
   // CMake content generators
   // ------------------------------------------------------------------
@@ -96,6 +129,7 @@ namespace vix::commands::modules_cmd::content
     o << "## - Each module exports <project>::<m> as an ALIAS target\n";
     o << "## - Public headers must never include private sources (src/)\n";
     o << "## - Cross-module usage must be explicit via target_link_libraries\n";
+    o << "## - vix.app projects load only VIX_ENABLED_MODULES\n";
     o << "##\n\n";
 
     o << "if(DEFINED VIX_MODULES_INCLUDED)\n";
@@ -103,7 +137,51 @@ namespace vix::commands::modules_cmd::content
     o << "endif()\n";
     o << "set(VIX_MODULES_INCLUDED ON)\n\n";
 
-    o << "set(VIX_MODULES_DIR \"${CMAKE_CURRENT_LIST_DIR}/../modules\")\n";
+    o << "set(VIX_MODULES_PROJECT_DIR \"${CMAKE_CURRENT_LIST_DIR}/..\")\n";
+    o << "set(VIX_MODULES_DIR \"${VIX_MODULES_PROJECT_DIR}/modules\")\n\n";
+
+    o << "##\n";
+    o << "## vix.app mode\n";
+    o << "##\n";
+    o << "## When VIX_ENABLED_MODULES is defined by the generated CMakeLists.txt,\n";
+    o << "## only those modules are loaded. A module folder can exist without\n";
+    o << "## being active.\n";
+    o << "##\n";
+    o << "if(DEFINED VIX_ENABLED_MODULES)\n";
+    o << "  foreach(_m ${VIX_ENABLED_MODULES})\n";
+    o << "    string(REPLACE \"-\" \"_\" _m_norm \"${_m}\")\n";
+    o << "    set(_m_path_var \"VIX_MODULE_${_m_norm}_PATH\")\n\n";
+
+    o << "    if(DEFINED ${_m_path_var})\n";
+    o << "      set(_m_path \"${${_m_path_var}}\")\n";
+    o << "      if(IS_ABSOLUTE \"${_m_path}\")\n";
+    o << "        set(_m_dir \"${_m_path}\")\n";
+    o << "      else()\n";
+    o << "        set(_m_dir \"${VIX_MODULES_PROJECT_DIR}/${_m_path}\")\n";
+    o << "      endif()\n";
+    o << "    else()\n";
+    o << "      set(_m_dir \"${VIX_MODULES_DIR}/${_m_norm}\")\n";
+    o << "    endif()\n\n";
+
+    o << "    if(NOT EXISTS \"${_m_dir}\")\n";
+    o << "      message(FATAL_ERROR \"VIX_MODULE_NOT_FOUND module=${_m_norm} path=${_m_dir}\")\n";
+    o << "    endif()\n\n";
+
+    o << "    if(NOT EXISTS \"${_m_dir}/CMakeLists.txt\")\n";
+    o << "      message(FATAL_ERROR \"VIX_MODULE_CMAKELISTS_NOT_FOUND module=${_m_norm} path=${_m_dir}/CMakeLists.txt\")\n";
+    o << "    endif()\n\n";
+
+    o << "    add_subdirectory(\"${_m_dir}\" \"${CMAKE_BINARY_DIR}/vix_modules/${_m_norm}\")\n";
+    o << "  endforeach()\n";
+    o << "  return()\n";
+    o << "endif()\n\n";
+
+    o << "##\n";
+    o << "## Legacy CMake mode\n";
+    o << "##\n";
+    o << "## If VIX_ENABLED_MODULES is not defined, keep the old behavior for\n";
+    o << "## classic CMake projects: load every module folder under modules/*.\n";
+    o << "##\n";
     o << "if(NOT EXISTS \"${VIX_MODULES_DIR}\")\n";
     o << "  return()\n";
     o << "endif()\n\n";
@@ -149,6 +227,217 @@ namespace vix::commands::modules_cmd::content
     o << "set_target_properties(" << target << " PROPERTIES\n";
     o << "  OUTPUT_NAME \"" << target << "\"\n";
     o << ")\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_cmakelists_txt_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+    const std::string target = module_target_name(project, module);
+    const std::string alias = module_alias_name(project, module);
+
+    std::ostringstream o;
+
+    o << "cmake_minimum_required(VERSION 3.16)\n\n";
+
+    o << "file(GLOB_RECURSE " << target << "_SOURCES CONFIGURE_DEPENDS\n";
+    o << "  ${CMAKE_CURRENT_LIST_DIR}/src/*.cpp\n";
+    o << ")\n\n";
+
+    o << "add_library(" << target << " ${" << target << "_SOURCES})\n";
+    o << "add_library(" << alias << " ALIAS " << target << ")\n\n";
+
+    o << "target_include_directories(" << target << "\n";
+    o << "  PUBLIC\n";
+    o << "    ${CMAKE_CURRENT_LIST_DIR}/include\n";
+    o << "  PRIVATE\n";
+    o << "    ${CMAKE_CURRENT_LIST_DIR}/src\n";
+    o << ")\n\n";
+
+    o << "target_compile_features(" << target << " PUBLIC cxx_std_20)\n\n";
+
+    o << "target_link_libraries(" << target << "\n";
+    o << "  PUBLIC\n";
+    o << "    vix::vix\n";
+    o << ")\n\n";
+
+    o << "set_target_properties(" << target << " PROPERTIES\n";
+    o << "  OUTPUT_NAME \"" << target << "\"\n";
+    o << ")\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_manifest_app_first(
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+
+    std::ostringstream o;
+
+    o << "name = \"" << normalized << "\"\n";
+    o << "kind = \"backend\"\n\n";
+
+    o << "[routes]\n";
+    o << "prefix = \"/api/" << normalized << "\"\n\n";
+
+    o << "[migrations]\n";
+    o << "dir = \"migrations\"\n\n";
+
+    o << "[tests]\n";
+    o << "enabled = true\n";
+
+    return o.str();
+  }
+
+  std::string module_manifest_app_first(
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+
+    std::ostringstream o;
+
+    o << "name = \"" << normalized << "\"\n";
+    o << "kind = \"module\"\n\n";
+
+    o << "[exports]\n";
+    o << "include = \"include\"\n\n";
+
+    o << "[tests]\n";
+    o << "enabled = true\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_header_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+    const std::string classBase = module_class_name(module);
+    const std::string guard =
+        to_lower(normalize_module_id(project)) + "_" +
+        to_lower(normalized) + "_module_hpp";
+
+    std::ostringstream o;
+
+    o << "#ifndef " << guard << "\n";
+    o << "#define " << guard << "\n\n";
+
+    o << "namespace vix\n";
+    o << "{\n";
+    o << "  class App;\n";
+    o << "}\n\n";
+
+    o << "namespace " << project << "::" << normalized << "\n";
+    o << "{\n";
+    o << "  class " << classBase << "Module\n";
+    o << "  {\n";
+    o << "  public:\n";
+    o << "    static const char *name();\n";
+    o << "    static void register_routes(vix::App &app);\n";
+    o << "  };\n";
+    o << "} // namespace " << project << "::" << normalized << "\n\n";
+
+    o << "#endif // " << guard << "\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_impl_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+    const std::string classBase = module_class_name(module);
+
+    std::ostringstream o;
+
+    o << "#include <" << normalized << "/" << classBase << "Module.hpp>\n";
+    o << "#include <" << normalized << "/controllers/" << classBase << "Controller.hpp>\n\n";
+
+    o << "#include <vix.hpp>\n\n";
+
+    o << "namespace " << project << "::" << normalized << "\n";
+    o << "{\n";
+    o << "  const char *" << classBase << "Module::name()\n";
+    o << "  {\n";
+    o << "    return \"" << normalized << "\";\n";
+    o << "  }\n\n";
+
+    o << "  void " << classBase << "Module::register_routes(vix::App &app)\n";
+    o << "  {\n";
+    o << "    controllers::" << classBase << "Controller::register_routes(app);\n";
+    o << "  }\n";
+    o << "} // namespace " << project << "::" << normalized << "\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_controller_header_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+    const std::string classBase = module_class_name(module);
+    const std::string guard =
+        to_lower(normalize_module_id(project)) + "_" +
+        to_lower(normalized) + "_controller_hpp";
+
+    std::ostringstream o;
+
+    o << "#ifndef " << guard << "\n";
+    o << "#define " << guard << "\n\n";
+
+    o << "namespace vix\n";
+    o << "{\n";
+    o << "  class App;\n";
+    o << "}\n\n";
+
+    o << "namespace " << project << "::" << normalized << "::controllers\n";
+    o << "{\n";
+    o << "  class " << classBase << "Controller\n";
+    o << "  {\n";
+    o << "  public:\n";
+    o << "    static void register_routes(vix::App &app);\n";
+    o << "  };\n";
+    o << "} // namespace " << project << "::" << normalized << "::controllers\n\n";
+
+    o << "#endif // " << guard << "\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_controller_impl_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+    const std::string classBase = module_class_name(module);
+
+    std::ostringstream o;
+
+    o << "#include <" << normalized << "/controllers/" << classBase << "Controller.hpp>\n\n";
+    o << "#include <vix.hpp>\n\n";
+
+    o << "namespace " << project << "::" << normalized << "::controllers\n";
+    o << "{\n";
+    o << "  void " << classBase << "Controller::register_routes(vix::App &app)\n";
+    o << "  {\n";
+    o << "    app.get(\"/api/" << normalized << "\", [](vix::Request &req, vix::Response &res)\n";
+    o << "    {\n";
+    o << "      (void)req;\n\n";
+    o << "      res.json({\n";
+    o << "        \"ok\", true,\n";
+    o << "        \"module\", \"" << normalized << "\",\n";
+    o << "        \"message\", \"" << classBase << " module is available\"\n";
+    o << "      });\n";
+    o << "    });\n";
+    o << "  }\n";
+    o << "} // namespace " << project << "::" << normalized << "::controllers\n";
 
     return o.str();
   }

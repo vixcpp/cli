@@ -118,6 +118,7 @@ namespace vix::commands::new_cmd::templates
     s += "#include <" + projectName + "/presentation/middleware/MiddlewareRegistry.hpp>\n";
     s += "#include <" + projectName + "/presentation/routes/RouteRegistry.hpp>\n\n";
 
+    s += "#include <vix_app_modules.hpp>\n\n";
     s += "#include <vix.hpp>\n";
     s += "#include <vix/log.hpp>\n";
     s += "#include <vix/middleware/app/adapter.hpp>\n";
@@ -168,7 +169,8 @@ namespace vix::commands::new_cmd::templates
     s += "        publicSpaFallback);\n\n";
 
     s += "    presentation::middleware::MiddlewareRegistry::register_all(app);\n";
-    s += "    presentation::routes::RouteRegistry::register_all(app);\n\n";
+    s += "    presentation::routes::RouteRegistry::register_all(app);\n";
+    s += "    vix::app_generated::register_app_modules(app);\n\n";
 
     s += "    vix::log::info(\"Starting " + projectName + " on port {}\", cfg.getServerPort());\n\n";
 

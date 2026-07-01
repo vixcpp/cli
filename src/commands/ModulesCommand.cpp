@@ -87,9 +87,13 @@ namespace vix::commands::ModulesCommand
       }
     }
 
-    if (o.subcmd == "add")
+    if (o.subcmd == "add" ||
+        o.subcmd == "enable" ||
+        o.subcmd == "disable")
+    {
       if (args.size() >= 2 && !is_opt(args[1]))
         o.module = args[1];
+    }
 
     return o;
   }
@@ -128,9 +132,38 @@ namespace vix::commands::ModulesCommand
       return cmds::cmd_add(root, project, opt.module, opt.patchLink) ? 0 : 1;
     }
 
+    if (opt.subcmd == "enable")
+    {
+      if (opt.module.empty())
+      {
+        ui::err_line(std::cout, "Missing module name.");
+        ui::warn_line(std::cout, "Usage: vix modules enable <name>");
+        return 1;
+      }
+
+      return cmds::cmd_enable(root, opt.module) ? 0 : 1;
+    }
+
+    if (opt.subcmd == "disable")
+    {
+      if (opt.module.empty())
+      {
+        ui::err_line(std::cout, "Missing module name.");
+        ui::warn_line(std::cout, "Usage: vix modules disable <name>");
+        return 1;
+      }
+
+      return cmds::cmd_disable(root, opt.module) ? 0 : 1;
+    }
+
     if (opt.subcmd == "check")
     {
       return cmds::cmd_check(root, project) ? 0 : 1;
+    }
+
+    if (opt.subcmd == "list")
+    {
+      return cmds::cmd_list(root) ? 0 : 1;
     }
 
     ui::err_line(std::cout, "Unknown subcommand: " + opt.subcmd);
@@ -156,6 +189,9 @@ namespace vix::commands::ModulesCommand
     out << "Subcommands:\n";
     out << "  init                 Initialize modules mode (creates modules/ + cmake/vix_modules.cmake)\n";
     out << "  add <name>           Create a module skeleton and a target <project>::<name>\n";
+    out << "  list                 List modules declared in vix.app\n";
+    out << "  enable <name>        Enable a module in vix.app\n";
+    out << "  disable <name>       Disable a module in vix.app\n";
     out << "  check                Validate module safety rules (public/private + explicit deps)\n\n";
 
     out << "Options:\n";
@@ -177,6 +213,10 @@ namespace vix::commands::ModulesCommand
     out << "  vix modules init\n";
     out << "  vix modules add auth\n";
     out << "  vix modules add products\n";
+    out << "  vix modules list\n";
+    out << "  vix modules list\n";
+    out << "  vix modules enable auth\n";
+    out << "  vix modules disable products\n";
     out << "  vix modules check\n\n";
 
     return 0;

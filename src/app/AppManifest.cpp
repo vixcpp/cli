@@ -122,6 +122,112 @@ namespace vix::cli::app
       return out;
     }
 
+    static bool is_valid_module_name(const std::string &name)
+    {
+      if (name.empty())
+        return false;
+
+      for (char c : name)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+
+        if (!std::isalnum(uc) && c != '_' && c != '-')
+          return false;
+      }
+
+      return true;
+    }
+
+    static std::string normalize_module_id(std::string name)
+    {
+      name = trim_copy(name);
+
+      for (char &c : name)
+      {
+        if (c == '-')
+          c = '_';
+      }
+
+      return name;
+    }
+
+    static bool parse_bool_value(
+        const std::string &raw,
+        bool &out)
+    {
+      const std::string value = lower_copy(strip_quotes(raw));
+
+      if (value == "true" || value == "yes" || value == "on" || value == "1")
+      {
+        out = true;
+        return true;
+      }
+
+      if (value == "false" || value == "no" || value == "off" || value == "0")
+      {
+        out = false;
+        return true;
+      }
+
+      return false;
+    }
+
+    static bool parse_module_section_header(
+        const std::string &line,
+        std::string &moduleName)
+    {
+      const std::string value = trim_copy(line);
+
+      if (value.size() <= std::string("[module.]").size())
+        return false;
+
+      if (!starts_with(value, "[module."))
+        return false;
+
+      if (!ends_with(value, "]"))
+        return false;
+
+      const std::string rawName =
+          value.substr(
+              std::string("[module.").size(),
+              value.size() - std::string("[module.").size() - 1);
+
+      moduleName = normalize_module_id(rawName);
+
+      return is_valid_module_name(moduleName);
+    }
+
+    static AppModule *find_app_module(
+        AppManifest &manifest,
+        const std::string &name)
+    {
+      for (AppModule &module : manifest.appModules)
+      {
+        if (module.name == name)
+          return &module;
+      }
+
+      return nullptr;
+    }
+
+    static AppModule &ensure_app_module(
+        AppManifest &manifest,
+        const std::string &name)
+    {
+      if (AppModule *existing = find_app_module(manifest, name))
+        return *existing;
+
+      AppModule module;
+      module.name = name;
+      module.enabled = true;
+      module.path = "modules/" + name;
+      module.kind.clear();
+
+      manifest.appModules.push_back(std::move(module));
+
+      return manifest.appModules.back();
+    }
+
     // ---------------------------------------------------------------
     // Line preprocessing
     // ---------------------------------------------------------------
@@ -507,16 +613,39 @@ namespace vix::cli::app
 
       if (normalizedKey == "type")
       {
+        const std::string loweredValue = lower_copy(normalizedValue);
+
+        if (loweredValue == "backend")
+        {
+          manifest.appKind = "backend";
+          manifest.type = AppTargetType::Executable;
+          return true;
+        }
+
         const auto parsed = app_target_type_from_string(normalizedValue);
 
         if (!parsed)
         {
           error = "Invalid vix.app target type: '" + normalizedValue +
-                  "'. Expected one of: executable, static, shared, library.";
+                  "'. Expected one of: executable, static, shared, library, backend.";
           return false;
         }
 
         manifest.type = *parsed;
+        return true;
+      }
+
+      if (normalizedKey == "kind" ||
+          normalizedKey == "app_kind" ||
+          normalizedKey == "appkind")
+      {
+        if (normalizedValue.empty())
+        {
+          error = "Invalid empty app kind in vix.app.";
+          return false;
+        }
+
+        manifest.appKind = normalizedValue;
         return true;
       }
 
@@ -649,6 +778,132 @@ namespace vix::cli::app
       return false;
     }
 
+    static bool assign_module_scalar(
+        AppModule &module,
+        const std::string &key,
+        const std::string &value,
+        std::string &error)
+    {
+      const std::string normalizedKey = lower_copy(trim_copy(key));
+      const std::string normalizedValue = strip_quotes(value);
+
+      if (normalizedKey == "enabled")
+      {
+        bool parsed = true;
+
+        if (!parse_bool_value(normalizedValue, parsed))
+        {
+          error = "Invalid boolean value for module '" +
+                  module.name +
+                  "': " +
+                  normalizedValue;
+          return false;
+        }
+
+        module.enabled = parsed;
+        return true;
+      }
+
+      if (normalizedKey == "path")
+      {
+        if (normalizedValue.empty())
+        {
+          error = "Module '" + module.name + "' has an empty path";
+          return false;
+        }
+
+        module.path = normalizedValue;
+        return true;
+      }
+
+      if (normalizedKey == "kind")
+      {
+        if (normalizedValue.empty())
+        {
+          error = "Module '" + module.name + "' has an empty kind";
+          return false;
+        }
+
+        module.kind = normalizedValue;
+        return true;
+      }
+
+      if (normalizedKey == "depends" ||
+          normalizedKey == "deps" ||
+          normalizedKey == "dependencies")
+      {
+        module.depends.clear();
+
+        for (std::string dep : split_by_comma(normalizedValue))
+        {
+          dep = normalize_module_id(dep);
+
+          if (!is_valid_module_name(dep))
+          {
+            error = "Invalid dependency name in module '" +
+                    module.name +
+                    "': " +
+                    dep;
+            return false;
+          }
+
+          module.depends.push_back(dep);
+        }
+
+        return true;
+      }
+
+      error = "Unknown field in [module." +
+              module.name +
+              "]: '" +
+              key +
+              "'";
+
+      return false;
+    }
+
+    static bool assign_module_array(
+        AppModule &module,
+        const std::string &key,
+        const std::vector<std::string> &values,
+        std::string &error)
+    {
+      const std::string normalizedKey = lower_copy(trim_copy(key));
+
+      if (normalizedKey == "depends" ||
+          normalizedKey == "deps" ||
+          normalizedKey == "dependencies")
+      {
+        module.depends.clear();
+
+        for (std::string dep : values)
+        {
+          dep = normalize_module_id(dep);
+
+          if (!is_valid_module_name(dep))
+          {
+            error = "Invalid dependency name in module '" +
+                    module.name +
+                    "': " +
+                    dep;
+            return false;
+          }
+
+          module.depends.push_back(dep);
+        }
+
+        return true;
+      }
+
+      error = "Unknown array field in [module." +
+              module.name +
+              "]: '" +
+              key +
+              "'";
+
+      return false;
+    }
+
     // ---------------------------------------------------------------
     // Top-level parser
     // ---------------------------------------------------------------
@@ -659,6 +914,62 @@ namespace vix::cli::app
     {
       return "Invalid vix.app syntax at line " +
              std::to_string(lineNumber) + ": " + reason;
+    }
+
+    static bool finalize_app_modules(
+        AppManifest &manifest,
+        std::string &error)
+    {
+      if (manifest.appModules.empty())
+        return true;
+
+      std::unordered_set<std::string> seen;
+
+      manifest.modules.clear();
+
+      for (AppModule &module : manifest.appModules)
+      {
+        module.name = normalize_module_id(module.name);
+
+        if (!is_valid_module_name(module.name))
+        {
+          error = "Invalid module name in vix.app: " + module.name;
+          return false;
+        }
+
+        if (seen.find(module.name) != seen.end())
+        {
+          error = "Duplicate module declaration in vix.app: " + module.name;
+          return false;
+        }
+
+        seen.insert(module.name);
+
+        if (module.path.empty())
+          module.path = "modules/" + module.name;
+
+        if (module.kind.empty())
+          module.kind = manifest.appKind == "backend" ? "backend" : "module";
+
+        for (std::string &dep : module.depends)
+        {
+          dep = normalize_module_id(dep);
+
+          if (!is_valid_module_name(dep))
+          {
+            error = "Invalid dependency name in module '" +
+                    module.name +
+                    "': " +
+                    dep;
+            return false;
+          }
+        }
+
+        if (module.enabled)
+          manifest.modules.push_back(module.name);
+      }
+
+      return true;
     }
 
     static bool parse_manifest_text(
@@ -672,6 +983,8 @@ namespace vix::cli::app
       std::string activeArrayKey;
       std::vector<std::string> activeArrayValues;
       std::size_t activeArrayStartLine = 0;
+
+      std::string activeModuleName;
 
       std::size_t lineNumber = 0;
 
@@ -688,13 +1001,30 @@ namespace vix::cli::app
         {
           if (is_array_end(line))
           {
-            if (!assign_array(
-                    manifest,
-                    activeArrayKey,
-                    activeArrayValues,
-                    error))
+            if (!activeModuleName.empty())
             {
-              return false;
+              AppModule &module =
+                  ensure_app_module(manifest, activeModuleName);
+
+              if (!assign_module_array(
+                      module,
+                      activeArrayKey,
+                      activeArrayValues,
+                      error))
+              {
+                return false;
+              }
+            }
+            else
+            {
+              if (!assign_array(
+                      manifest,
+                      activeArrayKey,
+                      activeArrayValues,
+                      error))
+              {
+                return false;
+              }
             }
 
             activeArrayKey.clear();
@@ -712,6 +1042,23 @@ namespace vix::cli::app
             activeArrayValues.push_back(item);
 
           continue;
+        }
+
+        std::string moduleSectionName;
+
+        if (parse_module_section_header(line, moduleSectionName))
+        {
+          activeModuleName = moduleSectionName;
+          ensure_app_module(manifest, activeModuleName);
+          continue;
+        }
+
+        if (starts_with(line, "[") && ends_with(line, "]"))
+        {
+          error = format_line_error(
+              lineNumber,
+              "unknown section '" + line + "'");
+          return false;
         }
 
         const auto pos = line.find('=');
@@ -749,20 +1096,48 @@ namespace vix::cli::app
             return false;
           }
 
-          if (!assign_array(
-                  manifest,
-                  key,
-                  parse_inline_array(value),
-                  error))
+          if (!activeModuleName.empty())
           {
-            return false;
+            AppModule &module =
+                ensure_app_module(manifest, activeModuleName);
+
+            if (!assign_module_array(
+                    module,
+                    key,
+                    parse_inline_array(value),
+                    error))
+            {
+              return false;
+            }
+          }
+          else
+          {
+            if (!assign_array(
+                    manifest,
+                    key,
+                    parse_inline_array(value),
+                    error))
+            {
+              return false;
+            }
           }
 
           continue;
         }
 
-        if (!assign_scalar(manifest, key, value, error))
-          return false;
+        if (!activeModuleName.empty())
+        {
+          AppModule &module =
+              ensure_app_module(manifest, activeModuleName);
+
+          if (!assign_module_scalar(module, key, value, error))
+            return false;
+        }
+        else
+        {
+          if (!assign_scalar(manifest, key, value, error))
+            return false;
+        }
       }
 
       if (!activeArrayKey.empty())
@@ -788,6 +1163,9 @@ namespace vix::cli::app
 
       if (manifest.standard.empty())
         manifest.standard = "c++20";
+
+      if (!finalize_app_modules(manifest, error))
+        return false;
 
       return true;
     }

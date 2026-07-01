@@ -38,6 +38,22 @@ namespace vix::commands::modules_cmd::commands
   ///   - every cross-module include has a declared CMake dependency
   bool cmd_check(const std::filesystem::path &root, const std::string &project);
 
+  /// `vix modules list` — lists modules declared in vix.app.
+  /// Shows enabled/disabled state, kind, path, and dependencies.
+  bool cmd_list(const std::filesystem::path &root);
+
+  /// `vix modules enable <module>` — enables an existing module section
+  /// in vix.app by setting `enabled = true`.
+  bool cmd_enable(
+      const std::filesystem::path &root,
+      const std::string &module);
+
+  /// `vix modules disable <module>` — disables an existing module section
+  /// in vix.app by setting `enabled = false`.
+  bool cmd_disable(
+      const std::filesystem::path &root,
+      const std::string &module);
+
 } // namespace vix::commands::modules_cmd::commands
 
 #endif

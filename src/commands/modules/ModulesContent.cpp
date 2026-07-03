@@ -265,6 +265,31 @@ namespace vix::commands::modules_cmd::content
     o << "    vix::vix\n";
     o << ")\n\n";
 
+    o << "if(DEFINED " << project << "_BUILD_TESTS AND " << project << "_BUILD_TESTS)\n";
+    o << "  file(GLOB_RECURSE " << target << "_TEST_SOURCES CONFIGURE_DEPENDS\n";
+    o << "    ${CMAKE_CURRENT_LIST_DIR}/tests/*.cpp\n";
+    o << "  )\n\n";
+
+    o << "  if(" << target << "_TEST_SOURCES)\n";
+    o << "    add_executable(" << target << "_tests\n";
+    o << "      ${" << target << "_TEST_SOURCES}\n";
+    o << "    )\n\n";
+
+    o << "    target_include_directories(" << target << "_tests PRIVATE\n";
+    o << "      ${CMAKE_CURRENT_LIST_DIR}/include\n";
+    o << "      ${CMAKE_CURRENT_LIST_DIR}/src\n";
+    o << "    )\n\n";
+
+    o << "    target_link_libraries(" << target << "_tests PRIVATE\n";
+    o << "      " << target << "\n";
+    o << "      vix::vix\n";
+    o << "    )\n\n";
+
+    o << "    target_compile_features(" << target << "_tests PRIVATE cxx_std_20)\n\n";
+    o << "    add_test(NAME " << project << "." << normalized << " COMMAND " << target << "_tests)\n";
+    o << "  endif()\n";
+    o << "endif()\n\n";
+
     o << "set_target_properties(" << target << " PROPERTIES\n";
     o << "  OUTPUT_NAME \"" << target << "\"\n";
     o << ")\n";
@@ -272,26 +297,30 @@ namespace vix::commands::modules_cmd::content
     return o.str();
   }
 
-  std::string module_backend_manifest_app_first(
-      const std::string &module)
+  std::string module_routed_manifest_app_first(
+      const std::string &module,
+      const std::string &kind)
   {
     const std::string normalized = normalize_module_id(module);
 
     std::ostringstream o;
 
     o << "name = \"" << normalized << "\"\n";
-    o << "kind = \"backend\"\n\n";
+    o << "kind = \"" << kind << "\"\n\n";
 
     o << "[routes]\n";
     o << "prefix = \"/api/" << normalized << "\"\n\n";
-
-    o << "[migrations]\n";
-    o << "dir = \"migrations\"\n\n";
 
     o << "[tests]\n";
     o << "enabled = true\n";
 
     return o.str();
+  }
+
+  std::string module_backend_manifest_app_first(
+      const std::string &module)
+  {
+    return module_routed_manifest_app_first(module, "backend");
   }
 
   std::string module_manifest_app_first(

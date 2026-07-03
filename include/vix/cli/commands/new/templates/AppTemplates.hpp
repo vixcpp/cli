@@ -15,6 +15,9 @@ namespace vix::commands::new_cmd::templates
 {
 
   /// src/main.cpp for a new App project.
+  ///
+  /// Kept for backward compatibility with older generator code.
+  /// New app projects should use make_main_cpp_app(projectName).
   constexpr const char *kMainCpp = R"(#include <vix.hpp>
 using namespace vix;
 
@@ -106,16 +109,43 @@ LOGGING_ASYNC=true
 WAF_MODE=basic
 )";
 
-  std::string make_readme_app(const std::string &projectName);
+  /// src/main.cpp for a new App project.
+  ///
+  /// The generated main file keeps the HTTP entry point small and delegates
+  /// module integration to app::ModuleRegistry.
+  std::string make_main_cpp_app(
+      const std::string &projectName);
 
-  std::string make_cmake_presets_json_app(const FeaturesSelection &features);
+  /// include/app/ModuleRegistry.hpp for a new App project.
+  ///
+  /// This file gives simple Vix apps one stable place where internal modules
+  /// can be connected without growing main.cpp.
+  std::string make_app_module_registry_hpp();
 
+  /// src/app/ModuleRegistry.cpp for a new App project.
+  ///
+  /// The default implementation is intentionally empty, but it gives the
+  /// project a clean integration point after `vix modules add <name>`.
+  std::string make_app_module_registry_cpp();
+
+  /// README.md for a new App project.
+  std::string make_readme_app(
+      const std::string &projectName);
+
+  /// CMakePresets.json for a new App project.
+  std::string make_cmake_presets_json_app(
+      const FeaturesSelection &features);
+
+  /// vix.app for a new App project.
   std::string make_project_manifest_app(
       const std::string &projectName,
       const FeaturesSelection &features);
 
-  std::string make_vix_json_app(const std::string &projectName);
+  /// vix.json for a new App project.
+  std::string make_vix_json_app(
+      const std::string &projectName);
 
+  /// Fallback CMakeLists.txt for a new App project.
   std::string make_cmakelists_app(
       const std::string &projectName,
       const FeaturesSelection &features);

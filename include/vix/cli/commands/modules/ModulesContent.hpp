@@ -168,6 +168,11 @@ namespace vix::commands::modules_cmd::content
       const std::string &project,
       const std::string &module);
 
+  /// modules/<m>/vix.module for a routed module.
+  std::string module_routed_manifest_app_first(
+      const std::string &module,
+      const std::string &kind);
+
 } // namespace vix::commands::modules_cmd::content
 
 #endif // VIX_CLI_MODULES_CONTENT_HPP

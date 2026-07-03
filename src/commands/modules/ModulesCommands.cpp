@@ -573,7 +573,8 @@ namespace vix::commands::modules_cmd::commands
 
   static bool append_module_section_to_vix_app(
       const fs::path &root,
-      const std::string &moduleRaw)
+      const std::string &moduleRaw,
+      const std::string &moduleKind)
   {
     const fs::path appPath = root / "vix.app";
 
@@ -614,7 +615,8 @@ namespace vix::commands::modules_cmd::commands
       }
     }
 
-    const std::string kind = detect_vix_app_kind(root);
+    const std::string kind =
+        moduleKind.empty() ? detect_vix_app_kind(root) : moduleKind;
 
     std::ostringstream out;
     out << content;
@@ -673,6 +675,15 @@ namespace vix::commands::modules_cmd::commands
     const bool isBackendModule =
         hasVixApp && detect_vix_app_kind(root) == "backend";
 
+    const bool isServiceModule =
+        hasVixApp && !isBackendModule;
+
+    const bool isRoutedModule =
+        isBackendModule || isServiceModule;
+
+    const std::string moduleKind =
+        isBackendModule ? "backend" : (isServiceModule ? "service" : "module");
+
     const fs::path includeDir = moduleDir / "include" / normalized;
     const fs::path srcDir = moduleDir / "src";
     const fs::path migrationsDir = moduleDir / "migrations";
@@ -703,13 +714,13 @@ namespace vix::commands::modules_cmd::commands
       return false;
     }
 
-    if (isBackendModule)
+    if (isRoutedModule)
     {
       if (!utils::ensure_dir(includeDir / "controllers"))
       {
         ui::err_line(
             std::cout,
-            "Failed to create backend module controllers include directory.");
+            "Failed to create module controllers include directory.");
         return false;
       }
 
@@ -717,23 +728,26 @@ namespace vix::commands::modules_cmd::commands
       {
         ui::err_line(
             std::cout,
-            "Failed to create backend module controllers source directory.");
+            "Failed to create module controllers source directory.");
         return false;
       }
 
-      if (!utils::ensure_dir(migrationsDir))
+      if (isBackendModule)
       {
-        ui::err_line(
-            std::cout,
-            "Failed to create backend module migrations directory.");
-        return false;
+        if (!utils::ensure_dir(migrationsDir))
+        {
+          ui::err_line(
+              std::cout,
+              "Failed to create backend module migrations directory.");
+          return false;
+        }
       }
 
       if (!utils::ensure_dir(testsDir))
       {
         ui::err_line(
             std::cout,
-            "Failed to create backend module tests directory.");
+            "Failed to create module tests directory.");
         return false;
       }
     }
@@ -750,7 +764,7 @@ namespace vix::commands::modules_cmd::commands
 
     const fs::path cmakeLists = moduleDir / "CMakeLists.txt";
 
-    if (isBackendModule)
+    if (isRoutedModule)
     {
       const std::string classBase =
           cnt::module_class_name(normalized);
@@ -770,6 +784,9 @@ namespace vix::commands::modules_cmd::commands
       const fs::path moduleManifest =
           moduleDir / "vix.module";
 
+      const std::string moduleKind =
+          isBackendModule ? "backend" : "service";
+
       const fs::path testFile =
           testsDir / ("test_" + normalized + ".cpp");
 
@@ -783,7 +800,7 @@ namespace vix::commands::modules_cmd::commands
 
       if (!utils::write_file_if_missing(
               moduleManifest,
-              cnt::module_backend_manifest_app_first(normalized)))
+              cnt::module_routed_manifest_app_first(normalized, moduleKind)))
       {
         ui::err_line(std::cout, "Failed to write vix.module.");
         return false;
@@ -821,13 +838,14 @@ namespace vix::commands::modules_cmd::commands
         return false;
       }
 
-      utils::write_file_if_missing(migrationsDir / ".gitkeep", "");
+      if (isBackendModule)
+        utils::write_file_if_missing(migrationsDir / ".gitkeep", "");
 
       if (!utils::write_file_if_missing(
               testFile,
               cnt::module_backend_test_cpp_app_first(project, normalized)))
       {
-        ui::err_line(std::cout, "Failed to write backend module test.");
+        ui::err_line(std::cout, "Failed to write module test.");
         return false;
       }
     }
@@ -900,7 +918,7 @@ namespace vix::commands::modules_cmd::commands
     }
     else if (patchRootLink && hasVixApp)
     {
-      if (!append_module_section_to_vix_app(root, normalized))
+      if (!append_module_section_to_vix_app(root, normalized, moduleKind))
       {
         ui::err_line(std::cout, "Failed to register module in vix.app.");
         return false;
@@ -924,7 +942,7 @@ namespace vix::commands::modules_cmd::commands
         1,
         "modules/" + normalized + "/");
 
-    if (isBackendModule)
+    if (isRoutedModule)
     {
       const std::string classBase =
           cnt::module_class_name(normalized);

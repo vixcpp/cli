@@ -138,6 +138,25 @@ namespace vix::cli::app
              lower_copy(module.kind) == "backend";
     }
 
+    static bool supports_generated_app_modules(
+        const AppManifest &manifest)
+    {
+      return manifest.type == AppTargetType::Executable;
+    }
+
+    static bool is_routed_app_module(
+        const AppModule &module)
+    {
+      if (!module.enabled)
+        return false;
+
+      const std::string kind = lower_copy(module.kind);
+
+      return kind == "backend" ||
+             kind == "service" ||
+             kind == "app";
+    }
+
     static std::string module_class_name(const std::string &module)
     {
       const std::string normalized = normalize_module_id(module);
@@ -223,7 +242,7 @@ namespace vix::cli::app
 
       for (const AppModule &module : manifest.appModules)
       {
-        if (!is_backend_app_module(module))
+        if (!is_routed_app_module(module))
           continue;
 
         const std::string normalized =
@@ -245,10 +264,11 @@ namespace vix::cli::app
       out << "{\n";
       out << "  void register_app_modules(vix::App &app)\n";
       out << "  {\n";
+      out << "    (void)app;\n\n";
 
       for (const AppModule &module : manifest.appModules)
       {
-        if (!is_backend_app_module(module))
+        if (!is_routed_app_module(module))
           continue;
 
         const std::string normalized =
@@ -688,7 +708,7 @@ namespace vix::cli::app
         out << "  " << cmake_quoted_path(resolved) << "\n";
       }
 
-      if (is_backend_app_manifest(manifest))
+      if (supports_generated_app_modules(manifest))
       {
         out << "  "
             << cmake_quoted_path(generated_modules_cpp_path(projectDir))
@@ -711,7 +731,7 @@ namespace vix::cli::app
           projectDir,
           manifest.includeDirs);
 
-      if (is_backend_app_manifest(manifest))
+      if (supports_generated_app_modules(manifest))
       {
         out << "target_include_directories("
             << targetName
@@ -1039,6 +1059,21 @@ namespace vix::cli::app
 
       out << "endif()\n\n";
     }
+
+    static void emit_tests_prelude(
+        std::ostringstream &out,
+        const std::string &targetName)
+    {
+      out << "# Tests declared by Vix app scaffold\n";
+      out << "include(CTest)\n";
+      out << "enable_testing()\n\n";
+
+      out << "option("
+          << targetName
+          << "_BUILD_TESTS \"Build tests for "
+          << targetName
+          << "\" OFF)\n\n";
+    }
   } // namespace
 
   // -----------------------------------------------------------------
@@ -1072,8 +1107,8 @@ namespace vix::cli::app
     // .vix/vix_deps.cmake and must be loaded before target linking.
     emit_registry_deps_loader(out, manifest, projectDir);
 
-    // User application modules must be loaded before linking their
-    // alias targets into the generated application target.
+    emit_tests_prelude(out, targetName);
+
     emit_enabled_modules_for_loader(out, manifest);
     emit_modules_loader(out, projectDir);
 
@@ -1127,7 +1162,7 @@ namespace vix::cli::app
 
     result.cmakeListsPath = result.sourceDir / "CMakeLists.txt";
 
-    if (is_backend_app_manifest(manifest))
+    if (supports_generated_app_modules(manifest))
     {
       const fs::path modulesHeader =
           generated_modules_header_path(normalizedProjectDir);

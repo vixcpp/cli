@@ -121,17 +121,46 @@ namespace vix::commands::new_cmd::generator
       const FeaturesSelection &features,
       std::string &err)
   {
+    const fs::path includeAppDir = projectDir / "include" / "app";
     const fs::path srcDir = projectDir / "src";
+    const fs::path appDir = srcDir / "app";
     const fs::path testsDir = projectDir / "tests";
 
+    if (!ensure_dir(includeAppDir, err))
+      return false;
+
     if (!ensure_dir(srcDir, err))
+      return false;
+
+    if (!ensure_dir(appDir, err))
       return false;
 
     if (!ensure_dir(testsDir, err))
       return false;
 
-    if (!write_text_file(srcDir / "main.cpp", tpl::kMainCpp, err))
+    if (!write_text_file(
+            srcDir / "main.cpp",
+            tpl::make_main_cpp_app(projName),
+            err))
+    {
       return false;
+    }
+
+    if (!write_text_file(
+            includeAppDir / "ModuleRegistry.hpp",
+            tpl::make_app_module_registry_hpp(),
+            err))
+    {
+      return false;
+    }
+
+    if (!write_text_file(
+            appDir / "ModuleRegistry.cpp",
+            tpl::make_app_module_registry_cpp(),
+            err))
+    {
+      return false;
+    }
 
     if (!write_text_file(testsDir / "test_basic.cpp", tpl::kBasicTestCpp_App, err))
       return false;

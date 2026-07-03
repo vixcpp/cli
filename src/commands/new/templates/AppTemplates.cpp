@@ -14,6 +14,94 @@
 
 namespace vix::commands::new_cmd::templates
 {
+  std::string make_main_cpp_app(const std::string &projectName)
+  {
+    std::string s;
+    s.reserve(1800);
+
+    s += "/**\n";
+    s += " * @file main.cpp\n";
+    s += " * @brief Entry point for the " + projectName + " Vix application.\n";
+    s += " */\n\n";
+
+    s += "#include <app/ModuleRegistry.hpp>\n\n";
+    s += "#include <vix.hpp>\n\n";
+
+    s += "int main()\n";
+    s += "{\n";
+    s += "  vix::config::Config cfg{\".env\"};\n";
+    s += "  vix::App app;\n\n";
+
+    s += "  app.get(\"/\", [](vix::Request &req, vix::Response &res)\n";
+    s += "  {\n";
+    s += "    (void)req;\n";
+    s += "    res.send(\"Hello from " + projectName + "\");\n";
+    s += "  });\n\n";
+
+    s += "  app::ModuleRegistry::register_all(app);\n\n";
+
+    s += "  app.run(cfg.getServerPort());\n";
+    s += "  return 0;\n";
+    s += "}\n";
+
+    return s;
+  }
+
+  std::string make_app_module_registry_hpp()
+  {
+    std::string s;
+    s.reserve(900);
+
+    s += "/**\n";
+    s += " * @file ModuleRegistry.hpp\n";
+    s += " * @brief Central module registry for a Vix application.\n";
+    s += " */\n\n";
+
+    s += "#ifndef VIX_GENERATED_APP_MODULE_REGISTRY_HPP\n";
+    s += "#define VIX_GENERATED_APP_MODULE_REGISTRY_HPP\n\n";
+
+    s += "namespace vix\n";
+    s += "{\n";
+    s += "  class App;\n";
+    s += "}\n\n";
+
+    s += "namespace app\n";
+    s += "{\n";
+    s += "  class ModuleRegistry\n";
+    s += "  {\n";
+    s += "  public:\n";
+    s += "    static void register_all(vix::App &app);\n";
+    s += "  };\n";
+    s += "} // namespace app\n\n";
+
+    s += "#endif // VIX_GENERATED_APP_MODULE_REGISTRY_HPP\n";
+
+    return s;
+  }
+
+  std::string make_app_module_registry_cpp()
+  {
+    std::string s;
+    s.reserve(1200);
+
+    s += "/**\n";
+    s += " * @file ModuleRegistry.cpp\n";
+    s += " * @brief Application module registration.\n";
+    s += " */\n\n";
+
+    s += "#include <app/ModuleRegistry.hpp>\n\n";
+    s += "#include <vix_app_modules.hpp>\n\n";
+
+    s += "namespace app\n";
+    s += "{\n";
+    s += "  void ModuleRegistry::register_all(vix::App &app)\n";
+    s += "  {\n";
+    s += "    vix::app_generated::register_app_modules(app);\n";
+    s += "  }\n";
+    s += "} // namespace app\n";
+
+    return s;
+  }
 
   std::string make_readme_app(const std::string &projectName)
   {
@@ -43,6 +131,34 @@ namespace vix::commands::new_cmd::templates
 
     readme += "Vix generates the internal CMake project automatically under `.vix/generated/app/`.\n";
     readme += "You do not need to write a `CMakeLists.txt` for a simple app.\n\n";
+
+    readme += "## Modules\n\n";
+    readme += "This project can also be split into internal Vix modules when the application starts growing.\n\n";
+
+    readme += "Start module mode with:\n\n";
+    readme += "```bash\n";
+    readme += "vix modules init\n";
+    readme += "```\n\n";
+
+    readme += "Create a module:\n\n";
+    readme += "```bash\n";
+    readme += "vix modules add products\n";
+    readme += "```\n\n";
+
+    readme += "Vix creates a module folder with its own source files, public header, `vix.module`, and an example test file.\n\n";
+
+    readme += "List modules with:\n\n";
+    readme += "```bash\n";
+    readme += "vix modules list\n";
+    readme += "```\n\n";
+
+    readme += "Enable or disable a module from the main application manifest:\n\n";
+    readme += "```bash\n";
+    readme += "vix modules enable products\n";
+    readme += "vix modules disable products\n";
+    readme += "```\n\n";
+
+    readme += "The main `vix.app` file decides which modules are active. A disabled module can stay on disk without being compiled into the application.\n\n";
 
     readme += "## Dependencies\n\n";
     readme += "This project also uses `vix.json` for package metadata, tasks and dependencies.\n\n";
@@ -239,9 +355,11 @@ namespace vix::commands::new_cmd::templates
 
     s += "sources = [\n";
     s += "  \"src/main.cpp\",\n";
+    s += "  \"src/app/ModuleRegistry.cpp\",\n";
     s += "]\n\n";
 
     s += "include_dirs = [\n";
+    s += "  \"include\",\n";
     s += "  \"src\",\n";
     s += "]\n\n";
 

@@ -55,7 +55,8 @@ namespace vix::commands::RunCommand::dev
     }
 
     std::string make_vix_dev_build_command(
-        const DevRebuilderOptions &options)
+        const DevRebuilderOptions &options,
+        bool fast)
     {
       const detail::Options &opt = options.runOptions;
 
@@ -65,15 +66,16 @@ namespace vix::commands::RunCommand::dev
       oss << "cd "
           << detail::quote(options.projectDir.string())
           << " && vix build"
-          << " --build-target all"
-          << " --fast";
+          << " --build-target all";
 #else
       oss << "cd /D "
           << detail::quote(options.projectDir.string())
           << " && vix build"
-          << " --build-target all"
-          << " --fast";
+          << " --build-target all";
 #endif
+
+      if (fast)
+        oss << " --fast";
 
       if (opt.jobs > 0)
         oss << " -j " << opt.jobs;
@@ -121,7 +123,7 @@ namespace vix::commands::RunCommand::dev
     DevRebuilderResult result;
     result.built = true;
 
-    std::string buildCmd = make_vix_dev_build_command(options_);
+    std::string buildCmd = make_vix_dev_build_command(options_, true);
 
 #ifndef _WIN32
     std::vector<std::string> argv = {
@@ -176,12 +178,69 @@ namespace vix::commands::RunCommand::dev
     result.message = "Build completed.";
     return result;
   }
+
   DevRebuilderResult DevRebuilder::reconfigure_and_rebuild() const
   {
     if (!options_.quiet)
       info("Configuration change detected.");
 
-    return rebuild();
+    DevRebuilderResult result;
+    result.built = true;
+
+    std::string buildCmd = make_vix_dev_build_command(options_, false);
+
+#ifndef _WIN32
+    std::vector<std::string> argv = {
+        "sh",
+        "-lc",
+        buildCmd};
+#else
+    std::vector<std::string> argv = {
+        "cmd",
+        "/C",
+        buildCmd};
+#endif
+
+    {
+      std::error_code ec;
+      fs::create_directories(options_.buildDir, ec);
+    }
+
+    const fs::path logPath = options_.buildDir / "dev-build.log";
+
+    const auto r = vix::cli::build::run_process_live_to_log(
+        argv,
+        {},
+        logPath,
+        options_.quiet,
+        false,
+        true);
+
+    result.exitCode = r.exitCode;
+    result.ok = r.exitCode == 0;
+
+    if (!result.ok)
+    {
+      const std::string log = read_text_file_or_empty(logPath);
+
+      bool handled = false;
+
+      if (!log.empty())
+      {
+        handled = vix::cli::ErrorHandler::printBuildErrors(
+            log,
+            options_.buildDir,
+            "Build failed in dev mode");
+      }
+
+      if (!handled)
+        error("Build failed in dev mode.");
+
+      return result;
+    }
+
+    result.message = "Build completed.";
+    return result;
   }
 
   bool DevRebuilder::has_cmake_cache() const

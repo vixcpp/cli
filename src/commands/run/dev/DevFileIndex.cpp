@@ -177,6 +177,7 @@ namespace vix::commands::RunCommand::dev
 
     if (name == "CMakeLists.txt" ||
         name == "CMakePresets.json" ||
+        name == "vix.app" ||
         name == "vix.json" ||
         name == "vix.toml" ||
         name == "vix.lock")

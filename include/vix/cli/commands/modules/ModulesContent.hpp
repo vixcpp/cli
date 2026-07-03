@@ -158,6 +158,16 @@ namespace vix::commands::modules_cmd::content
       const std::filesystem::path &publicHeader,
       const std::filesystem::path &moduleDir);
 
+  /// modules/<m>/tests/test_<m>.cpp for a backend module.
+  std::string module_backend_test_cpp_app_first(
+      const std::string &project,
+      const std::string &module);
+
+  /// modules/<m>/tests/test_<m>.cpp for a simple module.
+  std::string module_test_cpp_app_first(
+      const std::string &project,
+      const std::string &module);
+
 } // namespace vix::commands::modules_cmd::content
 
 #endif // VIX_CLI_MODULES_CONTENT_HPP

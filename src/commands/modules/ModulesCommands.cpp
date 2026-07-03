@@ -737,6 +737,16 @@ namespace vix::commands::modules_cmd::commands
         return false;
       }
     }
+    else
+    {
+      if (!utils::ensure_dir(testsDir))
+      {
+        ui::err_line(
+            std::cout,
+            "Failed to create module tests directory.");
+        return false;
+      }
+    }
 
     const fs::path cmakeLists = moduleDir / "CMakeLists.txt";
 
@@ -759,6 +769,9 @@ namespace vix::commands::modules_cmd::commands
 
       const fs::path moduleManifest =
           moduleDir / "vix.module";
+
+      const fs::path testFile =
+          testsDir / ("test_" + normalized + ".cpp");
 
       if (!utils::write_file_if_missing(
               cmakeLists,
@@ -809,7 +822,14 @@ namespace vix::commands::modules_cmd::commands
       }
 
       utils::write_file_if_missing(migrationsDir / ".gitkeep", "");
-      utils::write_file_if_missing(testsDir / ".gitkeep", "");
+
+      if (!utils::write_file_if_missing(
+              testFile,
+              cnt::module_backend_test_cpp_app_first(project, normalized)))
+      {
+        ui::err_line(std::cout, "Failed to write backend module test.");
+        return false;
+      }
     }
     else
     {
@@ -821,6 +841,9 @@ namespace vix::commands::modules_cmd::commands
 
       const fs::path moduleManifest =
           moduleDir / "vix.module";
+
+      const fs::path testFile =
+          testsDir / ("test_" + normalized + ".cpp");
 
       if (!utils::write_file_if_missing(
               cmakeLists,
@@ -835,6 +858,14 @@ namespace vix::commands::modules_cmd::commands
               cnt::module_manifest_app_first(normalized)))
       {
         ui::err_line(std::cout, "Failed to write vix.module.");
+        return false;
+      }
+
+      if (!utils::write_file_if_missing(
+              testFile,
+              cnt::module_test_cpp_app_first(project, normalized)))
+      {
+        ui::err_line(std::cout, "Failed to write module test.");
         return false;
       }
 
@@ -921,6 +952,10 @@ namespace vix::commands::modules_cmd::commands
       print_command_step(
           6,
           "modules/" + normalized + "/vix.module");
+
+      print_command_step(
+          7,
+          "modules/" + normalized + "/tests/test_" + normalized + ".cpp");
     }
     else
     {
@@ -935,6 +970,10 @@ namespace vix::commands::modules_cmd::commands
       print_command_step(
           4,
           "modules/" + normalized + "/vix.module");
+
+      print_command_step(
+          5,
+          "modules/" + normalized + "/tests/test_" + normalized + ".cpp");
     }
 
     sep();

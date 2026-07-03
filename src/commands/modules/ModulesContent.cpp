@@ -13,6 +13,7 @@
 
 #include <sstream>
 #include <unordered_set>
+#include <cctype>
 
 namespace vix::commands::modules_cmd::content
 {
@@ -438,6 +439,79 @@ namespace vix::commands::modules_cmd::content
     o << "    });\n";
     o << "  }\n";
     o << "} // namespace " << project << "::" << normalized << "::controllers\n";
+
+    return o.str();
+  }
+
+  std::string module_backend_test_cpp_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+    const std::string classBase = module_class_name(module);
+
+    std::ostringstream o;
+
+    o << "/**\n";
+    o << " * @file test_" << normalized << ".cpp\n";
+    o << " * @brief Basic tests for the " << normalized << " backend module.\n";
+    o << " */\n\n";
+
+    o << "#include <" << normalized << "/" << classBase << "Module.hpp>\n\n";
+    o << "#include <vix/tests/tests.hpp>\n\n";
+
+    o << "int main()\n";
+    o << "{\n";
+    o << "  using namespace vix::tests;\n\n";
+
+    o << "  auto &registry = TestRegistry::instance();\n";
+    o << "  registry.clear();\n\n";
+
+    o << "  registry.add(TestCase(\"" << normalized << " module exposes its name\", []\n";
+    o << "  {\n";
+    o << "    Assert::equal(\n";
+    o << "        std::string(" << project << "::" << normalized << "::" << classBase << "Module::name()),\n";
+    o << "        std::string(\"" << normalized << "\"));\n";
+    o << "  }));\n\n";
+
+    o << "  return TestRunner::run_all_and_exit();\n";
+    o << "}\n";
+
+    return o.str();
+  }
+
+  std::string module_test_cpp_app_first(
+      const std::string &project,
+      const std::string &module)
+  {
+    const std::string normalized = normalize_module_id(module);
+
+    std::ostringstream o;
+
+    o << "/**\n";
+    o << " * @file test_" << normalized << ".cpp\n";
+    o << " * @brief Basic tests for the " << normalized << " module.\n";
+    o << " */\n\n";
+
+    o << "#include <" << normalized << "/api.hpp>\n\n";
+    o << "#include <vix/tests/tests.hpp>\n\n";
+
+    o << "int main()\n";
+    o << "{\n";
+    o << "  using namespace vix::tests;\n\n";
+
+    o << "  auto &registry = TestRegistry::instance();\n";
+    o << "  registry.clear();\n\n";
+
+    o << "  registry.add(TestCase(\"" << normalized << " module exposes its API name\", []\n";
+    o << "  {\n";
+    o << "    Assert::equal(\n";
+    o << "        " << project << "::" << normalized << "::Api::name(),\n";
+    o << "        std::string(\"" << project << "::" << normalized << "\"));\n";
+    o << "  }));\n\n";
+
+    o << "  return TestRunner::run_all_and_exit();\n";
+    o << "}\n";
 
     return o.str();
   }

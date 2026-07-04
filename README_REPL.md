@@ -7,7 +7,7 @@ Just like **python**, **node**, or **deno**, you start it simply by typing:
 vix
 ```
 
-No subcommand. No flags.  
+No subcommand. No flags.
 This is the **default interactive mode** of Vix.
 
 ---
@@ -94,7 +94,7 @@ The REPL supports **strict JSON** using `nlohmann::json`.
 ### Objects
 
 ```text
-user = {"name":"Gaspard","age":10}
+user = {"name":"Gaspard","age":100}
 user
 ```
 
@@ -116,8 +116,8 @@ profile = {
 profile
 ```
 
-> ⚠️ JSON must be **valid**  
-> ❌ `{ "name", "Gaspard" }`  
+> ⚠️ JSON must be **valid**
+> ❌ `{ "name", "Gaspard" }`
 > ✅ `{ "name": "Gaspard" }`
 
 ---
@@ -254,5 +254,5 @@ Planned features:
 
 ## 🧾 License
 
-MIT License © Gaspard Kirira  
+MIT License © Gaspard Kirira
 Part of the **Vix.cpp** ecosystem

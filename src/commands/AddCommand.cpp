@@ -30,6 +30,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <sstream>
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -51,6 +52,13 @@ namespace vix::commands
       {
         return ns + "/" + name;
       }
+    };
+
+    struct AddOptions
+    {
+      std::string packageSpec;
+      std::string moduleName;
+      std::string linkTarget;
     };
 
     std::string home_dir()
@@ -178,6 +186,568 @@ namespace vix::commands
       }
 
       return true;
+    }
+
+    std::string normalize_module_id(std::string name)
+    {
+      name = trim_copy(std::move(name));
+
+      for (char &c : name)
+      {
+        if (c == '-')
+          c = '_';
+      }
+
+      return name;
+    }
+
+    bool is_valid_module_name(const std::string &name)
+    {
+      if (name.empty())
+        return false;
+
+      for (char c : name)
+      {
+        const bool ok =
+            (c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') ||
+            c == '_' ||
+            c == '-';
+
+        if (!ok)
+          return false;
+      }
+
+      return true;
+    }
+
+    std::string default_link_target(const PkgSpec &spec)
+    {
+      std::string ns = spec.ns;
+      std::string name = spec.name;
+
+      for (char &c : ns)
+      {
+        if (c == '-')
+          c = '_';
+      }
+
+      for (char &c : name)
+      {
+        if (c == '-')
+          c = '_';
+      }
+
+      return ns + "::" + name;
+    }
+
+    bool parse_add_options(
+        const std::vector<std::string> &args,
+        AddOptions &out,
+        std::string &error)
+    {
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        const std::string &arg = args[i];
+
+        if (arg == "--module" || arg == "-m")
+        {
+          if (i + 1 >= args.size())
+          {
+            error = "missing value after " + arg;
+            return false;
+          }
+
+          out.moduleName = args[++i];
+          continue;
+        }
+
+        if (arg.rfind("--module=", 0) == 0)
+        {
+          out.moduleName = arg.substr(std::string("--module=").size());
+          continue;
+        }
+
+        if (arg == "--link")
+        {
+          if (i + 1 >= args.size())
+          {
+            error = "missing value after --link";
+            return false;
+          }
+
+          out.linkTarget = args[++i];
+          continue;
+        }
+
+        if (arg.rfind("--link=", 0) == 0)
+        {
+          out.linkTarget = arg.substr(std::string("--link=").size());
+          continue;
+        }
+
+        if (!arg.empty() && arg[0] == '-')
+        {
+          error = "unknown option: " + arg;
+          return false;
+        }
+
+        if (!out.packageSpec.empty())
+        {
+          error = "too many package arguments";
+          return false;
+        }
+
+        out.packageSpec = arg;
+      }
+
+      if (out.packageSpec.empty())
+      {
+        error = "missing package spec";
+        return false;
+      }
+
+      out.moduleName = normalize_module_id(out.moduleName);
+      out.linkTarget = trim_copy(out.linkTarget);
+
+      if (!out.moduleName.empty() && !is_valid_module_name(out.moduleName))
+      {
+        error = "invalid module name: " + out.moduleName;
+        return false;
+      }
+
+      return true;
+    }
+
+    fs::path module_manifest_path(const std::string &moduleName)
+    {
+      return fs::current_path() / "modules" / moduleName / "vix.module";
+    }
+
+    struct EnabledModule
+    {
+      std::string name;
+      std::string path;
+    };
+
+    std::string strip_quotes_local(const std::string &value)
+    {
+      const std::string s = trim_copy(value);
+
+      if (s.size() >= 2 &&
+          ((s.front() == '"' && s.back() == '"') ||
+           (s.front() == '\'' && s.back() == '\'')))
+      {
+        return s.substr(1, s.size() - 2);
+      }
+
+      return s;
+    }
+
+    bool parse_bool_value(const std::string &raw, bool fallback)
+    {
+      const std::string value = to_lower(strip_quotes_local(trim_copy(raw)));
+
+      if (value == "true" || value == "yes" || value == "on" || value == "1")
+        return true;
+
+      if (value == "false" || value == "no" || value == "off" || value == "0")
+        return false;
+
+      return fallback;
+    }
+
+    std::vector<EnabledModule> read_enabled_modules_from_vix_app()
+    {
+      std::vector<EnabledModule> modules;
+
+      const fs::path appPath = fs::current_path() / "vix.app";
+
+      std::ifstream in(appPath);
+      if (!in)
+        return modules;
+
+      std::string line;
+      std::string currentName;
+      std::string currentPath;
+      bool currentEnabled = true;
+      bool inModule = false;
+
+      auto flush_current = [&]()
+      {
+        if (!inModule || currentName.empty())
+          return;
+
+        if (currentEnabled)
+        {
+          EnabledModule module;
+          module.name = currentName;
+          module.path = currentPath.empty()
+                            ? ("modules/" + currentName)
+                            : currentPath;
+          modules.push_back(std::move(module));
+        }
+      };
+
+      while (std::getline(in, line))
+      {
+        std::string s = trim_copy(line);
+
+        const std::size_t comment = s.find('#');
+        if (comment != std::string::npos)
+          s = trim_copy(s.substr(0, comment));
+
+        if (s.empty())
+          continue;
+
+        if (s.size() >= 2 && s.front() == '[' && s.back() == ']')
+        {
+          flush_current();
+
+          currentName.clear();
+          currentPath.clear();
+          currentEnabled = true;
+          inModule = false;
+
+          const std::string section =
+              trim_copy(s.substr(1, s.size() - 2));
+
+          const std::string prefix = "module.";
+
+          if (section.rfind(prefix, 0) == 0)
+          {
+            currentName = normalize_module_id(section.substr(prefix.size()));
+            currentPath = "modules/" + currentName;
+            currentEnabled = true;
+            inModule = true;
+          }
+
+          continue;
+        }
+
+        if (!inModule)
+          continue;
+
+        const std::size_t eq = s.find('=');
+        if (eq == std::string::npos)
+          continue;
+
+        const std::string key =
+            to_lower(trim_copy(s.substr(0, eq)));
+
+        const std::string value =
+            strip_quotes_local(trim_copy(s.substr(eq + 1)));
+
+        if (key == "enabled")
+          currentEnabled = parse_bool_value(value, true);
+        else if (key == "path")
+          currentPath = value;
+      }
+
+      flush_current();
+
+      return modules;
+    }
+
+    fs::path enabled_module_manifest_path(const EnabledModule &module)
+    {
+      fs::path path(module.path);
+
+      if (!path.is_absolute())
+        path = fs::current_path() / path;
+
+      return path / "vix.module";
+    }
+
+    bool contains_string(
+        const std::vector<std::string> &values,
+        const std::string &needle)
+    {
+      return std::find(values.begin(), values.end(), needle) != values.end();
+    }
+
+    std::vector<std::string> parse_ini_array(
+        const std::string &content,
+        const std::string &section,
+        const std::string &key)
+    {
+      std::vector<std::string> out;
+
+      std::istringstream in(content);
+      std::string line;
+      std::string activeSection;
+      bool collecting = false;
+
+      while (std::getline(in, line))
+      {
+        std::string s = trim_copy(line);
+
+        const std::size_t comment = s.find('#');
+        if (comment != std::string::npos)
+          s = trim_copy(s.substr(0, comment));
+
+        if (s.empty())
+          continue;
+
+        if (!collecting && s.size() >= 2 && s.front() == '[' && s.back() == ']')
+        {
+          activeSection = trim_copy(s.substr(1, s.size() - 2));
+          continue;
+        }
+
+        if (activeSection != section)
+          continue;
+
+        if (!collecting)
+        {
+          const std::size_t eq = s.find('=');
+
+          if (eq == std::string::npos)
+            continue;
+
+          const std::string currentKey =
+              trim_copy(s.substr(0, eq));
+
+          if (currentKey != key)
+            continue;
+
+          s = trim_copy(s.substr(eq + 1));
+
+          const std::size_t open = s.find('[');
+
+          if (open == std::string::npos)
+            continue;
+
+          collecting = true;
+          s = s.substr(open + 1);
+        }
+
+        const std::size_t close = s.find(']');
+
+        if (close != std::string::npos)
+        {
+          s = s.substr(0, close);
+          collecting = false;
+        }
+
+        std::istringstream items(s);
+        std::string item;
+
+        while (std::getline(items, item, ','))
+        {
+          item = strip_quotes_local(trim_copy(item));
+
+          if (!item.empty())
+            out.push_back(item);
+        }
+      }
+
+      return out;
+    }
+
+    std::string render_string_array(
+        const std::string &key,
+        const std::vector<std::string> &values)
+    {
+      std::ostringstream out;
+
+      out << key << " = [\n";
+
+      for (const std::string &value : values)
+        out << "  \"" << value << "\",\n";
+
+      out << "]\n";
+
+      return out.str();
+    }
+
+    std::string remove_section(
+        const std::string &content,
+        const std::string &section)
+    {
+      std::istringstream in(content);
+      std::ostringstream out;
+
+      std::string line;
+      bool skipping = false;
+
+      while (std::getline(in, line))
+      {
+        const std::string s = trim_copy(line);
+
+        if (s.size() >= 2 && s.front() == '[' && s.back() == ']')
+        {
+          const std::string current =
+              trim_copy(s.substr(1, s.size() - 2));
+
+          skipping = current == section;
+
+          if (skipping)
+            continue;
+        }
+
+        if (!skipping)
+          out << line << "\n";
+      }
+
+      return out.str();
+    }
+
+    bool upsert_module_dependency(
+        const fs::path &path,
+        const std::string &dependency,
+        const std::string &linkTarget,
+        std::string &error)
+    {
+      if (!fs::exists(path))
+      {
+        error = "module manifest not found: " + path.string();
+        return false;
+      }
+
+      std::ifstream in(path, std::ios::binary);
+
+      if (!in)
+      {
+        error = "cannot open module manifest: " + path.string();
+        return false;
+      }
+
+      std::ostringstream buffer;
+      buffer << in.rdbuf();
+
+      const std::string original = buffer.str();
+
+      std::vector<std::string> registry =
+          parse_ini_array(original, "deps", "registry");
+
+      std::vector<std::string> links =
+          parse_ini_array(original, "deps", "links");
+
+      if (!contains_string(registry, dependency))
+        registry.push_back(dependency);
+
+      if (!contains_string(links, linkTarget))
+        links.push_back(linkTarget);
+
+      std::string updated = remove_section(original, "deps");
+
+      while (!updated.empty() &&
+             (updated.back() == '\n' || updated.back() == '\r'))
+      {
+        updated.pop_back();
+      }
+
+      updated += "\n\n";
+      updated += "[deps]\n";
+      updated += render_string_array("registry", registry);
+      updated += "\n";
+      updated += render_string_array("links", links);
+      updated += "\n";
+
+      std::ofstream out(path, std::ios::binary | std::ios::trunc);
+
+      if (!out)
+      {
+        error = "cannot write module manifest: " + path.string();
+        return false;
+      }
+
+      out << updated;
+
+      if (!out.good())
+      {
+        error = "failed to write module manifest: " + path.string();
+        return false;
+      }
+
+      return true;
+    }
+
+    void add_dependency_once(
+        std::vector<vix::cli::util::manifest::Dependency> &deps,
+        const std::string &spec)
+    {
+      PkgSpec parsed;
+
+      if (!parse_pkg_spec(spec, parsed))
+        return;
+
+      const std::string packageId = parsed.id();
+
+      const std::string requested =
+          parsed.requestedVersion.empty()
+              ? "*"
+              : parsed.requestedVersion;
+
+      const auto exists =
+          std::find_if(
+              deps.begin(),
+              deps.end(),
+              [&](const vix::cli::util::manifest::Dependency &dep)
+              {
+                return dep.id == packageId;
+              });
+
+      if (exists != deps.end())
+        return;
+
+      deps.push_back(
+          vix::cli::util::manifest::Dependency{
+              packageId,
+              requested});
+    }
+
+    std::vector<vix::cli::util::manifest::Dependency>
+    read_effective_project_dependencies()
+    {
+      std::vector<vix::cli::util::manifest::Dependency> deps =
+          vix::cli::util::manifest::read_manifest_dependencies_or_throw(
+              manifest_path());
+
+      const std::vector<EnabledModule> modules =
+          read_enabled_modules_from_vix_app();
+
+      for (const EnabledModule &module : modules)
+      {
+        const fs::path manifestPath =
+            enabled_module_manifest_path(module);
+
+        if (!fs::exists(manifestPath))
+          continue;
+
+        std::ifstream in(manifestPath, std::ios::binary);
+        if (!in)
+          continue;
+
+        std::ostringstream buffer;
+        buffer << in.rdbuf();
+
+        const std::vector<std::string> registryDeps =
+            parse_ini_array(buffer.str(), "deps", "registry");
+
+        for (const std::string &dep : registryDeps)
+          add_dependency_once(deps, dep);
+      }
+
+      return deps;
+    }
+
+    std::size_t refresh_lockfile_from_effective_dependencies()
+    {
+      const auto effectiveDependencies =
+          read_effective_project_dependencies();
+
+      const auto lockedDependencies =
+          vix::cli::util::resolver::resolve_project_dependencies_or_throw(
+              effectiveDependencies);
+
+      vix::cli::util::lockfile::write_lockfile_replace_all_or_throw(
+          lock_path(),
+          lockedDependencies);
+
+      return lockedDependencies.size();
     }
 
     json read_json_file_or_throw(const fs::path &path)
@@ -456,7 +1026,19 @@ namespace vix::commands
       return 1;
     }
 
-    const std::string raw = args[0];
+    AddOptions options;
+    std::string optionsError;
+
+    if (!parse_add_options(args, options, optionsError))
+    {
+      vix::cli::util::err_line(std::cerr, optionsError);
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Usage: vix add [@]namespace/name[@version] [--module <name>] [--link <target>]");
+      return 1;
+    }
+
+    const std::string raw = options.packageSpec;
 
     PkgSpec spec;
     if (!parse_pkg_spec(raw, spec))
@@ -471,6 +1053,9 @@ namespace vix::commands
       vix::cli::util::warn_line(
           std::cerr,
           "Example:  vix add gaspardkirira/tree@0.1.0");
+      vix::cli::util::warn_line(
+          std::cerr,
+          "Example:  vix add gk/jwt@^1.0.0 --module auth");
       vix::cli::util::warn_line(
           std::cerr,
           std::string("Try search: vix search ") + raw);
@@ -558,6 +1143,62 @@ namespace vix::commands
               ? spec.resolvedVersion
               : spec.requestedVersion;
 
+      const std::string dependencySpec =
+          packageId + "@" + requested;
+
+      if (!options.moduleName.empty())
+      {
+        const std::string linkTarget =
+            options.linkTarget.empty()
+                ? default_link_target(spec)
+                : options.linkTarget;
+
+        std::string moduleError;
+
+        if (!upsert_module_dependency(
+                module_manifest_path(options.moduleName),
+                dependencySpec,
+                linkTarget,
+                moduleError))
+        {
+          vix::cli::util::err_line(std::cerr, moduleError);
+          return 1;
+        }
+
+        vix::cli::util::section(std::cout, "Add");
+        vix::cli::util::kv(std::cout, "id", packageId);
+        vix::cli::util::kv(std::cout, "version", spec.resolvedVersion);
+        vix::cli::util::kv(std::cout, "module", options.moduleName);
+        vix::cli::util::kv(std::cout, "link", linkTarget);
+        vix::cli::util::kv(
+            std::cout,
+            "file",
+            module_manifest_path(options.moduleName).string());
+
+        vix::cli::util::ok_line(
+            std::cout,
+            "added to module: " + options.moduleName);
+
+        step("resolving project dependencies...");
+
+        const std::size_t lockedCount =
+            refresh_lockfile_from_effective_dependencies();
+
+        vix::cli::util::ok_line(
+            std::cout,
+            "lock:  " + lock_path().string());
+
+        vix::cli::util::ok_line(
+            std::cout,
+            "deps:  " + std::to_string(lockedCount));
+
+        vix::cli::util::warn_line(
+            std::cout,
+            "Run: vix build");
+
+        return 0;
+      }
+
       vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
           manifest_path(),
           vix::cli::util::manifest::Dependency{
@@ -612,19 +1253,27 @@ namespace vix::commands
         << "Add a package to your project.\n\n"
 
         << "Usage\n"
-        << "  vix add [@]namespace/name[@version]\n\n"
+        << "  vix add [@]namespace/name[@version]\n"
+        << "  vix add [@]namespace/name[@version] --module <name>\n"
+        << "  vix add [@]namespace/name[@version] -m <name>\n"
+        << "  vix add [@]namespace/name[@version] --module <name> --link <target>\n\n"
 
         << "Examples\n"
         << "  vix add gk/jwt\n"
         << "  vix add gk/jwt@^1.0.0\n"
         << "  vix add @gk/jwt\n"
-        << "  vix add @gk/jwt@~1.2.0\n\n"
+        << "  vix add @gk/jwt@~1.2.0\n"
+        << "  vix add gk/jwt@^1.0.0 --module auth\n"
+        << "  vix add gk/jwt@^1.0.0 -m auth\n"
+        << "  vix add gk/jwt@^1.0.0 --module auth --link gk::jwt\n\n"
 
         << "What happens\n"
         << "  • Resolves the exact version (latest if not specified)\n"
         << "  • Fetches the package at a pinned commit\n"
         << "  • Updates vix.json with the declared dependency\n"
         << "  • Updates vix.lock with the exact resolved version\n"
+        << "  • With --module, updates modules/<name>/vix.module instead of adding the dependency directly to vix.json\n"
+        << "  • Module dependencies are resolved by the application build and kept in the root vix.lock\n"
         << "  • Installs all required dependencies\n\n"
 
         << "Notes\n"

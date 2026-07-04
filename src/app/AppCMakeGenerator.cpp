@@ -115,6 +115,220 @@ namespace vix::cli::app
       return name;
     }
 
+    static std::string trim_copy_local(std::string value)
+    {
+      auto is_space = [](unsigned char c)
+      {
+        return std::isspace(c) != 0;
+      };
+
+      while (!value.empty() && is_space(static_cast<unsigned char>(value.front())))
+        value.erase(value.begin());
+
+      while (!value.empty() && is_space(static_cast<unsigned char>(value.back())))
+        value.pop_back();
+
+      return value;
+    }
+
+    static std::string strip_quotes_local(const std::string &value)
+    {
+      const std::string s = trim_copy_local(value);
+
+      if (s.size() >= 2 &&
+          ((s.front() == '"' && s.back() == '"') ||
+           (s.front() == '\'' && s.back() == '\'')))
+      {
+        return s.substr(1, s.size() - 2);
+      }
+
+      return s;
+    }
+
+    static std::vector<std::string> parse_vix_module_array(
+        const fs::path &path,
+        const std::string &section,
+        const std::string &key)
+    {
+      std::vector<std::string> out;
+
+      std::ifstream in(path);
+      if (!in)
+        return out;
+
+      std::string activeSection;
+      bool collecting = false;
+      std::string line;
+
+      while (std::getline(in, line))
+      {
+        std::string s = trim_copy_local(line);
+
+        const std::size_t comment = s.find('#');
+        if (comment != std::string::npos)
+          s = trim_copy_local(s.substr(0, comment));
+
+        if (s.empty())
+          continue;
+
+        if (!collecting && s.size() >= 2 && s.front() == '[' && s.back() == ']')
+        {
+          activeSection = trim_copy_local(s.substr(1, s.size() - 2));
+          continue;
+        }
+
+        if (activeSection != section)
+          continue;
+
+        if (!collecting)
+        {
+          const std::size_t eq = s.find('=');
+          if (eq == std::string::npos)
+            continue;
+
+          const std::string currentKey =
+              trim_copy_local(s.substr(0, eq));
+
+          if (currentKey != key)
+            continue;
+
+          std::string value = trim_copy_local(s.substr(eq + 1));
+
+          if (value.find('[') == std::string::npos)
+            continue;
+
+          collecting = true;
+
+          const std::size_t open = value.find('[');
+          value = value.substr(open + 1);
+
+          const std::size_t close = value.find(']');
+          if (close != std::string::npos)
+          {
+            value = value.substr(0, close);
+            collecting = false;
+          }
+
+          std::stringstream ss(value);
+          std::string item;
+
+          while (std::getline(ss, item, ','))
+          {
+            item = strip_quotes_local(trim_copy_local(item));
+            if (!item.empty())
+              out.push_back(item);
+          }
+
+          continue;
+        }
+
+        const std::size_t close = s.find(']');
+        if (close != std::string::npos)
+        {
+          s = s.substr(0, close);
+          collecting = false;
+        }
+
+        std::stringstream ss(s);
+        std::string item;
+
+        while (std::getline(ss, item, ','))
+        {
+          item = strip_quotes_local(trim_copy_local(item));
+          if (!item.empty())
+            out.push_back(item);
+        }
+      }
+
+      return out;
+    }
+
+    static fs::path module_manifest_path(
+        const fs::path &projectDir,
+        const AppModule &module)
+    {
+      const std::string normalized =
+          normalize_module_id(module.name);
+
+      const std::string path =
+          module.path.empty() ? ("modules/" + normalized) : module.path;
+
+      return absolute_project_path(projectDir, path) / "vix.module";
+    }
+
+    static bool enabled_module_has_registry_deps(
+        const AppManifest &manifest,
+        const fs::path &projectDir)
+    {
+      for (const AppModule &module : manifest.appModules)
+      {
+        if (!module.enabled)
+          continue;
+
+        const fs::path manifestPath =
+            module_manifest_path(projectDir, module);
+
+        const std::vector<std::string> registryDeps =
+            parse_vix_module_array(manifestPath, "deps", "registry");
+
+        if (!registryDeps.empty())
+          return true;
+      }
+
+      return false;
+    }
+
+    static bool app_needs_registry_deps_loader(
+        const AppManifest &manifest,
+        const fs::path &projectDir)
+    {
+      if (!manifest.deps.empty())
+        return true;
+
+      return enabled_module_has_registry_deps(
+          manifest,
+          projectDir);
+    }
+
+    static void emit_module_links_for_loader(
+        std::ostringstream &out,
+        const AppManifest &manifest,
+        const fs::path &projectDir)
+    {
+      bool wroteHeader = false;
+
+      for (const AppModule &module : manifest.appModules)
+      {
+        if (!module.enabled)
+          continue;
+
+        const std::string normalized =
+            normalize_module_id(module.name);
+
+        const fs::path manifestPath =
+            module_manifest_path(projectDir, module);
+
+        const std::vector<std::string> links =
+            parse_vix_module_array(manifestPath, "deps", "links");
+
+        if (links.empty())
+          continue;
+
+        if (!wroteHeader)
+        {
+          out << "# Module registry links declared in vix.module\n";
+          wroteHeader = true;
+        }
+
+        out << "set(VIX_MODULE_" << normalized << "_LINKS\n";
+
+        for (const std::string &link : links)
+          out << "  " << link << "\n";
+
+        out << ")\n\n";
+      }
+    }
+
     static bool is_backend_app_manifest(const AppManifest &manifest)
     {
       if (lower_copy(manifest.appKind) == "backend")
@@ -610,17 +824,17 @@ namespace vix::cli::app
         const AppManifest &manifest,
         const fs::path &projectDir)
     {
-      if (manifest.deps.empty())
+      if (!app_needs_registry_deps_loader(manifest, projectDir))
         return;
 
       const fs::path depsFile =
           fs::absolute(projectDir / ".vix" / "vix_deps.cmake").lexically_normal();
 
-      out << "# Registry dependencies declared in vix.app\n";
+      out << "# Registry dependencies declared in vix.app or enabled vix.module files\n";
       out << "if(EXISTS " << cmake_quoted_path(depsFile) << ")\n";
       out << "  include(" << cmake_quoted_path(depsFile) << ")\n";
       out << "else()\n";
-      out << "  message(FATAL_ERROR \"vix.app dependencies are declared, but .vix/vix_deps.cmake was not found. Run: vix install\")\n";
+      out << "  message(FATAL_ERROR \"Registry dependencies are declared by vix.app or enabled modules, but .vix/vix_deps.cmake was not found. Run: vix install\")\n";
       out << "endif()\n\n";
     }
 
@@ -1110,6 +1324,7 @@ namespace vix::cli::app
     emit_tests_prelude(out, targetName);
 
     emit_enabled_modules_for_loader(out, manifest);
+    emit_module_links_for_loader(out, manifest, projectDir);
     emit_modules_loader(out, projectDir);
 
     emit_target(out, manifest, targetName, projectDir);

@@ -265,6 +265,13 @@ namespace vix::commands::modules_cmd::content
     o << "    vix::vix\n";
     o << ")\n\n";
 
+    o << "if(DEFINED VIX_MODULE_" << normalized << "_LINKS)\n";
+    o << "  target_link_libraries(" << target << "\n";
+    o << "    PUBLIC\n";
+    o << "      ${VIX_MODULE_" << normalized << "_LINKS}\n";
+    o << "  )\n";
+    o << "endif()\n\n";
+
     o << "if(DEFINED " << project << "_BUILD_TESTS AND " << project << "_BUILD_TESTS)\n";
     o << "  file(GLOB_RECURSE " << target << "_TEST_SOURCES CONFIGURE_DEPENDS\n";
     o << "    ${CMAKE_CURRENT_LIST_DIR}/tests/*.cpp\n";
@@ -310,6 +317,13 @@ namespace vix::commands::modules_cmd::content
 
     o << "[routes]\n";
     o << "prefix = \"/api/" << normalized << "\"\n\n";
+
+    o << "[deps]\n";
+    o << "registry = [\n";
+    o << "]\n\n";
+
+    o << "links = [\n";
+    o << "]\n\n";
 
     o << "[tests]\n";
     o << "enabled = true\n";

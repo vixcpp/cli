@@ -1290,6 +1290,88 @@ namespace vix::commands::modules_cmd::commands
     return "";
   }
 
+  static std::vector<std::string> read_manifest_array(
+      const fs::path &path,
+      const std::string &section,
+      const std::string &wantedKey)
+  {
+    std::vector<std::string> out;
+
+    auto contentOpt = utils::read_file(path);
+
+    if (!contentOpt)
+      return out;
+
+    std::istringstream in(*contentOpt);
+    std::string line;
+    std::string activeSection;
+    bool collecting = false;
+
+    while (std::getline(in, line))
+    {
+      std::string stripped =
+          trim_copy(strip_inline_comment(line));
+
+      if (stripped.empty())
+        continue;
+
+      if (!collecting && is_section_header(stripped))
+      {
+        activeSection = stripped.substr(1, stripped.size() - 2);
+        activeSection = lower_copy(trim_copy(activeSection));
+        continue;
+      }
+
+      if (lower_copy(activeSection) != lower_copy(section))
+        continue;
+
+      if (!collecting)
+      {
+        const auto eq = stripped.find('=');
+
+        if (eq == std::string::npos)
+          continue;
+
+        const std::string key =
+            lower_copy(trim_copy(stripped.substr(0, eq)));
+
+        if (key != lower_copy(wantedKey))
+          continue;
+
+        stripped = trim_copy(stripped.substr(eq + 1));
+
+        if (stripped.find('[') == std::string::npos)
+          continue;
+
+        collecting = true;
+
+        const std::size_t open = stripped.find('[');
+        stripped = stripped.substr(open + 1);
+      }
+
+      const std::size_t close = stripped.find(']');
+
+      if (close != std::string::npos)
+      {
+        stripped = stripped.substr(0, close);
+        collecting = false;
+      }
+
+      std::istringstream items(stripped);
+      std::string item;
+
+      while (std::getline(items, item, ','))
+      {
+        item = strip_quotes(trim_copy(item));
+
+        if (!item.empty())
+          out.push_back(item);
+      }
+    }
+
+    return out;
+  }
+
   static bool check_dependency_cycle_visit(
       const std::string &module,
       const std::unordered_map<std::string, std::vector<std::string>> &graph,
@@ -1570,6 +1652,32 @@ namespace vix::commands::modules_cmd::commands
 
       if (!utils::exists_file(moduleManifest))
         continue;
+
+      const std::vector<std::string> registryDeps =
+          read_manifest_array(moduleManifest, "deps", "registry");
+
+      const std::vector<std::string> depLinks =
+          read_manifest_array(moduleManifest, "deps", "links");
+
+      if (!registryDeps.empty() && depLinks.empty())
+      {
+        ok = false;
+        ++violations;
+
+        ui::err_line(std::cout, "Module declares registry deps but no links");
+        ui::kv(std::cout, "module", module, 12);
+        ui::kv(std::cout, "file", moduleManifest.string(), 12);
+      }
+
+      if (registryDeps.empty() && !depLinks.empty())
+      {
+        ok = false;
+        ++violations;
+
+        ui::err_line(std::cout, "Module declares links but no registry deps");
+        ui::kv(std::cout, "module", module, 12);
+        ui::kv(std::cout, "file", moduleManifest.string(), 12);
+      }
 
       const std::string routePrefix =
           read_manifest_value(moduleManifest, "routes", "prefix");

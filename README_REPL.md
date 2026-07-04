@@ -94,7 +94,7 @@ The REPL supports **strict JSON** using `nlohmann::json`.
 ### Objects
 
 ```text
-user = {"name":"Gaspard","age":100}
+user = {"name":"Gaspard","age":10}
 user
 ```
 

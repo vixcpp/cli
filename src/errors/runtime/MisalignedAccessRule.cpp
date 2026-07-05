@@ -28,28 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class MisalignedAccessKind
-    {
-      LoadMisaligned,
-      StoreMisaligned,
-      ReferenceMisaligned,
-      GenericMisaligned,
-    };
-
-    MisalignedAccessKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "load of misaligned address"))
-        return MisalignedAccessKind::LoadMisaligned;
-
-      if (icontains(log, "store to misaligned address"))
-        return MisalignedAccessKind::StoreMisaligned;
-
-      if (icontains(log, "reference binding to misaligned address"))
-        return MisalignedAccessKind::ReferenceMisaligned;
-
-      return MisalignedAccessKind::GenericMisaligned;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

@@ -984,14 +984,6 @@ namespace vix::commands
       return v == "info" || v == "about" || v == "show" || v == "deps";
     }
 
-    std::string available_sdk_profiles_text()
-    {
-      std::ostringstream oss;
-      for (const char *profile : kSdkProfiles)
-        oss << "  " << profile << "\n";
-      return oss.str();
-    }
-
     std::string cli_asset_name(const Platform &platform)
     {
       if (platform.os == "windows")

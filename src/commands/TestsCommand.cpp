@@ -930,13 +930,13 @@ namespace
         std::lock_guard<std::mutex> lock(currentMutex);
         currentTest = *name;
       }
-      else if (auto name = extract_ctest_done_name(trimmed))
+      else if (auto doneName = extract_ctest_done_name(trimmed))
       {
         if (!countedCompletion)
           completed.fetch_add(1);
 
         std::lock_guard<std::mutex> lock(currentMutex);
-        currentTest = *name;
+        currentTest = *doneName;
       }
     }
 

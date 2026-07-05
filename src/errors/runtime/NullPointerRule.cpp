@@ -28,35 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class NullPointerKind
-    {
-      UbsanMemberAccessNull,
-      UbsanLoadNull,
-      UbsanStoreNull,
-      SegvAtZero,
-      GenericNullDeref,
-    };
-
-    NullPointerKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "member access within null pointer"))
-        return NullPointerKind::UbsanMemberAccessNull;
-
-      if (icontains(log, "load of null pointer"))
-        return NullPointerKind::UbsanLoadNull;
-
-      if (icontains(log, "store to null pointer"))
-        return NullPointerKind::UbsanStoreNull;
-
-      if (icontains(log, "SEGV_MAPERR") && icontains(log, "0x0"))
-        return NullPointerKind::SegvAtZero;
-
-      if (icontains(log, "address 0x0"))
-        return NullPointerKind::SegvAtZero;
-
-      return NullPointerKind::GenericNullDeref;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

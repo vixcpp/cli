@@ -329,29 +329,6 @@ namespace vix::cli::app
       }
     }
 
-    static bool is_backend_app_manifest(const AppManifest &manifest)
-    {
-      if (lower_copy(manifest.appKind) == "backend")
-        return true;
-
-      for (const std::string &define : manifest.defines)
-      {
-        if (define == "VIX_BACKEND_APP=1" ||
-            define == "VIX_BACKEND_APP")
-        {
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    static bool is_backend_app_module(const AppModule &module)
-    {
-      return module.enabled &&
-             lower_copy(module.kind) == "backend";
-    }
-
     static bool supports_generated_app_modules(
         const AppManifest &manifest)
     {

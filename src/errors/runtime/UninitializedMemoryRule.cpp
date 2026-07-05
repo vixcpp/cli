@@ -28,31 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class UninitializedMemoryKind
-    {
-      MsanUninitValue,
-      ValgrindConditionalJump,
-      CompilerUninitialized,
-      GenericUninit,
-    };
-
-    UninitializedMemoryKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "MemorySanitizer") ||
-          icontains(log, "use-of-uninitialized-value"))
-      {
-        return UninitializedMemoryKind::MsanUninitValue;
-      }
-
-      if (icontains(log, "conditional jump or move depends on uninitialised value"))
-        return UninitializedMemoryKind::ValgrindConditionalJump;
-
-      if (icontains(log, "is used uninitialized"))
-        return UninitializedMemoryKind::CompilerUninitialized;
-
-      return UninitializedMemoryKind::GenericUninit;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

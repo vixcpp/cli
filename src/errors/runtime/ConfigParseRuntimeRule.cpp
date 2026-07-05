@@ -31,28 +31,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class ConfigParseKind
-    {
-      EnvParseError,
-      InvalidEnvLine,
-      InvalidKey,
-      GenericConfigParse,
-    };
-
-    ConfigParseKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "failed to parse .env content at line"))
-        return ConfigParseKind::EnvParseError;
-
-      if (icontains(log, "invalid .env line"))
-        return ConfigParseKind::InvalidEnvLine;
-
-      if (icontains(log, "key is invalid"))
-        return ConfigParseKind::InvalidKey;
-
-      return ConfigParseKind::GenericConfigParse;
-    }
-
     std::optional<RuntimeLocation> try_extract_env_location(
         const std::string &log,
         const std::filesystem::path &sourceFile)

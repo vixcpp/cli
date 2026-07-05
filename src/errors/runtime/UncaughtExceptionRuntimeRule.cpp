@@ -28,39 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class UncaughtExceptionKind
-    {
-      RuntimeError,
-      LogicError,
-      InvalidArgument,
-      OutOfRange,
-      FilesystemError,
-      GenericStdException,
-    };
-
-    UncaughtExceptionKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "std::filesystem::filesystem_error") ||
-          icontains(log, "filesystem_error"))
-      {
-        return UncaughtExceptionKind::FilesystemError;
-      }
-
-      if (icontains(log, "std::out_of_range"))
-        return UncaughtExceptionKind::OutOfRange;
-
-      if (icontains(log, "std::invalid_argument"))
-        return UncaughtExceptionKind::InvalidArgument;
-
-      if (icontains(log, "std::logic_error"))
-        return UncaughtExceptionKind::LogicError;
-
-      if (icontains(log, "std::runtime_error"))
-        return UncaughtExceptionKind::RuntimeError;
-
-      return UncaughtExceptionKind::GenericStdException;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

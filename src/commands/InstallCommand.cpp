@@ -1070,12 +1070,6 @@ namespace vix::commands
       out << "\n";
     }
 
-    static bool project_uses_vix_app()
-    {
-      return fs::exists(fs::current_path() / "vix.app") &&
-             !fs::exists(fs::current_path() / "CMakeLists.txt");
-    }
-
     static void print_next_steps(
         std::size_t installedCount,
         std::size_t checkedCount,
@@ -1188,13 +1182,10 @@ namespace vix::commands
 
       fs::create_directories(global_pkgs_dir());
 
-      bool didWork = false;
-
       for (auto &dep : ordered)
       {
         dep.linkDir = dep.checkout;
         save_global_install(dep, dep.checkout);
-        didWork = true;
       }
 
       std::optional<DepResolved> rootOpt;

@@ -28,31 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class JsonParseKind
-    {
-      NlohmannParseError,
-      UnexpectedToken,
-      InvalidJson,
-      GenericJsonParse,
-    };
-
-    JsonParseKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "nlohmann") ||
-          icontains(log, "parse_error"))
-      {
-        return JsonParseKind::NlohmannParseError;
-      }
-
-      if (icontains(log, "unexpected token"))
-        return JsonParseKind::UnexpectedToken;
-
-      if (icontains(log, "invalid JSON"))
-        return JsonParseKind::InvalidJson;
-
-      return JsonParseKind::GenericJsonParse;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

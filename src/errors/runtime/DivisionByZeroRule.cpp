@@ -28,28 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class DivisionByZeroKind
-    {
-      IntegerDivisionByZero,
-      FloatingPointException,
-      Sigfpe,
-      GenericDivisionByZero,
-    };
-
-    DivisionByZeroKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "integer division by zero"))
-        return DivisionByZeroKind::IntegerDivisionByZero;
-
-      if (icontains(log, "floating point exception"))
-        return DivisionByZeroKind::FloatingPointException;
-
-      if (icontains(log, "SIGFPE"))
-        return DivisionByZeroKind::Sigfpe;
-
-      return DivisionByZeroKind::GenericDivisionByZero;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

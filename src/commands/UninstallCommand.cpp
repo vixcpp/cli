@@ -255,42 +255,13 @@ namespace vix::commands
       return value ? "yes" : "no";
     }
 
-    std::string shell_quote(const std::string &s)
-    {
 #ifdef _WIN32
-      std::string out = "\"";
-      for (char c : s)
-      {
-        if (c == '"')
-          out += "\\\"";
-        else
-          out += c;
-      }
-      out += "\"";
-      return out;
-#else
-      std::string out = "'";
-      for (char c : s)
-      {
-        if (c == '\'')
-          out += "'\\''";
-        else
-          out += c;
-      }
-      out += "'";
-      return out;
-#endif
-    }
-
     std::string stderr_null_suffix()
     {
-#ifdef _WIN32
       return " 2>nul";
-#else
-      return " 2>/dev/null";
-#endif
     }
 
+#endif
     std::string exec_capture(const std::string &cmd)
     {
       FILE *pipe = popen_wrap(cmd.c_str(), "r");

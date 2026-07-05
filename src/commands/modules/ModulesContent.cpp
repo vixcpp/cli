@@ -734,7 +734,7 @@ namespace vix::commands::modules_cmd::content
       while (end < s.size())
       {
         char c = s[end];
-        if (!std::isalnum((unsigned char)c) && c != '_' && c != '-')
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '-')
           break;
         ++end;
       }

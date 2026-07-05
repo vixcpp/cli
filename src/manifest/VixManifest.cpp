@@ -33,9 +33,9 @@ namespace vix::cli::manifest
     auto is_ws = [](unsigned char c)
     { return std::isspace(c) != 0; };
 
-    while (!s.empty() && is_ws((unsigned char)s.front()))
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.front())))
       s.erase(s.begin());
-    while (!s.empty() && is_ws((unsigned char)s.back()))
+    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back())))
       s.pop_back();
     return s;
   }
@@ -43,7 +43,7 @@ namespace vix::cli::manifest
   static std::string lower(std::string s)
   {
     for (auto &c : s)
-      c = (char)std::tolower((unsigned char)c);
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
   }
 
@@ -147,7 +147,7 @@ namespace vix::cli::manifest
     size_t i = 0;
     auto skip_ws = [&]()
     {
-      while (i < s.size() && std::isspace((unsigned char)s[i]))
+      while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i])))
         ++i;
     };
 

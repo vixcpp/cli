@@ -1214,7 +1214,7 @@ namespace vix::commands::RunCommand::detail
       ::setrlimit(RLIMIT_CORE, &rl);
 #endif
 
-      ::execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
+      ::execl("/bin/sh", "sh", "-c", cmd.c_str(), static_cast<char *>(nullptr));
       _exit(127);
     }
 

@@ -90,22 +90,6 @@ namespace
     }
   }
 
-  void expect_not_swallowed_by_fallback(const std::string &test_name,
-                                        std::string_view log,
-                                        std::string_view specific_title)
-  {
-    auto r = classify(log);
-    check(test_name + " :: specific title present",
-          r.stderr_output.find(specific_title) != std::string::npos,
-          "stderr=" + r.stderr_output);
-    check(test_name + " :: NOT the generic fallback",
-          r.stderr_output.find("CMake configure failed") == std::string::npos ||
-              // generic fallback uses exactly this title and a specific hint; the
-              // specific_title check above is the real signal
-              r.stderr_output.find("vix build --verbose to inspect") == std::string::npos,
-          "specific handler should have caught this before fallback");
-  }
-
 } // namespace
 
 // ============================================================================

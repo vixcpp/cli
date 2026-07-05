@@ -2258,7 +2258,7 @@ namespace vix::commands::RunCommand::detail
         const std::string exeStr = exePath.string();
         const char *argv0 = exeStr.c_str();
 
-        ::execl(argv0, argv0, (char *)nullptr);
+        ::execl(argv0, argv0, static_cast<char *>(nullptr));
 
         std::cerr << "[vix][run] execl failed: " << std::strerror(errno) << "\n";
         _exit(127);

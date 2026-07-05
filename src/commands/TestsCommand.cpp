@@ -49,6 +49,12 @@
 #include <fcntl.h>
 #endif
 
+#ifndef _WIN32
+#include <sys/ioctl.h>
+#else
+#include <windows.h>
+#endif
+
 #ifdef _WIN32
 #define VIX_TESTS_POPEN _popen
 #define VIX_TESTS_PCLOSE _pclose
@@ -716,11 +722,65 @@ namespace
     }
   }
 
+  static std::size_t terminal_columns()
+  {
+#ifndef _WIN32
+    winsize size{};
+    if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &size) == 0 && size.ws_col > 0)
+      return static_cast<std::size_t>(size.ws_col);
+#else
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    if (handle != INVALID_HANDLE_VALUE &&
+        GetConsoleScreenBufferInfo(handle, &info))
+    {
+      return static_cast<std::size_t>(
+          info.srWindow.Right - info.srWindow.Left + 1);
+    }
+#endif
+
+    const char *columns = std::getenv("COLUMNS");
+    if (columns != nullptr)
+    {
+      try
+      {
+        const int value = std::stoi(columns);
+        if (value >= 20 && value <= 500)
+          return static_cast<std::size_t>(value);
+      }
+      catch (...)
+      {
+      }
+    }
+
+    return 100;
+  }
+
+  static std::string truncate_for_terminal(
+      const std::string &value,
+      std::size_t maxWidth)
+  {
+    if (maxWidth == 0)
+      return "";
+
+    if (value.size() <= maxWidth)
+      return value;
+
+    if (maxWidth <= 3)
+      return value.substr(0, maxWidth);
+
+    return value.substr(0, maxWidth - 3) + "...";
+  }
+
   static void clear_progress_line(bool newline = false)
   {
-    std::cout << "\r"
-              << std::string(140, ' ')
-              << "\r";
+    const std::size_t width = terminal_columns();
+
+    std::cout << "\r\033[2K";
+
+    if (width > 0)
+      std::cout << std::string(width - 1, ' ') << "\r\033[2K";
 
     if (newline)
       std::cout << "\n";
@@ -781,6 +841,38 @@ namespace
               const int startedCount = started.load();
               const int totalCount = total.load();
               const int runningCount = std::max(0, startedCount - doneCount);
+
+              std::ostringstream plainPrefix;
+
+              plainPrefix << "  "
+                          << frames[frame % 4]
+                          << " "
+                          << progressLabel
+                          << " (";
+
+              if (totalCount > 0)
+                plainPrefix << doneCount << "/" << totalCount << " done";
+              else
+                plainPrefix << doneCount << " done";
+
+              if (startedCount > 0)
+                plainPrefix << ", " << runningCount << " running";
+
+              plainPrefix << ", " << format_elapsed_seconds(begin) << ")";
+
+              const std::size_t width = terminal_columns();
+              const std::size_t prefixWidth = plainPrefix.str().size();
+
+              if (!current.empty() && width > prefixWidth + 4)
+              {
+                current = truncate_for_terminal(
+                    current,
+                    width - prefixWidth - 4);
+              }
+              else if (width <= prefixWidth + 4)
+              {
+                current.clear();
+              }
 
               std::cout << "\r\033[2K"
                         << "  "

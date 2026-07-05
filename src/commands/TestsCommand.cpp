@@ -1946,6 +1946,13 @@ namespace
     return result.code;
   }
 
+  static bool ctest_output_has_no_tests(const std::string &output)
+  {
+    return output.find("No tests were found") != std::string::npos ||
+           output.find("No tests were found!!!") != std::string::npos ||
+           output.find("Total Tests: 0") != std::string::npos;
+  }
+
   static int run_ctest(const vix::commands::TestsCommand::detail::Options &opt)
   {
     const std::string presetName = resolve_preset_name(opt);
@@ -2010,7 +2017,7 @@ namespace
       const std::vector<std::string> tests =
           parse_ctest_list_output(result.output);
 
-      if (tests.empty() && has_test_sources(opt.projectDir))
+      if (tests.empty() && ctest_output_has_no_tests(result.output))
         return 2;
 
       print_test_header(opt);
@@ -2027,19 +2034,15 @@ namespace
       return 0;
     }
 
-    print_test_header(opt);
-
     if (ok)
     {
       const std::vector<CTestItem> tests =
           parse_ctest_run_output(result.output);
 
-      if (tests.empty() &&
-          has_test_sources(opt.projectDir) &&
-          result.output.find("No tests were found") != std::string::npos)
-      {
+      if (tests.empty() && ctest_output_has_no_tests(result.output))
         return 2;
-      }
+
+      print_test_header(opt);
 
       if (opt.raw)
       {
@@ -2065,6 +2068,13 @@ namespace
       return 0;
     }
 
+    print_test_header(opt);
+
+    build::print_task_failure_timed(
+        std::cout,
+        failed_tests_message(result),
+        ms);
+
     build::print_task_failure_timed(
         std::cout,
         failed_tests_message(result),
@@ -2088,6 +2098,9 @@ namespace
   {
     auto run_available_tests = [&]() -> int
     {
+      if (should_force_ctest(opt))
+        return run_ctest(opt);
+
       const std::string presetName = resolve_preset_name(opt);
       const fs::path buildDir =
           resolve_build_dir_from_preset(opt.projectDir, presetName);

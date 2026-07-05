@@ -286,13 +286,7 @@ namespace vix::commands
         if (!dryRun)
         {
           std::error_code ec3;
-          bool empty = true;
-          for (auto it = fs::directory_iterator(pkgDir, fs::directory_options::skip_permission_denied, ec3);
-               it != fs::directory_iterator(); ++it)
-          {
-            empty = false;
-            break;
-          }
+          const bool empty = fs::is_empty(pkgDir, ec3);
           if (!ec3 && empty)
           {
             std::error_code rmec2;

@@ -35,8 +35,8 @@ namespace vix::cli::util
     line << key;
 
     std::string k = line.str();
-    if ((int)k.size() < pad)
-      k.append((std::size_t)(pad - (int)k.size()), ' ');
+    if (static_cast<int>(k.size()) < pad)
+      k.append(static_cast<std::size_t>(pad - static_cast<int>(k.size())), ' ');
 
     os << "    " << GRAY << "• " << RESET
        << GRAY << k << RESET

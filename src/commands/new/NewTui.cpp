@@ -279,7 +279,7 @@ namespace vix::commands::new_cmd::tui
       int selected,
       bool firstDraw)
   {
-    const int total = 1 + (int)items.size();
+    const int total = 1 + static_cast<int>(items.size());
     if (!firstDraw)
       move_cursor_up(total);
 
@@ -287,14 +287,14 @@ namespace vix::commands::new_cmd::tui
     clear_line();
     std::cout << PAD << GRAY << title << RESET << "\n";
 
-    for (int i = 0; i < (int)items.size(); ++i)
+    for (int i = 0; i < static_cast<int>(items.size()); ++i)
     {
       clear_line();
       const bool active = (i == selected);
       if (active)
-        std::cout << PAD << CYAN << BOLD << "❯ " << items[(std::size_t)i] << RESET << "\n";
+        std::cout << PAD << CYAN << BOLD << "❯ " << items[static_cast<std::size_t>(i)] << RESET << "\n";
       else
-        std::cout << PAD << GRAY << "  " << items[(std::size_t)i] << RESET << "\n";
+        std::cout << PAD << GRAY << "  " << items[static_cast<std::size_t>(i)] << RESET << "\n";
     }
     std::cout.flush();
   }
@@ -305,13 +305,13 @@ namespace vix::commands::new_cmd::tui
 
   void render_lines(const std::vector<std::string> &lines, bool firstDraw)
   {
-    const int total = (int)lines.size();
+    const int total = static_cast<int>(lines.size());
     if (!firstDraw)
       move_cursor_up(total);
     for (int i = 0; i < total; ++i)
     {
       clear_line();
-      std::cout << lines[(std::size_t)i] << "\n";
+      std::cout << lines[static_cast<std::size_t>(i)] << "\n";
     }
     std::cout.flush();
   }
@@ -367,7 +367,7 @@ namespace vix::commands::new_cmd::tui
     auto make_line = [&](std::size_t idx) -> std::string
     {
       const auto &item = items[idx];
-      const bool active = ((int)idx == cursor_idx);
+      const bool active = (static_cast<int>(idx) == cursor_idx);
       const bool sel = res.selected[idx];
 
       std::string line;
@@ -391,12 +391,12 @@ namespace vix::commands::new_cmd::tui
       if (!item.hint.empty())
       {
         // pad label to column 22 for alignment
-        const int label_len = (int)item.label.size() + 2; // 2 for "● "
+        const int label_len = static_cast<int>(item.label.size()) + 2; // 2 for "● "
         const int cursor_len = 2;
         const int total_text = cursor_len + label_len;
         const int target_col = 26;
         const int spaces = std::max(2, target_col - total_text);
-        line += std::string((std::size_t)spaces, ' ');
+        line += std::string(static_cast<std::size_t>(spaces), ' ');
         line += GRAY + item.hint + RESET;
       }
 
@@ -455,7 +455,7 @@ namespace vix::commands::new_cmd::tui
       if (k == Key::Space)
       {
         // toggle current item
-        res.selected[(std::size_t)cursor_idx] = !res.selected[(std::size_t)cursor_idx];
+        res.selected[static_cast<std::size_t>(cursor_idx)] = !res.selected[static_cast<std::size_t>(cursor_idx)];
         render_lines(build_lines(), firstDraw);
         continue;
       }

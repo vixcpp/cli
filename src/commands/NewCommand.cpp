@@ -73,14 +73,14 @@ namespace
           if (i + 1 >= a.size())
             return std::nullopt;
           std::string v = a[i + 1];
-          a.erase(a.begin() + (long)i, a.begin() + (long)i + 2);
+          a.erase(a.begin() + static_cast<std::ptrdiff_t>(i), a.begin() + static_cast<std::ptrdiff_t>(i) + 2);
           return v;
         }
         const std::string prefix = n + "=";
         if (a[i].rfind(prefix, 0) == 0)
         {
           std::string v = a[i].substr(prefix.size());
-          a.erase(a.begin() + (long)i);
+          a.erase(a.begin() + static_cast<std::ptrdiff_t>(i));
           return v;
         }
       }

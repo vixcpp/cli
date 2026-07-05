@@ -38,9 +38,9 @@ namespace vix::commands::modules_cmd::utils
   {
     auto is_space = [](unsigned char c)
     { return std::isspace(c) != 0; };
-    while (!s.empty() && is_space((unsigned char)s.front()))
+    while (!s.empty() && is_space(static_cast<unsigned char>(s.front())))
       s.erase(s.begin());
-    while (!s.empty() && is_space((unsigned char)s.back()))
+    while (!s.empty() && is_space(static_cast<unsigned char>(s.back())))
       s.pop_back();
     return s;
   }
@@ -48,7 +48,7 @@ namespace vix::commands::modules_cmd::utils
   std::string to_lower(std::string s)
   {
     for (auto &c : s)
-      c = (char)std::tolower((unsigned char)c);
+      c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
   }
 

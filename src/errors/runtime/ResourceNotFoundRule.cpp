@@ -62,6 +62,8 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
+      (void)log;
+
       std::cerr << RED
                 << "runtime error: required resource not found"
                 << RESET << "\n";

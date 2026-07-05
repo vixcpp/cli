@@ -28,20 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class PureVirtualKind
-    {
-      LibcxxPureVirtual,
-      GenericPureVirtual,
-    };
-
-    PureVirtualKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "__cxa_pure_virtual"))
-        return PureVirtualKind::LibcxxPureVirtual;
-
-      return PureVirtualKind::GenericPureVirtual;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

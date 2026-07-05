@@ -31,27 +31,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class AddrInUseKind
-    {
-      EaddrinuseExplicit,
-      AddressAlreadyInUse,
-      GenericPortInUse,
-    };
-
-    AddrInUseKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "EADDRINUSE"))
-        return AddrInUseKind::EaddrinuseExplicit;
-
-      if (icontains(log, "Address already in use") ||
-          icontains(log, "address already in use"))
-      {
-        return AddrInUseKind::AddressAlreadyInUse;
-      }
-
-      return AddrInUseKind::GenericPortInUse;
-    }
-
     std::optional<int> try_extract_port(const std::string &log)
     {
       static const std::regex re(

@@ -784,7 +784,7 @@ namespace vix::commands::modules_cmd::commands
       const fs::path moduleManifest =
           moduleDir / "vix.module";
 
-      const std::string moduleKind =
+      const std::string routedModuleKind =
           isBackendModule ? "backend" : "service";
 
       const fs::path testFile =
@@ -800,7 +800,7 @@ namespace vix::commands::modules_cmd::commands
 
       if (!utils::write_file_if_missing(
               moduleManifest,
-              cnt::module_routed_manifest_app_first(normalized, moduleKind)))
+              cnt::module_routed_manifest_app_first(normalized, routedModuleKind)))
       {
         ui::err_line(std::cout, "Failed to write vix.module.");
         return false;

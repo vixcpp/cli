@@ -28,28 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class TimeoutKind
-    {
-      Etimedout,
-      OperationTimedOut,
-      DeadlineExceeded,
-      GenericTimeout,
-    };
-
-    TimeoutKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "ETIMEDOUT"))
-        return TimeoutKind::Etimedout;
-
-      if (icontains(log, "deadline exceeded"))
-        return TimeoutKind::DeadlineExceeded;
-
-      if (icontains(log, "operation timed out"))
-        return TimeoutKind::OperationTimedOut;
-
-      return TimeoutKind::GenericTimeout;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

@@ -420,16 +420,6 @@ namespace
     return fs::path(".");
   }
 
-  std::string note_current_dir_string()
-  {
-    std::error_code ec;
-    const fs::path cwd = fs::current_path(ec);
-
-    if (!ec)
-      return cwd.string();
-
-    return ".";
-  }
 
   // Returns 0 if valid, otherwise a non-zero exit code.
   int note_validate_path(const NoteReporter &out, const fs::path &notePath)

@@ -122,15 +122,23 @@ namespace vix::commands::logs::runner
       return cmd;
     }
 
+    struct PipeCloser
+    {
+      void operator()(FILE *pipe) const
+      {
+        if (pipe != nullptr)
+          (void)pclose(pipe);
+      }
+    };
+
     std::vector<std::string> read_command_lines(
         const std::string &cmd)
     {
       std::vector<std::string> lines;
       std::array<char, 4096> buffer{};
 
-      std::unique_ptr<FILE, decltype(&pclose)> pipe(
-          popen(cmd.c_str(), "r"),
-          pclose);
+      std::unique_ptr<FILE, PipeCloser> pipe(
+          popen(cmd.c_str(), "r"));
 
       if (!pipe)
         return lines;

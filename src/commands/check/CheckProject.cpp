@@ -270,17 +270,6 @@ namespace vix::commands::CheckCommand::detail
       return derived;
     }
 
-    static bool wants_listing_only_ctest(const Options &opt)
-    {
-      for (const auto &arg : opt.ctestArgs)
-      {
-        if (arg == "--show-only" ||
-            arg == "--show-only=json-v1" ||
-            arg == "-N")
-          return true;
-      }
-      return false;
-    }
 
     static void append_ctest_args(std::ostringstream &os, const Options &opt)
     {
@@ -648,49 +637,6 @@ namespace vix::commands::CheckCommand::detail
       ui::one_line_spacer(std::cout);
     }
 
-#ifndef _WIN32
-    static int run_tests_with_fallback(
-        const Options &opt,
-        const fs::path &projectDir,
-        const fs::path &buildDir,
-        const std::string &configurePreset)
-    {
-      const bool listingOnly = wants_listing_only_ctest(opt);
-      const fs::path ctestPresets = projectDir / "CTestPresets.json";
-      const bool hasCTestPresets = fs::exists(ctestPresets);
-
-      if (hasCTestPresets || !opt.ctestPreset.empty())
-      {
-        const std::string ctestPreset =
-            opt.ctestPreset.empty() ? ("test-" + configurePreset) : opt.ctestPreset;
-
-        std::ostringstream cmd;
-        cmd << "cd " << quote(projectDir.string())
-            << " && ctest --preset " << quote(ctestPreset);
-
-        if (!listingOnly)
-          cmd << " --output-on-failure";
-
-        append_ctest_args(cmd, opt);
-
-        int code = run_cmd_live_filtered(cmd.str(), "Running tests");
-        if (code == 0)
-          return 0;
-
-        ui::warn_line(std::cout, "CTest preset failed, fallback to build directory.");
-      }
-
-      std::ostringstream fb;
-      fb << "cd " << quote(buildDir.string()) << " && ctest";
-
-      if (!listingOnly)
-        fb << " --output-on-failure";
-
-      append_ctest_args(fb, opt);
-
-      return run_cmd_live_filtered(fb.str(), "Running tests (fallback)");
-    }
-
     static bool runtime_log_looks_like_failure(const std::string &log)
     {
       if (log.empty())
@@ -808,7 +754,6 @@ namespace vix::commands::CheckCommand::detail
 
       return rr.exitCode;
     }
-#endif
 
     static void print_header(
         const Options &opt,

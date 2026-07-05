@@ -98,32 +98,6 @@ namespace vix::commands::deploy::runner
       std::string previousGitRef{};
     };
 
-    int fail(
-        const DeployConfig &cfg,
-        const DeployOptions &options,
-        const std::string &message,
-        const std::string &fixMessage = {})
-    {
-      output::error(std::cerr, message);
-
-      if (!fixMessage.empty())
-        output::fix(std::cerr, fixMessage);
-
-      if (cfg.logsOnFailure)
-      {
-        const std::string logsCmd =
-            "vix logs errors --repeated -n " +
-            std::to_string(cfg.logLines);
-
-        output::step(std::cout, "Failure Logs");
-        output::command(std::cout, logsCmd);
-
-        if (!options.dryRun)
-          (void)std::system(logsCmd.c_str());
-      }
-
-      return 1;
-    }
 
     bool rollback_deploy(
         const DeployConfig &cfg,

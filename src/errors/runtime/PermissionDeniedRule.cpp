@@ -28,28 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class PermissionKind
-    {
-      PermissionDenied,
-      OperationNotPermitted,
-      GenericPermission,
-    };
-
-    PermissionKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "operation not permitted") || icontains(log, "EPERM"))
-        return PermissionKind::OperationNotPermitted;
-
-      if (icontains(log, "Permission denied") ||
-          icontains(log, "permission denied") ||
-          icontains(log, "EACCES"))
-      {
-        return PermissionKind::PermissionDenied;
-      }
-
-      return PermissionKind::GenericPermission;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

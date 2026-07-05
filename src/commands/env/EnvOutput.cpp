@@ -30,10 +30,6 @@ namespace vix::commands::env::output
       return value ? "found" : "missing";
     }
 
-    std::string loaded_missing(bool value)
-    {
-      return value ? "loaded" : "missing";
-    }
 
     std::string variable_status(const EnvVariable &variable)
     {

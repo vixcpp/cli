@@ -80,26 +80,6 @@ namespace vix::cli::errors::build
       return {};
     }
 
-    // Extract the first quoted string that appears after `marker` in `log`.
-    std::string extract_quoted_after(std::string_view log,
-                                     std::string_view marker)
-    {
-      const std::size_t pos = log.find(marker);
-      if (pos == std::string_view::npos)
-        return {};
-
-      const std::string_view tail = log.substr(pos + marker.size());
-      const std::size_t q1 = tail.find('"');
-      if (q1 == std::string_view::npos)
-        return {};
-
-      const std::size_t q2 = tail.find('"', q1 + 1);
-      if (q2 == std::string_view::npos)
-        return {};
-
-      return std::string(tail.substr(q1 + 1, q2 - q1 - 1));
-    }
-
     // Extract the first non-empty, non-noise line that contains `marker`.
     // Useful for grabbing the single most informative compiler/linker line.
     std::string extract_first_line_with(std::string_view log,

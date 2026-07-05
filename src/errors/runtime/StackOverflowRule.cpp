@@ -28,23 +28,6 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
-    enum class StackOverflowKind
-    {
-      AsanStackOverflow,
-      GenericStackOverflow,
-    };
-
-    StackOverflowKind classify_issue(const std::string &log)
-    {
-      if (icontains(log, "AddressSanitizer") &&
-          icontains(log, "stack-overflow"))
-      {
-        return StackOverflowKind::AsanStackOverflow;
-      }
-
-      return StackOverflowKind::GenericStackOverflow;
-    }
-
     std::string choose_message(const std::string &log)
     {
       (void)log;

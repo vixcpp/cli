@@ -52,6 +52,14 @@
 #ifndef _WIN32
 #include <sys/ioctl.h>
 #else
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+
 #include <windows.h>
 #endif
 
@@ -840,7 +848,7 @@ namespace
               const int doneCount = completed.load();
               const int startedCount = started.load();
               const int totalCount = total.load();
-              const int runningCount = std::max(0, startedCount - doneCount);
+              const int runningCount = (std::max)(0, startedCount - doneCount);
 
               std::ostringstream plainPrefix;
 
@@ -918,8 +926,8 @@ namespace
 
       if (auto counts = extract_ctest_progress_counts(trimmed))
       {
-        completed.store(std::max(completed.load(), counts->first));
-        total.store(std::max(total.load(), counts->second));
+        completed.store((std::max)(completed.load(), counts->first));
+        total.store((std::max)(total.load(), counts->second));
         countedCompletion = true;
       }
 
@@ -2161,11 +2169,6 @@ namespace
     }
 
     print_test_header(opt);
-
-    build::print_task_failure_timed(
-        std::cout,
-        failed_tests_message(result),
-        ms);
 
     build::print_task_failure_timed(
         std::cout,

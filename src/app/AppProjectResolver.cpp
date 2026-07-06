@@ -23,9 +23,11 @@
 #include <vix/cli/util/Manifest.hpp>
 #include <vix/cli/util/Resolver.hpp>
 
-#include <system_error>
-#include <fstream>
 #include <algorithm>
+#include <cctype>
+#include <fstream>
+#include <sstream>
+#include <system_error>
 
 namespace vix::cli::app
 {

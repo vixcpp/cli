@@ -109,13 +109,13 @@ namespace vix::commands::RunCommand::detail
    */
   void watch_spinner_pause_for_output();
 
-#ifndef _WIN32
   /**
    * @brief Applies sanitizer-related runtime environment variables.
    *
    * On POSIX systems, this configures ASan, UBSan, or TSan environment
    * variables so sanitizer reports are deterministic and easier for Vix
-   * to capture and convert into friendly diagnostics.
+   * to capture and convert into friendly diagnostics. On Windows this is a
+   * no-op because the current runtime sanitizer environment is POSIX-only.
    *
    * @param enableSanitizers True when ASan+UBSan mode is enabled.
    * @param enableUbsanOnly True when UBSan-only mode is enabled.
@@ -125,7 +125,6 @@ namespace vix::commands::RunCommand::detail
       bool enableSanitizers,
       bool enableUbsanOnly,
       bool enableThreadSanitizer);
-#endif
 
   /**
    * @brief Finds a precompiled Vix header if available.

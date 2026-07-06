@@ -48,11 +48,9 @@ namespace vix::commands::CheckCommand::detail
   namespace build = vix::cli::build;
   namespace style = vix::cli::style;
 
-#ifndef _WIN32
   using vix::commands::RunCommand::detail::handle_runtime_exit_code;
   using vix::commands::RunCommand::detail::run_cmd_live_filtered;
   using vix::commands::RunCommand::detail::run_cmd_live_filtered_capture;
-#endif
 
   using vix::cli::commands::helpers::has_cmake_cache;
   using vix::cli::commands::helpers::quote;
@@ -369,81 +367,6 @@ namespace vix::commands::CheckCommand::detail
       return !cmake_cache_has_global_packages_include(buildDir, globalPackagesFile);
     }
 
-#ifndef _WIN32
-    static std::string guess_project_name_from_dir(const fs::path &projectDir)
-    {
-      std::string name = projectDir.filename().string();
-      if (name.empty())
-        name = "app";
-      return name;
-    }
-
-    static std::string resolve_build_type_from_cache_or_default(
-        const fs::path &buildDir,
-        const std::string &fallback = "Debug")
-    {
-      const fs::path cacheFile = buildDir / "CMakeCache.txt";
-      if (!fs::exists(cacheFile))
-        return fallback;
-
-      std::string bt = read_cmake_cache_value(cacheFile, "CMAKE_BUILD_TYPE");
-      if (bt.empty())
-        return fallback;
-
-      return bt;
-    }
-
-    static fs::path compute_runtime_executable_path(
-        const fs::path &buildDir,
-        const std::string &projectName,
-        const std::string &configName)
-    {
-      std::string exeName = projectName;
-#ifdef _WIN32
-      exeName += ".exe";
-#endif
-
-      std::vector<fs::path> candidates;
-      candidates.push_back(buildDir / exeName);
-      candidates.push_back(buildDir / "bin" / exeName);
-      candidates.push_back(buildDir / configName / exeName);
-      candidates.push_back(buildDir / "bin" / configName / exeName);
-      candidates.push_back(buildDir / "src" / exeName);
-      candidates.push_back(buildDir / "src" / configName / exeName);
-
-      for (const auto &candidate : candidates)
-      {
-        std::error_code ec;
-        if (fs::exists(candidate, ec) && !ec)
-          return candidate;
-      }
-
-      const fs::path cacheFile = buildDir / "CMakeCache.txt";
-      if (fs::exists(cacheFile))
-      {
-        std::string outDir =
-            read_cmake_cache_value(cacheFile, "CMAKE_RUNTIME_OUTPUT_DIRECTORY_" + configName);
-
-        if (outDir.empty())
-          outDir = read_cmake_cache_value(cacheFile, "CMAKE_RUNTIME_OUTPUT_DIRECTORY");
-
-        if (!outDir.empty())
-        {
-          fs::path base = fs::path(outDir);
-          if (base.is_relative())
-            base = buildDir / base;
-
-          const fs::path candidate = base / exeName;
-          std::error_code ec;
-          if (fs::exists(candidate, ec) && !ec)
-            return candidate;
-        }
-      }
-
-      return buildDir / exeName;
-    }
-#endif
-
     static void apply_log_level_env_local(const Options &opt)
     {
       if (opt.logLevel.empty() && !opt.quiet && !opt.verbose)
@@ -679,9 +602,9 @@ namespace vix::commands::CheckCommand::detail
         const fs::path &buildDir,
         ProjectCheckSummary &summary)
     {
-      const std::string projectName = guess_project_name_from_dir(projectDir);
-      const std::string configName = resolve_build_type_from_cache_or_default(buildDir, "Debug");
-      const fs::path exePath = compute_runtime_executable_path(buildDir, projectName, configName);
+      const std::string projectName = run::guess_project_name_from_dir(projectDir);
+      const std::string configName = run::resolve_build_type_from_cache_or_default(buildDir, "Debug");
+      const fs::path exePath = run::compute_runtime_executable_path(buildDir, projectName, configName);
       const int timeoutSec = (opt.runTimeoutSec > 0) ? opt.runTimeoutSec : 15;
 
       if (!fs::exists(exePath))

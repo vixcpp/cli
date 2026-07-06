@@ -267,55 +267,6 @@ namespace vix::commands::RunCommand::detail
 #endif
   }
 
-#ifndef _WIN32
-  void apply_sanitizer_env_if_needed(
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer)
-  {
-    if (!want_any_sanitizer(
-            enableSanitizers,
-            enableUbsanOnly,
-            enableThreadSanitizer))
-    {
-      return;
-    }
-
-    if (enableThreadSanitizer)
-    {
-      ::setenv(
-          "TSAN_OPTIONS",
-          "halt_on_error=1:"
-          "second_deadlock_stack=1:"
-          "history_size=7:"
-          "color=never",
-          1);
-      return;
-    }
-
-    ::setenv(
-        "UBSAN_OPTIONS",
-        "halt_on_error=1:print_stacktrace=1:color=never",
-        1);
-
-    if (!enableUbsanOnly)
-    {
-      ::setenv(
-          "ASAN_OPTIONS",
-          "abort_on_error=1:"
-          "detect_leaks=1:"
-          "symbolize=1:"
-          "allocator_may_return_null=1:"
-          "fast_unwind_on_malloc=0:"
-          "strict_init_order=1:"
-          "check_initialization_order=1:"
-          "color=never:"
-          "quiet=1",
-          1);
-    }
-  }
-#endif
-
   std::optional<fs::path> find_vix_include_dir()
   {
     const char *home = vix::utils::vix_getenv(

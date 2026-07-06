@@ -577,6 +577,39 @@ namespace vix::commands::RunCommand::detail
       const std::string &context,
       bool alreadyHandled);
 
+  /**
+   * @brief Applies sanitizer-related runtime environment variables.
+   *
+   * On POSIX systems, this configures ASan, UBSan, or TSan environment
+   * variables so sanitizer reports are deterministic and easier for Vix
+   * to capture and convert into friendly diagnostics. On Windows this is a
+   * no-op because the current runtime sanitizer environment is POSIX-only.
+   */
+  void apply_sanitizer_env_if_needed(
+      bool enableSanitizers,
+      bool enableUbsanOnly,
+      bool enableThreadSanitizer);
+
+  /**
+   * @brief Guess the default executable/project name from a project directory.
+   */
+  std::string guess_project_name_from_dir(const fs::path &projectDir);
+
+  /**
+   * @brief Resolve CMAKE_BUILD_TYPE from CMakeCache.txt, or return fallback.
+   */
+  std::string resolve_build_type_from_cache_or_default(
+      const fs::path &buildDir,
+      const std::string &fallback = "Debug");
+
+  /**
+   * @brief Resolve the executable path produced by a project build.
+   */
+  fs::path compute_runtime_executable_path(
+      const fs::path &buildDir,
+      const std::string &projectName,
+      const std::string &configName);
+
   // ===========================================================================
   // Script probing / planning
   // ===========================================================================

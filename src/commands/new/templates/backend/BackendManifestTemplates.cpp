@@ -17,7 +17,8 @@ namespace vix::commands::new_cmd::templates
 
   std::string make_project_manifest_backend(
       const std::string &projectName,
-      const FeaturesSelection &features)
+      const FeaturesSelection &features,
+      bool apiOnly)
   {
     std::string s;
     s.reserve(5000);
@@ -115,15 +116,20 @@ namespace vix::commands::new_cmd::templates
 
     s += "resources = [\n";
     s += "  \".env=.env\",\n";
-    s += "  \"public=public\",\n";
-    s += "  \"views=views\",\n";
+    if (!apiOnly)
+    {
+      s += "  \"public=public\",\n";
+      s += "  \"views=views\",\n";
+    }
     s += "  \"storage=storage\",\n";
     s += "]\n";
 
     return s;
   }
 
-  std::string make_vix_json_backend(const std::string &projectName)
+  std::string make_vix_json_backend(
+      const std::string &projectName,
+      bool apiOnly)
   {
     std::string s;
     s.reserve(7200);
@@ -218,13 +224,16 @@ namespace vix::commands::new_cmd::templates
     s += "        \"APP_NAME\",\n";
     s += "        \"APP_ENV\",\n";
     s += "        \"SERVER_PORT\",\n";
-    s += "        \"PUBLIC_PATH\",\n";
-    s += "        \"PUBLIC_MOUNT\",\n";
-    s += "        \"PUBLIC_INDEX\",\n";
-    s += "        \"PUBLIC_CACHE_CONTROL\",\n";
-    s += "        \"PUBLIC_SPA_FALLBACK\",\n";
-    s += "        \"PUBLIC_COMPRESSION\",\n";
-    s += "        \"PUBLIC_COMPRESSION_MIN_SIZE\",\n";
+    if (!apiOnly)
+    {
+      s += "        \"PUBLIC_PATH\",\n";
+      s += "        \"PUBLIC_MOUNT\",\n";
+      s += "        \"PUBLIC_INDEX\",\n";
+      s += "        \"PUBLIC_CACHE_CONTROL\",\n";
+      s += "        \"PUBLIC_SPA_FALLBACK\",\n";
+      s += "        \"PUBLIC_COMPRESSION\",\n";
+      s += "        \"PUBLIC_COMPRESSION_MIN_SIZE\",\n";
+    }
     s += "        \"DATABASE_ENGINE\",\n";
     s += "        \"DATABASE_SQLITE_PATH\"\n";
     s += "      ]\n";

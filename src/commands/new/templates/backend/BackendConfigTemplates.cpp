@@ -73,7 +73,9 @@ namespace vix::commands::new_cmd::templates
     return s;
   }
 
-  std::string make_backend_env_example(const std::string &projectName)
+  std::string make_backend_env_example(
+      const std::string &projectName,
+      bool apiOnly)
   {
     std::string s;
     s.reserve(4200);
@@ -111,16 +113,19 @@ namespace vix::commands::new_cmd::templates
     s += "LOGGING_QUEUE_MAX=20000\n";
     s += "LOGGING_DROP_ON_OVERFLOW=true\n\n";
 
-    s += "# Public files and templates\n";
-    s += "# ----------------------------------\n";
-    s += "PUBLIC_PATH=public\n";
-    s += "PUBLIC_MOUNT=/\n";
-    s += "PUBLIC_INDEX=index.html\n";
-    s += "PUBLIC_CACHE_CONTROL=public, max-age=3600\n";
-    s += "PUBLIC_SPA_FALLBACK=false\n";
-    s += "PUBLIC_COMPRESSION=false\n";
-    s += "PUBLIC_COMPRESSION_MIN_SIZE=1024\n";
-    s += "VIEWS_PATH=views\n\n";
+    if (!apiOnly)
+    {
+      s += "# Public files and templates\n";
+      s += "# ----------------------------------\n";
+      s += "PUBLIC_PATH=public\n";
+      s += "PUBLIC_MOUNT=/\n";
+      s += "PUBLIC_INDEX=index.html\n";
+      s += "PUBLIC_CACHE_CONTROL=public, max-age=3600\n";
+      s += "PUBLIC_SPA_FALLBACK=false\n";
+      s += "PUBLIC_COMPRESSION=false\n";
+      s += "PUBLIC_COMPRESSION_MIN_SIZE=1024\n";
+      s += "VIEWS_PATH=views\n\n";
+    }
 
     s += "# ----------------------------------\n";
     s += "# Storage\n";

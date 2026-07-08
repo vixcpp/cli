@@ -106,6 +106,7 @@ namespace vix::commands::NewCommand
     std::vector<std::string> args = argsIn;
 
     const bool force = consume_flag(args, "--force");
+    const bool apiOnly = consume_flag(args, "--api-only");
     const std::optional<std::string> baseOpt = take_option_value(args, {"-d", "--dir"});
     const std::optional<std::string> templateOpt =
         take_option_value(args, {"--template"});
@@ -185,6 +186,13 @@ namespace vix::commands::NewCommand
         hint("Use --template web.");
         return 1;
       }
+    }
+
+    if (apiOnly && (!templateOpt.has_value() || *templateOpt != "backend"))
+    {
+      error("Conflicting options: --api-only requires --template backend.");
+      hint("Use: vix new <name> --template backend --api-only");
+      return 1;
     }
 
     const std::string nameOrPath = args[0];
@@ -402,7 +410,7 @@ namespace vix::commands::NewCommand
 
       if (kind == TemplateKind::Backend)
       {
-        if (!gen::generate_backend_project(projectDir, projName, features, genErr))
+        if (!gen::generate_backend_project(projectDir, projName, features, apiOnly, genErr))
         {
           vix::cli::util::err_line(std::cerr, "Failed to create project files.");
           vix::cli::util::warn_line(std::cerr, genErr);
@@ -494,6 +502,7 @@ namespace vix::commands::NewCommand
         << "  vix new .\n"
         << "  vix new tree --lib\n"
         << "  vix new api --template backend\n"
+        << "  vix new blog --template backend --api-only\n"
         << "  vix new blog --template web\n"
         << "  vix new mario --game\n"
         << "  vix new shop --template vue\n"
@@ -515,6 +524,7 @@ namespace vix::commands::NewCommand
         << "  --game      Generate a Vix game project\n"
         << "  --lib       Generate a header-only library\n"
         << "  --template  Project template: backend, web, vue, game\n"
+        << "  --api-only  Generate backend API without public files or views\n"
         << "  -d, --dir   Base directory for project creation\n"
         << "  --force     Overwrite existing directory\n\n"
 

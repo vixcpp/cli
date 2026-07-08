@@ -17,7 +17,7 @@ namespace vix::commands::new_cmd::templates
   std::string make_main_cpp_app(const std::string &projectName)
   {
     std::string s;
-    s.reserve(1800);
+    s.reserve(2400);
 
     s += "/**\n";
     s += " * @file main.cpp\n";
@@ -25,12 +25,19 @@ namespace vix::commands::new_cmd::templates
     s += " */\n\n";
 
     s += "#include <app/ModuleRegistry.hpp>\n\n";
-    s += "#include <vix.hpp>\n\n";
+    s += "#include <vix_app_modules.hpp>\n\n";
+
+    s += "#include <vix.hpp>\n";
+    s += "#include <vix/executor/RuntimeExecutor.hpp>\n\n";
+
+    s += "#include <memory>\n\n";
 
     s += "int main()\n";
     s += "{\n";
-    s += "  vix::config::Config cfg{\".env\"};\n";
-    s += "  vix::App app;\n\n";
+    s += "  vix::config::Config cfg{\".env\"};\n\n";
+
+    s += "  auto executor = std::make_shared<vix::executor::RuntimeExecutor>(1u);\n";
+    s += "  vix::App app{executor};\n\n";
 
     s += "  app.get(\"/\", [](vix::Request &req, vix::Response &res)\n";
     s += "  {\n";
@@ -40,13 +47,11 @@ namespace vix::commands::new_cmd::templates
 
     s += "  app::ModuleRegistry::register_all(app);\n\n";
 
-    s += "  app.run(cfg.getServerPort());\n";
-    s += "  return 0;\n";
+    s += "  return vix::app_generated::run_app(app, cfg, executor);\n";
     s += "}\n";
 
     return s;
   }
-
   std::string make_app_module_registry_hpp()
   {
     std::string s;

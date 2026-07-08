@@ -10,6 +10,7 @@
 
 #include <vix/cli/commands/new/templates/backend/BackendBootstrapTemplates.hpp>
 #include <vix/cli/commands/new/templates/backend/BackendTemplateUtils.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <string>
@@ -49,7 +50,8 @@ namespace vix::commands::new_cmd::templates
 
   std::string make_backend_app_bootstrap_hpp(const std::string &projectName)
   {
-    const std::string guard = make_backend_header_guard(projectName, "APP_BOOTSTRAP");
+    const std::string guard =
+        make_backend_header_guard(projectName, "APP_BOOTSTRAP");
 
     std::string s;
     s.reserve(1600);
@@ -107,7 +109,7 @@ namespace vix::commands::new_cmd::templates
   std::string make_backend_app_bootstrap_cpp(const std::string &projectName)
   {
     std::string s;
-    s.reserve(3200);
+    s.reserve(3600);
 
     s += "/**\n";
     s += " * @file AppBootstrap.cpp\n";
@@ -119,18 +121,24 @@ namespace vix::commands::new_cmd::templates
     s += "#include <" + projectName + "/presentation/routes/RouteRegistry.hpp>\n\n";
 
     s += "#include <vix_app_modules.hpp>\n\n";
+
     s += "#include <vix.hpp>\n";
+    s += "#include <vix/executor/RuntimeExecutor.hpp>\n";
     s += "#include <vix/log.hpp>\n";
     s += "#include <vix/middleware/app/adapter.hpp>\n";
     s += "#include <vix/middleware/performance/compression.hpp>\n";
     s += "#include <vix/middleware/performance/static_compression.hpp>\n\n";
 
+    s += "#include <memory>\n\n";
+
     s += "namespace " + projectName + "::app\n";
     s += "{\n";
     s += "  int AppBootstrap::run()\n";
     s += "  {\n";
-    s += "    vix::config::Config cfg{\".env\"};\n";
-    s += "    vix::App app;\n\n";
+    s += "    vix::config::Config cfg{\".env\"};\n\n";
+
+    s += "    auto executor = std::make_shared<vix::executor::RuntimeExecutor>(1u);\n";
+    s += "    vix::App app{executor};\n\n";
 
     s += "    const std::string viewsPath = cfg.getString(\"templates.path\", \"views\");\n";
     s += "    const std::string publicPath = cfg.getString(\"public.path\", \"public\");\n";
@@ -154,7 +162,7 @@ namespace vix::commands::new_cmd::templates
 
     s += "      app.use(std::move(compressionMiddleware));\n\n";
 
-    s += "     vix::App::set_static_response_hook(\n";
+    s += "      vix::App::set_static_response_hook(\n";
     s += "          vix::middleware::performance::compressed_static_response_hook(compressionOptions));\n";
     s += "    }\n\n";
 
@@ -174,8 +182,7 @@ namespace vix::commands::new_cmd::templates
 
     s += "    vix::log::info(\"Starting " + projectName + " on port {}\", cfg.getServerPort());\n\n";
 
-    s += "    app.run(cfg);\n";
-    s += "    return 0;\n";
+    s += "    return vix::app_generated::run_app(app, cfg, executor);\n";
     s += "  }\n";
     s += "} // namespace " + projectName + "::app\n";
 

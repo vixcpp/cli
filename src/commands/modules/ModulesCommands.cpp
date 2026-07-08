@@ -643,8 +643,10 @@ namespace vix::commands::modules_cmd::commands
       const fs::path &root,
       const std::string &project,
       const std::string &module,
-      bool patchRootLink)
+      const AddModuleOptions &options)
   {
+    const bool patchRootLink = options.patchRootLink;
+
     if (!cnt::is_valid_module_name(module))
     {
       ui::err_line(std::cout, "Invalid module name: " + module);
@@ -672,17 +674,47 @@ namespace vix::commands::modules_cmd::commands
     const bool hasVixApp =
         utils::exists_file(root / "vix.app");
 
+    const bool isWebSocketModule =
+        options.moduleTemplate == ModuleTemplate::WebSocket;
+
+    const WebSocketWorkflow websocketWorkflow =
+        options.websocketWorkflow;
+
     const bool isBackendModule =
         hasVixApp && detect_vix_app_kind(root) == "backend";
+
+    if (isWebSocketModule)
+    {
+      if (websocketWorkflow == WebSocketWorkflow::None)
+      {
+        ui::err_line(std::cout, "Missing WebSocket workflow.");
+        ui::warn_line(
+            std::cout,
+            "Use --workflow attached, standalone, bridge, or client.");
+        return false;
+      }
+
+      if (!hasVixApp)
+      {
+        ui::err_line(std::cout, "WebSocket modules require a vix.app project.");
+        ui::warn_line(
+            std::cout,
+            "Create a backend app first, then run vix modules add again.");
+        return false;
+      }
+
+    }
 
     const bool isServiceModule =
         hasVixApp && !isBackendModule;
 
     const bool isRoutedModule =
-        isBackendModule || isServiceModule;
+        isWebSocketModule || isBackendModule || isServiceModule;
 
     const std::string moduleKind =
-        isBackendModule ? "backend" : (isServiceModule ? "service" : "module");
+        isWebSocketModule
+            ? "backend"
+            : (isBackendModule ? "backend" : (isServiceModule ? "service" : "module"));
 
     const fs::path includeDir = moduleDir / "include" / normalized;
     const fs::path srcDir = moduleDir / "src";
@@ -716,23 +748,26 @@ namespace vix::commands::modules_cmd::commands
 
     if (isRoutedModule)
     {
-      if (!utils::ensure_dir(includeDir / "controllers"))
+      if (!isWebSocketModule)
       {
-        ui::err_line(
-            std::cout,
-            "Failed to create module controllers include directory.");
-        return false;
+        if (!utils::ensure_dir(includeDir / "controllers"))
+        {
+          ui::err_line(
+              std::cout,
+              "Failed to create module controllers include directory.");
+          return false;
+        }
+
+        if (!utils::ensure_dir(srcDir / "controllers"))
+        {
+          ui::err_line(
+              std::cout,
+              "Failed to create module controllers source directory.");
+          return false;
+        }
       }
 
-      if (!utils::ensure_dir(srcDir / "controllers"))
-      {
-        ui::err_line(
-            std::cout,
-            "Failed to create module controllers source directory.");
-        return false;
-      }
-
-      if (isBackendModule)
+      if (isBackendModule && !isWebSocketModule)
       {
         if (!utils::ensure_dir(migrationsDir))
         {
@@ -764,7 +799,64 @@ namespace vix::commands::modules_cmd::commands
 
     const fs::path cmakeLists = moduleDir / "CMakeLists.txt";
 
-    if (isRoutedModule)
+    if (isWebSocketModule)
+    {
+      const std::string classBase =
+          cnt::module_class_name(normalized);
+
+      const fs::path moduleHeader =
+          includeDir / (classBase + "Module.hpp");
+
+      const fs::path moduleImpl =
+          srcDir / (classBase + "Module.cpp");
+
+      const fs::path moduleManifest =
+          moduleDir / "vix.module";
+
+      const fs::path testFile =
+          testsDir / ("test_" + normalized + ".cpp");
+
+      if (!utils::write_file_if_missing(
+              cmakeLists,
+              cnt::module_websocket_cmakelists_txt_app_first(project, normalized)))
+      {
+        ui::err_line(std::cout, "Failed to write WebSocket module CMakeLists.txt.");
+        return false;
+      }
+
+      if (!utils::write_file_if_missing(
+              moduleManifest,
+              cnt::module_websocket_manifest_app_first(normalized, websocketWorkflow)))
+      {
+        ui::err_line(std::cout, "Failed to write WebSocket vix.module.");
+        return false;
+      }
+
+      if (!utils::write_file_if_missing(
+              moduleHeader,
+              cnt::module_websocket_header_app_first(project, normalized, websocketWorkflow)))
+      {
+        ui::err_line(std::cout, "Failed to write WebSocket module header.");
+        return false;
+      }
+
+      if (!utils::write_file_if_missing(
+              moduleImpl,
+              cnt::module_websocket_impl_app_first(project, normalized, websocketWorkflow)))
+      {
+        ui::err_line(std::cout, "Failed to write WebSocket module implementation.");
+        return false;
+      }
+
+      if (!utils::write_file_if_missing(
+              testFile,
+              cnt::module_websocket_test_cpp_app_first(project, normalized, websocketWorkflow)))
+      {
+        ui::err_line(std::cout, "Failed to write WebSocket module test.");
+        return false;
+      }
+    }
+    else if (isRoutedModule)
     {
       const std::string classBase =
           cnt::module_class_name(normalized);
@@ -942,7 +1034,30 @@ namespace vix::commands::modules_cmd::commands
         1,
         "modules/" + normalized + "/");
 
-    if (isRoutedModule)
+    if (isWebSocketModule)
+    {
+      const std::string classBase =
+          cnt::module_class_name(normalized);
+
+      print_command_step(
+          2,
+          "modules/" + normalized + "/include/" + normalized + "/" +
+              classBase + "Module.hpp");
+
+      print_command_step(
+          3,
+          "modules/" + normalized + "/src/" +
+              classBase + "Module.cpp");
+
+      print_command_step(
+          4,
+          "modules/" + normalized + "/vix.module");
+
+      print_command_step(
+          5,
+          "modules/" + normalized + "/tests/test_" + normalized + ".cpp");
+    }
+    else if (isRoutedModule)
     {
       const std::string classBase =
           cnt::module_class_name(normalized);

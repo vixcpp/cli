@@ -18,6 +18,8 @@
 #include <string>
 #include <unordered_set>
 
+#include <vix/cli/commands/modules/ModulesTypes.hpp>
+
 namespace vix::commands::modules_cmd::content
 {
   // ------------------------------------------------------------------
@@ -71,6 +73,22 @@ namespace vix::commands::modules_cmd::content
       const std::string &project,
       const std::string &module);
 
+  /**
+   * @brief Generate modules/<m>/CMakeLists.txt for a WebSocket module.
+   *
+   * The generated target is an application module library. It links directly
+   * with the core Vix target and the WebSocket target because WebSocket is part
+   * of the local Vix build, not a registry dependency declared through
+   * `vix.module`.
+   *
+   * @param project Project name used to build the generated target and alias.
+   * @param module Module name requested by the user.
+   * @return Complete CMakeLists.txt content for the WebSocket module.
+   */
+  std::string module_websocket_cmakelists_txt_app_first(
+      const std::string &project,
+      const std::string &module);
+
   // ------------------------------------------------------------------
   // Module manifest generators
   // ------------------------------------------------------------------
@@ -120,6 +138,81 @@ namespace vix::commands::modules_cmd::content
   std::string module_backend_controller_impl_app_first(
       const std::string &project,
       const std::string &module);
+
+  // ------------------------------------------------------------------
+  // WebSocket module content generators
+  // ------------------------------------------------------------------
+
+  /**
+   * @brief Generate the manifest for a WebSocket application module.
+   *
+   * The generated `vix.module` file records the selected WebSocket workflow
+   * and declares the registry and link dependencies required by
+   * `vix::websocket`.
+   *
+   * This manifest is separate from `vix.app`. The application manifest decides
+   * whether the module is enabled, while `vix.module` describes what the module
+   * itself needs.
+   *
+   * @param module Module name requested by the user.
+   * @param workflow WebSocket workflow selected by the CLI.
+   * @return Complete `vix.module` file content.
+   */
+  std::string module_websocket_manifest_app_first(
+      const std::string &module,
+      WebSocketWorkflow workflow);
+
+  /**
+   * @brief Generate the public header for a WebSocket application module.
+   *
+   * The generated header keeps route registration separate from runtime
+   * startup. This matters because `register_routes()` is part of application
+   * configuration, while a WebSocket server is a long-lived runtime service.
+   *
+   * @param project Project name used for the generated namespace.
+   * @param module Module name requested by the user.
+   * @param workflow WebSocket workflow selected by the CLI.
+   * @return Complete public header file content.
+   */
+  std::string module_websocket_header_app_first(
+      const std::string &project,
+      const std::string &module,
+      WebSocketWorkflow workflow);
+
+  /**
+   * @brief Generate the implementation file for a WebSocket application module.
+   *
+   * The generated implementation registers lightweight HTTP-facing routes and,
+   * when the selected workflow owns runtime behavior, exposes a dedicated
+   * runtime entry point instead of starting WebSocket services from
+   * `register_routes()`.
+   *
+   * @param project Project name used for the generated namespace.
+   * @param module Module name requested by the user.
+   * @param workflow WebSocket workflow selected by the CLI.
+   * @return Complete implementation file content.
+   */
+  std::string module_websocket_impl_app_first(
+      const std::string &project,
+      const std::string &module,
+      WebSocketWorkflow workflow);
+
+  /**
+   * @brief Generate the test file for a WebSocket application module.
+   *
+   * The generated test verifies that the module header can be included and that
+   * route registration remains lightweight. It must not start a WebSocket
+   * server, because runtime startup is tested separately.
+   *
+   * @param project Project name used for the generated namespace.
+   * @param module Module name requested by the user.
+   * @param workflow WebSocket workflow selected by the CLI.
+   * @return Complete test source file content.
+   */
+  std::string module_websocket_test_cpp_app_first(
+      const std::string &project,
+      const std::string &module,
+      WebSocketWorkflow workflow);
 
   // ------------------------------------------------------------------
   // CMakeLists.txt patching

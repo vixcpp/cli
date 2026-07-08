@@ -77,6 +77,7 @@ namespace vix::commands::new_cmd::generator
       const fs::path &projectDir,
       const std::string &projName,
       const FeaturesSelection &features,
+      bool apiOnly,
       std::string &err);
 
   bool generate_web_project(

@@ -12,6 +12,8 @@
 namespace vix::commands::new_cmd::templates
 {
 
-  std::string make_readme_backend(const std::string &projectName);
+  std::string make_readme_backend(
+      const std::string &projectName,
+      bool apiOnly = false);
 
 } // namespace vix::commands::new_cmd::templates

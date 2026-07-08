@@ -17,8 +17,11 @@ namespace vix::commands::new_cmd::templates
 
   std::string make_project_manifest_backend(
       const std::string &projectName,
-      const FeaturesSelection &features);
+      const FeaturesSelection &features,
+      bool apiOnly = false);
 
-  std::string make_vix_json_backend(const std::string &projectName);
+  std::string make_vix_json_backend(
+      const std::string &projectName,
+      bool apiOnly = false);
 
 } // namespace vix::commands::new_cmd::templates

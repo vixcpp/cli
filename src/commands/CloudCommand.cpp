@@ -19,12 +19,15 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -76,6 +79,28 @@ namespace vix::commands
       std::string cloud_url;
     };
 
+    struct CloudPublishOptions
+    {
+      std::string package_name;
+      std::string version;
+      std::string visibility{"private"};
+      std::string description;
+      std::string repository_url;
+      fs::path archive_path;
+      fs::path manifest_path;
+      bool dry_run{false};
+      bool json_output{false};
+      bool help{false};
+    };
+
+    struct PreparedArchive
+    {
+      fs::path path;
+      bool generated{false};
+      std::uintmax_t size{0};
+      std::string checksum_sha256;
+    };
+
     std::string trim_copy(std::string s)
     {
       auto isws = [](unsigned char c)
@@ -84,6 +109,13 @@ namespace vix::commands
         s.erase(s.begin());
       while (!s.empty() && isws(static_cast<unsigned char>(s.back())))
         s.pop_back();
+      return s;
+    }
+
+    std::string lower_copy(std::string s)
+    {
+      std::transform(s.begin(), s.end(), s.begin(),
+                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
       return s;
     }
 
@@ -212,6 +244,14 @@ namespace vix::commands
       return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
 
+    std::optional<std::vector<unsigned char>> read_binary_file(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return std::nullopt;
+      return std::vector<unsigned char>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    }
+
     bool write_json_file(const fs::path &path, const json &value)
     {
       std::error_code ec;
@@ -312,6 +352,22 @@ namespace vix::commands
       {
         vix::requests::Client client;
         const auto response = client.post(strip_trailing_slash(cloud_url) + path, vix::requests::json_body(body.dump()), request_options(cfg));
+        return parse_response(response);
+      }
+      catch (const std::exception &ex)
+      {
+        return ApiResult{false, 0, json::object(), "network_error", ex.what()};
+      }
+    }
+
+    ApiResult api_post_binary(const std::string &cloud_url, const std::string &path, std::vector<unsigned char> body, const std::optional<GlobalCloudConfig> &cfg = std::nullopt)
+    {
+      try
+      {
+        vix::requests::Client client;
+        auto options = request_options(cfg);
+        options.headers.set("Content-Type", "application/gzip");
+        const auto response = client.post(strip_trailing_slash(cloud_url) + path, vix::requests::binary_body(std::move(body), "application/gzip"), options);
         return parse_response(response);
       }
       catch (const std::exception &ex)
@@ -424,6 +480,13 @@ namespace vix::commands
       return ctx;
     }
 
+    bool executable_available(const std::string &exe)
+    {
+      std::string output;
+      const auto result = vix::cli::build::run_process_capture({exe, "--version"}, {}, output);
+      return result.exitCode == 0;
+    }
+
     std::string git_value(const std::vector<std::string> &argv)
     {
       std::string output;
@@ -431,6 +494,280 @@ namespace vix::commands
       if (result.exitCode != 0)
         return {};
       return trim_copy(output);
+    }
+
+
+    std::string json_error_output(const std::string &error, const std::string &message)
+    {
+      return json{{"ok", false}, {"error", error}, {"message", message}}.dump(2);
+    }
+
+    int print_cloud_publish_error(const CloudPublishOptions &opt, const std::string &error, const std::string &message)
+    {
+      if (opt.json_output)
+        std::cout << json_error_output(error, message) << "\n";
+      else
+        std::cerr << message << "\n";
+      return 1;
+    }
+
+    CloudPublishOptions parse_cloud_publish_options(const std::vector<std::string> &args)
+    {
+      CloudPublishOptions opt;
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        const std::string &a = args[i];
+        auto take = [&](const std::string &name) -> std::string {
+          if (i + 1 >= args.size())
+            throw std::runtime_error(name + " requires a value");
+          ++i;
+          return args[i];
+        };
+
+        if (a == "--help" || a == "-h")
+          opt.help = true;
+        else if (a == "--dry-run")
+          opt.dry_run = true;
+        else if (a == "--json")
+          opt.json_output = true;
+        else if (a == "--package")
+          opt.package_name = take("--package");
+        else if (a.rfind("--package=", 0) == 0)
+          opt.package_name = a.substr(std::string("--package=").size());
+        else if (a == "--version")
+          opt.version = take("--version");
+        else if (a.rfind("--version=", 0) == 0)
+          opt.version = a.substr(std::string("--version=").size());
+        else if (a == "--visibility")
+          opt.visibility = take("--visibility");
+        else if (a.rfind("--visibility=", 0) == 0)
+          opt.visibility = a.substr(std::string("--visibility=").size());
+        else if (a == "--description")
+          opt.description = take("--description");
+        else if (a.rfind("--description=", 0) == 0)
+          opt.description = a.substr(std::string("--description=").size());
+        else if (a == "--repository-url")
+          opt.repository_url = take("--repository-url");
+        else if (a.rfind("--repository-url=", 0) == 0)
+          opt.repository_url = a.substr(std::string("--repository-url=").size());
+        else if (a == "--archive")
+          opt.archive_path = fs::path(take("--archive"));
+        else if (a.rfind("--archive=", 0) == 0)
+          opt.archive_path = fs::path(a.substr(std::string("--archive=").size()));
+        else if (a == "--manifest")
+          opt.manifest_path = fs::path(take("--manifest"));
+        else if (a.rfind("--manifest=", 0) == 0)
+          opt.manifest_path = fs::path(a.substr(std::string("--manifest=").size()));
+        else if (!a.empty())
+          throw std::runtime_error("unknown cloud publish flag: " + a);
+      }
+      return opt;
+    }
+
+    std::string toml_like_value(const std::string &content, const std::string &key)
+    {
+      std::istringstream in(content);
+      std::string line;
+      const std::string prefix = key + " =";
+      while (std::getline(in, line))
+      {
+        line = trim_copy(line);
+        if (line.rfind(prefix, 0) != 0)
+          continue;
+        std::string value = trim_copy(line.substr(prefix.size()));
+        if (!value.empty() && value.front() == '"')
+          value.erase(value.begin());
+        if (!value.empty() && value.back() == '"')
+          value.pop_back();
+        return value;
+      }
+      return {};
+    }
+
+    json load_optional_json(const fs::path &path)
+    {
+      json value;
+      if (read_json_file(path, value) && value.is_object())
+        return value;
+      return json::object();
+    }
+
+    void fill_package_metadata_from_files(CloudPublishOptions &opt, json &manifest)
+    {
+      const fs::path root = fs::current_path();
+      const fs::path vix_json_path = root / "vix.json";
+      const fs::path vix_app_path = root / "vix.app";
+
+      json vix_json = load_optional_json(vix_json_path);
+      if (!vix_json.empty())
+      {
+        manifest["vix_json"] = vix_json;
+        const std::string name = vix_json.value("name", "");
+        const std::string ns = vix_json.value("namespace", "");
+        if (opt.package_name.empty() && !name.empty())
+          opt.package_name = ns.empty() ? name : (ns + "/" + name);
+        if (opt.version.empty())
+          opt.version = vix_json.value("version", "");
+        if (opt.description.empty())
+          opt.description = vix_json.value("description", "");
+        if (opt.repository_url.empty())
+          opt.repository_url = vix_json.value("repository", vix_json.value("repository_url", ""));
+      }
+
+      if (auto content = read_text_file(vix_app_path))
+      {
+        const std::string app_name = toml_like_value(*content, "name");
+        const std::string app_version = toml_like_value(*content, "version");
+        json app_info = json::object();
+        if (!app_name.empty())
+          app_info["name"] = app_name;
+        if (!app_version.empty())
+          app_info["version"] = app_version;
+        if (!app_info.empty())
+          manifest["vix_app"] = app_info;
+        if (opt.package_name.empty() && !app_name.empty())
+          opt.package_name = app_name;
+        if (opt.version.empty() && !app_version.empty())
+          opt.version = app_version;
+      }
+    }
+
+    std::string latest_git_semver_version()
+    {
+      std::string output;
+      const auto result = vix::cli::build::run_process_capture({"git", "tag", "--list", "v[0-9]*", "--sort=-v:refname"}, {}, output);
+      if (result.exitCode != 0)
+        return {};
+      std::istringstream in(output);
+      std::string line;
+      while (std::getline(in, line))
+      {
+        line = trim_copy(line);
+        if (line.size() > 1 && line[0] == 'v')
+          return line.substr(1);
+      }
+      return {};
+    }
+
+    fs::path make_temp_archive_path()
+    {
+      const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+      fs::path dir = fs::temp_directory_path() / ("vix-cloud-publish-" + std::to_string(now));
+      std::error_code ec;
+      fs::create_directories(dir, ec);
+      return dir / "package.tar.gz";
+    }
+
+    std::optional<PreparedArchive> prepare_archive(const CloudPublishOptions &opt, std::string &message)
+    {
+      PreparedArchive archive;
+      if (!opt.archive_path.empty())
+      {
+        archive.path = fs::absolute(opt.archive_path);
+        archive.generated = false;
+        if (!fs::exists(archive.path) || !fs::is_regular_file(archive.path))
+        {
+          message = "Archive file not found: " + archive.path.string();
+          return std::nullopt;
+        }
+      }
+      else
+      {
+#if defined(_WIN32)
+        if (!executable_available("tar"))
+        {
+          message = "Cloud publish archive creation is not available on this platform yet. Pass --archive <path>.";
+          return std::nullopt;
+        }
+#endif
+        if (!executable_available("tar"))
+        {
+          message = "tar is required to create a package archive. Pass --archive <path>.";
+          return std::nullopt;
+        }
+        archive.path = make_temp_archive_path();
+        archive.generated = true;
+        std::vector<std::string> argv{
+            "tar", "-czf", archive.path.string(),
+            "-C", fs::current_path().string(),
+            "--exclude=.git", "--exclude=build", "--exclude=build-*", "--exclude=.vix",
+            "--exclude=node_modules", "--exclude=.cache", "--exclude=tmp",
+            "--exclude=*.o", "--exclude=*.a", "--exclude=*.so", "--exclude=*.dll", "--exclude=*.exe",
+            "--exclude=database.sqlite", "--exclude=storage", "."};
+        std::string output;
+        const auto result = vix::cli::build::run_process_capture(argv, {}, output);
+        if (result.exitCode != 0)
+        {
+          message = output.empty() ? "Could not create package archive." : trim_copy(output);
+          return std::nullopt;
+        }
+      }
+
+      std::error_code ec;
+      archive.size = fs::file_size(archive.path, ec);
+      if (ec)
+      {
+        message = "Unable to read archive size.";
+        return std::nullopt;
+      }
+      auto checksum = vix::cli::util::sha256_file(archive.path);
+      if (!checksum)
+      {
+        message = "Unable to calculate archive checksum.";
+        return std::nullopt;
+      }
+      archive.checksum_sha256 = *checksum;
+      return archive;
+    }
+
+    json build_cloud_manifest(CloudPublishOptions &opt, const CloudContext &ctx)
+    {
+      json manifest = json::object();
+      if (!opt.manifest_path.empty())
+      {
+        json provided;
+        if (read_json_file(opt.manifest_path, provided) && provided.is_object())
+          manifest = provided;
+      }
+      fill_package_metadata_from_files(opt, manifest);
+      manifest["name"] = opt.package_name;
+      manifest["version"] = opt.version;
+      manifest["project_id"] = ctx.project.project_id;
+      manifest["workspace_id"] = ctx.project.workspace_id;
+      manifest["source"] = "vix";
+      manifest["generated_by"] = "vix-cli";
+      return manifest;
+    }
+
+    std::optional<json> find_package_by_name(const CloudContext &ctx, const std::string &name, ApiResult *lastResult = nullptr)
+    {
+      auto listed = api_post(ctx.cloud_url, "/api/packages/list", json{{"workspace_id", ctx.project.workspace_id}}, ctx.global);
+      if (lastResult)
+        *lastResult = listed;
+      if (!listed.ok)
+        return std::nullopt;
+      const auto packages = listed.data.value("packages", json::array());
+      for (const auto &pkg : packages)
+      {
+        if (pkg.value("name", "") == name)
+          return pkg;
+      }
+      return std::nullopt;
+    }
+
+    std::string publish_permission_message(const ApiResult &result)
+    {
+      if (result.status == 401)
+        return "Authentication failed. Run vix login again.";
+      if (result.status == 403)
+        return "You do not have permission to publish packages in this workspace.";
+      if (result.status == 404)
+        return "Linked workspace or project was not found. Run vix cloud init again.";
+      if (result.status == 409 && result.error == "package_version_already_exists")
+        return "This package version already exists in Softadastra Cloud. Use a new version.";
+      return api_error_text(result);
     }
 
     std::string item_label(const json &item)
@@ -727,6 +1064,201 @@ namespace vix::commands
     return true;
   }
 
+  int CloudCommand::publish(const std::vector<std::string> &args)
+  {
+    CloudPublishOptions opt;
+    try
+    {
+      opt = parse_cloud_publish_options(args);
+    }
+    catch (const std::exception &ex)
+    {
+      CloudPublishOptions fallback;
+      fallback.json_output = has_flag(args, "--json");
+      return print_cloud_publish_error(fallback, "invalid_arguments", ex.what());
+    }
+
+    if (opt.help)
+    {
+      std::cout
+          << "Usage:\n"
+          << "  vix publish --cloud [options]\n"
+          << "  vix cloud publish [options]\n\n"
+          << "Options:\n"
+          << "  --package <name>        Package name, for example vix/http\n"
+          << "  --version <version>     Package version\n"
+          << "  --visibility <private|public>\n"
+          << "  --description <text>\n"
+          << "  --repository-url <url>\n"
+          << "  --archive <path>        Use an existing package.tar.gz\n"
+          << "  --manifest <path>       Use manifest JSON file\n"
+          << "  --dry-run               Show what would be published\n"
+          << "  --json                  Emit machine-readable JSON\n";
+      return 0;
+    }
+
+    std::string context_error;
+    auto ctx = load_cloud_context(context_error);
+    if (!ctx)
+    {
+      const std::string msg = context_error == "Authentication failed. Run vix login again."
+                                  ? "Not connected to Softadastra Cloud. Run vix login first."
+                                  : context_error;
+      return print_cloud_publish_error(opt, "not_ready", msg);
+    }
+
+    opt.visibility = lower_copy(trim_copy(opt.visibility));
+    if (opt.visibility.empty())
+      opt.visibility = "private";
+    if (opt.visibility != "private" && opt.visibility != "public")
+      return print_cloud_publish_error(opt, "invalid_visibility", "Visibility must be private or public.");
+
+    json manifest = build_cloud_manifest(opt, *ctx);
+
+    if (opt.package_name.empty())
+      return print_cloud_publish_error(opt, "missing_package", "Could not determine package name. Pass --package <name>.");
+
+    if (opt.version.empty())
+      opt.version = latest_git_semver_version();
+
+    if (opt.version.empty())
+      return print_cloud_publish_error(opt, "missing_version", "Could not determine package version. Pass --version <version>.");
+
+    manifest["name"] = opt.package_name;
+    manifest["version"] = opt.version;
+
+    std::string archive_error;
+    auto archive = prepare_archive(opt, archive_error);
+    if (!archive)
+      return print_cloud_publish_error(opt, "archive_error", archive_error);
+
+    if (opt.dry_run)
+    {
+      if (opt.json_output)
+      {
+        std::cout << json{
+                         {"ok", true},
+                         {"dry_run", true},
+                         {"cloud_url", ctx->cloud_url},
+                         {"workspace_id", ctx->project.workspace_id},
+                         {"project_id", ctx->project.project_id},
+                         {"package", opt.package_name},
+                         {"version", opt.version},
+                         {"manifest_json", manifest.dump()},
+                         {"archive_path", archive->path.string()},
+                         {"archive_size", archive->size},
+                         {"checksum_sha256", archive->checksum_sha256}}
+                         .dump(2)
+                  << "\n";
+      }
+      else
+      {
+        std::cout << "Cloud publish dry run.\n";
+        std::cout << "Cloud URL: " << ctx->cloud_url << "\n";
+        std::cout << "Workspace: " << ctx->project.workspace_id << "\n";
+        std::cout << "Project: " << ctx->project.project_id << "\n";
+        std::cout << "Package: " << opt.package_name << "\n";
+        std::cout << "Version: " << opt.version << "\n";
+        std::cout << "Manifest: " << manifest.dump() << "\n";
+        std::cout << "Archive: " << archive->path << "\n";
+        std::cout << "Archive size: " << archive->size << "\n";
+        std::cout << "Checksum: " << archive->checksum_sha256 << "\n";
+      }
+      return 0;
+    }
+
+    if (!opt.json_output)
+    {
+      std::cout << "Publishing package to Softadastra Cloud...\n";
+      std::cout << "Package: " << opt.package_name << "\n";
+      std::cout << "Version: " << opt.version << "\n";
+      if (!ctx->project.workspace_name.empty())
+        std::cout << "Workspace: " << ctx->project.workspace_name << "\n";
+      std::cout << "Archive: " << archive->size << " bytes\n";
+      std::cout << "Checksum: " << archive->checksum_sha256 << "\n";
+    }
+
+    ApiResult listResult;
+    std::optional<json> package = find_package_by_name(*ctx, opt.package_name, &listResult);
+    if (!package && !listResult.ok)
+      return print_cloud_publish_error(opt, listResult.error.empty() ? "package_list_failed" : listResult.error, publish_permission_message(listResult));
+
+    if (!package)
+    {
+      auto created = api_post(ctx->cloud_url, "/api/packages", json{
+                                                           {"workspace_id", ctx->project.workspace_id},
+                                                           {"owner_user_id", ctx->global.user_id},
+                                                           {"created_by_user_id", ctx->global.user_id},
+                                                           {"name", opt.package_name},
+                                                           {"description", opt.description},
+                                                           {"repository_url", opt.repository_url},
+                                                           {"visibility", opt.visibility}},
+                              ctx->global);
+      if (!created.ok)
+      {
+        if (created.status == 409 || created.error == "package_already_exists")
+        {
+          package = find_package_by_name(*ctx, opt.package_name, nullptr);
+        }
+        else
+        {
+          return print_cloud_publish_error(opt, created.error.empty() ? "package_create_failed" : created.error, publish_permission_message(created));
+        }
+      }
+      else
+      {
+        package = created.data.value("package", json::object());
+        if (!opt.json_output)
+          std::cout << "Package created.\n";
+      }
+    }
+
+    if (!package || package->value("id", "").empty())
+      return print_cloud_publish_error(opt, "package_not_found", "Package could not be found or created in Softadastra Cloud.");
+
+    const std::string package_id = package->value("id", "");
+    auto bytes = read_binary_file(archive->path);
+    if (!bytes)
+      return print_cloud_publish_error(opt, "archive_read_failed", "Unable to read package archive.");
+
+    vix::requests::Params params;
+    params.set("published_by_user_id", ctx->global.user_id);
+    params.set("checksum_sha256", archive->checksum_sha256);
+    params.set("manifest_json", manifest.dump());
+
+    const std::string upload_path = "/api/package_versions/upload/" +
+                                    vix::requests::url_encode(ctx->project.workspace_id) + "/" +
+                                    vix::requests::url_encode(package_id) + "/" +
+                                    vix::requests::url_encode(opt.version) + "?" +
+                                    params.to_query_string();
+
+    auto uploaded = api_post_binary(ctx->cloud_url, upload_path, std::move(*bytes), ctx->global);
+    if (!uploaded.ok)
+      return print_cloud_publish_error(opt, uploaded.error.empty() ? "package_upload_failed" : uploaded.error, publish_permission_message(uploaded));
+
+    if (opt.json_output)
+    {
+      std::cout << json{
+                       {"ok", true},
+                       {"package", opt.package_name},
+                       {"version", opt.version},
+                       {"workspace_id", ctx->project.workspace_id},
+                       {"project_id", ctx->project.project_id},
+                       {"package_id", package_id},
+                       {"checksum_sha256", archive->checksum_sha256},
+                       {"archive_size", archive->size}}
+                       .dump(2)
+                << "\n";
+    }
+    else
+    {
+      std::cout << "Package version published.\n";
+      std::cout << "Download available from Softadastra Cloud.\n";
+    }
+
+    return 0;
+  }
+
   int CloudCommand::doctor(const std::vector<std::string> &)
   {
     std::cout << "Softadastra Cloud doctor\n\n";
@@ -774,6 +1306,8 @@ namespace vix::commands
       return init(std::vector<std::string>(args.begin() + 1, args.end()));
     if (args[0] == "sync")
       return sync(std::vector<std::string>(args.begin() + 1, args.end()));
+    if (args[0] == "publish")
+      return publish(std::vector<std::string>(args.begin() + 1, args.end()));
     if ((args[0] == "lockfile" || args[0] == "lock") && args.size() > 1 && args[1] == "upload")
       return upload_lockfile(std::vector<std::string>(args.begin() + 2, args.end()));
     if (args[0] == "doctor")
@@ -796,6 +1330,8 @@ namespace vix::commands
         << "  vix cloud sync\n"
         << "  vix cloud lockfile upload [--file <path>] [--json]\n"
         << "  vix cloud lock upload [--file <path>] [--json]\n"
+        << "  vix cloud publish [options]\n"
+        << "  vix publish --cloud [options]\n"
         << "  vix doctor --cloud\n\n"
         << "Cloud config:\n"
         << "  Global session: ~/.vix/cloud/config.json\n"

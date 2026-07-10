@@ -28,6 +28,7 @@ namespace vix::commands
     static int init(const std::vector<std::string> &args);
     static int sync(const std::vector<std::string> &args);
     static int upload_lockfile(const std::vector<std::string> &args);
+    static int publish(const std::vector<std::string> &args);
     static bool submit_build_report(const CloudBuildReport &report, std::string &message);
     static int doctor(const std::vector<std::string> &args);
     static int help();

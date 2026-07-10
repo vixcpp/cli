@@ -194,6 +194,7 @@ jobs:
             ../reply \
             ../template \
             ../net \
+            ../requests \
             ../crypto \
             ../sync \
             ../cache \
@@ -217,6 +218,7 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/reply.git ../reply || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/requests.git ../requests
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
@@ -278,6 +280,7 @@ jobs:
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/reply.git ..\reply
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/template.git ..\template
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/net.git ..\net
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/requests.git ..\requests
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/crypto.git ..\crypto
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/sync.git ..\sync
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/cache.git ..\cache

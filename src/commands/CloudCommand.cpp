@@ -11,6 +11,8 @@
  *  Vix.cpp
  */
 #include <vix/cli/commands/CloudCommand.hpp>
+#include <vix/cli/cmake/CMakeBuild.hpp>
+#include <vix/cli/util/Hash.hpp>
 #include <vix/requests/requests.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -21,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -64,6 +67,13 @@ namespace vix::commands
       json data = json::object();
       std::string error;
       std::string message;
+    };
+
+    struct CloudContext
+    {
+      GlobalCloudConfig global;
+      ProjectCloudConfig project;
+      std::string cloud_url;
     };
 
     std::string trim_copy(std::string s)
@@ -127,6 +137,11 @@ namespace vix::commands
       return fs::current_path() / ".vix" / "cloud.json";
     }
 
+    bool has_flag(const std::vector<std::string> &args, const std::string &name)
+    {
+      return std::find(args.begin(), args.end(), name) != args.end();
+    }
+
     std::optional<std::string> arg_value(const std::vector<std::string> &args, const std::string &name)
     {
       const std::string prefix = name + "=";
@@ -187,6 +202,14 @@ namespace vix::commands
       {
         return false;
       }
+    }
+
+    std::optional<std::string> read_text_file(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return std::nullopt;
+      return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     }
 
     bool write_json_file(const fs::path &path, const json &value)
@@ -311,6 +334,30 @@ namespace vix::commands
       }
     }
 
+    std::string api_error_text(const ApiResult &result)
+    {
+      if (!result.error.empty() && !result.message.empty())
+        return result.error + ": " + result.message;
+      if (!result.message.empty())
+        return result.message;
+      if (!result.error.empty())
+        return result.error;
+      if (result.status > 0)
+        return "HTTP " + std::to_string(result.status);
+      return "Cloud request failed.";
+    }
+
+    std::string permission_error_text(const ApiResult &result, const std::string &permissionMessage)
+    {
+      if (result.status == 401)
+        return "Authentication failed. Run vix login again.";
+      if (result.status == 403)
+        return permissionMessage;
+      if (result.status == 404)
+        return "Linked workspace or project was not found.";
+      return api_error_text(result);
+    }
+
     void print_api_error(const ApiResult &result)
     {
       if (result.status == 403)
@@ -332,6 +379,58 @@ namespace vix::commands
         return std::nullopt;
       }
       return cfg;
+    }
+
+    std::optional<CloudContext> load_cloud_context(std::string &message)
+    {
+      auto global = load_global_config();
+      if (!global || global->cloud_url.empty() || global->session_id.empty())
+      {
+        message = "Authentication failed. Run vix login again.";
+        return std::nullopt;
+      }
+
+      if (global->user_id.empty())
+      {
+        auto me = api_post(global->cloud_url, "/api/auth/me", json{{"session_id", global->session_id}}, global);
+        if (!me.ok)
+        {
+          message = permission_error_text(me, "Authentication failed. Run vix login again.");
+          return std::nullopt;
+        }
+        const auto user = me.data.value("user", json::object());
+        global->user_id = user.value("id", "");
+        global->email = user.value("email", global->email);
+        global->display_name = user.value("display_name", global->display_name);
+      }
+
+      auto project = load_project_config();
+      if (!project || project->workspace_id.empty() || project->project_id.empty() || project->cloud_url.empty())
+      {
+        message = "This project is not linked to Softadastra Cloud. Run vix cloud init first.";
+        return std::nullopt;
+      }
+
+      if (global->user_id.empty())
+      {
+        message = "Authentication failed. Run vix login again.";
+        return std::nullopt;
+      }
+
+      CloudContext ctx;
+      ctx.global = *global;
+      ctx.project = *project;
+      ctx.cloud_url = strip_trailing_slash(project->cloud_url.empty() ? global->cloud_url : project->cloud_url);
+      return ctx;
+    }
+
+    std::string git_value(const std::vector<std::string> &argv)
+    {
+      std::string output;
+      const auto result = vix::cli::build::run_process_capture(argv, {}, output);
+      if (result.exitCode != 0)
+        return {};
+      return trim_copy(output);
     }
 
     std::string item_label(const json &item)
@@ -516,6 +615,118 @@ namespace vix::commands
     return 0;
   }
 
+  int CloudCommand::upload_lockfile(const std::vector<std::string> &args)
+  {
+    const bool json_output = has_flag(args, "--json");
+
+    std::string context_error;
+    auto ctx = load_cloud_context(context_error);
+    if (!ctx)
+    {
+      std::cerr << context_error << "\n";
+      return 1;
+    }
+
+    fs::path lockfile = fs::current_path() / "vix.lock";
+    if (auto file_arg = arg_value(args, "--file"))
+      lockfile = fs::path(*file_arg);
+
+    if (!fs::exists(lockfile) || !fs::is_regular_file(lockfile))
+    {
+      std::cerr << "No vix.lock file found. Run this command from a linked Vix project or pass --file <path>.\n";
+      return 1;
+    }
+
+    const auto content = read_text_file(lockfile);
+    if (!content)
+    {
+      std::cerr << "Unable to read lockfile: " << lockfile << "\n";
+      return 1;
+    }
+
+    const auto checksum = vix::cli::util::sha256_file(lockfile);
+    if (!checksum)
+    {
+      std::cerr << "Unable to calculate lockfile checksum.\n";
+      return 1;
+    }
+
+    const json payload{
+        {"workspace_id", ctx->project.workspace_id},
+        {"project_id", ctx->project.project_id},
+        {"uploaded_by_user_id", ctx->global.user_id},
+        {"lockfile_json", *content},
+        {"checksum_sha256", *checksum},
+        {"source", "vix"}};
+
+    const auto result = api_post(ctx->cloud_url, "/api/lockfiles/upload", payload, ctx->global);
+    if (!result.ok)
+    {
+      std::cerr << permission_error_text(result, "You do not have permission to upload lockfiles for this project.") << "\n";
+      return 1;
+    }
+
+    if (json_output)
+    {
+      std::cout << json{{"ok", true}, {"checksum_sha256", *checksum}, {"project_id", ctx->project.project_id}}.dump(2) << "\n";
+      return 0;
+    }
+
+    std::cout << "Lockfile uploaded to Softadastra Cloud.\n";
+    std::cout << "Project: " << (ctx->project.project_name.empty() ? ctx->project.project_id : ctx->project.project_name) << "\n";
+    std::cout << "Checksum: " << *checksum << "\n";
+    return 0;
+  }
+
+  bool CloudCommand::submit_build_report(const CloudBuildReport &report, std::string &message)
+  {
+    std::string context_error;
+    auto ctx = load_cloud_context(context_error);
+    if (!ctx)
+    {
+      message = context_error;
+      return false;
+    }
+
+    const std::string branch = git_value({"git", "rev-parse", "--abbrev-ref", "HEAD"});
+    const std::string commit = git_value({"git", "rev-parse", "HEAD"});
+
+    const json summary{
+        {"message", report.summary_message.empty() ? "Build completed" : report.summary_message},
+        {"target", report.target},
+        {"profile", report.profile}};
+
+    const json diagnostics = report.status == "success"
+                                 ? json::array()
+                                 : json::array({json{{"message", report.summary_message.empty() ? "Build failed" : report.summary_message}}});
+
+    const json payload{
+        {"workspace_id", ctx->project.workspace_id},
+        {"project_id", ctx->project.project_id},
+        {"submitted_by_user_id", ctx->global.user_id},
+        {"status", report.status},
+        {"target", report.target},
+        {"profile", report.profile},
+        {"branch", branch},
+        {"commit_sha", commit},
+        {"toolchain", report.toolchain},
+        {"summary_json", summary.dump()},
+        {"diagnostics_json", diagnostics.dump()},
+        {"duration_ms", report.duration_ms},
+        {"warnings_count", report.warnings_count},
+        {"errors_count", report.errors_count}};
+
+    const auto result = api_post(ctx->cloud_url, "/api/build_reports/submit", payload, ctx->global);
+    if (!result.ok)
+    {
+      message = permission_error_text(result, "You do not have permission to submit build reports for this project.");
+      return false;
+    }
+
+    message.clear();
+    return true;
+  }
+
   int CloudCommand::doctor(const std::vector<std::string> &)
   {
     std::cout << "Softadastra Cloud doctor\n\n";
@@ -544,12 +755,14 @@ namespace vix::commands
     const std::string url = linked->cloud_url.empty() ? cfg->cloud_url : linked->cloud_url;
     auto workspace = api_post(url, "/api/workspaces/show", json{{"id", linked->workspace_id}}, cfg);
     auto project = api_post(url, "/api/projects/show", json{{"workspace_id", linked->workspace_id}, {"id", linked->project_id}}, cfg);
-    std::cout << "Workspace: " << (workspace.ok ? "OK" : "failed") << "\n";
-    std::cout << "Project: " << (project.ok ? "OK" : "failed") << "\n";
-    std::cout << "Permissions: " << ((workspace.ok && project.ok) ? "OK" : "check backend response") << "\n";
-    std::cout << "Registry: " << ((workspace.ok && project.ok) ? "OK" : "not checked") << "\n";
+    const bool permissionDenied = workspace.status == 403 || project.status == 403;
+    const bool ready = workspace.ok && project.ok;
+    std::cout << "Workspace: " << (workspace.ok ? "OK" : (workspace.status == 403 ? "permission denied" : "failed")) << "\n";
+    std::cout << "Project: " << (project.ok ? "OK" : (project.status == 403 ? "permission denied" : "failed")) << "\n";
+    std::cout << "Permissions: " << (ready ? "OK" : (permissionDenied ? "permission denied" : "check backend response")) << "\n";
     std::cout << "Lockfile: " << (fs::exists(fs::current_path() / "vix.lock") ? "found" : "missing") << "\n";
-    std::cout << "Build reports: " << ((workspace.ok && project.ok) ? "ready" : "not ready") << "\n";
+    std::cout << "Can upload lockfile: " << (ready ? "OK" : (permissionDenied ? "permission denied" : "not ready")) << "\n";
+    std::cout << "Build reports: " << (ready ? "ready" : (permissionDenied ? "permission denied" : "not ready")) << "\n";
     return (workspace.ok && project.ok) ? 0 : 1;
   }
 
@@ -561,6 +774,8 @@ namespace vix::commands
       return init(std::vector<std::string>(args.begin() + 1, args.end()));
     if (args[0] == "sync")
       return sync(std::vector<std::string>(args.begin() + 1, args.end()));
+    if ((args[0] == "lockfile" || args[0] == "lock") && args.size() > 1 && args[1] == "upload")
+      return upload_lockfile(std::vector<std::string>(args.begin() + 2, args.end()));
     if (args[0] == "doctor")
       return doctor(std::vector<std::string>(args.begin() + 1, args.end()));
     if (args[0] == "--help" || args[0] == "-h")
@@ -579,6 +794,8 @@ namespace vix::commands
         << "  vix cloud status\n"
         << "  vix cloud init [--url <url>]\n"
         << "  vix cloud sync\n"
+        << "  vix cloud lockfile upload [--file <path>] [--json]\n"
+        << "  vix cloud lock upload [--file <path>] [--json]\n"
         << "  vix doctor --cloud\n\n"
         << "Cloud config:\n"
         << "  Global session: ~/.vix/cloud/config.json\n"

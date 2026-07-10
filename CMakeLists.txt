@@ -119,8 +119,9 @@ endfunction()
 get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 set(_VIX_REPLY_DIR "${_VIX_MODULES_DIR}/reply")
-set(_VIX_NOTE_DIR  "${_VIX_MODULES_DIR}/note")
-set(_VIX_UI_DIR    "${_VIX_MODULES_DIR}/ui")
+set(_VIX_NOTE_DIR     "${_VIX_MODULES_DIR}/note")
+set(_VIX_UI_DIR       "${_VIX_MODULES_DIR}/ui")
+set(_VIX_REQUESTS_DIR "${_VIX_MODULES_DIR}/requests")
 
 if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
   add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
@@ -183,6 +184,7 @@ else()
   set(_VIX_WEBSOCKET_DIR "${_VIX_MODULES_DIR}/websocket")
   set(_VIX_NOTE_DIR      "${_VIX_MODULES_DIR}/note")
   set(_VIX_UI_DIR        "${_VIX_MODULES_DIR}/ui")
+  set(_VIX_REQUESTS_DIR  "${_VIX_MODULES_DIR}/requests")
 
   set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
@@ -218,6 +220,13 @@ else()
 
     if (EXISTS "${_VIX_NET_DIR}/CMakeLists.txt" AND NOT TARGET vix::net)
       add_subdirectory("${_VIX_NET_DIR}" "${CMAKE_BINARY_DIR}/_vix_net")
+    endif()
+
+    if (EXISTS "${_VIX_REQUESTS_DIR}/CMakeLists.txt" AND NOT TARGET vix::requests)
+      set(VIX_REQUESTS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+      set(VIX_REQUESTS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+      set(VIX_REQUESTS_INSTALL OFF CACHE BOOL "" FORCE)
+      add_subdirectory("${_VIX_REQUESTS_DIR}" "${CMAKE_BINARY_DIR}/_vix_requests")
     endif()
 
     if (EXISTS "${_VIX_CRYPTO_DIR}/CMakeLists.txt" AND NOT TARGET vix::crypto)
@@ -281,6 +290,10 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::net)
     endif()
 
+    if (TARGET vix::requests)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::requests)
+    endif()
+
     if (TARGET vix::crypto)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::crypto)
     endif()
@@ -325,6 +338,7 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REPLY_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_TEMPLATE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_NET_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REQUESTS_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
@@ -359,6 +373,7 @@ else()
     find_package(vixcrypto CONFIG QUIET)
     find_package(vixp2p CONFIG QUIET)
     find_package(vix_note CONFIG QUIET)
+    find_package(vix_requests CONFIG QUIET)
 
     if (TARGET vix::vix)
       message(STATUS "[cli] Using installed package target vix::vix")
@@ -384,6 +399,17 @@ else()
       )
     endif()
   endif()
+endif()
+
+# ----------------------------------------------------
+# Cloud command support
+# ----------------------------------------------------
+if (TARGET vix::requests)
+  message(STATUS "[cli] Cloud command enabled")
+  target_link_libraries(vix_cli PRIVATE vix::requests)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_REQUESTS=1)
+else()
+  message(FATAL_ERROR "[cli] Cloud command requires vix::requests")
 endif()
 
 # ----------------------------------------------------

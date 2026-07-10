@@ -62,6 +62,7 @@
 #include <vix/cli/commands/WsCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
+#include <vix/cli/commands/CloudCommand.hpp>
 
 #include <stdexcept>
 
@@ -138,6 +139,30 @@ namespace vix::cli::dispatch
          { return vix::commands::GameCommand::run(a); },
          []()
          { return vix::commands::GameCommand::help(); }});
+
+    add({"login",
+         "Cloud",
+         "Connect to Softadastra Cloud",
+         [](const Args &a)
+         { return vix::commands::CloudCommand::login(a); },
+         []()
+         { return vix::commands::CloudCommand::help(); }});
+
+    add({"logout",
+         "Cloud",
+         "Remove the local Softadastra Cloud session",
+         [](const Args &a)
+         { return vix::commands::CloudCommand::logout(a); },
+         []()
+         { return vix::commands::CloudCommand::help(); }});
+
+    add({"cloud",
+         "Cloud",
+         "Manage Softadastra Cloud connection and project links",
+         [](const Args &a)
+         { return vix::commands::CloudCommand::run(a); },
+         []()
+         { return vix::commands::CloudCommand::help(); }});
 
     add({"check",
          "Project",
@@ -482,7 +507,11 @@ namespace vix::cli::dispatch
          "Info",
          "Check toolchain and install health",
          [](const Args &a)
-         { return vix::commands::DoctorCommand::run(a); },
+         {
+           if (!a.empty() && a[0] == "--cloud")
+             return vix::commands::CloudCommand::doctor({});
+           return vix::commands::DoctorCommand::run(a);
+         },
          []()
          { return vix::commands::DoctorCommand::help(); }});
 

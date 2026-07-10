@@ -63,6 +63,7 @@
 #include <vix/cli/commands/WsCommand.hpp>
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
+#include <vix/cli/commands/CloudCommand.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Logger.hpp>
@@ -324,6 +325,12 @@ namespace vix
     { return commands::AgentCommand::run(args); };
     commands_["game"] = [](auto args)
     { return commands::GameCommand::run(args); };
+    commands_["login"] = [](auto args)
+    { return commands::CloudCommand::login(args); };
+    commands_["logout"] = [](auto args)
+    { return commands::CloudCommand::logout(args); };
+    commands_["cloud"] = [](auto args)
+    { return commands::CloudCommand::run(args); };
 
     commands_["-h"] = [this](auto args)
     { return help(args); };
@@ -452,6 +459,17 @@ namespace vix
       }
     }
 
+    if (cmd == "doctor" && !args.empty() && args[0] == "--cloud")
+    {
+      return commands::CloudCommand::doctor({});
+    }
+
+    if (cmd == "help")
+      return help(args);
+
+    if (cmd == "version")
+      return version(args);
+
     if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
     {
       if (!dispatcher.has(cmd))
@@ -572,6 +590,8 @@ namespace vix
         return commands::ModulesCommand::help();
       if (cmd == "game")
         return commands::GameCommand::help();
+      if (cmd == "login" || cmd == "logout" || cmd == "cloud")
+        return commands::CloudCommand::help();
 
       if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
         return commands::MakeCommand::help();
@@ -705,6 +725,12 @@ namespace vix
     out << indent(3) << "ws                 Check and diagnose WebSocket endpoints\n";
     out << indent(3) << "modules            Manage optional project modules\n\n";
 
+    out << indent(2) << "Cloud:\n";
+    out << indent(3) << "login              Connect to Softadastra Cloud\n";
+    out << indent(3) << "logout             Remove the local cloud session\n";
+    out << indent(3) << "cloud              Manage Softadastra Cloud project links\n";
+    out << indent(3) << "doctor --cloud     Diagnose Softadastra Cloud connectivity\n\n";
+
     out << indent(2) << "Registry and dependencies:\n";
     docs("/cli/registry");
     out << indent(3) << "registry           Sync/search the registry index\n";
@@ -763,6 +789,8 @@ namespace vix
     out << indent(2) << "vix make:class User\n";
     out << indent(2) << "vix add @cnerium/app\n";
     out << indent(2) << "vix install\n";
+    out << indent(2) << "vix login --url http://127.0.0.1:8080\n";
+    out << indent(2) << "vix cloud status\n";
     out << indent(2) << "vix game export\n";
     out << indent(2) << "vix agent ask \"Explain Vix.cpp\" --model qwen2.5-coder:1.5b --timeout 120000\n";
     out << indent(2) << "vix help run\n\n";

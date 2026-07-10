@@ -15,6 +15,7 @@
 #include <vix/cli/Style.hpp>
 #include <vix/cli/cache/ArtifactCache.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
+#include <vix/cli/commands/CloudCommand.hpp>
 #include <vix/cli/build/BuildGraph.hpp>
 #include <vix/cli/build/BuildScheduler.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -879,6 +881,10 @@ namespace vix::commands::BuildCommand
         else if (a == "--fast")
         {
           o.fast = true;
+        }
+        else if (a == "--report")
+        {
+          o.report = true;
         }
         else if (a == "--no-cache")
         {
@@ -3717,8 +3723,45 @@ namespace vix::commands::BuildCommand
       return 2;
     }
 
+    process::Options reportOpt = opt;
+    const auto reportStart = std::chrono::steady_clock::now();
+
     BuildCommand cmd(std::move(opt));
-    return cmd.run();
+    const int buildCode = cmd.run();
+
+    if (!reportOpt.report)
+      return buildCode;
+
+    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - reportStart)
+                                .count();
+
+    CloudBuildReport report;
+    report.status = buildCode == 0 ? "success" : "failed";
+    report.target = reportOpt.buildTarget.empty() ? "default" : reportOpt.buildTarget;
+    report.profile = reportOpt.preset;
+    report.toolchain = reportOpt.targetTriple;
+    report.summary_message = buildCode == 0 ? "Build completed" : "Build failed";
+    report.duration_ms = durationMs < 0 ? 0 : static_cast<std::int64_t>(durationMs);
+    report.warnings_count = 0;
+    report.errors_count = buildCode == 0 ? 0 : 1;
+
+    std::string cloudMessage;
+    const bool sent = CloudCommand::submit_build_report(report, cloudMessage);
+
+    if (buildCode == 0)
+      std::cout << "Build succeeded.\n";
+    else
+      std::cout << "Build failed.\n";
+
+    if (sent)
+      std::cout << "Build report sent to Softadastra Cloud.\n";
+    else
+      std::cout << "Could not send build report to Softadastra Cloud: "
+                << (cloudMessage.empty() ? "Cloud request failed." : cloudMessage)
+                << "\n";
+
+    return buildCode;
   }
 
   int BuildCommand::run_single_cpp_build()
@@ -3833,6 +3876,7 @@ namespace vix::commands::BuildCommand
     out << "  --explain                 Explain why files or targets rebuild\n";
     out << "  --warnings                Show warnings from the last build log\n";
     out << "  --warning-check           Build with strong compiler warnings enabled\n";
+    out << "  --report                  Submit a Softadastra Cloud build report\n";
     out << "  --page <n>                Warning page to display with --warnings, default: 1\n";
     out << "  --limit <n>               Warnings per page with --warnings, default: 10\n";
     out << "  --no-cache                Disable Vix cache shortcuts\n";
@@ -3882,6 +3926,7 @@ namespace vix::commands::BuildCommand
     out << "  vix build\n";
     out << "  vix build -v\n";
     out << "  vix build --fast\n";
+    out << "  vix build --report\n";
     out << "  vix build --clean\n";
     out << "  vix build --explain\n";
     out << "  vix build --warnings\n";

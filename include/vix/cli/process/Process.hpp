@@ -173,6 +173,11 @@ namespace vix::cli::process
     bool warningsLimitSet{false};
 
     bool warningCheck{false};
+
+    /**
+     * @brief Submit a Softadastra Cloud build report after the build completes.
+     */
+    bool report{false};
   };
 
   /**

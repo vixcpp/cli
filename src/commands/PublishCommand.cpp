@@ -12,6 +12,7 @@
  * This source code is governed by the MIT license found in the LICENSE file.
  */
 #include <vix/cli/commands/PublishCommand.hpp>
+#include <vix/cli/commands/CloudCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/Style.hpp>
@@ -941,6 +942,24 @@ namespace vix::commands
       return r.exitCode == 0;
     }
 
+
+    static bool has_cloud_flag(const std::vector<std::string> &args)
+    {
+      return std::find(args.begin(), args.end(), "--cloud") != args.end();
+    }
+
+    static std::vector<std::string> without_cloud_flag(const std::vector<std::string> &args)
+    {
+      std::vector<std::string> out;
+      out.reserve(args.size());
+      for (const auto &arg : args)
+      {
+        if (arg != "--cloud")
+          out.push_back(arg);
+      }
+      return out;
+    }
+
     static PublishOptions parse_args_or_throw(const std::vector<std::string> &args)
     {
       PublishOptions opt;
@@ -1563,6 +1582,9 @@ namespace vix::commands
 
   int PublishCommand::run(const std::vector<std::string> &args)
   {
+    if (has_cloud_flag(args))
+      return CloudCommand::publish(without_cloud_flag(args));
+
     try
     {
       const PublishOptions opt = parse_args_or_throw(args);
@@ -1579,16 +1601,29 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix publish [version] [--notes \"...\"] [--dry-run]\n\n"
+        << "  vix publish [version] [--notes \"...\"] [--dry-run]\n"
+        << "  vix publish --cloud [options]\n\n"
 
         << "Description:\n"
-        << "  Publish a tagged version of the current package to the Vix registry.\n"
-        << "  If version is omitted, Vix uses the latest local SemVer tag and verifies it exists on origin.\n\n"
+        << "  vix publish publishes a tagged version to the public Vix registry.\n"
+        << "  vix publish --cloud publishes to Softadastra Cloud private registry.\n"
+        << "  If public version is omitted, Vix uses the latest local SemVer tag and verifies it exists on origin.\n\n"
 
-        << "Options:\n"
+        << "Public registry options:\n"
         << "  --notes \"...\"     Attach release notes\n"
         << "  --dry-run          Validate without pushing changes\n"
         << "  --cleanup          Remove older local publish branches in the registry clone\n\n"
+        << "Cloud registry options:\n"
+        << "  --cloud            Publish to Softadastra Cloud instead of the public registry\n"
+        << "  --package <name>   Package name, for example vix/http\n"
+        << "  --version <value>  Package version\n"
+        << "  --visibility <private|public>\n"
+        << "  --description <text>\n"
+        << "  --repository-url <url>\n"
+        << "  --archive <path>   Use an existing package.tar.gz\n"
+        << "  --manifest <path>  Use manifest JSON file\n"
+        << "  --dry-run          Show what would be published\n"
+        << "  --json             Emit machine-readable JSON\n\n"
 
         << "Requirements:\n"
         << "  - Run inside a git repository\n"
@@ -1598,7 +1633,9 @@ namespace vix::commands
         << "  vix publish\n"
         << "  vix publish 0.2.0\n"
         << "  vix publish --notes \"Add helpers\"\n"
-        << "  vix publish --dry-run\n";
+        << "  vix publish --dry-run\n"
+        << "  vix publish --cloud --package vix/testpkg --version 1.0.0\n"
+        << "  vix cloud publish --dry-run\n";
 
     return 0;
   }

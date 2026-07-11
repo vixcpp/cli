@@ -773,6 +773,30 @@ namespace vix::cli::app
       return !ec;
     }
 
+    static std::string read_text_file_or_empty(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+
+      if (!in)
+        return {};
+
+      std::ostringstream out;
+      out << in.rdbuf();
+      return out.str();
+    }
+
+    static bool write_text_file_if_different(
+        const fs::path &path,
+        const std::string &content)
+    {
+      std::error_code ec;
+
+      if (fs::exists(path, ec) && !ec && read_text_file_or_empty(path) == content)
+        return true;
+
+      return write_text_file_atomic(path, content);
+    }
+
     // ---------------------------------------------------------------
     // Target type helpers
     // ---------------------------------------------------------------
@@ -1532,7 +1556,7 @@ namespace vix::cli::app
       const fs::path modulesCpp =
           generated_modules_cpp_path(normalizedProjectDir);
 
-      if (!write_text_file_atomic(
+      if (!write_text_file_if_different(
               modulesHeader,
               generate_app_modules_header_content()))
       {
@@ -1542,7 +1566,7 @@ namespace vix::cli::app
         return result;
       }
 
-      if (!write_text_file_atomic(
+      if (!write_text_file_if_different(
               modulesCpp,
               generate_app_modules_cpp_content(manifest, normalizedProjectDir)))
       {
@@ -1558,7 +1582,7 @@ namespace vix::cli::app
             manifest,
             normalizedProjectDir);
 
-    if (!write_text_file_atomic(result.cmakeListsPath, content))
+    if (!write_text_file_if_different(result.cmakeListsPath, content))
     {
       result.error =
           "Failed to write generated CMakeLists.txt: " +

@@ -11,6 +11,7 @@
  *  Vix.cpp
  */
 #include <vix/cli/util/Manifest.hpp>
+#include <vix/cli/util/Fs.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -39,13 +40,18 @@ namespace vix::cli::util::manifest
 
     void write_json_or_throw(const fs::path &path, const json &j)
     {
-      std::ofstream out(path);
-      if (!out)
+      const std::string content = j.dump(2) + "\n";
+
+      if (vix::cli::util::file_exists(path) &&
+          vix::cli::util::read_text_file_or_empty(path) == content)
+      {
+        return;
+      }
+
+      if (!vix::cli::util::write_text_file_atomic(path, content))
       {
         throw std::runtime_error("cannot write file: " + path.string());
       }
-
-      out << j.dump(2) << "\n";
     }
 
     Dependency parse_dependency_or_throw(const json &item)

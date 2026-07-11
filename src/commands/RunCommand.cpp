@@ -896,7 +896,8 @@ namespace
       if (opt.jobs > 0)
         oss << " -j " << opt.jobs;
 
-      oss << " --quiet";
+      if (opt.quiet)
+        oss << " --quiet";
 #endif
 
       clear_terminal_if_enabled();

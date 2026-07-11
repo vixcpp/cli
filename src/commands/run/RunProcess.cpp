@@ -1265,19 +1265,6 @@ namespace vix::commands::RunCommand::detail
       if (useSan)
         return;
 
-      if (passthroughRuntime && looks_like_prompt_fragment(printable))
-      {
-        if (!captureOnly)
-        {
-          write_all(STDOUT_FILENO, printable.data(), printable.size());
-          printedSomething = true;
-          printedRealOutput = true;
-          result.printed_live = true;
-          lastPrintedChar = printable.back();
-        }
-        return;
-      }
-
       std::string filtered;
 
       printable = sanitizer.filter_for_print(printable);
@@ -1288,14 +1275,7 @@ namespace vix::commands::RunCommand::detail
       if (printable.empty())
         return;
 
-      if (passthroughRuntime)
-      {
-        filtered = printable;
-      }
-      else
-      {
-        filtered = runtimeFilter.process(printable);
-      }
+      filtered = passthroughRuntime ? printable : runtimeFilter.process(printable);
 
       if (filtered.empty())
         return;

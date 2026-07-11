@@ -752,7 +752,7 @@ namespace vix::commands
       for (const auto &pkg : packages)
       {
         if (pkg.value("name", "") == name)
-          return pkg;
+          return std::optional<json>{pkg};
       }
       return std::nullopt;
     }
@@ -789,7 +789,7 @@ namespace vix::commands
       {
         const std::size_t index = static_cast<std::size_t>(std::stoul(answer));
         if (index >= 1 && index <= items.size())
-          return items[index - 1];
+          return std::optional<json>{items[index - 1]};
       }
       catch (...)
       {

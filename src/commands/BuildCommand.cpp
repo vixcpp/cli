@@ -1278,6 +1278,85 @@ namespace vix::commands::BuildCommand
       return util::trim(oss.str()) + "\n";
     }
 
+    static std::uint64_t fast_file_size_or_zero(const fs::path &path)
+    {
+      std::error_code ec;
+      const auto size = fs::file_size(path, ec);
+      return ec ? 0 : static_cast<std::uint64_t>(size);
+    }
+
+    static std::uint64_t fast_file_mtime_count(const fs::path &path)
+    {
+      std::error_code ec;
+      const auto t = fs::last_write_time(path, ec);
+      if (ec)
+        return 0;
+
+      return static_cast<std::uint64_t>(t.time_since_epoch().count());
+    }
+
+    static std::string first_changed_project_input(
+        const fs::path &projectDir,
+        const std::vector<artifact_cache::ProjectInput> &inputs)
+    {
+      const fs::path root = fs::absolute(projectDir).lexically_normal();
+
+      for (const auto &input : inputs)
+      {
+        const fs::path path = root / fs::path(input.path);
+        std::error_code ec;
+
+        if (!fs::exists(path, ec) || ec)
+          return input.path + " (missing)";
+
+        if (!fs::is_regular_file(path, ec) || ec)
+          return input.path + " (not a regular file)";
+
+        if (fast_file_size_or_zero(path) != input.size)
+          return input.path + " (size changed)";
+
+        if (fast_file_mtime_count(path) != input.mtime)
+          return input.path + " (mtime changed)";
+      }
+
+      return {};
+    }
+
+    static bool previous_project_inputs_still_current(
+        const fs::path &projectDir,
+        const std::vector<artifact_cache::ProjectInput> &inputs)
+    {
+      return first_changed_project_input(projectDir, inputs).empty();
+    }
+
+    static bool cmake_globs_still_current(const fs::path &buildDir)
+    {
+      const fs::path verify = buildDir / "CMakeFiles" / "VerifyGlobs.cmake";
+      const fs::path stamp = buildDir / "CMakeFiles" / "cmake.verify_globs";
+
+      if (!util::file_exists(verify))
+        return true;
+
+      const std::uint64_t before = util::file_exists(stamp)
+                                       ? fast_file_mtime_count(stamp)
+                                       : 0;
+
+      std::string out;
+      const process::ExecResult result = build::run_process_capture(
+          {"cmake", "-P", verify.string()},
+          {},
+          out);
+
+      if (result.exitCode != 0)
+        return false;
+
+      const std::uint64_t after = util::file_exists(stamp)
+                                      ? fast_file_mtime_count(stamp)
+                                      : 0;
+
+      return before == after;
+    }
+
     static std::optional<process::Plan> make_plan(
         const process::Options &opt,
         const fs::path &cwd)
@@ -1318,30 +1397,18 @@ namespace vix::commands::BuildCommand
 
       if (!hasCMakeLists && hasVixApp)
       {
-        const app::AppManifestLoadResult loadResult =
-            app::load_app_manifest(appManifestPath);
+        const app::AppProjectResolveResult resolved =
+            app::resolve_app_project(userProjectDir);
 
-        if (!loadResult.success())
+        if (!resolved.success())
         {
-          error("Failed to load vix.app.");
-          hint(loadResult.error);
+          error("Failed to resolve vix.app project.");
+          hint(resolved.error);
           return std::nullopt;
         }
 
-        const app::AppCMakeGenerateResult generateResult =
-            app::generate_app_cmake_project(
-                loadResult.manifest,
-                userProjectDir);
-
-        if (!generateResult.success())
-        {
-          error("Failed to generate internal CMake project from vix.app.");
-          hint(generateResult.error);
-          return std::nullopt;
-        }
-
-        cmakeSourceDir = generateResult.sourceDir;
-        defaultTargetName = loadResult.manifest.name;
+        cmakeSourceDir = resolved.cmakeSourceDir;
+        defaultTargetName = resolved.targetName;
         generatedFromVixApp = true;
       }
 
@@ -3135,6 +3202,71 @@ namespace vix::commands::BuildCommand
 
         const auto previousState =
             artifact_cache::ArtifactCache::read_build_state(plan_.buildDir);
+
+        const bool canFastNoopCheck =
+            opt_.useCache &&
+            !opt_.clean &&
+            previousState &&
+            previousState->signature == plan_.signature &&
+            previousState->projectFingerprint == plan_.projectFingerprint &&
+            previousState->buildTarget == opt_.buildTarget &&
+            previousState->preset == plan_.preset.name &&
+            previousState->buildType == plan_.preset.buildType &&
+            previousState->target == projectArtifact.target &&
+            previousState->compiler == projectArtifact.compiler &&
+            !previousState->lastBinary.empty() &&
+            !previousState->artifactRoot.empty() &&
+            util::file_exists(previousState->lastBinary) &&
+            util::dir_exists(previousState->artifactRoot) &&
+            previous_project_inputs_still_current(
+                plan_.userProjectDir,
+                previousState->inputs) &&
+            cmake_globs_still_current(plan_.buildDir);
+
+        if (previousState && !canFastNoopCheck && debug_build_details_enabled() && !opt_.quiet)
+        {
+          if (previousState->signature != plan_.signature)
+            step("fast no-op miss: signature changed");
+          else if (previousState->projectFingerprint != plan_.projectFingerprint)
+            step("fast no-op miss: project fingerprint changed");
+          else if (previousState->buildTarget != opt_.buildTarget)
+            step("fast no-op miss: build target changed");
+          else if (previousState->preset != plan_.preset.name)
+            step("fast no-op miss: preset changed");
+          else if (previousState->buildType != plan_.preset.buildType)
+            step("fast no-op miss: build type changed");
+          else if (previousState->target != projectArtifact.target)
+            step("fast no-op miss: target changed");
+          else if (previousState->compiler != projectArtifact.compiler)
+            step("fast no-op miss: compiler changed");
+          else if (previousState->lastBinary.empty() || !util::file_exists(previousState->lastBinary))
+            step("fast no-op miss: last binary missing");
+          else if (previousState->artifactRoot.empty() || !util::dir_exists(previousState->artifactRoot))
+            step("fast no-op miss: artifact root missing");
+          else if (const std::string changedInput = first_changed_project_input(plan_.userProjectDir, previousState->inputs); !changedInput.empty())
+            step("fast no-op miss: project input changed: " + changedInput);
+          else if (!cmake_globs_still_current(plan_.buildDir))
+            step("fast no-op miss: CMake glob changed");
+        }
+
+        if (canFastNoopCheck &&
+            !opt_.explain &&
+            !opt_.exportBin &&
+            opt_.outPath.empty())
+        {
+          const auto ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - commandStart)
+                  .count();
+
+          if (!opt_.quiet)
+          {
+            print_vix_build_header("Checking", opt_, plan_);
+            print_vix_build_success_timed("Up to date", ms);
+          }
+
+          return 0;
+        }
 
         std::vector<artifact_cache::ProjectInput> projectInputs =
             artifact_cache::ArtifactCache::snapshot_project_inputs(

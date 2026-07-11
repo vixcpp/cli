@@ -931,7 +931,7 @@ namespace vix::cli::build
       return false;
 
     out = util::trim(out);
-    return out.empty();
+    return out.empty() || out == "ninja: no work to do.";
   }
 
   void print_preset_summary(const process::Options &opt, const process::Plan &plan)

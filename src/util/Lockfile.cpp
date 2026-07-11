@@ -11,6 +11,7 @@
  *  Vix.cpp
  */
 #include <vix/cli/util/Lockfile.hpp>
+#include <vix/cli/util/Fs.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -70,12 +71,17 @@ namespace vix::cli::util::lockfile
       root["dependencies"].push_back(dependency_to_json(dependency));
     }
 
-    std::ofstream out(lockPath);
-    if (!out)
+    const std::string content = root.dump(2) + "\n";
+
+    if (vix::cli::util::file_exists(lockPath) &&
+        vix::cli::util::read_text_file_or_empty(lockPath) == content)
+    {
+      return;
+    }
+
+    if (!vix::cli::util::write_text_file_atomic(lockPath, content))
     {
       throw std::runtime_error("cannot write file: " + lockPath.string());
     }
-
-    out << root.dump(2) << "\n";
   }
 }

@@ -234,11 +234,10 @@ namespace vix::commands::RunCommand::detail
           return true;
 
         const auto slash = includeTarget.find('/');
-        const std::string prefix =
-            slash == std::string::npos
-                ? includeTarget
-                : includeTarget.substr(0, slash);
+        if (slash == std::string::npos)
+          continue;
 
+        const std::string prefix = includeTarget.substr(0, slash);
         if (prefix.empty())
           continue;
 

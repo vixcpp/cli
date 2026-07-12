@@ -90,6 +90,31 @@ printf '%s\n' "$JSON_OUT" | grep -q '"status": "ready"'
 printf '%s\n' "$JSON_OUT" | grep -q '"package": "vixcpp/ovi"'
 printf '%s\n' "$JSON_OUT" | grep -q '"path": "ovi/ovi.hpp"'
 
+# Repository mismatch is a local validation and must not be masked by a missing remote tag.
+MISMATCH="$ROOT/repo-mismatch"
+MISMATCH_ORIGIN="$ROOT/repo-mismatch-origin.git"
+make_package "$MISMATCH" "$MISMATCH_ORIGIN" ovi vixcpp 0.1.0
+python3 - <<PY2
+from pathlib import Path
+p = Path("$MISMATCH/vix.json")
+s = p.read_text()
+s = s.replace("${MISMATCH_ORIGIN%.git}", "https://example.invalid/vixcpp/ovi")
+s = s.replace('"version": "0.1.0"', '"version": "0.4.0"')
+p.write_text(s)
+PY2
+git -C "$MISMATCH" add vix.json
+git -C "$MISMATCH" commit -q -m repository-mismatch
+git -C "$MISMATCH" tag v0.4.0
+if (cd "$MISMATCH" && "$VIX_BIN" publish 0.4.0 --dry-run >/tmp/vix-publish-repo-mismatch.out 2>&1); then
+  echo "repository mismatch was accepted" >&2
+  exit 1
+fi
+grep -q 'Repository mismatch' /tmp/vix-publish-repo-mismatch.out
+if grep -q 'not been pushed to origin' /tmp/vix-publish-repo-mismatch.out; then
+  echo "repository mismatch was masked by remote tag validation" >&2
+  exit 1
+fi
+
 # Version mismatch: manifest says 0.1.0, tag says 0.2.0.
 git -C "$PKG" tag v0.2.0
 git -C "$PKG" push -q origin v0.2.0

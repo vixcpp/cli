@@ -68,3 +68,10 @@ add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/RunScriptDependencyPathTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
+
+add_test(
+  NAME vix_cli_publish_preflight
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/PublishPreflightTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)

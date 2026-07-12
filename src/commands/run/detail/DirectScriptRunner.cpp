@@ -29,6 +29,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 
 #ifndef _WIN32
 #include <signal.h>
@@ -210,13 +211,22 @@ namespace vix::commands::RunCommand::detail
      */
     std::string compiler_query(const std::string &compiler, const std::string &arg)
     {
+      static std::unordered_map<std::string, std::string> cache;
+      const std::string key = compiler + "\n" + arg;
+
+      if (const auto it = cache.find(key); it != cache.end())
+        return it->second;
+
       int code = 0;
       const std::string out = run_and_capture_with_code(
           process::quote(compiler) + " " + arg,
           code);
 
       if (code != 0)
+      {
+        cache[key] = "unknown";
         return "unknown";
+      }
 
       std::string s = out;
       while (!s.empty() &&
@@ -225,7 +235,17 @@ namespace vix::commands::RunCommand::detail
         s.pop_back();
       }
 
-      return s.empty() ? "unknown" : s;
+      if (s.empty())
+        s = "unknown";
+
+      cache[key] = s;
+      return s;
+    }
+
+    bool direct_compiler_queries_enabled()
+    {
+      const char *env = vix::utils::vix_getenv("VIX_RUN_STRICT_COMPILER_FINGERPRINT");
+      return env && *env && std::string(env) != "0";
     }
 
     /**
@@ -236,6 +256,8 @@ namespace vix::commands::RunCommand::detail
 #ifdef _WIN32
       return "unknown";
 #else
+      if (!direct_compiler_queries_enabled())
+        return "fast";
       return compiler_query(compiler, "-dumpfullversion -dumpversion");
 #endif
     }
@@ -248,6 +270,8 @@ namespace vix::commands::RunCommand::detail
 #ifdef _WIN32
       return "windows";
 #else
+      if (!direct_compiler_queries_enabled())
+        return "native";
       return compiler_query(compiler, "-dumpmachine");
 #endif
     }
@@ -645,6 +669,15 @@ namespace vix::commands::RunCommand::detail
       return wrap_with_cwd_if_needed(opt, cmd);
     }
 
+    bool direct_replay_enabled(const Options &opt)
+    {
+      if (opt.watch)
+        return true;
+
+      const char *env = vix::utils::vix_getenv("VIX_RUN_REPLAY");
+      return env && *env && std::string(env) != "0";
+    }
+
   } // namespace
 
   fs::path get_direct_scripts_cache_root()
@@ -790,31 +823,36 @@ namespace vix::commands::RunCommand::detail
     namespace replay = vix::commands::replay;
 
     replay::ReplayRecorder recorder;
-    replay::ReplayRecorderConfig replayConfig{};
-
-    replayConfig.base_dir = fs::current_path();
-    replayConfig.cwd = fs::current_path();
-    replayConfig.project_dir = fs::current_path();
-    replayConfig.target_path = plan.scriptPath;
-    replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
-    replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
-    replayConfig.command = opt.watch
-                               ? "vix dev " + plan.scriptPath.string()
-                               : "vix run " + plan.scriptPath.string();
-    replayConfig.resolved_command = plan.runCmd;
-    replayConfig.vix_args = opt.scriptFlags;
-    replayConfig.app_args = opt.runArgs;
-    replayConfig.watch = opt.watch;
-    replayConfig.direct_script = true;
-    replayConfig.cmake_fallback = false;
-    replayConfig.replayable = true;
-
-    std::string replayErr;
-    const bool replayEnabled = recorder.begin(replayConfig, replayErr);
-
     replay::ReplayCapture replayCapture;
-    if (replayEnabled)
-      replayCapture.attach(&recorder);
+    bool replayEnabled = false;
+
+    if (direct_replay_enabled(opt))
+    {
+      replay::ReplayRecorderConfig replayConfig{};
+
+      replayConfig.base_dir = fs::current_path();
+      replayConfig.cwd = fs::current_path();
+      replayConfig.project_dir = fs::current_path();
+      replayConfig.target_path = plan.scriptPath;
+      replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
+      replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
+      replayConfig.command = opt.watch
+                                 ? "vix dev " + plan.scriptPath.string()
+                                 : "vix run " + plan.scriptPath.string();
+      replayConfig.resolved_command = plan.runCmd;
+      replayConfig.vix_args = opt.scriptFlags;
+      replayConfig.app_args = opt.runArgs;
+      replayConfig.watch = opt.watch;
+      replayConfig.direct_script = true;
+      replayConfig.cmake_fallback = false;
+      replayConfig.replayable = true;
+
+      std::string replayErr;
+      replayEnabled = recorder.begin(replayConfig, replayErr);
+
+      if (replayEnabled)
+        replayCapture.attach(&recorder);
+    }
 
     const LiveRunResult run = run_cmd_live_filtered_capture(
         plan.runCmd,

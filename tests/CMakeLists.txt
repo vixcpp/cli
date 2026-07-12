@@ -61,3 +61,10 @@ add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/InitAndAutoGitTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
+
+add_test(
+  NAME vix_cli_run_script_dependency_path
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/RunScriptDependencyPathTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)

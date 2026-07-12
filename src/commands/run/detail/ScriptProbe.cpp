@@ -19,11 +19,13 @@
 #include <cctype>
 #include <fstream>
 #include <optional>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
 #include <iostream>
+#include <unordered_set>
 
 namespace vix::commands::RunCommand::detail
 {
@@ -87,12 +89,6 @@ namespace vix::commands::RunCommand::detail
       return cppFile.has_parent_path()
                  ? fs::absolute(cppFile.parent_path()).lexically_normal()
                  : fs::current_path();
-    }
-
-    bool has_local_vix_deps_cmake(const fs::path &cppFile)
-    {
-      const fs::path projectRoot = find_script_project_root(cppFile);
-      return fs::exists(projectRoot / ".vix" / "vix_deps.cmake");
     }
 
     /**
@@ -168,63 +164,6 @@ namespace vix::commands::RunCommand::detail
       return starts_with(includePath, "vix/");
     }
 
-    /**
-     * @brief Return true when the include clearly looks project-managed.
-     *
-     * Vix runtime headers (<vix/...>) are excluded from this check:
-     * they are handled separately via is_vix_runtime_include() and
-     * already force CMake fallback through usesVix → requiresCMakeTargets.
-     * Treating them as "project layout" here would cause script_source_requires_cmake_fallback
-     * to fire redundantly AND prevent the correct fallback reason from being set.
-     */
-    bool include_path_requires_fallback(const std::string &includePath, bool isQuotedInclude)
-    {
-      if (includePath.empty())
-        return false;
-
-      // Vix runtime headers are handled by is_vix_runtime_include() — skip them here.
-      if (is_vix_runtime_include(includePath))
-        return false;
-
-      if (isQuotedInclude)
-        return true;
-
-      if (includePath.find('/') != std::string::npos ||
-          includePath.find('\\') != std::string::npos)
-      {
-        return true;
-      }
-
-      return false;
-    }
-
-    /**
-     * @brief Return true when the script source layout is not suitable for direct mode.
-     *
-     * This does not try to recognize specific libraries.
-     * It simply distinguishes standalone scripts from project-like sources.
-     */
-    bool script_source_requires_cmake_fallback(const fs::path &cppPath)
-    {
-      std::ifstream ifs(cppPath);
-      if (!ifs)
-        return false;
-
-      std::string line;
-      while (std::getline(ifs, line))
-      {
-        const auto include = parse_include_target(line);
-        if (!include.has_value())
-          continue;
-
-        const auto &[includePath, isQuotedInclude] = *include;
-        if (include_path_requires_fallback(includePath, isQuotedInclude))
-          return true;
-      }
-
-      return false;
-    }
-
     std::vector<std::string> extract_script_include_targets(const fs::path &cppPath)
     {
       std::vector<std::string> includes;
@@ -246,6 +185,218 @@ namespace vix::commands::RunCommand::detail
       }
 
       return includes;
+    }
+
+    bool is_standard_library_include(const std::string &includePath)
+    {
+      if (includePath.empty())
+        return false;
+
+      if (includePath.find('/') != std::string::npos ||
+          includePath.find('\\') != std::string::npos ||
+          includePath.find('.') != std::string::npos)
+      {
+        return false;
+      }
+
+      static const std::unordered_set<std::string> headers = {
+          "algorithm", "any", "array", "atomic", "barrier", "bit", "bitset",
+          "cassert", "ccomplex", "cctype", "cerrno", "cfenv", "cfloat", "charconv",
+          "chrono", "cinttypes", "climits", "clocale", "cmath", "codecvt", "compare",
+          "complex", "concepts", "condition_variable", "coroutine", "csetjmp", "csignal",
+          "cstdarg", "cstddef", "cstdint", "cstdio", "cstdlib", "cstring", "ctime",
+          "deque", "exception", "execution", "expected", "filesystem", "format", "forward_list",
+          "fstream", "functional", "future", "initializer_list", "iomanip", "ios", "iosfwd",
+          "iostream", "istream", "iterator", "latch", "limits", "list", "locale", "map",
+          "memory", "memory_resource", "mutex", "new", "numbers", "numeric", "optional",
+          "ostream", "queue", "random", "ranges", "ratio", "regex", "scoped_allocator",
+          "semaphore", "set", "shared_mutex", "source_location", "span", "sstream", "stack",
+          "stdexcept", "stop_token", "streambuf", "string", "string_view", "strstream",
+          "syncstream", "system_error", "thread", "tuple", "type_traits", "typeindex",
+          "typeinfo", "unordered_map", "unordered_set", "utility", "valarray", "variant",
+          "vector", "version"};
+
+      return headers.find(includePath) != headers.end();
+    }
+
+    std::vector<std::string> extract_external_script_include_targets(const fs::path &cppPath)
+    {
+      std::vector<std::string> out;
+
+      for (const auto &includeTarget : extract_script_include_targets(cppPath))
+      {
+        if (is_vix_runtime_include(includeTarget))
+          continue;
+
+        if (is_standard_library_include(includeTarget))
+          continue;
+
+        append_unique(out, includeTarget);
+      }
+
+      return out;
+    }
+
+    std::string dep_id_to_dir_name(std::string depId)
+    {
+      depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
+      std::replace(depId.begin(), depId.end(), '/', '.');
+      return depId;
+    }
+
+    struct ProjectLockDependency
+    {
+      std::string id;
+      fs::path sourcePath;
+      bool headerOnly = false;
+      std::vector<std::string> includeRoots;
+    };
+
+    void append_include_roots_from_json(std::vector<std::string> &out, const nlohmann::json &dep)
+    {
+      if (dep.contains("include") && dep["include"].is_string())
+        append_unique(out, dep["include"].get<std::string>());
+
+      if (dep.contains("includes") && dep["includes"].is_array())
+      {
+        for (const auto &item : dep["includes"])
+        {
+          if (item.is_string())
+            append_unique(out, item.get<std::string>());
+        }
+      }
+    }
+
+    std::vector<ProjectLockDependency> load_project_lock_dependencies(const fs::path &projectRoot)
+    {
+      std::vector<ProjectLockDependency> deps;
+      const fs::path lockPath = projectRoot / "vix.lock";
+      if (!fs::exists(lockPath))
+        return deps;
+
+      std::ifstream ifs(lockPath);
+      if (!ifs)
+        return deps;
+
+      nlohmann::json lock;
+      try
+      {
+        ifs >> lock;
+      }
+      catch (...)
+      {
+        return deps;
+      }
+
+      if (!lock.is_object() || !lock.contains("dependencies") || !lock["dependencies"].is_array())
+        return deps;
+
+      const fs::path depsRoot = projectRoot / ".vix" / "deps";
+      for (const auto &item : lock["dependencies"])
+      {
+        if (!item.is_object() || !item.contains("id") || !item["id"].is_string())
+          continue;
+
+        ProjectLockDependency dep;
+        dep.id = item["id"].get<std::string>();
+        dep.sourcePath = depsRoot / dep_id_to_dir_name(dep.id);
+
+        if (item.contains("subdirectory") && item["subdirectory"].is_string())
+        {
+          const std::string subdir = item["subdirectory"].get<std::string>();
+          if (!subdir.empty())
+            dep.sourcePath /= subdir;
+        }
+
+        dep.headerOnly = item.value("header_only", false) || item.value("mode", std::string{}) == "header-only";
+        append_include_roots_from_json(dep.includeRoots, item);
+
+        if (dep.includeRoots.empty())
+        {
+          std::error_code ec;
+          if (fs::exists(dep.sourcePath / "include", ec) && !ec)
+            dep.includeRoots.push_back("include");
+          else if (fs::exists(dep.sourcePath / "single_include", ec) && !ec)
+            dep.includeRoots.push_back("single_include");
+        }
+
+        deps.push_back(std::move(dep));
+      }
+
+      return deps;
+    }
+
+    bool include_root_matches_target(const fs::path &includeRoot,
+                                     const std::vector<std::string> &includeTargets)
+    {
+      std::error_code ec;
+      if (!fs::exists(includeRoot, ec) || ec || !fs::is_directory(includeRoot, ec))
+        return false;
+
+      for (const auto &includeTarget : includeTargets)
+      {
+        if (includeTarget.empty())
+          continue;
+
+        ec.clear();
+        if (fs::exists(includeRoot / includeTarget, ec) && !ec)
+          return true;
+
+        const auto slash = includeTarget.find('/');
+        if (slash == std::string::npos)
+          continue;
+
+        const std::string prefix = includeTarget.substr(0, slash);
+        if (prefix.empty())
+          continue;
+
+        ec.clear();
+        if (fs::exists(includeRoot / prefix, ec) && !ec)
+          return true;
+      }
+
+      return false;
+    }
+
+    bool apply_matching_project_dependency_includes(const fs::path &cppPath,
+                                                    ScriptProbeResult &out)
+    {
+      const std::vector<std::string> includeTargets =
+          extract_external_script_include_targets(cppPath);
+
+      if (includeTargets.empty())
+        return false;
+
+      const fs::path projectRoot = find_script_project_root(cppPath);
+      bool matchedCompiledDep = false;
+
+      for (const auto &dep : load_project_lock_dependencies(projectRoot))
+      {
+        for (const auto &includeRootRelative : dep.includeRoots)
+        {
+          if (includeRootRelative.empty())
+            continue;
+
+          const fs::path includeRoot = dep.sourcePath / includeRootRelative;
+          if (!include_root_matches_target(includeRoot, includeTargets))
+            continue;
+
+          append_unique(out.includeDirs, includeRoot.string());
+          out.headerOnlyDepIncludeDirs.push_back(includeRoot);
+
+          if (!dep.headerOnly)
+          {
+            out.requiresCMakeTargets = true;
+            out.usesCompiledDeps = true;
+            out.compiledDepPaths.push_back(dep.sourcePath);
+            matchedCompiledDep = true;
+          }
+
+          break;
+        }
+      }
+
+      return matchedCompiledDep;
     }
 
     bool global_package_matches_script_include(
@@ -357,17 +508,6 @@ namespace vix::commands::RunCommand::detail
       }
 
       return false;
-    }
-
-    /**
-     * @brief Return true when the script explicitly forwards include roots.
-     *
-     * A truly standalone single-file direct compile should not need project include roots.
-     */
-    bool explicit_include_roots_require_fallback(const std::vector<std::string> &includeDirs,
-                                                 const std::vector<std::string> &systemIncludeDirs)
-    {
-      return !includeDirs.empty() || !systemIncludeDirs.empty();
     }
 
     /**
@@ -723,23 +863,14 @@ namespace vix::commands::RunCommand::detail
     out.libs = out.linkFlags.libs;
     out.linkOpts = out.linkFlags.linkOpts;
 
+    apply_matching_project_dependency_includes(opt.cppFile, out);
     apply_matching_global_package_includes(opt.cppFile, out);
-
-    const bool localVixDepsCmake = has_local_vix_deps_cmake(opt.cppFile);
 
     const bool unsupportedFlags =
         script_flags_require_cmake_fallback(opt.scriptFlags);
 
-    const bool sourceLayoutRequiresFallback =
-        script_source_requires_cmake_fallback(opt.cppFile);
-
     const bool dependencyManagedIncludes =
         include_dirs_require_cmake_fallback(
-            out.includeDirs,
-            out.systemIncludeDirs);
-
-    const bool explicitIncludeRoots =
-        explicit_include_roots_require_fallback(
             out.includeDirs,
             out.systemIncludeDirs);
 
@@ -749,10 +880,6 @@ namespace vix::commands::RunCommand::detail
         out.features.usesOrm ||
         out.features.usesDb ||
         out.features.usesMySql ||
-        sourceLayoutRequiresFallback ||
-        dependencyManagedIncludes ||
-        explicitIncludeRoots ||
-        localVixDepsCmake ||
         opt.withSqlite ||
         opt.withMySql ||
         !out.libs.empty() ||
@@ -761,9 +888,6 @@ namespace vix::commands::RunCommand::detail
 
     out.usesCompiledDeps =
         out.usesCompiledDeps ||
-        dependencyManagedIncludes ||
-        explicitIncludeRoots ||
-        localVixDepsCmake ||
         !out.libs.empty() ||
         !out.libDirs.empty() ||
         !out.linkOpts.empty();

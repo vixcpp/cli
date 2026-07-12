@@ -63,6 +63,9 @@ namespace vix::commands::RunCommand::detail
   {
     void print_double_dash_warning_if_needed(const Options &opt);
     bool ensure_script_exists(const fs::path &script);
+    std::vector<std::string> extract_script_include_prefixes_for_autodeps(const fs::path &cppPath);
+    bool script_may_use_dep_id(const std::vector<std::string> &includePrefixes,
+                               const std::string &depId);
     void apply_auto_deps_includes_from_deps_folder(Options &opt, const fs::path &startDir);
 
     struct ScriptProjectState
@@ -145,20 +148,6 @@ namespace vix::commands::RunCommand::detail
       return fs::exists(depsDir) && fs::exists(depsCmake);
     }
 
-    bool project_app_declares_dependencies(const fs::path &projectDir)
-    {
-      const fs::path appPath = projectDir / "vix.app";
-      if (!fs::exists(appPath))
-        return false;
-
-      const auto loaded = vix::cli::app::load_app_manifest(appPath);
-      if (!loaded.success())
-        return false;
-
-      return !loaded.manifest.deps.empty() ||
-             !loaded.manifest.gitDependencies.empty();
-    }
-
     bool run_project_dependency_install(const fs::path &projectDir)
     {
       std::error_code ec;
@@ -179,24 +168,88 @@ namespace vix::commands::RunCommand::detail
       return rc == 0;
     }
 
-    bool ensure_registry_deps_installed_if_needed(const fs::path &projectDir)
+    std::vector<std::string> project_declared_dependency_ids(const fs::path &projectDir)
     {
-      if (project_app_declares_dependencies(projectDir) &&
-          (!fs::exists(projectDir / "vix.lock") ||
-           !project_registry_deps_installed(projectDir)))
-      {
-        if (run_project_dependency_install(projectDir))
-          return true;
+      std::vector<std::string> ids;
 
-        error("Dependencies not installed");
-        hint("run: vix install");
-        return false;
+      const fs::path appPath = projectDir / "vix.app";
+      if (fs::exists(appPath))
+      {
+        const auto loaded = vix::cli::app::load_app_manifest(appPath);
+        if (loaded.success())
+        {
+          for (const auto &dep : loaded.manifest.deps)
+            ids.push_back(dep);
+
+          for (const auto &dep : loaded.manifest.gitDependencies)
+            ids.push_back(dep.name);
+        }
       }
 
-      if (!project_has_registry_lock_dependencies(projectDir))
+      const fs::path lockPath = projectDir / "vix.lock";
+      if (fs::exists(lockPath))
+      {
+        std::ifstream ifs(lockPath);
+        if (ifs)
+        {
+          try
+          {
+            nlohmann::json lock;
+            ifs >> lock;
+            if (lock.is_object() && lock.contains("dependencies") && lock["dependencies"].is_array())
+            {
+              for (const auto &item : lock["dependencies"])
+              {
+                if (item.is_object() && item.contains("id") && item["id"].is_string())
+                  ids.push_back(item["id"].get<std::string>());
+              }
+            }
+          }
+          catch (...)
+          {
+          }
+        }
+      }
+
+      std::sort(ids.begin(), ids.end());
+      ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+      return ids;
+    }
+
+    bool script_likely_uses_declared_dependency(const fs::path &projectDir,
+                                                const fs::path &cppFile)
+    {
+      const std::vector<std::string> includePrefixes =
+          extract_script_include_prefixes_for_autodeps(cppFile);
+
+      if (includePrefixes.empty())
+        return false;
+
+      for (const auto &depId : project_declared_dependency_ids(projectDir))
+      {
+        if (script_may_use_dep_id(includePrefixes, depId))
+          return true;
+      }
+
+      return false;
+    }
+
+    bool ensure_matching_registry_deps_installed_if_needed(const fs::path &projectDir,
+                                                           const fs::path &cppFile)
+    {
+      if (project_registry_deps_installed(projectDir))
         return true;
 
-      if (project_registry_deps_installed(projectDir))
+      if (!project_has_registry_lock_dependencies(projectDir) &&
+          project_declared_dependency_ids(projectDir).empty())
+      {
+        return true;
+      }
+
+      if (!script_likely_uses_declared_dependency(projectDir, cppFile))
+        return true;
+
+      if (run_project_dependency_install(projectDir))
         return true;
 
       error("Dependencies not installed");
@@ -254,7 +307,7 @@ namespace vix::commands::RunCommand::detail
       const fs::path projectDir =
           find_script_project_root(opt.cppFile);
 
-      if (!ensure_registry_deps_installed_if_needed(projectDir))
+      if (!ensure_matching_registry_deps_installed_if_needed(projectDir, opt.cppFile))
         return 1;
 
       if (opt.autoDeps != AutoDepsMode::None)

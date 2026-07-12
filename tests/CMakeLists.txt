@@ -54,3 +54,10 @@ add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/GitDependenciesTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
+
+add_test(
+  NAME vix_cli_init_and_auto_git
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/InitAndAutoGitTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)

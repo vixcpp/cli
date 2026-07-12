@@ -14,6 +14,7 @@
 
 #include <vix/cli/CLI.hpp>
 #include <vix/cli/commands/NewCommand.hpp>
+#include <vix/cli/commands/InitCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
@@ -540,6 +541,8 @@ namespace vix
 
       if (cmd == "new")
         return commands::NewCommand::help();
+      if (cmd == "init")
+        return commands::InitCommand::help();
       if (cmd == "make")
         return commands::MakeCommand::help();
       if (cmd == "build")
@@ -782,6 +785,7 @@ namespace vix
     out << indent(2) << "--log-level        trace|debug|info|warn|error|critical\n\n";
 
     out << indent(1) << "Examples:\n";
+    out << indent(2) << "vix init\n";
     out << indent(2) << "vix new hello\n";
     out << indent(2) << "vix run main.cpp\n";
     out << indent(2) << "vix note examples/hello.vixnote\n";

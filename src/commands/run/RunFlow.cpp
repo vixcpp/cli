@@ -448,6 +448,20 @@ namespace vix::commands::RunCommand::detail
       {
         opt.localCache = true;
       }
+      else if (a == "--dep")
+      {
+        opt.tempDeps.push_back(take_value(args, i, "--dep", opt));
+        if (opt.parseFailed)
+          return opt;
+      }
+      else if (a.rfind("--dep=", 0) == 0)
+      {
+        opt.tempDeps.push_back(take_eq_value(a, "--dep="));
+      }
+      else if (a == "--save")
+      {
+        opt.saveTempDeps = true;
+      }
       else if (a == "--replay")
       {
         opt.replay = true;

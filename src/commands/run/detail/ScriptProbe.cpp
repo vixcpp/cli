@@ -54,6 +54,47 @@ namespace vix::commands::RunCommand::detail
       return s.rfind(prefix, 0) == 0;
     }
 
+    fs::path find_script_project_root(const fs::path &cppFile)
+    {
+      std::error_code ec;
+
+      fs::path current =
+          cppFile.has_parent_path()
+              ? fs::absolute(cppFile.parent_path(), ec).lexically_normal()
+              : fs::current_path(ec).lexically_normal();
+
+      if (ec)
+        current = cppFile.parent_path();
+
+      while (!current.empty())
+      {
+        if (fs::exists(current / "vix.lock") ||
+            fs::exists(current / "vix.json") ||
+            fs::exists(current / "vix.app") ||
+            fs::exists(current / ".vix" / "vix_deps.cmake") ||
+            fs::exists(current / ".vix" / "deps"))
+        {
+          return current;
+        }
+
+        const fs::path parent = current.parent_path();
+        if (parent == current)
+          break;
+
+        current = parent;
+      }
+
+      return cppFile.has_parent_path()
+                 ? fs::absolute(cppFile.parent_path()).lexically_normal()
+                 : fs::current_path();
+    }
+
+    bool has_local_vix_deps_cmake(const fs::path &cppFile)
+    {
+      const fs::path projectRoot = find_script_project_root(cppFile);
+      return fs::exists(projectRoot / ".vix" / "vix_deps.cmake");
+    }
+
     /**
      * @brief Append a string only once.
      */
@@ -684,6 +725,8 @@ namespace vix::commands::RunCommand::detail
 
     apply_matching_global_package_includes(opt.cppFile, out);
 
+    const bool localVixDepsCmake = has_local_vix_deps_cmake(opt.cppFile);
+
     const bool unsupportedFlags =
         script_flags_require_cmake_fallback(opt.scriptFlags);
 
@@ -709,6 +752,7 @@ namespace vix::commands::RunCommand::detail
         sourceLayoutRequiresFallback ||
         dependencyManagedIncludes ||
         explicitIncludeRoots ||
+        localVixDepsCmake ||
         opt.withSqlite ||
         opt.withMySql ||
         !out.libs.empty() ||
@@ -719,6 +763,7 @@ namespace vix::commands::RunCommand::detail
         out.usesCompiledDeps ||
         dependencyManagedIncludes ||
         explicitIncludeRoots ||
+        localVixDepsCmake ||
         !out.libs.empty() ||
         !out.libDirs.empty() ||
         !out.linkOpts.empty();

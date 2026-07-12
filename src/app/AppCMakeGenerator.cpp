@@ -332,7 +332,7 @@ namespace vix::cli::app
         const AppManifest &manifest,
         const fs::path &projectDir)
     {
-      if (!manifest.deps.empty())
+      if (!manifest.deps.empty() || !manifest.gitDependencies.empty())
         return true;
 
       return enabled_module_has_registry_deps(
@@ -1200,6 +1200,36 @@ namespace vix::cli::app
       out << "\n";
     }
 
+    static void emit_vix_runtime_link(
+        std::ostringstream &out,
+        const std::string &targetName)
+    {
+      out << "# Vix runtime used by generated app glue\n";
+      out << "find_package(vix QUIET CONFIG)\n";
+      out << "if(NOT vix_FOUND)\n";
+      out << "  find_package(Vix QUIET CONFIG)\n";
+      out << "endif()\n";
+      out << "if(TARGET vix::vix)\n";
+      out << "  target_link_libraries(" << targetName << " PRIVATE vix::vix)\n";
+      out << "endif()\n\n";
+    }
+
+    static void emit_git_deps_links(
+        std::ostringstream &out,
+        const AppManifest &manifest,
+        const std::string &targetName)
+    {
+      if (manifest.gitDependencies.empty())
+        return;
+
+      out << "# Git dependencies declared in vix.app\n";
+      out << "if(TARGET vix::deps)\n";
+      out << "  target_link_libraries(" << targetName << " PRIVATE vix::deps)\n";
+      out << "else()\n";
+      out << "  message(FATAL_ERROR \"Git dependencies are declared by vix.app, but vix::deps was not generated. Run: vix install\")\n";
+      out << "endif()\n\n";
+    }
+
     static void emit_registry_deps_links(
         std::ostringstream &out,
         const AppManifest &manifest,
@@ -1492,7 +1522,9 @@ namespace vix::cli::app
     emit_includes_and_defines(out, manifest, targetName, projectDir);
     emit_options_and_features(out, manifest, targetName);
     emit_links(out, manifest, targetName);
+    emit_vix_runtime_link(out, targetName);
     emit_registry_deps_links(out, manifest, targetName);
+    emit_git_deps_links(out, manifest, targetName);
     emit_modules_links(out, manifest, targetName);
     emit_output_dir(out, manifest, targetName);
     emit_resources(out, manifest, targetName, projectDir);

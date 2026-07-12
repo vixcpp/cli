@@ -12,6 +12,8 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/cli/app/AppManifest.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
@@ -143,8 +145,54 @@ namespace vix::commands::RunCommand::detail
       return fs::exists(depsDir) && fs::exists(depsCmake);
     }
 
+    bool project_app_declares_dependencies(const fs::path &projectDir)
+    {
+      const fs::path appPath = projectDir / "vix.app";
+      if (!fs::exists(appPath))
+        return false;
+
+      const auto loaded = vix::cli::app::load_app_manifest(appPath);
+      if (!loaded.success())
+        return false;
+
+      return !loaded.manifest.deps.empty() ||
+             !loaded.manifest.gitDependencies.empty();
+    }
+
+    bool run_project_dependency_install(const fs::path &projectDir)
+    {
+      std::error_code ec;
+      const fs::path previous = fs::current_path(ec);
+      if (ec)
+        return false;
+
+      fs::current_path(projectDir, ec);
+      if (ec)
+        return false;
+
+      std::ostringstream muted;
+      std::streambuf *oldOut = std::cout.rdbuf(muted.rdbuf());
+      const int rc = vix::commands::InstallCommand::run({});
+      std::cout.rdbuf(oldOut);
+
+      fs::current_path(previous, ec);
+      return rc == 0;
+    }
+
     bool ensure_registry_deps_installed_if_needed(const fs::path &projectDir)
     {
+      if (project_app_declares_dependencies(projectDir) &&
+          (!fs::exists(projectDir / "vix.lock") ||
+           !project_registry_deps_installed(projectDir)))
+      {
+        if (run_project_dependency_install(projectDir))
+          return true;
+
+        error("Dependencies not installed");
+        hint("run: vix install");
+        return false;
+      }
+
       if (!project_has_registry_lock_dependencies(projectDir))
         return true;
 

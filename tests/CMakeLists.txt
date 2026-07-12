@@ -47,3 +47,10 @@ add_test(
     ${CMAKE_BINARY_DIR}/vix
     ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ovi
 )
+
+add_test(
+  NAME vix_cli_git_dependencies
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/GitDependenciesTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)

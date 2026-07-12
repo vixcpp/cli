@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Shell.hpp>
 #include <vix/cli/util/Hash.hpp>
@@ -59,6 +60,17 @@ namespace vix::commands
     {
       bool globalMode{false};
       std::string globalSpec;
+
+      std::string gitSpec;
+      std::string gitName;
+      std::string gitTag;
+      std::string gitBranch;
+      std::string gitRev;
+      std::string gitTarget;
+      std::string gitSubdirectory;
+      std::string gitInclude;
+      bool gitHeaderOnly{false};
+      bool yes{false};
     };
 
     struct PkgSpec
@@ -83,6 +95,12 @@ namespace vix::commands
       std::string tag;
       std::string commit;
       std::string hash;
+      std::string source{"registry"};
+      std::string requested;
+      std::string subdirectory;
+      bool headerOnly{false};
+      std::vector<std::string> includes;
+      std::vector<std::pair<std::string, std::string>> cmakeOptions;
 
       std::string type;
       std::string include{"include"};
@@ -124,6 +142,11 @@ namespace vix::commands
     static fs::path store_git_dir()
     {
       return vix_root() / "store" / "git";
+    }
+
+    static fs::path git_cache_dir()
+    {
+      return vix_root() / "cache" / "git";
     }
 
     static fs::path lock_path()
@@ -278,6 +301,9 @@ namespace vix::commands
       return id.substr(0, slash) + "::" + id.substr(slash + 1);
     }
 
+    static bool starts_with_local(const std::string &s, const std::string &prefix);
+    static bool is_supported_git_url(const std::string &url);
+
     static std::vector<std::string> cmake_dependency_aliases(const DepResolved &dep)
     {
       std::vector<std::string> aliases;
@@ -301,6 +327,9 @@ namespace vix::commands
     {
       return store_git_dir() / sanitize_id_dot(id) / commit;
     }
+
+    static fs::path git_cache_checkout_path(const std::string &url, const std::string &commit);
+    static int install_project_dependencies();
 
     static fs::path entry_path(const std::string &ns, const std::string &name)
     {
@@ -492,6 +521,14 @@ namespace vix::commands
 #endif
     }
 
+    static std::string next_arg_value(const std::vector<std::string> &args, std::size_t &i, const std::string &flag)
+    {
+      if (i + 1 >= args.size())
+        throw std::runtime_error("missing value for " + flag);
+      ++i;
+      return args[i];
+    }
+
     static ParsedArgs parse_args(const std::vector<std::string> &args)
     {
       ParsedArgs parsed;
@@ -510,9 +547,47 @@ namespace vix::commands
             ++i;
           }
         }
+        else if (arg == "--yes" || arg == "-y")
+        {
+          parsed.yes = true;
+        }
+        else if (arg == "--name")
+          parsed.gitName = next_arg_value(args, i, arg);
+        else if (arg == "--tag")
+          parsed.gitTag = next_arg_value(args, i, arg);
+        else if (arg == "--branch")
+          parsed.gitBranch = next_arg_value(args, i, arg);
+        else if (arg == "--rev" || arg == "--commit")
+          parsed.gitRev = next_arg_value(args, i, arg);
+        else if (arg == "--target")
+          parsed.gitTarget = next_arg_value(args, i, arg);
+        else if (arg == "--subdirectory" || arg == "--subdir")
+          parsed.gitSubdirectory = next_arg_value(args, i, arg);
+        else if (arg == "--include")
+          parsed.gitInclude = next_arg_value(args, i, arg);
+        else if (arg == "--header-only" || arg == "--headers")
+          parsed.gitHeaderOnly = true;
+        else if (starts_with_local(arg, "--name="))
+          parsed.gitName = arg.substr(std::string("--name=").size());
+        else if (starts_with_local(arg, "--tag="))
+          parsed.gitTag = arg.substr(std::string("--tag=").size());
+        else if (starts_with_local(arg, "--branch="))
+          parsed.gitBranch = arg.substr(std::string("--branch=").size());
+        else if (starts_with_local(arg, "--rev="))
+          parsed.gitRev = arg.substr(std::string("--rev=").size());
+        else if (starts_with_local(arg, "--target="))
+          parsed.gitTarget = arg.substr(std::string("--target=").size());
+        else if (starts_with_local(arg, "--subdirectory="))
+          parsed.gitSubdirectory = arg.substr(std::string("--subdirectory=").size());
+        else if (starts_with_local(arg, "--include="))
+          parsed.gitInclude = arg.substr(std::string("--include=").size());
         else if (parsed.globalMode && parsed.globalSpec.empty())
         {
           parsed.globalSpec = arg;
+        }
+        else if (parsed.gitSpec.empty() && is_supported_git_url(arg))
+        {
+          parsed.gitSpec = arg;
         }
       }
 
@@ -760,16 +835,71 @@ namespace vix::commands
     {
       DepResolved dep;
       dep.id = d.value("id", "");
+      dep.source = d.value("source", "registry");
       dep.version = d.value("version", "");
-      dep.repo = d.value("repo", "");
+      dep.requested = d.value("requested", "");
+      dep.repo = d.value("repo", d.value("url", ""));
       dep.tag = d.value("tag", "");
       dep.commit = d.value("commit", "");
       dep.hash = d.value("hash", "");
+      dep.subdirectory = d.value("subdirectory", "");
+      dep.headerOnly = d.value("header_only", false);
 
       if (dep.id.empty() || dep.repo.empty() || dep.commit.empty())
         throw std::runtime_error("invalid dependency entry in vix.lock (missing id/repo/commit)");
 
-      dep.checkout = store_checkout_path(dep.id, dep.commit);
+      if (d.contains("targets") && d["targets"].is_array())
+      {
+        for (const auto &item : d["targets"])
+        {
+          if (item.is_string())
+            dep.cmakeTargets.push_back(item.get<std::string>());
+        }
+      }
+      else if (d.contains("target") && d["target"].is_string())
+      {
+        dep.cmakeTargets.push_back(d["target"].get<std::string>());
+      }
+
+      if (d.contains("includes") && d["includes"].is_array())
+      {
+        for (const auto &item : d["includes"])
+        {
+          if (item.is_string())
+            dep.includes.push_back(item.get<std::string>());
+        }
+      }
+      else if (d.contains("include") && d["include"].is_string())
+      {
+        dep.includes.push_back(d["include"].get<std::string>());
+      }
+
+      if (!dep.includes.empty())
+        dep.include = dep.includes.front();
+
+      if (d.contains("cmake_options") && d["cmake_options"].is_object())
+      {
+        for (auto it = d["cmake_options"].begin(); it != d["cmake_options"].end(); ++it)
+        {
+          if (it.value().is_boolean())
+            dep.cmakeOptions.emplace_back(it.key(), it.value().get<bool>() ? "ON" : "OFF");
+          else if (it.value().is_string())
+            dep.cmakeOptions.emplace_back(it.key(), it.value().get<std::string>());
+          else
+            dep.cmakeOptions.emplace_back(it.key(), it.value().dump());
+        }
+      }
+
+      if (dep.source == "git")
+      {
+        dep.checkout = git_cache_checkout_path(dep.repo, dep.commit);
+        dep.type = dep.headerOnly ? "header-only" : "library";
+      }
+      else
+      {
+        dep.checkout = store_checkout_path(dep.id, dep.commit);
+      }
+
       return dep;
     }
 
@@ -925,6 +1055,279 @@ namespace vix::commands
           out += c;
       }
       out += "\"";
+      return out;
+    }
+
+    static std::string shell_quote(const std::string &s)
+    {
+      return vix::cli::commands::helpers::quote(s);
+    }
+
+    static bool starts_with_local(const std::string &s, const std::string &prefix)
+    {
+      return s.rfind(prefix, 0) == 0;
+    }
+
+    static bool is_supported_git_url(const std::string &url)
+    {
+      const std::string value = trim_copy(url);
+      if (value.empty())
+        return false;
+
+      if (starts_with_local(value, "https://") ||
+          starts_with_local(value, "http://") ||
+          starts_with_local(value, "ssh://") ||
+          starts_with_local(value, "git://") ||
+          starts_with_local(value, "file://"))
+        return true;
+
+      if (value.find('@') != std::string::npos && value.find(':') != std::string::npos && value.find(' ') == std::string::npos)
+        return true;
+
+      std::error_code ec;
+      return fs::exists(fs::path(value), ec) && !ec;
+    }
+
+    static bool is_safe_local_dep_name(const std::string &name)
+    {
+      if (name.empty())
+        return false;
+      const unsigned char first = static_cast<unsigned char>(name.front());
+      if (!(std::isalpha(first) || name.front() == '_'))
+        return false;
+      for (char c : name)
+      {
+        const unsigned char ch = static_cast<unsigned char>(c);
+        if (!(std::isalnum(ch) || c == '_' || c == '-'))
+          return false;
+      }
+      return true;
+    }
+
+    static std::string git_url_to_default_name(std::string url)
+    {
+      url = trim_copy(std::move(url));
+      while (!url.empty() && (url.back() == '/' || url.back() == '\\'))
+        url.pop_back();
+
+      std::size_t pos = url.find_last_of("/:");
+      std::string name = pos == std::string::npos ? url : url.substr(pos + 1);
+      if (name.size() > 4 && name.substr(name.size() - 4) == ".git")
+        name = name.substr(0, name.size() - 4);
+
+      std::string out;
+      for (char c : name)
+      {
+        const unsigned char ch = static_cast<unsigned char>(c);
+        if (std::isalnum(ch) || c == '_' || c == '-')
+          out.push_back(c);
+        else if (c == '.')
+          out.push_back('-');
+      }
+      if (out.empty() || !(std::isalpha(static_cast<unsigned char>(out.front())) || out.front() == '_'))
+        out = "dep_" + out;
+      return out;
+    }
+
+    static std::string short_hash_for_url(const std::string &url)
+    {
+      return vix::cli::util::hex64(vix::cli::util::fnv1a64_str(url, 1469598103934665603ull));
+    }
+
+    static std::string capture_command_or_throw(const std::string &cmd, const std::string &what)
+    {
+      int code = 0;
+      std::string out = vix::cli::commands::helpers::run_and_capture_with_code(cmd, code);
+      if (code != 0)
+        throw std::runtime_error(what + " failed");
+      return trim_copy(out);
+    }
+
+    static std::string first_ls_remote_hash(const std::string &output)
+    {
+      std::istringstream in(output);
+      std::string line;
+      while (std::getline(in, line))
+      {
+        line = trim_copy(line);
+        if (line.empty())
+          continue;
+        const auto tab = line.find_first_of(" \t");
+        return tab == std::string::npos ? line : line.substr(0, tab);
+      }
+      return {};
+    }
+
+    static std::string resolve_git_commit_or_throw(
+        const std::string &url,
+        const std::string &tag,
+        const std::string &branch,
+        const std::string &rev)
+    {
+      const int revisionCount = (!tag.empty() ? 1 : 0) + (!branch.empty() ? 1 : 0) + (!rev.empty() ? 1 : 0);
+      if (revisionCount > 1)
+        throw std::runtime_error("use only one of --tag, --branch, or --rev");
+
+      if (!tag.empty())
+      {
+        std::string out = capture_command_or_throw(
+            "git ls-remote " + shell_quote(url) + " " + shell_quote("refs/tags/" + tag + "^{}"),
+            "git ls-remote");
+        std::string hash = first_ls_remote_hash(out);
+        if (hash.empty())
+        {
+          out = capture_command_or_throw(
+              "git ls-remote " + shell_quote(url) + " " + shell_quote("refs/tags/" + tag),
+              "git ls-remote");
+          hash = first_ls_remote_hash(out);
+        }
+        if (hash.empty())
+          throw std::runtime_error("tag not found: " + tag);
+        return hash;
+      }
+
+      if (!branch.empty())
+      {
+        const std::string out = capture_command_or_throw(
+            "git ls-remote " + shell_quote(url) + " " + shell_quote("refs/heads/" + branch),
+            "git ls-remote");
+        const std::string hash = first_ls_remote_hash(out);
+        if (hash.empty())
+          throw std::runtime_error("branch not found: " + branch);
+        return hash;
+      }
+
+      if (!rev.empty())
+        return rev;
+
+      const std::string out = capture_command_or_throw(
+          "git ls-remote " + shell_quote(url) + " HEAD",
+          "git ls-remote");
+      const std::string hash = first_ls_remote_hash(out);
+      if (hash.empty())
+        throw std::runtime_error("could not resolve repository HEAD");
+      return hash;
+    }
+
+    static fs::path git_cache_checkout_path(const std::string &url, const std::string &commit)
+    {
+      return git_cache_dir() / short_hash_for_url(url) / commit;
+    }
+
+    static fs::path clone_git_to_cache_or_throw(const std::string &url, const std::string &commit)
+    {
+      fs::create_directories(git_cache_dir());
+      const fs::path dst = git_cache_checkout_path(url, commit);
+      if (fs::exists(dst / ".git") || fs::exists(dst / "CMakeLists.txt") || fs::exists(dst / "include"))
+        return dst;
+
+      const fs::path parent = dst.parent_path();
+      const fs::path tmp = parent / (dst.filename().string() + ".tmp");
+      std::error_code ec;
+      fs::create_directories(parent, ec);
+      fs::remove_all(tmp, ec);
+
+      int code = 0;
+      std::string out = vix::cli::commands::helpers::run_and_capture_with_code(
+          "git clone -q " + shell_quote(url) + " " + shell_quote(tmp.string()),
+          code);
+      if (code != 0)
+        throw std::runtime_error("git clone failed for: " + url);
+
+      out = vix::cli::commands::helpers::run_and_capture_with_code(
+          "git -C " + shell_quote(tmp.string()) + " -c advice.detachedHead=false checkout -q " + shell_quote(commit),
+          code);
+      if (code != 0)
+      {
+        fs::remove_all(tmp, ec);
+        throw std::runtime_error("git checkout failed for: " + commit);
+      }
+
+      fs::rename(tmp, dst, ec);
+      if (ec)
+      {
+        fs::remove_all(dst, ec);
+        ec.clear();
+        fs::rename(tmp, dst, ec);
+        if (ec)
+          throw std::runtime_error("cannot move git cache checkout: " + ec.message());
+      }
+
+      return dst;
+    }
+
+    static bool safe_relative_path_string(const std::string &raw)
+    {
+      if (raw.empty())
+        return false;
+      const fs::path p(raw);
+      if (p.is_absolute())
+        return false;
+      for (const auto &part : p)
+      {
+        if (part == "..")
+          return false;
+      }
+      return true;
+    }
+
+    static std::vector<std::string> detect_cmake_targets_from_file(const fs::path &cmakeLists)
+    {
+      std::ifstream in(cmakeLists);
+      if (!in)
+        return {};
+
+      std::vector<std::string> targets;
+      std::string line;
+      while (std::getline(in, line))
+      {
+        const std::string trimmed = trim_copy(line);
+        const std::string lower = [&]()
+        {
+          std::string v = trimmed;
+          std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c)
+                         { return static_cast<char>(std::tolower(c)); });
+          return v;
+        }();
+
+        const std::string key = "add_library(";
+        const auto pos = lower.find(key);
+        if (pos == std::string::npos)
+          continue;
+        std::string rest = trim_copy(trimmed.substr(pos + key.size()));
+        if (rest.empty() || rest[0] == '$')
+          continue;
+        std::string name;
+        for (char c : rest)
+        {
+          if (std::isspace(static_cast<unsigned char>(c)) || c == ')')
+            break;
+          name.push_back(c);
+        }
+        if (!name.empty() && name != "INTERFACE" && name != "STATIC" && name != "SHARED" && name != "MODULE")
+          targets.push_back(name);
+
+        const auto aliasPos = lower.find(" alias ");
+        if (aliasPos != std::string::npos)
+        {
+          std::istringstream ss(rest);
+          std::string aliasName;
+          ss >> aliasName;
+          if (!aliasName.empty())
+            targets.push_back(aliasName);
+        }
+      }
+
+      std::sort(targets.begin(), targets.end());
+      targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+      return targets;
+    }
+
+    static std::vector<std::pair<std::string, std::string>> app_cmake_options_to_pairs(
+        const std::vector<std::pair<std::string, std::string>> &options)
+    {
+      std::vector<std::pair<std::string, std::string>> out = options;
+      std::sort(out.begin(), out.end());
       return out;
     }
 
@@ -1101,6 +1504,51 @@ namespace vix::commands
 
         out << "# " << dep.id << " @" << dep.version << " (" << dep.commit << ")\n";
 
+        if (dep.source == "git")
+        {
+          const fs::path gitSourceDir = dep.subdirectory.empty() ? dep.linkDir : (dep.linkDir / dep.subdirectory);
+          const fs::path gitCMake = gitSourceDir / "CMakeLists.txt";
+          const std::string gitAlias = "vix_git::" + dep.id;
+
+          if (dep.headerOnly)
+          {
+            out << "if(NOT TARGET " << safe << ")\n";
+            out << "  add_library(" << safe << " INTERFACE)\n";
+            std::vector<std::string> includeDirs = dep.includes.empty() ? std::vector<std::string>{dep.include} : dep.includes;
+            for (const std::string &includeDir : includeDirs)
+            {
+              const fs::path inc = gitSourceDir / includeDir;
+              out << "  if(EXISTS " << cmake_quote(inc.string()) << ")\n";
+              out << "    target_include_directories(" << safe << " INTERFACE " << cmake_quote(inc.string()) << ")\n";
+              out << "  endif()\n";
+            }
+            out << "endif()\n";
+            out << "if(NOT TARGET " << gitAlias << ")\n";
+            out << "  add_library(" << gitAlias << " ALIAS " << safe << ")\n";
+            out << "endif()\n";
+          }
+          else if (fs::exists(gitCMake))
+          {
+            for (const auto &option : dep.cmakeOptions)
+              out << "set(" << option.first << " " << option.second << " CACHE STRING \"\" FORCE)\n";
+            out << "if(EXISTS " << cmake_quote(gitCMake.string()) << ")\n";
+            out << "  add_subdirectory("
+                << cmake_quote(gitSourceDir.string()) << " "
+                << cmake_quote((project_vix_dir() / buildDirName).string())
+                << " EXCLUDE_FROM_ALL)\n";
+            out << "endif()\n";
+          }
+          else
+          {
+            out << "message(FATAL_ERROR "
+                << cmake_quote("Git dependency " + dep.id + " does not expose a supported CMake or header-only package")
+                << ")\n";
+          }
+
+          out << "\n";
+          continue;
+        }
+
         const bool hasCMake = fs::exists(depCMake);
         const bool isHeaderOnly =
             dep.type == "header-only" ||
@@ -1202,6 +1650,27 @@ namespace vix::commands
 
       for (const auto &dep : deps)
       {
+        if (dep.source == "git")
+        {
+          if (dep.headerOnly || dep.cmakeTargets.empty())
+          {
+            const std::string alias = "vix_git::" + dep.id;
+            out << "if(TARGET " << alias << ")\n";
+            out << "  target_link_libraries(vix__deps INTERFACE " << alias << ")\n";
+            out << "endif()\n";
+          }
+
+          for (const std::string &target : dep.cmakeTargets)
+          {
+            out << "if(TARGET " << target << ")\n";
+            out << "  target_link_libraries(vix__deps INTERFACE " << target << ")\n";
+            out << "else()\n";
+            out << "  message(FATAL_ERROR " << cmake_quote("Git dependency " + dep.id + " target not found: " + target) << ")\n";
+            out << "endif()\n";
+          }
+          continue;
+        }
+
         const std::string alias = cmake_alias_target(dep.id);
 
         if (alias.empty())
@@ -1214,7 +1683,6 @@ namespace vix::commands
 
       out << "\n";
     }
-
 
     struct GlobalExecutableDecl
     {
@@ -1535,9 +2003,8 @@ namespace vix::commands
         dirs.push_back(abs.parent_path());
       }
 
-      std::sort(dirs.begin(), dirs.end(), [](const fs::path &a, const fs::path &b) {
-        return a.string().size() > b.string().size();
-      });
+      std::sort(dirs.begin(), dirs.end(), [](const fs::path &a, const fs::path &b)
+                { return a.string().size() > b.string().size(); });
       for (const auto &dir : dirs)
         remove_empty_parents_under(prefix, dir);
     }
@@ -1741,8 +2208,8 @@ namespace vix::commands
             ec.clear();
             const fs::path rawTarget = fs::read_symlink(shim, ec);
             const fs::path linkTarget = rawTarget.is_absolute()
-                ? rawTarget.lexically_normal()
-                : fs::absolute(shim.parent_path() / rawTarget).lexically_normal();
+                                            ? rawTarget.lexically_normal()
+                                            : fs::absolute(shim.parent_path() / rawTarget).lexically_normal();
             if (!ec && linkTarget == target)
             {
               shims.push_back(shim.string());
@@ -1794,7 +2261,8 @@ namespace vix::commands
       if (!out)
         return;
 
-      out << "\n# Vix global commands\n" << line << "\n";
+      out << "\n# Vix global commands\n"
+          << line << "\n";
     }
 
 #ifndef _WIN32
@@ -1881,16 +2349,16 @@ namespace vix::commands
       {
         const std::string marker = defaultPrefix ? "$HOME/.vix/global/bin" : bin.string();
         const std::string line = defaultPrefix
-            ? "fish_add_path -g \"$HOME/.vix/global/bin\""
-            : "fish_add_path -g \"" + bin.string() + "\"";
+                                     ? "fish_add_path -g \"$HOME/.vix/global/bin\""
+                                     : "fish_add_path -g \"" + bin.string() + "\"";
         append_line_once(config, marker, line);
         return true;
       }
 
       const std::string marker = defaultPrefix ? "$HOME/.vix/global/bin" : bin.string();
       const std::string line = defaultPrefix
-          ? "export PATH=\"$HOME/.vix/global/bin:$PATH\""
-          : "export PATH=\"" + bin.string() + ":$PATH\"";
+                                   ? "export PATH=\"$HOME/.vix/global/bin:$PATH\""
+                                   : "export PATH=\"" + bin.string() + ":$PATH\"";
       append_line_once(config, marker, line);
       return true;
     }
@@ -2231,6 +2699,197 @@ namespace vix::commands
       return 0;
     }
 
+    static json cmake_options_json(const std::vector<std::pair<std::string, std::string>> &options)
+    {
+      json obj = json::object();
+      for (const auto &option : options)
+        obj[option.first] = option.second;
+      return obj;
+    }
+
+    static std::string requested_revision_text(const vix::cli::app::AppGitDependency &dep)
+    {
+      if (!dep.tag.empty())
+        return dep.tag;
+      if (!dep.branch.empty())
+        return dep.branch;
+      if (!dep.rev.empty())
+        return dep.rev;
+      return "HEAD";
+    }
+
+    static void validate_git_dependency_paths_or_throw(const vix::cli::app::AppGitDependency &dep)
+    {
+      if (!dep.subdirectory.empty() && !safe_relative_path_string(dep.subdirectory))
+        throw std::runtime_error("unsafe subdirectory for dependency " + dep.name + ": " + dep.subdirectory);
+
+      for (const std::string &include : dep.includes)
+      {
+        if (!safe_relative_path_string(include))
+          throw std::runtime_error("unsafe include path for dependency " + dep.name + ": " + include);
+      }
+    }
+
+    static DepResolved resolve_app_git_dependency_or_throw(const vix::cli::app::AppGitDependency &appDep)
+    {
+      if (!is_safe_local_dep_name(appDep.name))
+        throw std::runtime_error("invalid dependency name: " + appDep.name);
+      if (!is_supported_git_url(appDep.git))
+        throw std::runtime_error("unsupported Git URL: " + appDep.git);
+
+      validate_git_dependency_paths_or_throw(appDep);
+
+      const std::string commit = resolve_git_commit_or_throw(appDep.git, appDep.tag, appDep.branch, appDep.rev);
+      const fs::path checkout = clone_git_to_cache_or_throw(appDep.git, commit);
+      const fs::path sourceDir = appDep.subdirectory.empty() ? checkout : (checkout / appDep.subdirectory);
+
+      if (!fs::exists(sourceDir))
+        throw std::runtime_error("subdirectory not found for dependency " + appDep.name + ": " + appDep.subdirectory);
+
+      DepResolved dep;
+      dep.id = appDep.name;
+      dep.source = "git";
+      dep.repo = appDep.git;
+      dep.requested = requested_revision_text(appDep);
+      dep.version = commit.substr(0, std::min<std::size_t>(commit.size(), 12));
+      dep.tag = appDep.tag;
+      dep.commit = commit;
+      dep.checkout = checkout;
+      dep.hash = vix::cli::util::sha256_directory(checkout).value_or("");
+      dep.subdirectory = appDep.subdirectory;
+      dep.headerOnly = appDep.headerOnly;
+      dep.type = appDep.headerOnly ? "header-only" : "library";
+      dep.includes = appDep.includes;
+      if (dep.includes.empty() && appDep.headerOnly)
+        dep.includes.push_back("include");
+      if (!dep.includes.empty())
+        dep.include = dep.includes.front();
+      dep.cmakeTargets = appDep.targets;
+      dep.cmakeOptions = app_cmake_options_to_pairs(appDep.cmakeOptions);
+
+      if (dep.headerOnly)
+      {
+        for (const std::string &include : dep.includes)
+        {
+          if (!fs::exists(sourceDir / include))
+            throw std::runtime_error("include path not found for dependency " + dep.id + ": " + include);
+        }
+      }
+      else
+      {
+        const fs::path cmakeLists = sourceDir / "CMakeLists.txt";
+        if (!fs::exists(cmakeLists))
+          throw std::runtime_error("The repository does not expose a supported CMake or header-only package: " + dep.id);
+
+        if (dep.cmakeTargets.empty())
+        {
+          const auto detected = detect_cmake_targets_from_file(cmakeLists);
+          if (detected.size() == 1)
+          {
+            dep.cmakeTargets = detected;
+            vix::cli::util::ok_line(std::cout, "detected CMake target " + detected.front());
+          }
+          else if (detected.size() > 1)
+          {
+            std::ostringstream msg;
+            msg << "The repository exposes multiple CMake targets:";
+            for (const auto &target : detected)
+              msg << "\n  " << target;
+            msg << "\nDeclare one in vix.app with target = \"<target>\".";
+            throw std::runtime_error(msg.str());
+          }
+        }
+      }
+
+      return dep;
+    }
+
+    static json git_dependency_to_lock_json(const DepResolved &dep)
+    {
+      json item = json::object();
+      item["id"] = dep.id;
+      item["source"] = "git";
+      item["url"] = dep.repo;
+      item["repo"] = dep.repo;
+      item["requested"] = dep.requested;
+      item["version"] = dep.version;
+      item["tag"] = dep.tag;
+      item["commit"] = dep.commit;
+      item["hash"] = dep.hash;
+      item["subdirectory"] = dep.subdirectory;
+      item["header_only"] = dep.headerOnly;
+      item["includes"] = json::array();
+      for (const std::string &include : dep.includes)
+        item["includes"].push_back(include);
+      item["targets"] = json::array();
+      for (const std::string &target : dep.cmakeTargets)
+        item["targets"].push_back(target);
+      item["cmake_options"] = cmake_options_json(dep.cmakeOptions);
+      return item;
+    }
+
+    static json read_lock_or_empty()
+    {
+      if (!fs::exists(lock_path()))
+        return json{{"lockVersion", 1}, {"dependencies", json::array()}};
+      json root = read_json_or_throw(lock_path());
+      if (!root.is_object())
+        root = json{{"lockVersion", 1}, {"dependencies", json::array()}};
+      if (!root.contains("dependencies") || !root["dependencies"].is_array())
+        root["dependencies"] = json::array();
+      return root;
+    }
+
+    static void save_lock_json(const json &root)
+    {
+      write_json_or_throw(lock_path(), root);
+    }
+
+    static void upsert_lock_dependency(json &root, const json &dependency)
+    {
+      auto &arr = root["dependencies"];
+      const std::string id = dependency.value("id", "");
+      for (auto &item : arr)
+      {
+        if (item.is_object() && item.value("id", "") == id)
+        {
+          item = dependency;
+          return;
+        }
+      }
+      arr.push_back(dependency);
+    }
+
+    static std::vector<DepResolved> sync_vix_app_git_dependencies()
+    {
+      const fs::path appPath = fs::current_path() / "vix.app";
+      if (!fs::exists(appPath))
+        return {};
+
+      const auto load = vix::cli::app::load_app_manifest(appPath);
+      if (!load.success())
+        throw std::runtime_error(load.error);
+
+      std::vector<DepResolved> resolved;
+      if (load.manifest.gitDependencies.empty())
+        return resolved;
+
+      json root = read_lock_or_empty();
+      root["lockVersion"] = 1;
+
+      for (const auto &appDep : load.manifest.gitDependencies)
+      {
+        DepResolved dep = resolve_app_git_dependency_or_throw(appDep);
+        upsert_lock_dependency(root, git_dependency_to_lock_json(dep));
+        resolved.push_back(dep);
+      }
+
+      std::sort(root["dependencies"].begin(), root["dependencies"].end(), [](const json &a, const json &b)
+                { return a.value("id", "") < b.value("id", ""); });
+      save_lock_json(root);
+      return resolved;
+    }
+
     static bool dependency_link_needs_update(
         const fs::path &link,
         const fs::path &expectedTarget)
@@ -2263,18 +2922,119 @@ namespace vix::commands
       return true;
     }
 
+    static std::string read_text_file_or_empty_local(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return {};
+      std::ostringstream out;
+      out << in.rdbuf();
+      return out.str();
+    }
+
+    static void append_git_dependency_to_vix_app(const ParsedArgs &parsed)
+    {
+      const fs::path appPath = fs::current_path() / "vix.app";
+      if (!fs::exists(appPath))
+        throw std::runtime_error("vix.app not found. Create a vix.app project before adding a Git dependency.");
+
+      std::string name = trim_copy(parsed.gitName.empty() ? git_url_to_default_name(parsed.gitSpec) : parsed.gitName);
+      if (!is_safe_local_dep_name(name))
+        throw std::runtime_error("invalid dependency name: " + name);
+
+      const std::string content = read_text_file_or_empty_local(appPath);
+      const std::string section = "[dependencies." + name + "]";
+      if (content.find(section) != std::string::npos)
+        throw std::runtime_error("dependency already exists in vix.app: " + name);
+
+      if (!parsed.gitSubdirectory.empty() && !safe_relative_path_string(parsed.gitSubdirectory))
+        throw std::runtime_error("unsafe subdirectory: " + parsed.gitSubdirectory);
+      if (!parsed.gitInclude.empty() && !safe_relative_path_string(parsed.gitInclude))
+        throw std::runtime_error("unsafe include path: " + parsed.gitInclude);
+
+      std::ofstream out(appPath, std::ios::app);
+      if (!out)
+        throw std::runtime_error("cannot update vix.app");
+
+      out << "\n"
+          << section << "\n";
+      out << "git = \"" << parsed.gitSpec << "\"\n";
+      if (!parsed.gitTag.empty())
+        out << "tag = \"" << parsed.gitTag << "\"\n";
+      if (!parsed.gitBranch.empty())
+        out << "branch = \"" << parsed.gitBranch << "\"\n";
+      if (!parsed.gitRev.empty())
+        out << "rev = \"" << parsed.gitRev << "\"\n";
+      if (!parsed.gitSubdirectory.empty())
+        out << "subdirectory = \"" << parsed.gitSubdirectory << "\"\n";
+      if (!parsed.gitTarget.empty())
+        out << "target = \"" << parsed.gitTarget << "\"\n";
+      if (parsed.gitHeaderOnly)
+        out << "header_only = true\n";
+      if (!parsed.gitInclude.empty())
+        out << "include = \"" << parsed.gitInclude << "\"\n";
+    }
+
+    static int install_git_dependency_from_cli(const ParsedArgs &parsed)
+    {
+      const auto started = std::chrono::steady_clock::now();
+      if (!is_supported_git_url(parsed.gitSpec))
+      {
+        vix::cli::util::err_line(std::cerr, "unsupported Git URL: " + parsed.gitSpec);
+        return 1;
+      }
+
+      const int revisionCount = (!parsed.gitTag.empty() ? 1 : 0) + (!parsed.gitBranch.empty() ? 1 : 0) + (!parsed.gitRev.empty() ? 1 : 0);
+      if (revisionCount > 1)
+      {
+        vix::cli::util::err_line(std::cerr, "use only one of --tag, --branch, or --rev");
+        return 1;
+      }
+
+      try
+      {
+        append_git_dependency_to_vix_app(parsed);
+        sync_vix_app_git_dependencies();
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
+      const int rc = install_project_dependencies();
+      if (rc != 0)
+        return rc;
+
+      const std::string name = trim_copy(parsed.gitName.empty() ? git_url_to_default_name(parsed.gitSpec) : parsed.gitName);
+      vix::cli::util::ok_line(
+          std::cout,
+          name + " added from Git in " + format_elapsed(std::chrono::steady_clock::now() - started));
+      return 0;
+    }
+
     static int install_project_dependencies()
     {
       bool didWork = false;
       bool printedHeader = false;
       std::size_t installedCount = 0;
 
+      try
+      {
+        sync_vix_app_git_dependencies();
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("failed to resolve Git dependencies: ") + ex.what());
+        return 1;
+      }
+
       const fs::path lp = lock_path();
 
       if (!fs::exists(lp))
       {
         vix::cli::util::err_line(std::cerr, "missing vix.lock");
-        vix::cli::util::warn_line(std::cerr, "Run: vix add @namespace/name[@version]");
+        vix::cli::util::warn_line(std::cerr, "Run: vix add @namespace/name[@version] or vix install <git-url>");
         return 1;
       }
 
@@ -2334,16 +3094,32 @@ namespace vix::commands
             printedHeader = true;
           }
 
-          std::string outDir;
-          const int rc = clone_checkout(dep.repo, sanitize_id_dot(dep.id), dep.commit, outDir);
-          if (rc != 0)
+          if (dep.source == "git")
           {
-            vix::cli::util::err_line(std::cerr, "fetch failed: " + dep.id);
-            vix::cli::util::warn_line(std::cerr, "Check git access, network, or re-add with a valid version.");
-            return rc;
+            try
+            {
+              dep.checkout = clone_git_to_cache_or_throw(dep.repo, dep.commit);
+            }
+            catch (const std::exception &ex)
+            {
+              vix::cli::util::err_line(std::cerr, std::string("fetch failed: ") + dep.id);
+              vix::cli::util::warn_line(std::cerr, ex.what());
+              return 1;
+            }
           }
+          else
+          {
+            std::string outDir;
+            const int rc = clone_checkout(dep.repo, sanitize_id_dot(dep.id), dep.commit, outDir);
+            if (rc != 0)
+            {
+              vix::cli::util::err_line(std::cerr, "fetch failed: " + dep.id);
+              vix::cli::util::warn_line(std::cerr, "Check git access, network, or re-add with a valid version.");
+              return rc;
+            }
 
-          dep.checkout = fs::path(outDir);
+            dep.checkout = fs::path(outDir);
+          }
           didWork = true;
         }
 
@@ -2354,7 +3130,8 @@ namespace vix::commands
           return 1;
         }
 
-        load_dep_manifest(dep);
+        if (dep.source != "git")
+          load_dep_manifest(dep);
 
         try
         {
@@ -2427,7 +3204,16 @@ namespace vix::commands
 
   int InstallCommand::run(const std::vector<std::string> &args)
   {
-    const ParsedArgs parsed = parse_args(args);
+    ParsedArgs parsed;
+    try
+    {
+      parsed = parse_args(args);
+    }
+    catch (const std::exception &ex)
+    {
+      vix::cli::util::err_line(std::cerr, ex.what());
+      return 1;
+    }
 
     if (parsed.globalMode)
     {
@@ -2441,6 +3227,9 @@ namespace vix::commands
       return install_global_package(parsed.globalSpec);
     }
 
+    if (!parsed.gitSpec.empty())
+      return install_git_dependency_from_cli(parsed);
+
     return install_project_dependencies();
   }
 
@@ -2452,10 +3241,15 @@ namespace vix::commands
 
         << "Usage\n"
         << "  vix install\n"
+        << "  vix install <git-url> [options]\n"
         << "  vix install -g [@]namespace/name[@version]\n\n"
 
         << "Examples\n"
         << "  vix install\n"
+        << "  vix install https://github.com/fmtlib/fmt --tag 11.2.0 --target fmt::fmt\n"
+        << "  vix install https://github.com/nlohmann/json.git --tag v3.12.0 --target nlohmann_json::nlohmann_json\n"
+        << "  vix install https://github.com/example/headers --header-only --include include\n"
+        << "  vix install git@github.com:company/repo.git --name parser --subdirectory libs/parser --target company::parser\n"
         << "  vix install -g gk/jwt\n"
         << "  vix install -g gk/jwt@^1.0.0\n"
         << "  vix install -g @gk/jwt\n"
@@ -2468,11 +3262,27 @@ namespace vix::commands
         << "    - Installs dependencies into ./.vix/deps/\n"
         << "    - Generates ./.vix/vix_deps.cmake for CMake projects\n"
         << "\n"
+        << "  • Git dependency mode:\n"
+        << "    - Adds a [dependencies.<name>] block to vix.app\n"
+        << "    - Resolves tag, branch, rev, or HEAD to an exact commit\n"
+        << "    - Stores the checkout in ~/.vix/cache/git/ and links it into ./.vix/deps/\n"
+        << "    - Supports CMake repositories and header-only repositories\n"
+        << "\n"
         << "  • Global mode (-g):\n"
         << "    - Resolves a package from the registry\n"
         << "    - Builds it with CMake in Release mode\n"
         << "    - Runs cmake --install into a Vix-managed user prefix\n"
         << "    - Records installed files and commands in ~/.vix/global/installed.json\n\n"
+
+        << "Git options\n"
+        << "  --name <name>           Local dependency name in vix.app\n"
+        << "  --tag <tag>             Resolve a Git tag\n"
+        << "  --branch <branch>       Resolve a Git branch to a commit\n"
+        << "  --rev <commit>          Use a commit/revision\n"
+        << "  --target <target>       CMake target to link, e.g. fmt::fmt\n"
+        << "  --subdirectory <dir>    CMake project inside a monorepo\n"
+        << "  --header-only           Treat the repository as headers only\n"
+        << "  --include <dir>         Include directory for header-only deps\n\n"
 
         << "Project outputs\n"
         << "  ./.vix/deps/\n"

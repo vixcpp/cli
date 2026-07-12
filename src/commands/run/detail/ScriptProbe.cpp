@@ -13,12 +13,14 @@
  */
 #include <vix/cli/commands/run/detail/ScriptProbe.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
+#include <vix/cli/cmake/GlobalPackages.hpp>
 
 #include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 #include <iostream>
@@ -180,6 +182,110 @@ namespace vix::commands::RunCommand::detail
       }
 
       return false;
+    }
+
+    std::vector<std::string> extract_script_include_targets(const fs::path &cppPath)
+    {
+      std::vector<std::string> includes;
+
+      std::ifstream ifs(cppPath);
+      if (!ifs)
+        return includes;
+
+      std::string line;
+      while (std::getline(ifs, line))
+      {
+        const auto include = parse_include_target(line);
+        if (!include.has_value())
+          continue;
+
+        const std::string target = trim_copy(include->first);
+        if (!target.empty())
+          append_unique(includes, target);
+      }
+
+      return includes;
+    }
+
+    bool global_package_matches_script_include(
+        const vix::cli::build::GlobalPackage &pkg,
+        const std::vector<std::string> &includeTargets)
+    {
+      if (pkg.installedPath.empty() || pkg.includeDir.empty())
+        return false;
+
+      const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
+
+      std::error_code ec;
+      if (!fs::exists(includeRoot, ec) || ec)
+        return false;
+
+      ec.clear();
+      if (!fs::is_directory(includeRoot, ec) || ec)
+        return false;
+
+      for (const auto &includeTarget : includeTargets)
+      {
+        if (includeTarget.empty())
+          continue;
+
+        ec.clear();
+        if (fs::exists(includeRoot / includeTarget, ec) && !ec)
+          return true;
+
+        const auto slash = includeTarget.find('/');
+        const std::string prefix =
+            slash == std::string::npos
+                ? includeTarget
+                : includeTarget.substr(0, slash);
+
+        if (prefix.empty())
+          continue;
+
+        ec.clear();
+        if (fs::exists(includeRoot / prefix, ec) && !ec)
+          return true;
+      }
+
+      return false;
+    }
+
+    bool global_package_requires_cmake_targets(
+        const vix::cli::build::GlobalPackage &pkg)
+    {
+      std::error_code ec;
+      const bool hasCMake =
+          fs::exists(pkg.installedPath / "CMakeLists.txt", ec) && !ec;
+
+      return hasCMake && pkg.type != "header-only";
+    }
+
+    void apply_matching_global_package_includes(
+        const fs::path &cppPath,
+        ScriptProbeResult &out)
+    {
+      const std::vector<std::string> includeTargets =
+          extract_script_include_targets(cppPath);
+
+      if (includeTargets.empty())
+        return;
+
+      for (const auto &pkg : vix::cli::build::load_global_packages())
+      {
+        if (!global_package_matches_script_include(pkg, includeTargets))
+          continue;
+
+        const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
+        append_unique(out.includeDirs, includeRoot.string());
+        out.headerOnlyDepIncludeDirs.push_back(includeRoot);
+
+        if (global_package_requires_cmake_targets(pkg))
+        {
+          out.requiresCMakeTargets = true;
+          out.usesCompiledDeps = true;
+          out.compiledDepPaths.push_back(pkg.installedPath);
+        }
+      }
     }
 
     /**
@@ -577,6 +683,8 @@ namespace vix::commands::RunCommand::detail
     out.libs = out.linkFlags.libs;
     out.linkOpts = out.linkFlags.linkOpts;
 
+    apply_matching_global_package_includes(opt.cppFile, out);
+
     const bool unsupportedFlags =
         script_flags_require_cmake_fallback(opt.scriptFlags);
 
@@ -594,6 +702,7 @@ namespace vix::commands::RunCommand::detail
             out.systemIncludeDirs);
 
     out.requiresCMakeTargets =
+        out.requiresCMakeTargets ||
         out.features.usesVix ||
         out.features.usesOrm ||
         out.features.usesDb ||
@@ -608,6 +717,7 @@ namespace vix::commands::RunCommand::detail
         !out.linkOpts.empty();
 
     out.usesCompiledDeps =
+        out.usesCompiledDeps ||
         dependencyManagedIncludes ||
         explicitIncludeRoots ||
         !out.libs.empty() ||

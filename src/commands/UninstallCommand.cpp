@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -248,6 +249,39 @@ namespace vix::commands
     bool starts_with(const std::string &s, const std::string &prefix)
     {
       return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+    }
+
+    std::string format_elapsed(std::chrono::steady_clock::duration d)
+    {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+      if (ms < 1000)
+        return std::to_string(ms) + "ms";
+
+      if (ms < 10000)
+      {
+        const auto seconds = ms / 1000;
+        const auto tenths = (ms % 1000) / 100;
+        return std::to_string(seconds) + "." + std::to_string(tenths) + "s";
+      }
+
+      return std::to_string((ms + 500) / 1000) + "s";
+    }
+
+    std::string normalize_global_package_spec(std::string spec)
+    {
+      spec = trim_copy(std::move(spec));
+      if (!spec.empty() && spec.front() == '@')
+        spec.erase(spec.begin());
+
+      const auto slash = spec.find('/');
+      if (slash != std::string::npos)
+      {
+        const auto versionAt = spec.find('@', slash + 1);
+        if (versionAt != std::string::npos)
+          spec = spec.substr(0, versionAt);
+      }
+
+      return spec;
     }
 
     std::string yes_no(bool value)
@@ -1181,8 +1215,11 @@ namespace vix::commands
 
     int run_global_uninstall(const Options &opt)
     {
+      const auto started = std::chrono::steady_clock::now();
       const Fmt f(std::cout);
-      const std::string pkg = opt.globalSpec.value_or("");
+      const std::string requestedPkg = opt.globalSpec.value_or("");
+      const std::string pkg = normalize_global_package_spec(requestedPkg);
+      const bool detailed = opt.verbose || opt.dryRun;
 
       if (pkg.empty())
       {
@@ -1265,7 +1302,7 @@ namespace vix::commands
         }
       }
 
-      if (!opt.jsonOut)
+      if (!opt.jsonOut && detailed)
       {
         print_header_box(
             std::cout,
@@ -1284,7 +1321,8 @@ namespace vix::commands
       if (found->contains("files") && (*found)["files"].is_array())
       {
         usedRegisteredFiles = true;
-        styled_step(std::cout, f, "Removing registered package files");
+        if (detailed)
+          styled_step(std::cout, f, "Removing registered package files");
 
         std::vector<fs::path> parentDirs;
         for (const auto &file : (*found)["files"])
@@ -1314,7 +1352,8 @@ namespace vix::commands
               false,
               false,
               opt.dryRun);
-          print_remove_result(opt, f, rr);
+          if (detailed)
+            print_remove_result(opt, f, rr);
           removed.push_back(remove_result_json(rr));
           parentDirs.push_back(abs.parent_path());
         }
@@ -1371,21 +1410,24 @@ namespace vix::commands
               false,
               false,
               opt.dryRun);
-          print_remove_result(opt, f, rr);
+          if (detailed)
+            print_remove_result(opt, f, rr);
           removed.push_back(remove_result_json(rr));
         }
       }
 
       if (!usedRegisteredFiles && !installedPath.empty())
       {
-        styled_step(std::cout, f, "Removing legacy package files");
+        if (detailed)
+          styled_step(std::cout, f, "Removing legacy package files");
         const RemoveResult rr = remove_path_best_effort(
             fs::path(installedPath),
             "package",
             true,
             true,
             opt.dryRun);
-        print_remove_result(opt, f, rr);
+        if (detailed)
+          print_remove_result(opt, f, rr);
         removed.push_back(remove_result_json(rr));
       }
 
@@ -1414,13 +1456,10 @@ namespace vix::commands
       }
       else
       {
-        styled_done(std::cout, f, "Removed " + pkg + (version.empty() ? std::string() : "@" + version));
-        if (!executableNames.empty())
-        {
-          std::cout << "\nExecutables removed:\n";
-          for (const auto &exe : executableNames)
-            std::cout << "  " << exe << "\n";
-        }
+        const std::string label = pkg + (version.empty() ? std::string() : "@" + version);
+        vix::cli::util::ok_line(
+            std::cout,
+            "removed " + label + " in " + format_elapsed(std::chrono::steady_clock::now() - started));
       }
 
       return 0;

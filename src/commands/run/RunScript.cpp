@@ -562,9 +562,6 @@ namespace vix::commands::RunCommand::detail
       normalized.erase(std::remove(normalized.begin(), normalized.end(), '@'), normalized.end());
 
       const auto slash = normalized.find('/');
-      const std::string namespacePart =
-          slash == std::string::npos ? normalized : normalized.substr(0, slash);
-
       const std::string packagePart =
           slash == std::string::npos ? normalized : normalized.substr(slash + 1);
 
@@ -573,10 +570,42 @@ namespace vix::commands::RunCommand::detail
         if (prefix == normalized)
           return true;
 
-        if (prefix == namespacePart)
+        if (prefix == packagePart)
+          return true;
+      }
+
+      return false;
+    }
+
+    bool global_package_has_requested_include(
+        const fs::path &installedPath,
+        const std::string &includeDir,
+        const std::vector<std::string> &includeTargets)
+    {
+      const fs::path includeRoot = installedPath / includeDir;
+      std::error_code ec;
+      if (!fs::exists(includeRoot, ec) || ec || !fs::is_directory(includeRoot, ec))
+        return false;
+
+      for (const auto &includeTarget : includeTargets)
+      {
+        if (includeTarget.empty())
+          continue;
+
+        ec.clear();
+        if (fs::exists(includeRoot / includeTarget, ec) && !ec)
           return true;
 
-        if (prefix == packagePart)
+        const auto slash = includeTarget.find('/');
+        if (slash == std::string::npos)
+          continue;
+
+        const std::string prefix = includeTarget.substr(0, slash);
+        if (prefix.empty())
+          continue;
+
+        ec.clear();
+        if (fs::exists(includeRoot / prefix, ec) && !ec)
           return true;
       }
 
@@ -704,12 +733,10 @@ namespace vix::commands::RunCommand::detail
             includeDir = item["include"].get<std::string>();
 
           const fs::path installedPath = fs::path(item["installed_path"].get<std::string>());
-          const fs::path inc = installedPath / includeDir;
-
-          std::error_code ec;
-          if (!fs::exists(inc, ec) || ec)
+          if (!global_package_has_requested_include(installedPath, includeDir, scriptIncludePrefixes))
             continue;
 
+          const fs::path inc = installedPath / includeDir;
           const std::string incStr = inc.string();
           if (!already_has_I(incStr))
             opt.scriptFlags.push_back("-I" + incStr);

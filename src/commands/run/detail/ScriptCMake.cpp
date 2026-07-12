@@ -479,13 +479,13 @@ namespace vix::commands::RunCommand::detail
       return out;
     }
 
-    std::vector<std::string> extract_script_include_prefixes(const fs::path &cppPath)
+    std::vector<std::string> extract_script_include_targets(const fs::path &cppPath)
     {
-      std::vector<std::string> prefixes;
+      std::vector<std::string> targets;
 
       std::ifstream ifs(cppPath);
       if (!ifs)
-        return prefixes;
+        return targets;
 
       std::string line;
       while (std::getline(ifs, line))
@@ -513,17 +513,12 @@ namespace vix::commands::RunCommand::detail
         if (inc.empty())
           continue;
 
-        const auto slash = inc.find('/');
-        const std::string prefix = (slash == std::string::npos) ? inc : inc.substr(0, slash);
-        if (prefix.empty())
-          continue;
-
-        prefixes.push_back(prefix);
+        targets.push_back(inc);
       }
 
-      std::sort(prefixes.begin(), prefixes.end());
-      prefixes.erase(std::unique(prefixes.begin(), prefixes.end()), prefixes.end());
-      return prefixes;
+      std::sort(targets.begin(), targets.end());
+      targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+      return targets;
     }
 
     std::vector<GlobalPackage> load_global_packages()
@@ -574,15 +569,26 @@ namespace vix::commands::RunCommand::detail
 
     bool package_matches_script_includes(
         const GlobalPackage &pkg,
-        const std::vector<std::string> &includePrefixes)
+        const std::vector<std::string> &includeTargets)
     {
       const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
       if (!fs::exists(includeRoot) || !fs::is_directory(includeRoot))
         return false;
 
-      for (const auto &prefix : includePrefixes)
+      for (const auto &includeTarget : includeTargets)
       {
-        if (fs::exists(includeRoot / prefix))
+        if (includeTarget.empty())
+          continue;
+
+        if (fs::exists(includeRoot / includeTarget))
+          return true;
+
+        const auto slash = includeTarget.find('/');
+        if (slash == std::string::npos)
+          continue;
+
+        const std::string prefix = includeTarget.substr(0, slash);
+        if (!prefix.empty() && fs::exists(includeRoot / prefix))
           return true;
       }
 
@@ -595,9 +601,9 @@ namespace vix::commands::RunCommand::detail
     {
       std::vector<GlobalPackage> selected;
       const auto allGlobals = load_global_packages();
-      const auto includePrefixes = extract_script_include_prefixes(cppPath);
+      const auto includeTargets = extract_script_include_targets(cppPath);
 
-      if (allGlobals.empty() || includePrefixes.empty())
+      if (allGlobals.empty() || includeTargets.empty())
         return selected;
 
       std::unordered_set<std::string> localIds(localPackageIds.begin(), localPackageIds.end());
@@ -621,6 +627,9 @@ namespace vix::commands::RunCommand::detail
 
         selected.push_back(pkg);
 
+        if (fs::exists(pkg.installedPath / ".vix" / "vix_deps.cmake"))
+          return;
+
         for (const auto &depId : load_package_dependencies_from_manifest(pkg.installedPath))
         {
           if (localIds.contains(depId))
@@ -637,7 +646,7 @@ namespace vix::commands::RunCommand::detail
         if (localIds.contains(pkg.id))
           continue;
 
-        if (package_matches_script_includes(pkg, includePrefixes))
+        if (package_matches_script_includes(pkg, includeTargets))
           visit(pkg);
       }
 

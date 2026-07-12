@@ -193,6 +193,22 @@ namespace vix::commands
       return s;
     }
 
+    static std::string format_elapsed(std::chrono::steady_clock::duration d)
+    {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
+      if (ms < 1000)
+        return std::to_string(ms) + "ms";
+
+      if (ms < 10000)
+      {
+        const auto seconds = ms / 1000;
+        const auto tenths = (ms % 1000) / 100;
+        return std::to_string(seconds) + "." + std::to_string(tenths) + "s";
+      }
+
+      return std::to_string((ms + 500) / 1000) + "s";
+    }
+
     static json read_json_or_throw(const fs::path &p)
     {
       std::ifstream in(p);
@@ -615,6 +631,67 @@ namespace vix::commands
 
       if (dep.dependencies.empty() && j.contains("deps"))
         read_dep_block(j["deps"]);
+    }
+
+    static void generate_cmake(const std::vector<DepResolved> &deps);
+    static std::vector<DepResolved> sort_deps_topologically(const std::vector<DepResolved> &deps);
+
+    static std::vector<std::string> read_lock_dependency_specs(const fs::path &checkout)
+    {
+      std::vector<std::string> specs;
+      const fs::path lock = checkout / "vix.lock";
+      if (!fs::exists(lock))
+        return specs;
+
+      const json j = read_json_or_throw(lock);
+      if (!j.contains("dependencies") || !j["dependencies"].is_array())
+        return specs;
+
+      for (const auto &item : j["dependencies"])
+      {
+        if (!item.is_object())
+          continue;
+        const std::string id = item.value("id", "");
+        const std::string version = item.value("version", item.value("requested", ""));
+        if (id.empty())
+          continue;
+        specs.push_back(version.empty() ? id : (id + "@" + version));
+      }
+
+      return specs;
+    }
+
+    static void generate_cmake_in_project(const fs::path &projectRoot, const std::vector<DepResolved> &deps)
+    {
+      const fs::path previous = fs::current_path();
+      fs::current_path(projectRoot);
+      try
+      {
+        generate_cmake(deps);
+      }
+      catch (...)
+      {
+        fs::current_path(previous);
+        throw;
+      }
+      fs::current_path(previous);
+    }
+
+    static std::vector<DepResolved> prepare_global_project_deps(const DepResolved &rootDep, const std::vector<DepResolved> &ordered)
+    {
+      std::vector<DepResolved> deps;
+      for (DepResolved dep : ordered)
+      {
+        if (dep.id == rootDep.id)
+          continue;
+
+        const fs::path link = rootDep.checkout / ".vix" / "deps" / sanitize_id_dot(dep.id);
+        ensure_symlink_or_copy_dir(dep.checkout, link);
+        dep.linkDir = link;
+        deps.push_back(dep);
+      }
+
+      return sort_deps_topologically(deps);
     }
 
     static std::vector<DepResolved> sort_deps_topologically(const std::vector<DepResolved> &deps)
@@ -1261,6 +1338,50 @@ namespace vix::commands
       return name;
     }
 
+    static bool is_header_only_type(const std::string &type)
+    {
+      return type == "header-only" || type == "header_only" || type == "headers";
+    }
+
+    static void copy_header_fallback_to_stage(const DepResolved &dep, const fs::path &stage)
+    {
+      if (dep.include.empty())
+        return;
+
+      const fs::path src = dep.checkout / dep.include;
+      std::error_code ec;
+      if (!fs::exists(src, ec) || !fs::is_directory(src, ec))
+        return;
+
+      const fs::path dst = stage / "include";
+      fs::create_directories(dst, ec);
+      if (ec)
+        throw std::runtime_error("cannot create header fallback directory: " + dst.string());
+
+      fs::copy(
+          src,
+          dst,
+          fs::copy_options::recursive |
+              fs::copy_options::copy_symlinks |
+              fs::copy_options::overwrite_existing,
+          ec);
+      if (ec)
+        throw std::runtime_error("cannot install header fallback for " + dep.id + ": " + ec.message());
+    }
+
+    static void copy_header_fallbacks_to_stage(const DepResolved &rootDep, const std::vector<DepResolved> &ordered, const fs::path &stage)
+    {
+      copy_header_fallback_to_stage(rootDep, stage);
+
+      for (const auto &dep : ordered)
+      {
+        if (dep.id == rootDep.id)
+          continue;
+        if (is_header_only_type(dep.type))
+          copy_header_fallback_to_stage(dep, stage);
+      }
+    }
+
     static std::vector<fs::path> collect_regular_files(const fs::path &root)
     {
       std::vector<fs::path> files;
@@ -1834,8 +1955,18 @@ namespace vix::commands
 
     static int install_global_package(const std::string &specRaw)
     {
+      const auto started = std::chrono::steady_clock::now();
+
       if (ensure_registry_present() != 0)
         return 1;
+
+      PkgSpec requestedRootSpec;
+      if (!parse_pkg_spec(specRaw, requestedRootSpec))
+      {
+        vix::cli::util::err_line(std::cerr, "invalid package spec: " + specRaw);
+        return 1;
+      }
+      const std::string requestedRootId = requestedRootSpec.id();
 
       std::unordered_map<std::string, DepResolved> resolvedById;
       std::queue<std::string> pendingSpecs;
@@ -1882,6 +2013,20 @@ namespace vix::commands
           }
 
           load_dep_manifest(dep);
+
+          if (dep.id == requestedRootId)
+          {
+            try
+            {
+              for (const auto &lockedSpec : read_lock_dependency_specs(dep.checkout))
+                pendingSpecs.push(lockedSpec);
+            }
+            catch (const std::exception &ex)
+            {
+              vix::cli::util::err_line(std::cerr, std::string("invalid package lock: ") + ex.what());
+              return 1;
+            }
+          }
 
           resolvedById[dep.id] = dep;
 
@@ -1968,6 +2113,17 @@ namespace vix::commands
         return 1;
       }
 
+      try
+      {
+        const std::vector<DepResolved> projectDeps = prepare_global_project_deps(rootDep, ordered);
+        generate_cmake_in_project(rootDep.checkout, projectDeps);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("failed to prepare package dependencies: ") + ex.what());
+        return 1;
+      }
+
       const std::string cmake = "cmake";
       const std::string qSource = vix::cli::commands::helpers::quote(rootDep.checkout.string());
       const std::string qBuild = vix::cli::commands::helpers::quote(buildDir.string());
@@ -2001,6 +2157,21 @@ namespace vix::commands
       {
         vix::cli::util::err_line(std::cerr, ex.what());
         return 1;
+      }
+
+      if (files.empty())
+      {
+        try
+        {
+          copy_header_fallbacks_to_stage(rootDep, ordered, stageDir);
+          files = collect_regular_files(stageDir);
+          validate_staged_paths(files);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
+          return 1;
+        }
       }
 
       if (files.empty())
@@ -2055,7 +2226,7 @@ namespace vix::commands
 
       vix::cli::util::ok_line(
           std::cout,
-          rootDep.id + "@" + rootDep.version + " installed globally");
+          rootDep.id + "@" + rootDep.version + " installed globally in " + format_elapsed(std::chrono::steady_clock::now() - started));
 
       return 0;
     }

@@ -423,6 +423,9 @@ namespace vix::commands
 
     fs::path global_root_dir()
     {
+      if (const char *p = vix::utils::vix_getenv("VIX_GLOBAL_PREFIX"); p && *p)
+        return fs::path(p);
+
       return vix_root() / "global";
     }
 
@@ -806,6 +809,52 @@ namespace vix::commands
     void save_global_manifest(const json &root)
     {
       write_json_or_throw(global_manifest_path(), root);
+    }
+
+    std::string owner_of_global_file(const json &root, const std::string &rel)
+    {
+      if (!root.contains("packages") || !root["packages"].is_array())
+        return {};
+
+      for (const auto &pkg : root["packages"])
+      {
+        if (!pkg.contains("files") || !pkg["files"].is_array())
+          continue;
+        for (const auto &file : pkg["files"])
+        {
+          if (file.is_string() && file.get<std::string>() == rel)
+            return pkg.value("id", "");
+        }
+      }
+
+      return {};
+    }
+
+    bool safe_relative_manifest_path(const fs::path &rel)
+    {
+      const std::string s = rel.generic_string();
+      return !rel.empty() && !rel.is_absolute() && s.find("..") == std::string::npos;
+    }
+
+    void remove_empty_parents_under_global(fs::path dir)
+    {
+      std::error_code ec;
+      const fs::path root = fs::absolute(global_root_dir(), ec).lexically_normal();
+      while (!dir.empty())
+      {
+        ec.clear();
+        const fs::path abs = fs::absolute(dir, ec).lexically_normal();
+        if (ec || abs == root || abs.string().find(root.string()) != 0)
+          break;
+        if (!fs::is_directory(abs, ec) || ec)
+          break;
+        if (!fs::is_empty(abs, ec) || ec)
+          break;
+        fs::remove(abs, ec);
+        if (ec)
+          break;
+        dir = abs.parent_path();
+      }
     }
 
     std::optional<std::string> read_sdk_current_version(const std::string &profile)
@@ -1205,6 +1254,16 @@ namespace vix::commands
       }
 
       const std::string installedPath = found->value("installed_path", "");
+      const std::string version = found->value("version", "");
+      std::vector<std::string> executableNames;
+      if (found->contains("executables") && (*found)["executables"].is_array())
+      {
+        for (const auto &exe : (*found)["executables"])
+        {
+          if (exe.is_string())
+            executableNames.push_back(exe.get<std::string>());
+        }
+      }
 
       if (!opt.jsonOut)
       {
@@ -1220,10 +1279,106 @@ namespace vix::commands
       }
 
       json removed = json::array();
+      bool usedRegisteredFiles = false;
 
-      if (!installedPath.empty())
+      if (found->contains("files") && (*found)["files"].is_array())
       {
-        styled_step(std::cout, f, "Removing package files");
+        usedRegisteredFiles = true;
+        styled_step(std::cout, f, "Removing registered package files");
+
+        std::vector<fs::path> parentDirs;
+        for (const auto &file : (*found)["files"])
+        {
+          if (!file.is_string())
+            continue;
+
+          const std::string relString = file.get<std::string>();
+          const fs::path rel = fs::path(relString).lexically_normal();
+          if (!safe_relative_manifest_path(rel))
+          {
+            removed.push_back({{"path", relString}, {"kind", "package-file"}, {"removed", false}, {"error", "unsafe path"}});
+            continue;
+          }
+
+          const std::string owner = owner_of_global_file(root, rel.generic_string());
+          if (!owner.empty() && owner != pkg)
+          {
+            removed.push_back({{"path", rel.generic_string()}, {"kind", "package-file"}, {"removed", false}, {"error", "owned by " + owner}});
+            continue;
+          }
+
+          const fs::path abs = global_root_dir() / rel;
+          const RemoveResult rr = remove_path_best_effort(
+              abs,
+              "package-file",
+              false,
+              false,
+              opt.dryRun);
+          print_remove_result(opt, f, rr);
+          removed.push_back(remove_result_json(rr));
+          parentDirs.push_back(abs.parent_path());
+        }
+
+        if (!opt.dryRun)
+        {
+          std::sort(parentDirs.begin(), parentDirs.end(), [](const fs::path &a, const fs::path &b) {
+            return a.string().size() > b.string().size();
+          });
+          for (const auto &dir : parentDirs)
+            remove_empty_parents_under_global(dir);
+        }
+      }
+
+      if (found->contains("shims") && (*found)["shims"].is_array())
+      {
+        for (const auto &shimValue : (*found)["shims"])
+        {
+          if (!shimValue.is_string())
+            continue;
+
+          const fs::path shim = fs::absolute(fs::path(shimValue.get<std::string>())).lexically_normal();
+          std::error_code ec;
+          const auto st = fs::symlink_status(shim, ec);
+          if (ec || st.type() == fs::file_type::not_found)
+            continue;
+
+          if (!fs::is_symlink(st))
+          {
+            removed.push_back({{"path", shim.string()}, {"kind", "command-shim"}, {"removed", false}, {"error", "not a symlink"}});
+            continue;
+          }
+
+          ec.clear();
+          const fs::path rawTarget = fs::read_symlink(shim, ec);
+          if (ec)
+            continue;
+
+          const fs::path target = rawTarget.is_absolute()
+              ? rawTarget.lexically_normal()
+              : fs::absolute(shim.parent_path() / rawTarget).lexically_normal();
+          const fs::path globalBin = fs::absolute(global_root_dir() / "bin").lexically_normal();
+          const std::string targetString = target.string();
+          const std::string globalBinString = globalBin.string();
+          if (targetString.rfind(globalBinString + fs::path::preferred_separator, 0) != 0)
+          {
+            removed.push_back({{"path", shim.string()}, {"kind", "command-shim"}, {"removed", false}, {"error", "target outside vix global bin"}});
+            continue;
+          }
+
+          const RemoveResult rr = remove_path_best_effort(
+              shim,
+              "command-shim",
+              false,
+              false,
+              opt.dryRun);
+          print_remove_result(opt, f, rr);
+          removed.push_back(remove_result_json(rr));
+        }
+      }
+
+      if (!usedRegisteredFiles && !installedPath.empty())
+      {
+        styled_step(std::cout, f, "Removing legacy package files");
         const RemoveResult rr = remove_path_best_effort(
             fs::path(installedPath),
             "package",
@@ -1254,9 +1409,19 @@ namespace vix::commands
       }
 
       if (opt.dryRun)
+      {
         styled_done(std::cout, f, "global package uninstall plan ready");
+      }
       else
-        styled_done(std::cout, f, "uninstalled " + pkg);
+      {
+        styled_done(std::cout, f, "Removed " + pkg + (version.empty() ? std::string() : "@" + version));
+        if (!executableNames.empty())
+        {
+          std::cout << "\nExecutables removed:\n";
+          for (const auto &exe : executableNames)
+            std::cout << "  " << exe << "\n";
+        }
+      }
 
       return 0;
     }

@@ -78,6 +78,7 @@ namespace vix::commands
       Cli,
       Sdk,
       GlobalPackage,
+      LocalDependency,
     };
 
     struct Options
@@ -101,6 +102,7 @@ namespace vix::commands
 
       std::vector<std::string> sdkProfiles;
       std::optional<std::string> globalSpec;
+      std::optional<std::string> localSpec;
     };
 
     struct RemoveResult
@@ -1117,7 +1119,8 @@ namespace vix::commands
             continue;
           }
 
-          throw std::runtime_error("unexpected argument: " + a);
+          o.localSpec = trim_copy(a);
+          continue;
         }
 
         throw std::runtime_error("unknown argument: " + a);
@@ -1135,6 +1138,8 @@ namespace vix::commands
         return UninstallKind::GlobalPackage;
       if (opt.sdkMode)
         return UninstallKind::Sdk;
+      if (opt.localSpec.has_value() && !opt.localSpec->empty())
+        return UninstallKind::LocalDependency;
       return UninstallKind::Cli;
     }
 
@@ -1148,6 +1153,8 @@ namespace vix::commands
         return "sdk";
       case UninstallKind::GlobalPackage:
         return "global";
+      case UninstallKind::LocalDependency:
+        return "dependency";
       }
 
       return "cli";
@@ -1465,6 +1472,159 @@ namespace vix::commands
       return 0;
     }
 
+    static std::string read_text_file_or_empty_uninstall(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return {};
+      std::ostringstream out;
+      out << in.rdbuf();
+      return out.str();
+    }
+
+    static bool write_text_atomic_uninstall(const fs::path &path, const std::string &content)
+    {
+      std::error_code ec;
+      const fs::path tmp = path.string() + ".tmp";
+      {
+        std::ofstream out(tmp, std::ios::binary);
+        if (!out)
+          return false;
+        out << content;
+      }
+      fs::rename(tmp, path, ec);
+      if (!ec)
+        return true;
+      ec.clear();
+      fs::remove(path, ec);
+      ec.clear();
+      fs::rename(tmp, path, ec);
+      return !ec;
+    }
+
+    static std::string remove_git_dependency_block(const std::string &content, const std::string &name)
+    {
+      const std::string header = "[dependencies." + name + "]";
+      const std::string cmakeHeader = "[dependencies." + name + ".cmake]";
+      std::istringstream in(content);
+      std::ostringstream out;
+      std::string line;
+      bool skipping = false;
+      bool removedAny = false;
+
+      while (std::getline(in, line))
+      {
+        const std::string trimmed = trim_copy(line);
+        const bool isSection = starts_with(trimmed, "[") && trimmed.find(']') != std::string::npos;
+        if (trimmed == header || trimmed == cmakeHeader)
+        {
+          skipping = true;
+          removedAny = true;
+          continue;
+        }
+        if (skipping && isSection)
+          skipping = false;
+        if (!skipping)
+          out << line << "\n";
+      }
+
+      return removedAny ? out.str() : content;
+    }
+
+    int run_local_dependency_uninstall(const Options &opt)
+    {
+      const auto started = std::chrono::steady_clock::now();
+      const std::string name = trim_copy(opt.localSpec.value_or(""));
+      const Fmt f(std::cout);
+      if (name.empty())
+      {
+        styled_error(std::cerr, Fmt(std::cerr), "Missing dependency name.", "usage: vix uninstall <name>");
+        return 1;
+      }
+
+      const fs::path appPath = fs::current_path() / "vix.app";
+      const fs::path lockPath = fs::current_path() / "vix.lock";
+      const fs::path depPath = fs::current_path() / ".vix" / "deps" / name;
+
+      bool changed = false;
+      if (fs::exists(appPath))
+      {
+        const std::string before = read_text_file_or_empty_uninstall(appPath);
+        const std::string after = remove_git_dependency_block(before, name);
+        if (after != before)
+        {
+          if (!opt.dryRun && !write_text_atomic_uninstall(appPath, after))
+          {
+            styled_error(std::cerr, Fmt(std::cerr), "Could not update vix.app");
+            return 1;
+          }
+          changed = true;
+        }
+      }
+
+      if (fs::exists(lockPath))
+      {
+        try
+        {
+          json root = read_json_or_throw(lockPath);
+          if (root.is_object() && root.contains("dependencies") && root["dependencies"].is_array())
+          {
+            json next = json::array();
+            for (const auto &dep : root["dependencies"])
+            {
+              if (dep.is_object() && dep.value("id", "") == name)
+              {
+                changed = true;
+                continue;
+              }
+              next.push_back(dep);
+            }
+            root["dependencies"] = next;
+            if (!opt.dryRun)
+              write_json_or_throw(lockPath, root);
+          }
+        }
+        catch (const std::exception &ex)
+        {
+          styled_error(std::cerr, Fmt(std::cerr), std::string("Could not update vix.lock: ") + ex.what());
+          return 1;
+        }
+      }
+
+      if (fs::exists(depPath))
+      {
+        if (!opt.dryRun)
+        {
+          std::error_code ec;
+          fs::remove_all(depPath, ec);
+          if (ec)
+          {
+            styled_error(std::cerr, Fmt(std::cerr), "Could not remove dependency directory: " + depPath.string());
+            return 1;
+          }
+        }
+        changed = true;
+      }
+
+      if (!opt.dryRun)
+      {
+        const fs::path depsCmake = fs::current_path() / ".vix" / "vix_deps.cmake";
+        std::error_code ec;
+        fs::remove(depsCmake, ec);
+      }
+
+      if (!changed)
+      {
+        styled_error(std::cerr, Fmt(std::cerr), "Dependency not found: " + name);
+        return 1;
+      }
+
+      vix::cli::util::ok_line(
+          std::cout,
+          "removed " + name + " in " + format_elapsed(std::chrono::steady_clock::now() - started));
+      return 0;
+    }
+
     int run_sdk_uninstall(const Options &opt)
     {
       if (opt.sdkList)
@@ -1744,6 +1904,8 @@ namespace vix::commands
         return run_sdk_uninstall(opt);
       case UninstallKind::GlobalPackage:
         return run_global_uninstall(opt);
+      case UninstallKind::LocalDependency:
+        return run_local_dependency_uninstall(opt);
       }
 
       return 1;
@@ -1774,6 +1936,7 @@ namespace vix::commands
         << "  vix uninstall [options]\n"
         << "  vix uninstall --sdk <profile> [options]\n"
         << "  vix uninstall --sdk-list\n"
+        << "  vix uninstall <dependency>\n"
         << "  vix uninstall --sdk-all\n"
         << "  vix uninstall -g <package> [options]\n\n"
 
@@ -1788,6 +1951,7 @@ namespace vix::commands
         << "  vix uninstall --sdk web --version v2.7.0\n"
         << "  vix uninstall --sdk-list\n"
         << "  vix uninstall --sdk-all\n"
+        << "  vix uninstall sample\n"
         << "  vix uninstall -g gk/jwt\n\n"
 
         << "CLI options\n"
@@ -1802,6 +1966,9 @@ namespace vix::commands
         << "  --sdk-list          List installed SDK profiles\n"
         << "  --sdk-all           Remove all known SDK profiles\n"
         << "  --version <tag>     Remove one SDK version from the selected profile\n\n"
+
+        << "Dependency uninstall\n"
+        << "  vix uninstall <name> removes a Git dependency from vix.app, vix.lock, and .vix/deps/\n\n"
 
         << "Global package options\n"
         << "  -g, --global <pkg>  Remove a globally installed package\n\n"

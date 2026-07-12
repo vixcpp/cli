@@ -228,6 +228,57 @@ namespace vix::cli::app
       return manifest.appModules.back();
     }
 
+    static bool parse_git_dependency_section_header(
+        const std::string &line,
+        std::string &dependencyName,
+        bool &cmakeOptionsSection)
+    {
+      const std::string value = trim_copy(line);
+      cmakeOptionsSection = false;
+
+      if (!starts_with(value, "[dependencies.") || !ends_with(value, "]"))
+        return false;
+
+      std::string inner = value.substr(
+          std::string("[dependencies.").size(),
+          value.size() - std::string("[dependencies.").size() - 1);
+
+      if (ends_with(inner, ".cmake"))
+      {
+        cmakeOptionsSection = true;
+        inner = inner.substr(0, inner.size() - std::string(".cmake").size());
+      }
+
+      dependencyName = trim_copy(inner);
+      return is_valid_module_name(dependencyName);
+    }
+
+    static AppGitDependency *find_git_dependency(
+        AppManifest &manifest,
+        const std::string &name)
+    {
+      for (AppGitDependency &dependency : manifest.gitDependencies)
+      {
+        if (dependency.name == name)
+          return &dependency;
+      }
+
+      return nullptr;
+    }
+
+    static AppGitDependency &ensure_git_dependency(
+        AppManifest &manifest,
+        const std::string &name)
+    {
+      if (AppGitDependency *existing = find_git_dependency(manifest, name))
+        return *existing;
+
+      AppGitDependency dependency;
+      dependency.name = name;
+      manifest.gitDependencies.push_back(std::move(dependency));
+      return manifest.gitDependencies.back();
+    }
+
     // ---------------------------------------------------------------
     // Line preprocessing
     // ---------------------------------------------------------------
@@ -904,6 +955,121 @@ namespace vix::cli::app
       return false;
     }
 
+    static bool assign_git_dependency_scalar(
+        AppGitDependency &dependency,
+        const std::string &key,
+        const std::string &value,
+        std::string &error)
+    {
+      const std::string normalizedKey = lower_copy(trim_copy(key));
+      const std::string normalizedValue = strip_quotes(value);
+
+      if (normalizedKey == "git")
+      {
+        dependency.git = normalizedValue;
+        return true;
+      }
+      if (normalizedKey == "tag")
+      {
+        dependency.tag = normalizedValue;
+        return true;
+      }
+      if (normalizedKey == "branch")
+      {
+        dependency.branch = normalizedValue;
+        return true;
+      }
+      if (normalizedKey == "rev" || normalizedKey == "commit")
+      {
+        dependency.rev = normalizedValue;
+        return true;
+      }
+      if (normalizedKey == "subdirectory" || normalizedKey == "subdir")
+      {
+        dependency.subdirectory = normalizedValue;
+        return true;
+      }
+      if (normalizedKey == "target")
+      {
+        dependency.target = normalizedValue;
+        return true;
+      }
+      if (normalizedKey == "header_only" || normalizedKey == "header-only" || normalizedKey == "headers")
+      {
+        bool parsed = false;
+        if (!parse_bool_value(normalizedValue, parsed))
+        {
+          error = "Invalid boolean value for dependency '" + dependency.name + "': " + normalizedValue;
+          return false;
+        }
+        dependency.headerOnly = parsed;
+        return true;
+      }
+      if (normalizedKey == "include")
+      {
+        dependency.include = normalizedValue;
+        return true;
+      }
+
+      error = "Unknown field in [dependencies." + dependency.name + "]: '" + key + "'";
+      return false;
+    }
+
+    static bool assign_git_dependency_array(
+        AppGitDependency &dependency,
+        const std::string &key,
+        const std::vector<std::string> &values,
+        std::string &error)
+    {
+      const std::string normalizedKey = lower_copy(trim_copy(key));
+
+      if (normalizedKey == "targets")
+      {
+        dependency.targets = values;
+        return true;
+      }
+      if (normalizedKey == "includes" || normalizedKey == "include_dirs")
+      {
+        dependency.includes = values;
+        return true;
+      }
+      if (normalizedKey == "cmake_options" || normalizedKey == "cmake-options")
+      {
+        dependency.cmakeOptions.clear();
+        for (const std::string &item : values)
+        {
+          const auto eq = item.find('=');
+          if (eq == std::string::npos)
+          {
+            error = "Invalid cmake_options entry for dependency '" + dependency.name + "': " + item;
+            return false;
+          }
+          dependency.cmakeOptions.emplace_back(trim_copy(item.substr(0, eq)), trim_copy(item.substr(eq + 1)));
+        }
+        return true;
+      }
+
+      error = "Unknown array field in [dependencies." + dependency.name + "]: '" + key + "'";
+      return false;
+    }
+
+    static bool assign_git_cmake_option(
+        AppGitDependency &dependency,
+        const std::string &key,
+        const std::string &value,
+        std::string &error)
+    {
+      const std::string option = trim_copy(key);
+      if (option.empty())
+      {
+        error = "Empty CMake option name in [dependencies." + dependency.name + ".cmake]";
+        return false;
+      }
+
+      dependency.cmakeOptions.emplace_back(option, strip_quotes(value));
+      return true;
+    }
+
     // ---------------------------------------------------------------
     // Top-level parser
     // ---------------------------------------------------------------
@@ -914,6 +1080,63 @@ namespace vix::cli::app
     {
       return "Invalid vix.app syntax at line " +
              std::to_string(lineNumber) + ": " + reason;
+    }
+
+    static bool finalize_git_dependencies(
+        AppManifest &manifest,
+        std::string &error)
+    {
+      std::unordered_set<std::string> seen;
+
+      for (AppGitDependency &dependency : manifest.gitDependencies)
+      {
+        dependency.name = trim_copy(dependency.name);
+        if (!is_valid_target_name(dependency.name))
+        {
+          error = "Invalid dependency name in vix.app: " + dependency.name;
+          return false;
+        }
+
+        if (seen.find(dependency.name) != seen.end())
+        {
+          error = "Duplicate dependency declaration in vix.app: " + dependency.name;
+          return false;
+        }
+        seen.insert(dependency.name);
+
+        if (trim_copy(dependency.git).empty())
+        {
+          error = "Git dependency '" + dependency.name + "' is missing field 'git'";
+          return false;
+        }
+
+        int revisionCount = 0;
+        if (!trim_copy(dependency.tag).empty())
+          ++revisionCount;
+        if (!trim_copy(dependency.branch).empty())
+          ++revisionCount;
+        if (!trim_copy(dependency.rev).empty())
+          ++revisionCount;
+
+        if (revisionCount > 1)
+        {
+          error = "Git dependency '" + dependency.name + "' must use only one of tag, branch, or rev";
+          return false;
+        }
+
+        if (!dependency.target.empty() &&
+            std::find(dependency.targets.begin(), dependency.targets.end(), dependency.target) == dependency.targets.end())
+          dependency.targets.insert(dependency.targets.begin(), dependency.target);
+
+        if (!dependency.include.empty() &&
+            std::find(dependency.includes.begin(), dependency.includes.end(), dependency.include) == dependency.includes.end())
+          dependency.includes.insert(dependency.includes.begin(), dependency.include);
+
+        if (dependency.headerOnly && dependency.includes.empty())
+          dependency.includes.push_back("include");
+      }
+
+      return true;
     }
 
     static bool finalize_app_modules(
@@ -985,6 +1208,8 @@ namespace vix::cli::app
       std::size_t activeArrayStartLine = 0;
 
       std::string activeModuleName;
+      std::string activeGitDependencyName;
+      bool activeGitCmakeOptions = false;
 
       std::size_t lineNumber = 0;
 
@@ -1001,7 +1226,27 @@ namespace vix::cli::app
         {
           if (is_array_end(line))
           {
-            if (!activeModuleName.empty())
+            if (!activeGitDependencyName.empty())
+            {
+              AppGitDependency &dependency =
+                  ensure_git_dependency(manifest, activeGitDependencyName);
+
+              if (activeGitCmakeOptions)
+              {
+                error = "Arrays are not supported in [dependencies." + activeGitDependencyName + ".cmake]";
+                return false;
+              }
+
+              if (!assign_git_dependency_array(
+                      dependency,
+                      activeArrayKey,
+                      activeArrayValues,
+                      error))
+              {
+                return false;
+              }
+            }
+            else if (!activeModuleName.empty())
             {
               AppModule &module =
                   ensure_app_module(manifest, activeModuleName);
@@ -1049,7 +1294,21 @@ namespace vix::cli::app
         if (parse_module_section_header(line, moduleSectionName))
         {
           activeModuleName = moduleSectionName;
+          activeGitDependencyName.clear();
+          activeGitCmakeOptions = false;
           ensure_app_module(manifest, activeModuleName);
+          continue;
+        }
+
+        std::string gitDependencySectionName;
+        bool gitCmakeOptionsSection = false;
+
+        if (parse_git_dependency_section_header(line, gitDependencySectionName, gitCmakeOptionsSection))
+        {
+          activeModuleName.clear();
+          activeGitDependencyName = gitDependencySectionName;
+          activeGitCmakeOptions = gitCmakeOptionsSection;
+          ensure_git_dependency(manifest, activeGitDependencyName);
           continue;
         }
 
@@ -1096,7 +1355,27 @@ namespace vix::cli::app
             return false;
           }
 
-          if (!activeModuleName.empty())
+          if (!activeGitDependencyName.empty())
+          {
+            AppGitDependency &dependency =
+                ensure_git_dependency(manifest, activeGitDependencyName);
+
+            if (activeGitCmakeOptions)
+            {
+              error = "Arrays are not supported in [dependencies." + activeGitDependencyName + ".cmake]";
+              return false;
+            }
+
+            if (!assign_git_dependency_array(
+                    dependency,
+                    key,
+                    parse_inline_array(value),
+                    error))
+            {
+              return false;
+            }
+          }
+          else if (!activeModuleName.empty())
           {
             AppModule &module =
                 ensure_app_module(manifest, activeModuleName);
@@ -1125,7 +1404,22 @@ namespace vix::cli::app
           continue;
         }
 
-        if (!activeModuleName.empty())
+        if (!activeGitDependencyName.empty())
+        {
+          AppGitDependency &dependency =
+              ensure_git_dependency(manifest, activeGitDependencyName);
+
+          if (activeGitCmakeOptions)
+          {
+            if (!assign_git_cmake_option(dependency, key, value, error))
+              return false;
+          }
+          else if (!assign_git_dependency_scalar(dependency, key, value, error))
+          {
+            return false;
+          }
+        }
+        else if (!activeModuleName.empty())
         {
           AppModule &module =
               ensure_app_module(manifest, activeModuleName);
@@ -1163,6 +1457,9 @@ namespace vix::cli::app
 
       if (manifest.standard.empty())
         manifest.standard = "c++20";
+
+      if (!finalize_git_dependencies(manifest, error))
+        return false;
 
       if (!finalize_app_modules(manifest, error))
         return false;

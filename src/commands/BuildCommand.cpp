@@ -2646,6 +2646,9 @@ namespace vix::commands::BuildCommand
       if (!manifest.links.empty())
         return false;
 
+      if (!manifest.deps.empty() || !manifest.gitDependencies.empty())
+        return false;
+
       if (!manifest.packages.empty())
         return false;
 

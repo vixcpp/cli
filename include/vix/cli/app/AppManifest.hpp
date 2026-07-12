@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vix::cli::app
@@ -176,6 +177,28 @@ namespace vix::cli::app
   };
 
   /**
+   * @brief Git dependency declared with [dependencies.<name>] in vix.app.
+   *
+   * Supported first version backends are CMake and header-only.
+   * CMake options are represented by [dependencies.<name>.cmake].
+   */
+  struct AppGitDependency
+  {
+    std::string name;
+    std::string git;
+    std::string tag;
+    std::string branch;
+    std::string rev;
+    std::string subdirectory;
+    std::string target;
+    std::vector<std::string> targets;
+    bool headerOnly{false};
+    std::string include;
+    std::vector<std::string> includes;
+    std::vector<std::pair<std::string, std::string>> cmakeOptions;
+  };
+
+  /**
    * @brief Simple C++ application manifest.
    *
    * This structure represents the content of a vix.app file.
@@ -271,6 +294,11 @@ namespace vix::cli::app
      * and linked through the generated Vix dependency CMake file.
      */
     std::vector<std::string> deps;
+
+    /**
+     * @brief Git dependencies declared with [dependencies.<name>].
+     */
+    std::vector<AppGitDependency> gitDependencies;
 
     /**
      * @brief CMake targets or libraries to link.

@@ -77,6 +77,9 @@ namespace vix::commands
 
     fs::path global_root_dir()
     {
+      if (const char *p = vix::utils::vix_getenv("VIX_GLOBAL_PREFIX"); p && *p)
+        return fs::path(p);
+
       return vix_root() / "global";
     }
 
@@ -383,6 +386,8 @@ namespace vix::commands
         row["type"] = d.value("type", "");
         row["include"] = d.value("include", "");
         row["installed_path"] = d.value("installed_path", "");
+        row["prefix"] = d.value("prefix", "");
+        row["executables"] = d.contains("executables") ? d["executables"] : json::array();
       }
 
       return row;
@@ -417,6 +422,21 @@ namespace vix::commands
 
         if (!include.empty())
           vix::cli::util::kv(std::cout, "include", include);
+
+        if (d.contains("executables") && d["executables"].is_array() && !d["executables"].empty())
+        {
+          std::string commands;
+          for (const auto &exe : d["executables"])
+          {
+            if (!exe.is_string())
+              continue;
+            if (!commands.empty())
+              commands += ", ";
+            commands += exe.get<std::string>();
+          }
+          if (!commands.empty())
+            vix::cli::util::kv(std::cout, "commands", commands);
+        }
       }
 
       std::cout << "\n";

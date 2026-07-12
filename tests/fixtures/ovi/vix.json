@@ -1,0 +1,22 @@
+{
+  "name": "ovi",
+  "namespace": "vixcpp",
+  "version": "0.1.0",
+  "type": "header-only",
+  "include": "include",
+  "deps": [],
+  "bin": {
+    "ovi": "ovi_cli",
+    "ovi-doctor": "ovi_doctor_cli"
+  },
+  "license": "MIT",
+  "description": "A small C++ library with command-line executables for testing global package installation with Vix.",
+  "keywords": ["cpp", "cli", "header-only", "vix", "global-install"],
+  "repository": "https://github.com/vixcpp/ovi",
+  "authors": [
+    {
+      "name": "Gaspard Kirira",
+      "github": "adastrablockchain"
+    }
+  ]
+}

@@ -38,3 +38,12 @@ add_test(
   NAME vix_cli_cmake_build_errors_tests
   COMMAND vix_cli_cmake_build_errors_tests
 )
+
+
+add_test(
+  NAME vix_cli_global_install_ovi
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/GlobalInstallOviTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ovi
+)

@@ -16,18 +16,23 @@
 #include <vix/cli/util/Shell.hpp>
 #include <vix/cli/util/Hash.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/commands/helpers/ProcessHelpers.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/util/Semver.hpp>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -35,6 +40,13 @@
 #include <unordered_map>
 
 namespace fs = std::filesystem;
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using json = nlohmann::json;
 
 namespace vix::commands
@@ -136,6 +148,9 @@ namespace vix::commands
 
     static fs::path global_root_dir()
     {
+      if (const char *p = vix::utils::vix_getenv("VIX_GLOBAL_PREFIX"); p && *p)
+        return fs::path(p);
+
       return vix_root() / "global";
     }
 
@@ -147,6 +162,21 @@ namespace vix::commands
     static fs::path global_manifest_path()
     {
       return global_root_dir() / "installed.json";
+    }
+
+    static fs::path global_bin_dir()
+    {
+      return global_root_dir() / "bin";
+    }
+
+    static fs::path global_build_dir()
+    {
+      return global_root_dir() / "build";
+    }
+
+    static fs::path global_tmp_dir()
+    {
+      return global_root_dir() / "tmp";
     }
 
     static std::string trim_copy(std::string s)
@@ -176,11 +206,28 @@ namespace vix::commands
 
     static void write_json_or_throw(const fs::path &p, const json &j)
     {
-      std::ofstream out(p);
-      if (!out)
-        throw std::runtime_error("cannot write: " + p.string());
+      std::error_code ec;
+      fs::create_directories(p.parent_path(), ec);
 
-      out << j.dump(2) << "\n";
+      const fs::path tmp = p.string() + ".tmp";
+      {
+        std::ofstream out(tmp);
+        if (!out)
+          throw std::runtime_error("cannot write: " + tmp.string());
+
+        out << j.dump(2) << "\n";
+      }
+
+      fs::rename(tmp, p, ec);
+      if (ec)
+      {
+        ec.clear();
+        fs::remove(p, ec);
+        ec.clear();
+        fs::rename(tmp, p, ec);
+        if (ec)
+          throw std::runtime_error("cannot replace: " + p.string() + ": " + ec.message());
+      }
     }
 
     static std::string sanitize_id_dot(const std::string &id)
@@ -726,7 +773,16 @@ namespace vix::commands
       write_json_or_throw(global_manifest_path(), root);
     }
 
-    static void save_global_install(const DepResolved &dep, const fs::path &installedPath)
+    static std::string now_utc_iso8601();
+    static json make_files_json(const std::vector<fs::path> &files);
+    static json make_strings_json(const std::vector<std::string> &items);
+
+    static void save_global_install(
+        const DepResolved &dep,
+        const fs::path &installedPath,
+        const std::vector<fs::path> &files,
+        const std::vector<std::string> &executables,
+        const std::vector<std::string> &shims)
     {
       json root = load_global_manifest();
       auto &arr = root["packages"];
@@ -738,6 +794,7 @@ namespace vix::commands
         if (item.value("id", "") == dep.id)
         {
           item["id"] = dep.id;
+          item["package"] = dep.id;
           item["version"] = dep.version;
           item["repo"] = dep.repo;
           item["tag"] = dep.tag;
@@ -746,6 +803,11 @@ namespace vix::commands
           item["type"] = dep.type;
           item["include"] = dep.include;
           item["installed_path"] = installedPath.string();
+          item["prefix"] = global_root_dir().string();
+          item["installed_at"] = now_utc_iso8601();
+          item["files"] = make_files_json(files);
+          item["executables"] = make_strings_json(executables);
+          item["shims"] = make_strings_json(shims);
           updated = true;
           break;
         }
@@ -755,6 +817,7 @@ namespace vix::commands
       {
         arr.push_back({
             {"id", dep.id},
+            {"package", dep.id},
             {"version", dep.version},
             {"repo", dep.repo},
             {"tag", dep.tag},
@@ -763,6 +826,11 @@ namespace vix::commands
             {"type", dep.type},
             {"include", dep.include},
             {"installed_path", installedPath.string()},
+            {"prefix", global_root_dir().string()},
+            {"installed_at", now_utc_iso8601()},
+            {"files", make_files_json(files)},
+            {"executables", make_strings_json(executables)},
+            {"shims", make_strings_json(shims)},
         });
       }
 
@@ -1070,6 +1138,673 @@ namespace vix::commands
       out << "\n";
     }
 
+
+    struct GlobalExecutableDecl
+    {
+      std::string name;
+      std::string target;
+    };
+
+    static std::string now_utc_iso8601()
+    {
+      const auto now = std::chrono::system_clock::now();
+      const std::time_t t = std::chrono::system_clock::to_time_t(now);
+      std::tm tm{};
+#ifdef _WIN32
+      gmtime_s(&tm, &t);
+#else
+      gmtime_r(&t, &tm);
+#endif
+      char buf[32]{};
+      std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm);
+      return std::string(buf);
+    }
+
+    static bool is_safe_executable_name(const std::string &name)
+    {
+      if (name.empty() || name == "." || name == "..")
+        return false;
+
+      if (name.find('/') != std::string::npos ||
+          name.find('\\') != std::string::npos ||
+          name.find(':') != std::string::npos)
+        return false;
+
+      if (name.find("..") != std::string::npos)
+        return false;
+
+      for (char c : name)
+      {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (!(std::isalnum(uc) || c == '_' || c == '-' || c == '.'))
+          return false;
+      }
+
+      return true;
+    }
+
+    static std::vector<GlobalExecutableDecl> read_declared_executables(const fs::path &manifestPath)
+    {
+      std::vector<GlobalExecutableDecl> out;
+      if (!fs::exists(manifestPath))
+        return out;
+
+      const json j = read_json_or_throw(manifestPath);
+
+      auto add = [&](std::string name, std::string target)
+      {
+        name = trim_copy(std::move(name));
+        target = trim_copy(std::move(target));
+        if (name.empty())
+          return;
+        if (!is_safe_executable_name(name))
+          throw std::runtime_error("invalid executable name in vix.json: " + name);
+        for (const auto &item : out)
+        {
+          if (item.name == name)
+            return;
+        }
+        out.push_back({name, target});
+      };
+
+      // Optional metadata for global CLI packages. CMake install() remains
+      // authoritative; this only documents and validates expected commands.
+      if (j.contains("bin") && j["bin"].is_object())
+      {
+        for (auto it = j["bin"].begin(); it != j["bin"].end(); ++it)
+        {
+          if (it.value().is_string())
+            add(it.key(), it.value().get<std::string>());
+        }
+      }
+
+      if (j.contains("executables") && j["executables"].is_array())
+      {
+        for (const auto &item : j["executables"])
+        {
+          if (!item.is_object())
+            continue;
+          add(item.value("name", ""), item.value("target", ""));
+        }
+      }
+
+      return out;
+    }
+
+    static bool is_executable_filename(const fs::path &p)
+    {
+      const std::string name = p.filename().string();
+      if (name.empty())
+        return false;
+#ifdef _WIN32
+      const std::string ext = p.extension().string();
+      return ext == ".exe" || ext == ".cmd" || ext == ".bat";
+#else
+      std::error_code ec;
+      const auto perms = fs::status(p, ec).permissions();
+      if (ec)
+        return false;
+      return (perms & fs::perms::owner_exec) != fs::perms::none ||
+             (perms & fs::perms::group_exec) != fs::perms::none ||
+             (perms & fs::perms::others_exec) != fs::perms::none;
+#endif
+    }
+
+    static std::string executable_command_name(const fs::path &p)
+    {
+      std::string name = p.filename().string();
+#ifdef _WIN32
+      const std::string ext = p.extension().string();
+      if (ext == ".exe" || ext == ".cmd" || ext == ".bat")
+        name = p.stem().string();
+#endif
+      return name;
+    }
+
+    static std::vector<fs::path> collect_regular_files(const fs::path &root)
+    {
+      std::vector<fs::path> files;
+      std::error_code ec;
+      if (!fs::exists(root, ec))
+        return files;
+
+      for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+           !ec && it != end;
+           it.increment(ec))
+      {
+        if (ec)
+          break;
+
+        const fs::path p = it->path();
+        const auto st = fs::symlink_status(p, ec);
+        if (ec)
+          continue;
+
+        if (fs::is_regular_file(st) || fs::is_symlink(st))
+          files.push_back(fs::relative(p, root).lexically_normal());
+      }
+
+      std::sort(files.begin(), files.end());
+      return files;
+    }
+
+    static std::vector<std::string> collect_installed_commands(const fs::path &prefix)
+    {
+      std::vector<std::string> commands;
+      const fs::path bin = prefix / "bin";
+      std::error_code ec;
+      if (!fs::exists(bin, ec) || !fs::is_directory(bin, ec))
+        return commands;
+
+      for (fs::directory_iterator it(bin, ec), end; !ec && it != end; it.increment(ec))
+      {
+        if (ec)
+          break;
+        if (!it->is_regular_file(ec) && !it->is_symlink(ec))
+          continue;
+        if (!is_executable_filename(it->path()))
+          continue;
+        const std::string cmd = executable_command_name(it->path());
+        if (!cmd.empty() && std::find(commands.begin(), commands.end(), cmd) == commands.end())
+          commands.push_back(cmd);
+      }
+
+      std::sort(commands.begin(), commands.end());
+      return commands;
+    }
+
+    static std::string owner_of_relpath(const json &root, const fs::path &rel)
+    {
+      const std::string key = rel.generic_string();
+      if (!root.contains("packages") || !root["packages"].is_array())
+        return {};
+
+      for (const auto &pkg : root["packages"])
+      {
+        if (!pkg.contains("files") || !pkg["files"].is_array())
+          continue;
+        for (const auto &file : pkg["files"])
+        {
+          if (file.is_string() && file.get<std::string>() == key)
+            return pkg.value("id", "");
+        }
+      }
+
+      return {};
+    }
+
+    static const json *find_global_pkg(const json &root, const std::string &id)
+    {
+      if (!root.contains("packages") || !root["packages"].is_array())
+        return nullptr;
+      for (const auto &pkg : root["packages"])
+      {
+        if (pkg.value("id", "") == id)
+          return &pkg;
+      }
+      return nullptr;
+    }
+
+    static void remove_empty_parents_under(const fs::path &prefix, fs::path dir)
+    {
+      std::error_code ec;
+      const fs::path root = fs::absolute(prefix, ec).lexically_normal();
+      while (!dir.empty())
+      {
+        ec.clear();
+        fs::path abs = fs::absolute(dir, ec).lexically_normal();
+        if (ec || abs == root || abs.string().find(root.string()) != 0)
+          break;
+        if (!fs::is_directory(abs, ec) || ec)
+          break;
+        if (!fs::is_empty(abs, ec) || ec)
+          break;
+        fs::remove(abs, ec);
+        if (ec)
+          break;
+        dir = abs.parent_path();
+      }
+    }
+
+    static void copy_staged_prefix(const fs::path &stage, const fs::path &prefix, const std::vector<fs::path> &files)
+    {
+      for (const auto &rel : files)
+      {
+        const fs::path src = stage / rel;
+        const fs::path dst = prefix / rel;
+        std::error_code ec;
+        fs::create_directories(dst.parent_path(), ec);
+        if (ec)
+          throw std::runtime_error("cannot create directory: " + dst.parent_path().string());
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+        if (ec)
+          throw std::runtime_error("cannot install file: " + rel.generic_string() + ": " + ec.message());
+      }
+    }
+
+    static void remove_obsolete_registered_files_for_package(
+        const json &pkg,
+        const fs::path &prefix,
+        const std::vector<fs::path> &newFiles)
+    {
+      if (!pkg.contains("files") || !pkg["files"].is_array())
+        return;
+
+      std::set<std::string> keep;
+      for (const auto &file : newFiles)
+        keep.insert(file.generic_string());
+
+      std::vector<fs::path> dirs;
+      for (const auto &file : pkg["files"])
+      {
+        if (!file.is_string())
+          continue;
+
+        const std::string relString = file.get<std::string>();
+        if (keep.contains(relString))
+          continue;
+
+        const fs::path rel = fs::path(relString).lexically_normal();
+        if (rel.empty() || rel.is_absolute() || rel.generic_string().find("..") != std::string::npos)
+          continue;
+
+        const fs::path abs = prefix / rel;
+        std::error_code ec;
+        fs::remove(abs, ec);
+        dirs.push_back(abs.parent_path());
+      }
+
+      std::sort(dirs.begin(), dirs.end(), [](const fs::path &a, const fs::path &b) {
+        return a.string().size() > b.string().size();
+      });
+      for (const auto &dir : dirs)
+        remove_empty_parents_under(prefix, dir);
+    }
+
+    static void validate_staged_paths(const std::vector<fs::path> &files)
+    {
+      for (const auto &rel : files)
+      {
+        const std::string s = rel.generic_string();
+        if (rel.empty() || rel.is_absolute() || s.find("..") != std::string::npos)
+          throw std::runtime_error("unsafe installed path from CMake: " + s);
+      }
+    }
+
+    static void ensure_no_global_conflicts(const json &registry, const std::string &pkgId, const fs::path &prefix, const std::vector<fs::path> &files)
+    {
+      for (const auto &rel : files)
+      {
+        const fs::path dst = prefix / rel;
+        std::error_code ec;
+        if (!fs::exists(dst, ec) && !fs::is_symlink(dst, ec))
+          continue;
+
+        const std::string owner = owner_of_relpath(registry, rel);
+        if (owner.empty())
+        {
+          throw std::runtime_error("refusing to overwrite unmanaged file: " + dst.string());
+        }
+
+        if (owner != pkgId)
+        {
+          throw std::runtime_error(
+              "cannot install file '" + rel.generic_string() + "'; already owned by " + owner);
+        }
+      }
+    }
+
+    static void validate_declared_executables_installed(const std::vector<GlobalExecutableDecl> &declared, const std::vector<std::string> &installed)
+    {
+      for (const auto &decl : declared)
+      {
+        if (std::find(installed.begin(), installed.end(), decl.name) == installed.end())
+          throw std::runtime_error("declared executable was not installed by CMake: " + decl.name);
+      }
+    }
+
+    static bool path_has_dir(const fs::path &dir)
+    {
+      const char *env = vix::utils::vix_getenv("PATH");
+      if (!env)
+        return false;
+
+      const std::string want = fs::absolute(dir).lexically_normal().string();
+#ifdef _WIN32
+      const char sep = ';';
+#else
+      const char sep = ':';
+#endif
+      std::string cur;
+      std::istringstream iss(env);
+      while (std::getline(iss, cur, sep))
+      {
+        if (cur.empty())
+          continue;
+        std::error_code ec;
+        fs::path p = fs::absolute(fs::path(cur), ec).lexically_normal();
+        if (!ec && p.string() == want)
+          return true;
+      }
+      return false;
+    }
+
+    static std::vector<fs::path> current_path_dirs()
+    {
+      std::vector<fs::path> dirs;
+      const char *env = vix::utils::vix_getenv("PATH");
+      if (!env)
+        return dirs;
+
+#ifdef _WIN32
+      const char sep = ';';
+#else
+      const char sep = ':';
+#endif
+      std::string cur;
+      std::istringstream iss(env);
+      while (std::getline(iss, cur, sep))
+      {
+        if (cur.empty())
+          continue;
+        std::error_code ec;
+        fs::path p = fs::absolute(fs::path(cur), ec).lexically_normal();
+        if (!ec)
+          dirs.push_back(p);
+      }
+
+      return dirs;
+    }
+
+    static bool current_path_contains_exact_dir(const fs::path &dir)
+    {
+      const fs::path want = fs::absolute(dir).lexically_normal();
+      for (const auto &entry : current_path_dirs())
+      {
+        if (entry == want)
+          return true;
+      }
+      return false;
+    }
+
+    static std::optional<fs::path> immediate_user_shim_dir()
+    {
+      const std::string h = home_dir();
+      if (h.empty())
+        return std::nullopt;
+
+      const fs::path home = fs::absolute(fs::path(h)).lexically_normal();
+      const fs::path localBin = (home / ".local" / "bin").lexically_normal();
+      if (current_path_contains_exact_dir(localBin))
+        return localBin;
+
+      const fs::path homeBin = (home / "bin").lexically_normal();
+      if (current_path_contains_exact_dir(homeBin))
+        return homeBin;
+
+      for (const auto &dir : current_path_dirs())
+      {
+        const std::string d = dir.string();
+        const std::string hs = home.string();
+        if (d == hs || d.rfind(hs + fs::path::preferred_separator, 0) == 0)
+          return dir;
+      }
+
+      return std::nullopt;
+    }
+
+    static bool package_owns_shim(const json &registry, const std::string &pkgId, const fs::path &shim)
+    {
+      const std::string abs = fs::absolute(shim).lexically_normal().string();
+      if (!registry.contains("packages") || !registry["packages"].is_array())
+        return false;
+
+      for (const auto &pkg : registry["packages"])
+      {
+        if (pkg.value("id", "") != pkgId)
+          continue;
+        if (!pkg.contains("shims") || !pkg["shims"].is_array())
+          continue;
+        for (const auto &item : pkg["shims"])
+        {
+          if (item.is_string() && fs::absolute(fs::path(item.get<std::string>())).lexically_normal().string() == abs)
+            return true;
+        }
+      }
+
+      return false;
+    }
+
+    static std::vector<std::string> install_immediate_command_shims(
+        const json &registry,
+        const std::string &pkgId,
+        const std::vector<std::string> &commands)
+    {
+      std::vector<std::string> shims;
+
+#ifdef _WIN32
+      (void)registry;
+      (void)pkgId;
+      (void)commands;
+      return shims;
+#else
+      if (path_has_dir(global_bin_dir()))
+        return shims;
+
+      const auto shimDirOpt = immediate_user_shim_dir();
+      if (!shimDirOpt)
+        return shims;
+
+      const fs::path shimDir = *shimDirOpt;
+      std::error_code ec;
+      fs::create_directories(shimDir, ec);
+      if (ec)
+        return shims;
+
+      for (const auto &cmd : commands)
+      {
+        if (!is_safe_executable_name(cmd))
+          continue;
+
+        const fs::path target = fs::absolute(global_bin_dir() / cmd).lexically_normal();
+        const fs::path shim = fs::absolute(shimDir / cmd).lexically_normal();
+
+        ec.clear();
+        const auto st = fs::symlink_status(shim, ec);
+        const bool exists = !ec && st.type() != fs::file_type::not_found;
+
+        if (exists)
+        {
+          if (fs::is_symlink(st))
+          {
+            ec.clear();
+            const fs::path rawTarget = fs::read_symlink(shim, ec);
+            const fs::path linkTarget = rawTarget.is_absolute()
+                ? rawTarget.lexically_normal()
+                : fs::absolute(shim.parent_path() / rawTarget).lexically_normal();
+            if (!ec && linkTarget == target)
+            {
+              shims.push_back(shim.string());
+              continue;
+            }
+          }
+
+          if (!package_owns_shim(registry, pkgId, shim))
+            throw std::runtime_error("cannot install command '" + cmd + "'; shim already exists: " + shim.string());
+
+          ec.clear();
+          fs::remove(shim, ec);
+          if (ec)
+            throw std::runtime_error("cannot replace command shim: " + shim.string());
+        }
+
+        ec.clear();
+        fs::create_symlink(target, shim, ec);
+        if (ec)
+          throw std::runtime_error("cannot create command shim: " + shim.string() + ": " + ec.message());
+
+        shims.push_back(shim.string());
+      }
+
+      return shims;
+#endif
+    }
+
+    static bool file_contains_text(const fs::path &path, const std::string &needleText)
+    {
+      std::ifstream in(path);
+      if (!in)
+        return false;
+
+      std::ostringstream ss;
+      ss << in.rdbuf();
+      return ss.str().find(needleText) != std::string::npos;
+    }
+
+    static void append_line_once(const fs::path &path, const std::string &marker, const std::string &line)
+    {
+      std::error_code ec;
+      fs::create_directories(path.parent_path(), ec);
+
+      if (file_contains_text(path, marker))
+        return;
+
+      std::ofstream out(path, std::ios::app);
+      if (!out)
+        return;
+
+      out << "\n# Vix global commands\n" << line << "\n";
+    }
+
+#ifndef _WIN32
+    static fs::path default_shell_config_file()
+    {
+      const std::string h = home_dir();
+      const fs::path home = h.empty() ? fs::current_path() : fs::path(h);
+      const char *shellEnv = vix::utils::vix_getenv("SHELL");
+      const std::string shell = shellEnv ? fs::path(shellEnv).filename().string() : std::string();
+
+      if (shell == "zsh")
+        return home / ".zshrc";
+
+      if (shell == "fish")
+        return home / ".config" / "fish" / "config.fish";
+
+      return home / ".bashrc";
+    }
+#endif
+
+#ifdef _WIN32
+    static bool ensure_user_path_contains_global_bin()
+    {
+      if (path_has_dir(global_bin_dir()))
+        return true;
+
+      const std::string bin = fs::absolute(global_bin_dir()).lexically_normal().string();
+
+      HKEY key = nullptr;
+      const LONG openRc = RegOpenKeyExA(
+          HKEY_CURRENT_USER,
+          "Environment",
+          0,
+          KEY_READ | KEY_WRITE,
+          &key);
+
+      if (openRc != ERROR_SUCCESS)
+        return false;
+
+      char buffer[32767]{};
+      DWORD size = sizeof(buffer);
+      DWORD type = 0;
+      std::string current;
+
+      const LONG queryRc = RegQueryValueExA(key, "Path", nullptr, &type, reinterpret_cast<LPBYTE>(buffer), &size);
+      if (queryRc == ERROR_SUCCESS && (type == REG_EXPAND_SZ || type == REG_SZ))
+        current.assign(buffer, strnlen(buffer, sizeof(buffer)));
+
+      if (!current.empty() && current.back() != ';')
+        current += ';';
+      current += bin;
+
+      const LONG setRc = RegSetValueExA(
+          key,
+          "Path",
+          0,
+          REG_EXPAND_SZ,
+          reinterpret_cast<const BYTE *>(current.c_str()),
+          static_cast<DWORD>(current.size() + 1));
+      RegCloseKey(key);
+
+      if (setRc != ERROR_SUCCESS)
+        return false;
+
+      SendMessageTimeoutA(HWND_BROADCAST, WM_SETTINGCHANGE, 0, reinterpret_cast<LPARAM>("Environment"), SMTO_ABORTIFHUNG, 5000, nullptr);
+      return true;
+    }
+#else
+    static bool ensure_user_path_contains_global_bin()
+    {
+      if (path_has_dir(global_bin_dir()))
+        return true;
+
+      const std::string h = home_dir();
+      const fs::path bin = fs::absolute(global_bin_dir()).lexically_normal();
+      const fs::path expectedDefault = h.empty() ? fs::path() : (fs::path(h) / ".vix" / "global" / "bin");
+      const bool defaultPrefix = !h.empty() && bin == fs::absolute(expectedDefault).lexically_normal();
+
+      const char *shellEnv = vix::utils::vix_getenv("SHELL");
+      const std::string shell = shellEnv ? fs::path(shellEnv).filename().string() : std::string();
+      const fs::path config = default_shell_config_file();
+
+      if (shell == "fish")
+      {
+        const std::string marker = defaultPrefix ? "$HOME/.vix/global/bin" : bin.string();
+        const std::string line = defaultPrefix
+            ? "fish_add_path -g \"$HOME/.vix/global/bin\""
+            : "fish_add_path -g \"" + bin.string() + "\"";
+        append_line_once(config, marker, line);
+        return true;
+      }
+
+      const std::string marker = defaultPrefix ? "$HOME/.vix/global/bin" : bin.string();
+      const std::string line = defaultPrefix
+          ? "export PATH=\"$HOME/.vix/global/bin:$PATH\""
+          : "export PATH=\"" + bin.string() + ":$PATH\"";
+      append_line_once(config, marker, line);
+      return true;
+    }
+#endif
+
+    static int run_checked_command(const std::string &cmd, const std::string &what)
+    {
+      int code = 0;
+      const std::string out = vix::cli::commands::helpers::run_and_capture_with_code(cmd, code);
+      if (code != 0)
+      {
+        if (!out.empty())
+          std::cerr << out;
+        vix::cli::util::err_line(std::cerr, what + " failed");
+        return 1;
+      }
+      return 0;
+    }
+
+    static json make_files_json(const std::vector<fs::path> &files)
+    {
+      json arr = json::array();
+      for (const auto &file : files)
+        arr.push_back(file.generic_string());
+      return arr;
+    }
+
+    static json make_strings_json(const std::vector<std::string> &items)
+    {
+      json arr = json::array();
+      for (const auto &item : items)
+        arr.push_back(item);
+      return arr;
+    }
+
     static void print_next_steps(
         std::size_t installedCount,
         std::size_t checkedCount,
@@ -1181,12 +1916,12 @@ namespace vix::commands
       }
 
       fs::create_directories(global_pkgs_dir());
+      fs::create_directories(global_bin_dir());
+      fs::create_directories(global_build_dir());
+      fs::create_directories(global_tmp_dir());
 
       for (auto &dep : ordered)
-      {
         dep.linkDir = dep.checkout;
-        save_global_install(dep, dep.checkout);
-      }
 
       std::optional<DepResolved> rootOpt;
       try
@@ -1206,17 +1941,121 @@ namespace vix::commands
       }
 
       const auto finalIt = resolvedById.find(rootOpt->id);
+      if (finalIt == resolvedById.end())
+      {
+        vix::cli::util::err_line(std::cerr, "resolved package disappeared from install graph");
+        return 1;
+      }
 
-      if (finalIt != resolvedById.end())
+      DepResolved rootDep = finalIt->second;
+      const std::string idDot = sanitize_id_dot(rootDep.id);
+      const std::string buildLeaf = idDot + "-" + rootDep.version;
+      const fs::path buildDir = global_build_dir() / buildLeaf;
+      const fs::path stageDir = global_tmp_dir() / (buildLeaf + "-stage");
+
+      std::error_code ec;
+      fs::remove_all(stageDir, ec);
+      fs::create_directories(stageDir, ec);
+      if (ec)
       {
-        vix::cli::util::ok_line(
-            std::cout,
-            finalIt->second.id + "@" + finalIt->second.version + " installed globally");
+        vix::cli::util::err_line(std::cerr, "failed to create staging prefix: " + stageDir.string());
+        return 1;
       }
-      else
+
+      if (!fs::exists(rootDep.checkout / "CMakeLists.txt"))
       {
-        vix::cli::util::ok_line(std::cout, "Global package installed");
+        vix::cli::util::err_line(std::cerr, "global install requires a CMakeLists.txt with install() rules: " + rootDep.id);
+        return 1;
       }
+
+      const std::string cmake = "cmake";
+      const std::string qSource = vix::cli::commands::helpers::quote(rootDep.checkout.string());
+      const std::string qBuild = vix::cli::commands::helpers::quote(buildDir.string());
+      const std::string qStage = vix::cli::commands::helpers::quote(stageDir.string());
+
+      const std::string configureCmd =
+          cmake + " -S " + qSource + " -B " + qBuild +
+          " -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=" + qStage;
+      if (run_checked_command(configureCmd, "cmake configure") != 0)
+        return 1;
+
+      const std::string buildCmd =
+          cmake + " --build " + qBuild + " --config Release";
+      if (run_checked_command(buildCmd, "cmake build") != 0)
+        return 1;
+
+      const std::string installCmd =
+          cmake + " --install " + qBuild + " --config Release";
+      if (run_checked_command(installCmd, "cmake install") != 0)
+      {
+        vix::cli::util::warn_line(std::cerr, "Global packages with executables must provide CMake install(TARGETS ... RUNTIME DESTINATION bin) rules.");
+        return 1;
+      }
+
+      std::vector<fs::path> files = collect_regular_files(stageDir);
+      try
+      {
+        validate_staged_paths(files);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
+      if (files.empty())
+      {
+        vix::cli::util::err_line(std::cerr, "cmake install produced no files for: " + rootDep.id);
+        return 1;
+      }
+
+      std::vector<std::string> commands = collect_installed_commands(stageDir);
+      std::vector<GlobalExecutableDecl> declared;
+      try
+      {
+        declared = read_declared_executables(rootDep.checkout / "vix.json");
+        validate_declared_executables_installed(declared, commands);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
+      json registry;
+      try
+      {
+        registry = load_global_manifest();
+        ensure_no_global_conflicts(registry, rootDep.id, global_root_dir(), files);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
+      try
+      {
+        const json *previous = find_global_pkg(registry, rootDep.id);
+        copy_staged_prefix(stageDir, global_root_dir(), files);
+        if (previous)
+          remove_obsolete_registered_files_for_package(*previous, global_root_dir(), files);
+        const std::vector<std::string> shims = install_immediate_command_shims(registry, rootDep.id, commands);
+        save_global_install(rootDep, rootDep.checkout, files, commands, shims);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
+        return 1;
+      }
+
+      fs::remove_all(stageDir, ec);
+
+      ensure_user_path_contains_global_bin();
+
+      vix::cli::util::ok_line(
+          std::cout,
+          rootDep.id + "@" + rootDep.version + " installed globally");
 
       return 0;
     }
@@ -1460,15 +2299,18 @@ namespace vix::commands
         << "\n"
         << "  • Global mode (-g):\n"
         << "    - Resolves a package from the registry\n"
-        << "    - Installs it into the global Vix store\n"
-        << "    - Updates ~/.vix/global/installed.json\n\n"
+        << "    - Builds it with CMake in Release mode\n"
+        << "    - Runs cmake --install into a Vix-managed user prefix\n"
+        << "    - Records installed files and commands in ~/.vix/global/installed.json\n\n"
 
         << "Project outputs\n"
         << "  ./.vix/deps/\n"
         << "  ./.vix/vix_deps.cmake\n\n"
 
         << "Global outputs\n"
-        << "  ~/.vix/global/packages/\n"
+        << "  ~/.vix/global/bin/\n"
+        << "  ~/.vix/global/include/\n"
+        << "  ~/.vix/global/lib/\n"
         << "  ~/.vix/global/installed.json\n\n"
 
         << "Notes\n"

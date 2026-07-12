@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/RunCommand.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/commands/replay/ReplayRecorder.hpp>
@@ -49,6 +50,8 @@ namespace
   using vix::commands::RunCommand::detail::LiveRunResult;
   using vix::commands::RunCommand::detail::Options;
 
+  int run_script_mode(Options &opt);
+
   enum class RunTargetKind
   {
     Binary,
@@ -67,6 +70,142 @@ namespace
   bool should_clear_terminal_now()
   {
     return false;
+  }
+
+  std::vector<std::string> split_dep_spec(const std::string &spec)
+  {
+    std::vector<std::string> args;
+    if (spec.find(';') == std::string::npos || spec.find('=') == std::string::npos)
+    {
+      args.push_back(spec);
+      args.push_back("--yes");
+      return args;
+    }
+
+    std::string git;
+    std::istringstream in(spec);
+    std::string part;
+    std::vector<std::pair<std::string, std::string>> options;
+    while (std::getline(in, part, ';'))
+    {
+      const auto eq = part.find('=');
+      if (eq == std::string::npos)
+        continue;
+      std::string key = part.substr(0, eq);
+      std::string value = part.substr(eq + 1);
+      if (key == "git" || key == "url")
+        git = value;
+      else
+        options.push_back({key, value});
+    }
+
+    if (!git.empty())
+      args.push_back(git);
+    for (const auto &[key, value] : options)
+    {
+      if (key == "tag" || key == "branch" || key == "rev" || key == "target" || key == "name" || key == "include" || key == "subdirectory")
+      {
+        args.push_back("--" + key);
+        args.push_back(value);
+      }
+      else if (key == "header_only" || key == "header-only")
+      {
+        if (value == "1" || value == "true" || value == "yes" || value == "on")
+          args.push_back("--header-only");
+      }
+    }
+    args.push_back("--yes");
+    return args;
+  }
+
+  int install_temp_deps_in_dir(const fs::path &dir, const std::vector<std::string> &deps)
+  {
+    std::error_code ec;
+    const fs::path old = fs::current_path(ec);
+    if (ec)
+      return 1;
+    fs::current_path(dir, ec);
+    if (ec)
+      return 1;
+
+    int rc = 0;
+    for (const std::string &dep : deps)
+    {
+      std::ostringstream muted;
+      std::streambuf *oldOut = std::cout.rdbuf(muted.rdbuf());
+      rc = vix::commands::InstallCommand::run(split_dep_spec(dep));
+      std::cout.rdbuf(oldOut);
+      if (rc != 0)
+        break;
+    }
+
+    fs::current_path(old, ec);
+    return rc;
+  }
+
+  fs::path make_temp_run_dep_dir()
+  {
+    std::error_code ec;
+    fs::path base = fs::temp_directory_path(ec);
+    if (ec)
+      base = fs::current_path();
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    fs::path dir = base / ("vix-run-deps-" + std::to_string(static_cast<long long>(now)));
+    fs::create_directories(dir, ec);
+    return dir;
+  }
+
+  int run_with_temporary_deps(Options opt)
+  {
+    if (!opt.singleCpp || opt.cppFile.empty())
+    {
+      error("--dep is supported for single C++ files");
+      return 2;
+    }
+
+    if (opt.saveTempDeps)
+    {
+      for (const std::string &dep : opt.tempDeps)
+      {
+        const int rc = vix::commands::InstallCommand::run(split_dep_spec(dep));
+        if (rc != 0)
+          return rc;
+      }
+      opt.tempDeps.clear();
+      return run_script_mode(opt);
+    }
+
+    const fs::path original = fs::absolute(opt.cppFile).lexically_normal();
+    const fs::path tempDir = make_temp_run_dep_dir();
+    const fs::path tempSource = tempDir / original.filename();
+    std::error_code ec;
+    fs::copy_file(original, tempSource, fs::copy_options::overwrite_existing, ec);
+    if (ec)
+    {
+      error("cannot prepare temporary run source: " + ec.message());
+      return 1;
+    }
+
+    {
+      std::ofstream app(tempDir / "vix.app", std::ios::binary | std::ios::trunc);
+      app << "name = \"vix-temp-run\"\n";
+      app << "type = \"executable\"\n";
+      app << "standard = \"c++20\"\n";
+      app << "sources = [\"" << original.filename().string() << "\"]\n";
+    }
+
+    const int installRc = install_temp_deps_in_dir(tempDir, opt.tempDeps);
+    if (installRc != 0)
+    {
+      fs::remove_all(tempDir, ec);
+      return installRc;
+    }
+
+    opt.cppFile = tempSource;
+    opt.tempDeps.clear();
+    const int rc = run_script_mode(opt);
+    fs::remove_all(tempDir, ec);
+    return rc;
   }
 
   std::string trim_copy_local(std::string s)
@@ -1416,7 +1555,11 @@ namespace vix::commands::RunCommand
     apply_common_run_environment(opt);
 
     if (opt.singleCpp)
+    {
+      if (!opt.tempDeps.empty())
+        return run_with_temporary_deps(opt);
       return run_script_mode(opt);
+    }
 
     const RunTarget target = resolve_target(opt);
 
@@ -1547,7 +1690,8 @@ namespace vix::commands::RunCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix run [target] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
+    out << "  vix run [target] [options] [-- compiler/linker flags] [--run <args...>]\n";
+    out << "  vix run main.cpp --dep <git-url>\n\n";
 
     out << "Description:\n";
     out << "  Build and run a C++ target with Vix.\n";
@@ -1594,6 +1738,8 @@ namespace vix::commands::RunCommand
     out << "  --force-script              Treat the program as a short-lived script\n\n";
 
     out << "Script mode:\n";
+    out << "  --dep <git-url>             Temporary Git dependency for single-file run\n";
+    out << "  --save                      Save --dep entries into vix.app\n";
     out << "  --auto-deps                 Auto-add includes from .vix/deps/*/include\n";
     out << "  --auto-deps=local           Same as --auto-deps\n";
     out << "  --auto-deps=up              Search deps in parent folders too\n";
@@ -1647,6 +1793,7 @@ namespace vix::commands::RunCommand
     out << "  vix run api --env PORT=8080\n";
     out << "  vix run api --replay\n";
     out << "  vix run main.cpp\n";
+    out << "  vix run main.cpp --dep https://github.com/fmtlib/fmt\n";
     out << "  vix run main.cpp --run hello 123\n";
     out << "  vix run main.cpp --args hello --args 123\n";
     out << "  vix run main.cpp --with-sqlite\n";

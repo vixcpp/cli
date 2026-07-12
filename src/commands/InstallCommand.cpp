@@ -70,6 +70,7 @@ namespace vix::commands
       std::string gitSubdirectory;
       std::string gitInclude;
       bool gitHeaderOnly{false};
+      bool allowPrerelease{false};
       bool yes{false};
     };
 
@@ -86,6 +87,8 @@ namespace vix::commands
         return ns + "/" + name;
       }
     };
+
+    static void split_compact_git_revision(struct ParsedArgs &parsed);
 
     struct DepResolved
     {
@@ -567,6 +570,8 @@ namespace vix::commands
           parsed.gitInclude = next_arg_value(args, i, arg);
         else if (arg == "--header-only" || arg == "--headers")
           parsed.gitHeaderOnly = true;
+        else if (arg == "--pre" || arg == "--prerelease")
+          parsed.allowPrerelease = true;
         else if (starts_with_local(arg, "--name="))
           parsed.gitName = arg.substr(std::string("--name=").size());
         else if (starts_with_local(arg, "--tag="))
@@ -591,6 +596,7 @@ namespace vix::commands
         }
       }
 
+      split_compact_git_revision(parsed);
       return parsed;
     }
 
@@ -1158,6 +1164,78 @@ namespace vix::commands
       return {};
     }
 
+    static std::string semver_key_from_tag(std::string tag)
+    {
+      tag = trim_copy(std::move(tag));
+      if (!tag.empty() && (tag.front() == 'v' || tag.front() == 'V'))
+        tag.erase(tag.begin());
+      return tag;
+    }
+
+    static bool is_semver_tag(const std::string &tag, bool allowPrerelease)
+    {
+      const std::string v = semver_key_from_tag(tag);
+      if (v.empty())
+        return false;
+      if (!allowPrerelease && v.find('-') != std::string::npos)
+        return false;
+      return vix::cli::util::semver::compare(v, v) == 0;
+    }
+
+    static std::string select_latest_stable_git_tag(const std::string &url, bool allowPrerelease)
+    {
+      int code = 0;
+      const std::string out = vix::cli::commands::helpers::run_and_capture_with_code(
+          "git ls-remote --tags " + shell_quote(url),
+          code);
+      if (code != 0)
+        return {};
+
+      std::vector<std::pair<std::string, std::string>> candidates;
+      std::istringstream in(out);
+      std::string line;
+      while (std::getline(in, line))
+      {
+        line = trim_copy(line);
+        const std::string needle = "refs/tags/";
+        const std::size_t pos = line.find(needle);
+        if (pos == std::string::npos)
+          continue;
+        std::string tag = line.substr(pos + needle.size());
+        if (tag.size() > 3 && tag.rfind("^{}") == tag.size() - 3)
+          tag.resize(tag.size() - 3);
+        if (!is_semver_tag(tag, allowPrerelease))
+          continue;
+        candidates.push_back({semver_key_from_tag(tag), tag});
+      }
+
+      if (candidates.empty())
+        return {};
+
+      std::sort(candidates.begin(), candidates.end(), [](const auto &a, const auto &b)
+                { return vix::cli::util::semver::compare(a.first, b.first) > 0; });
+      return candidates.front().second;
+    }
+
+    static void split_compact_git_revision(ParsedArgs &parsed)
+    {
+      if (parsed.gitSpec.empty() || !parsed.gitTag.empty() || !parsed.gitBranch.empty() || !parsed.gitRev.empty())
+        return;
+      if (starts_with_local(parsed.gitSpec, "git@"))
+        return;
+
+      const std::size_t at = parsed.gitSpec.rfind('@');
+      if (at == std::string::npos || at == 0 || at + 1 >= parsed.gitSpec.size())
+        return;
+
+      const std::size_t slash = parsed.gitSpec.find_last_of("/\\");
+      if (slash != std::string::npos && at < slash)
+        return;
+
+      parsed.gitTag = parsed.gitSpec.substr(at + 1);
+      parsed.gitSpec = parsed.gitSpec.substr(0, at);
+    }
+
     static std::string resolve_git_commit_or_throw(
         const std::string &url,
         const std::string &tag,
@@ -1321,6 +1399,124 @@ namespace vix::commands
       std::sort(targets.begin(), targets.end());
       targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
       return targets;
+    }
+
+    static std::string read_text_file_or_empty_for_detection(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return {};
+      std::ostringstream out;
+      out << in.rdbuf();
+      return out.str();
+    }
+
+    static void add_generated_alias_candidates(
+        std::vector<std::string> &targets,
+        const fs::path &cmakeLists,
+        const std::string &repoName)
+    {
+      const std::string content = read_text_file_or_empty_for_detection(cmakeLists);
+      if (content.find(repoName + "::${target}") == std::string::npos &&
+          content.find(repoName + "::${TARGET}") == std::string::npos)
+        return;
+
+      if (std::find(targets.begin(), targets.end(), repoName) != targets.end())
+        targets.push_back(repoName + "::" + repoName);
+
+      std::sort(targets.begin(), targets.end());
+      targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    }
+
+    static std::string lower_string(std::string v)
+    {
+      std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c)
+                     { return static_cast<char>(std::tolower(c)); });
+      return v;
+    }
+
+    static std::string cmake_target_last_segment(const std::string &target)
+    {
+      const auto pos = target.rfind("::");
+      return pos == std::string::npos ? target : target.substr(pos + 2);
+    }
+
+    static bool cmake_target_looks_private(const std::string &target)
+    {
+      const std::string t = lower_string(cmake_target_last_segment(target));
+      return t == "test" || t == "tests" || t.find("test") != std::string::npos ||
+             t == "example" || t == "examples" || t.find("example") != std::string::npos ||
+             t == "benchmark" || t == "bench" || t.find("bench") != std::string::npos ||
+             t == "doc" || t == "docs" || t == "install" || t == "uninstall" ||
+             t == "package";
+    }
+
+    static std::optional<std::string> choose_cmake_target(
+        const std::vector<std::string> &targets,
+        const std::string &repoName)
+    {
+      const std::string repo = lower_string(repoName);
+      int bestScore = -1;
+      std::vector<std::string> best;
+
+      for (const std::string &target : targets)
+      {
+        if (cmake_target_looks_private(target))
+          continue;
+
+        const std::string t = lower_string(target);
+        const std::string last = lower_string(cmake_target_last_segment(target));
+        int score = 10;
+        if (t == repo + "::" + repo)
+          score = 100;
+        else if (t == repo)
+          score = 90;
+        else if (last == repo && t.find("::") != std::string::npos)
+          score = 80;
+        else if (t.rfind(repo + "::", 0) == 0)
+          score = 70;
+        else if (last.find(repo) != std::string::npos)
+          score = 50;
+
+        if (score > bestScore)
+        {
+          bestScore = score;
+          best.clear();
+          best.push_back(target);
+        }
+        else if (score == bestScore)
+        {
+          best.push_back(target);
+        }
+      }
+
+      if (best.size() == 1)
+        return best.front();
+
+      std::vector<std::string> namespaced;
+      for (const std::string &target : targets)
+      {
+        if (!cmake_target_looks_private(target) && target.find("::") != std::string::npos)
+          namespaced.push_back(target);
+      }
+      if (namespaced.size() == 1)
+        return namespaced.front();
+
+      if (best.empty() && targets.size() == 1 && !cmake_target_looks_private(targets.front()))
+        return targets.front();
+      return std::nullopt;
+    }
+
+    static std::vector<std::string> detect_header_include_roots(const fs::path &sourceDir)
+    {
+      std::vector<std::string> out;
+      for (const char *candidate : {"include", "single_include"})
+      {
+        std::error_code ec;
+        if (fs::is_directory(sourceDir / candidate, ec) && !ec)
+          out.push_back(candidate);
+      }
+      return out;
     }
 
     static std::vector<std::pair<std::string, std::string>> app_cmake_options_to_pairs(
@@ -2707,14 +2903,17 @@ namespace vix::commands
       return obj;
     }
 
-    static std::string requested_revision_text(const vix::cli::app::AppGitDependency &dep)
+    static std::string requested_revision_text_from_parts(
+        const std::string &tag,
+        const std::string &branch,
+        const std::string &rev)
     {
-      if (!dep.tag.empty())
-        return dep.tag;
-      if (!dep.branch.empty())
-        return dep.branch;
-      if (!dep.rev.empty())
-        return dep.rev;
+      if (!tag.empty())
+        return tag;
+      if (!branch.empty())
+        return branch;
+      if (!rev.empty())
+        return rev;
       return "HEAD";
     }
 
@@ -2739,7 +2938,11 @@ namespace vix::commands
 
       validate_git_dependency_paths_or_throw(appDep);
 
-      const std::string commit = resolve_git_commit_or_throw(appDep.git, appDep.tag, appDep.branch, appDep.rev);
+      std::string selectedTag = appDep.tag;
+      if (selectedTag.empty() && appDep.branch.empty() && appDep.rev.empty())
+        selectedTag = select_latest_stable_git_tag(appDep.git, false);
+
+      const std::string commit = resolve_git_commit_or_throw(appDep.git, selectedTag, appDep.branch, appDep.rev);
       const fs::path checkout = clone_git_to_cache_or_throw(appDep.git, commit);
       const fs::path sourceDir = appDep.subdirectory.empty() ? checkout : (checkout / appDep.subdirectory);
 
@@ -2750,9 +2953,9 @@ namespace vix::commands
       dep.id = appDep.name;
       dep.source = "git";
       dep.repo = appDep.git;
-      dep.requested = requested_revision_text(appDep);
+      dep.requested = requested_revision_text_from_parts(selectedTag, appDep.branch, appDep.rev);
       dep.version = commit.substr(0, std::min<std::size_t>(commit.size(), 12));
-      dep.tag = appDep.tag;
+      dep.tag = selectedTag;
       dep.commit = commit;
       dep.checkout = checkout;
       dep.hash = vix::cli::util::sha256_directory(checkout).value_or("");
@@ -2767,6 +2970,7 @@ namespace vix::commands
       dep.cmakeTargets = appDep.targets;
       dep.cmakeOptions = app_cmake_options_to_pairs(appDep.cmakeOptions);
 
+      const fs::path cmakeLists = sourceDir / "CMakeLists.txt";
       if (dep.headerOnly)
       {
         for (const std::string &include : dep.includes)
@@ -2775,29 +2979,44 @@ namespace vix::commands
             throw std::runtime_error("include path not found for dependency " + dep.id + ": " + include);
         }
       }
-      else
+      else if (fs::exists(cmakeLists))
       {
-        const fs::path cmakeLists = sourceDir / "CMakeLists.txt";
-        if (!fs::exists(cmakeLists))
-          throw std::runtime_error("The repository does not expose a supported CMake or header-only package: " + dep.id);
-
         if (dep.cmakeTargets.empty())
         {
-          const auto detected = detect_cmake_targets_from_file(cmakeLists);
-          if (detected.size() == 1)
+          auto detected = detect_cmake_targets_from_file(cmakeLists);
+          add_generated_alias_candidates(detected, cmakeLists, appDep.name);
+          const auto chosen = choose_cmake_target(detected, appDep.name);
+          if (chosen)
           {
-            dep.cmakeTargets = detected;
-            vix::cli::util::ok_line(std::cout, "detected CMake target " + detected.front());
+            dep.cmakeTargets = {*chosen};
           }
-          else if (detected.size() > 1)
+          else if (!detected.empty())
           {
             std::ostringstream msg;
-            msg << "The repository exposes multiple CMake targets:";
+            msg << "Could not choose a CMake target automatically\n\nRepository exposes:";
             for (const auto &target : detected)
               msg << "\n  " << target;
-            msg << "\nDeclare one in vix.app with target = \"<target>\".";
+            msg << "\n\nSelect one explicitly with --target <target>.";
             throw std::runtime_error(msg.str());
           }
+        }
+      }
+      else
+      {
+        dep.includes = detect_header_include_roots(sourceDir);
+        if (dep.includes.size() == 1)
+        {
+          dep.headerOnly = true;
+          dep.type = "header-only";
+          dep.include = dep.includes.front();
+        }
+        else if (dep.includes.size() > 1)
+        {
+          throw std::runtime_error("multiple header roots detected for dependency " + dep.id + "; use --header-only --include <path>");
+        }
+        else
+        {
+          throw std::runtime_error("The repository does not expose a supported CMake or header-only package: " + dep.id);
         }
       }
 
@@ -2932,11 +3151,71 @@ namespace vix::commands
       return out.str();
     }
 
+    static std::string normalize_project_name_from_dir(std::string raw)
+    {
+      std::string out;
+      bool dash = false;
+      for (char c : raw)
+      {
+        const unsigned char ch = static_cast<unsigned char>(c);
+        if (std::isalnum(ch))
+        {
+          out.push_back(static_cast<char>(std::tolower(ch)));
+          dash = false;
+        }
+        else if (!dash && !out.empty())
+        {
+          out.push_back('-');
+          dash = true;
+        }
+      }
+      while (!out.empty() && out.back() == '-')
+        out.pop_back();
+      if (out.empty() || !std::isalpha(static_cast<unsigned char>(out.front())))
+        out = "vix-project";
+      return out;
+    }
+
+    static void create_minimal_vix_app_if_missing(const fs::path &appPath)
+    {
+      if (fs::exists(appPath))
+        return;
+
+      std::vector<std::string> sources;
+      std::error_code ec;
+      for (const auto &entry : fs::directory_iterator(fs::current_path(), ec))
+      {
+        if (ec || !entry.is_regular_file())
+          continue;
+        const fs::path p = entry.path();
+        if (p.extension() == ".cpp" || p.extension() == ".cc" || p.extension() == ".cxx")
+          sources.push_back(p.filename().string());
+      }
+      std::sort(sources.begin(), sources.end());
+
+      std::ofstream out(appPath, std::ios::binary | std::ios::trunc);
+      if (!out)
+        throw std::runtime_error("cannot create vix.app");
+      out << "name = \"" << normalize_project_name_from_dir(fs::current_path().filename().string()) << "\"\n";
+      out << "type = \"executable\"\n";
+      out << "standard = \"c++20\"\n";
+      if (!sources.empty())
+      {
+        out << "sources = [";
+        for (std::size_t i = 0; i < sources.size(); ++i)
+        {
+          if (i)
+            out << ", ";
+          out << "\"" << sources[i] << "\"";
+        }
+        out << "]\n";
+      }
+    }
+
     static void append_git_dependency_to_vix_app(const ParsedArgs &parsed)
     {
       const fs::path appPath = fs::current_path() / "vix.app";
-      if (!fs::exists(appPath))
-        throw std::runtime_error("vix.app not found. Create a vix.app project before adding a Git dependency.");
+      create_minimal_vix_app_if_missing(appPath);
 
       std::string name = trim_copy(parsed.gitName.empty() ? git_url_to_default_name(parsed.gitSpec) : parsed.gitName);
       if (!is_safe_local_dep_name(name))
@@ -2975,6 +3254,46 @@ namespace vix::commands
         out << "include = \"" << parsed.gitInclude << "\"\n";
     }
 
+    static void ensure_line_in_dependency_block(
+        const fs::path &appPath,
+        const std::string &name,
+        const std::string &linePrefix,
+        const std::string &line)
+    {
+      std::string content = read_text_file_or_empty_local(appPath);
+      const std::string section = "[dependencies." + name + "]";
+      const std::size_t start = content.find(section);
+      if (start == std::string::npos)
+        return;
+      const std::size_t blockStart = content.find('\n', start);
+      const std::size_t next = content.find("\n[", blockStart == std::string::npos ? start : blockStart);
+      const std::size_t end = next == std::string::npos ? content.size() : next;
+      const std::string block = content.substr(start, end - start);
+      if (block.find(linePrefix) != std::string::npos)
+        return;
+      content.insert(end, "\n" + line);
+      std::ofstream out(appPath, std::ios::binary | std::ios::trunc);
+      out << content;
+    }
+
+    static void update_vix_app_with_detected_git_metadata(const std::vector<DepResolved> &resolved)
+    {
+      const fs::path appPath = fs::current_path() / "vix.app";
+      for (const DepResolved &dep : resolved)
+      {
+        if (!dep.tag.empty())
+          ensure_line_in_dependency_block(appPath, dep.id, "tag", "tag = \"" + dep.tag + "\"");
+        if (!dep.cmakeTargets.empty())
+          ensure_line_in_dependency_block(appPath, dep.id, "target", "target = \"" + dep.cmakeTargets.front() + "\"");
+        if (dep.headerOnly)
+        {
+          ensure_line_in_dependency_block(appPath, dep.id, "header_only", "header_only = true");
+          if (!dep.includes.empty())
+            ensure_line_in_dependency_block(appPath, dep.id, "include", "include = \"" + dep.includes.front() + "\"");
+        }
+      }
+    }
+
     static int install_git_dependency_from_cli(const ParsedArgs &parsed)
     {
       const auto started = std::chrono::steady_clock::now();
@@ -2994,7 +3313,8 @@ namespace vix::commands
       try
       {
         append_git_dependency_to_vix_app(parsed);
-        sync_vix_app_git_dependencies();
+        const auto resolved = sync_vix_app_git_dependencies();
+        update_vix_app_with_detected_git_metadata(resolved);
       }
       catch (const std::exception &ex)
       {
@@ -3246,7 +3566,8 @@ namespace vix::commands
 
         << "Examples\n"
         << "  vix install\n"
-        << "  vix install https://github.com/fmtlib/fmt --tag 11.2.0 --target fmt::fmt\n"
+        << "  vix install https://github.com/fmtlib/fmt\n"
+        << "  vix install https://github.com/fmtlib/fmt@11.2.0\n"
         << "  vix install https://github.com/nlohmann/json.git --tag v3.12.0 --target nlohmann_json::nlohmann_json\n"
         << "  vix install https://github.com/example/headers --header-only --include include\n"
         << "  vix install git@github.com:company/repo.git --name parser --subdirectory libs/parser --target company::parser\n"
@@ -3264,6 +3585,8 @@ namespace vix::commands
         << "\n"
         << "  • Git dependency mode:\n"
         << "    - Adds a [dependencies.<name>] block to vix.app\n"
+        << "    - Auto-selects the newest stable SemVer tag when no revision is provided\n"
+        << "    - Auto-detects the main CMake target when possible\n"
         << "    - Resolves tag, branch, rev, or HEAD to an exact commit\n"
         << "    - Stores the checkout in ~/.vix/cache/git/ and links it into ./.vix/deps/\n"
         << "    - Supports CMake repositories and header-only repositories\n"
@@ -3276,7 +3599,7 @@ namespace vix::commands
 
         << "Git options\n"
         << "  --name <name>           Local dependency name in vix.app\n"
-        << "  --tag <tag>             Resolve a Git tag\n"
+        << "  --tag <tag>             Resolve a Git tag; also supports <url>@<tag>\n"
         << "  --branch <branch>       Resolve a Git branch to a commit\n"
         << "  --rev <commit>          Use a commit/revision\n"
         << "  --target <target>       CMake target to link, e.g. fmt::fmt\n"

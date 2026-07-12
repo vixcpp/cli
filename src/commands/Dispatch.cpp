@@ -13,6 +13,7 @@
  */
 #include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/NewCommand.hpp>
+#include <vix/cli/commands/InitCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
@@ -83,6 +84,14 @@ namespace vix::cli::dispatch
          { return vix::commands::NewCommand::run(a); },
          []()
          { return vix::commands::NewCommand::help(); }});
+
+    add({"init",
+         "Project",
+         "Initialize current directory",
+         [](const Args &a)
+         { return vix::commands::InitCommand::run(a); },
+         []()
+         { return vix::commands::InitCommand::help(); }});
 
     add({"completion",
          "Info",

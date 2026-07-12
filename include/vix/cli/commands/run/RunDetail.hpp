@@ -168,6 +168,9 @@ namespace vix::commands::RunCommand::detail
     bool devMode{false};
     bool replay = false;
 
+    std::vector<std::string> tempDeps;
+    bool saveTempDeps = false;
+
     bool fullstackVue = false;
   };
 

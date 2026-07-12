@@ -571,17 +571,69 @@ namespace vix::commands
       return r.out;
     }
 
-    static bool git_remote_tag_exists(const std::string &tag)
+    enum class RemoteGitFailure
     {
+      none,
+      tagMissing,
+      network,
+      authentication,
+      repository,
+      unknown,
+    };
+
+    struct RemoteTagLookup
+    {
+      std::optional<std::string> commit;
+      RemoteGitFailure failure{RemoteGitFailure::none};
+      std::string detail;
+    };
+
+    static RemoteGitFailure classify_git_remote_error(const ProcessResult &r)
+    {
+      const std::string text = lower_copy(r.err + "\n" + r.out);
+      if (text.find("could not resolve host") != std::string::npos ||
+          text.find("temporary failure") != std::string::npos ||
+          text.find("network is unreachable") != std::string::npos ||
+          text.find("connection timed out") != std::string::npos ||
+          text.find("connection reset") != std::string::npos ||
+          text.find("failed to connect") != std::string::npos ||
+          text.find("unable to access") != std::string::npos ||
+          text.find("gnutls recv error") != std::string::npos ||
+          text.find("tls") != std::string::npos)
+        return RemoteGitFailure::network;
+
+      if (text.find("authentication failed") != std::string::npos ||
+          text.find("permission denied") != std::string::npos ||
+          text.find("could not read from remote repository") != std::string::npos ||
+          text.find("repository access denied") != std::string::npos)
+        return RemoteGitFailure::authentication;
+
+      if (text.find("repository not found") != std::string::npos ||
+          text.find("not found") != std::string::npos ||
+          text.find("does not appear to be a git repository") != std::string::npos)
+        return RemoteGitFailure::repository;
+
+      return RemoteGitFailure::unknown;
+    }
+
+    static std::string remote_git_failure_message(RemoteGitFailure failure, const std::string &tag)
+    {
+      switch (failure)
       {
-        const auto r = run_process_capture({"git", "ls-remote", "--tags", "origin", "refs/tags/" + tag});
-        if (r.exitCode == 0 && !r.out.empty())
-          return true;
+      case RemoteGitFailure::tagMissing:
+        return "Tag " + tag + " is not on origin\n  Run: git push origin " + tag;
+      case RemoteGitFailure::network:
+        return "Cannot reach git origin to verify tag " + tag + "\n  Check your network connection and try again.";
+      case RemoteGitFailure::authentication:
+        return "Cannot access git origin to verify tag " + tag + "\n  Check your Git credentials for origin.";
+      case RemoteGitFailure::repository:
+        return "Git origin repository could not be found\n  Check: git remote -v";
+      case RemoteGitFailure::unknown:
+        return "Could not verify tag " + tag + " on origin";
+      case RemoteGitFailure::none:
+        return {};
       }
-      {
-        const auto r = run_process_capture({"git", "ls-remote", "--tags", "origin", "refs/tags/" + tag + "^{}"});
-        return (r.exitCode == 0 && !r.out.empty());
-      }
+      return "Could not verify tag " + tag + " on origin";
     }
 
     static bool looks_like_semver_tag(const std::string &tag)
@@ -656,13 +708,6 @@ namespace vix::commands
               ". Create it first or run `vix publish` without a version to use the latest git tag");
         }
 
-        if (!git_remote_tag_exists(tag))
-        {
-          throw std::runtime_error(
-              "tag not found on remote origin: " + tag +
-              ". Push it first with: git push origin " + tag);
-        }
-
         return explicitVersion;
       }
 
@@ -674,13 +719,6 @@ namespace vix::commands
       }
 
       const std::string tag = "v" + *detected;
-
-      if (!git_remote_tag_exists(tag))
-      {
-        throw std::runtime_error(
-            "local tag exists, but it has not been pushed to origin: " + tag +
-            ". Run: git push origin " + tag);
-      }
 
       return detected;
     }
@@ -782,11 +820,23 @@ namespace vix::commands
       return trim_copy(r.out);
     }
 
-    static std::optional<std::string> git_remote_commit_for_tag(const std::string &tag)
+    static RemoteTagLookup git_remote_commit_for_tag(const std::string &tag)
     {
       const auto r = run_process_capture({"git", "ls-remote", "--tags", "origin", "refs/tags/" + tag, "refs/tags/" + tag + "^{}"});
-      if (r.exitCode != 0 || trim_copy(r.out).empty())
-        return std::nullopt;
+      RemoteTagLookup lookup;
+      lookup.detail = trim_copy(r.err.empty() ? r.out : r.err);
+
+      if (r.exitCode != 0)
+      {
+        lookup.failure = classify_git_remote_error(r);
+        return lookup;
+      }
+
+      if (trim_copy(r.out).empty())
+      {
+        lookup.failure = RemoteGitFailure::tagMissing;
+        return lookup;
+      }
 
       std::istringstream iss(r.out);
       std::string line;
@@ -804,11 +854,16 @@ namespace vix::commands
         if (first.empty())
           first = sha;
         if (ref == "refs/tags/" + tag + "^{}")
-          return sha;
+        {
+          lookup.commit = sha;
+          return lookup;
+        }
       }
       if (!first.empty())
-        return first;
-      return std::nullopt;
+        lookup.commit = first;
+      else
+        lookup.failure = RemoteGitFailure::tagMissing;
+      return lookup;
     }
 
     static bool is_valid_package_atom(const std::string &value)
@@ -1468,24 +1523,6 @@ namespace vix::commands
       }
       const std::string commit = *commitOpt;
 
-      const auto remoteCommitOpt = git_remote_commit_for_tag(tag);
-      if (!remoteCommitOpt)
-      {
-        vix::cli::util::err_line(std::cerr, "Tag " + tag + " is not on origin");
-        vix::cli::util::warn_line(std::cerr, "Run: git push origin " + tag);
-        return 1;
-      }
-
-      if (*remoteCommitOpt != commit)
-      {
-        vix::cli::util::err_line(std::cerr, "Tag local and origin commits differ");
-        if (opt.verbose)
-        {
-          vix::cli::util::kv(std::cerr, "local", commit);
-          vix::cli::util::kv(std::cerr, "origin", *remoteCommitOpt);
-        }
-        return 1;
-      }
 
       const auto originRaw = git_origin_url();
       if (!originRaw)
@@ -1545,6 +1582,26 @@ namespace vix::commands
       catch (const std::exception &ex)
       {
         vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
+      const auto remoteTag = git_remote_commit_for_tag(tag);
+      if (!remoteTag.commit)
+      {
+        vix::cli::util::err_line(std::cerr, remote_git_failure_message(remoteTag.failure, tag));
+        if (opt.verbose && !remoteTag.detail.empty())
+          vix::cli::util::kv(std::cerr, "git", remoteTag.detail);
+        return 1;
+      }
+
+      if (*remoteTag.commit != commit)
+      {
+        vix::cli::util::err_line(std::cerr, "Tag local and origin commits differ");
+        if (opt.verbose)
+        {
+          vix::cli::util::kv(std::cerr, "local", commit);
+          vix::cli::util::kv(std::cerr, "origin", *remoteTag.commit);
+        }
         return 1;
       }
 

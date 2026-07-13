@@ -34,6 +34,12 @@ if (TARGET vix_warnings)
   target_link_libraries(vix_cli_cmake_build_errors_tests PRIVATE vix_warnings)
 endif()
 
+if (COMMAND vix_enable_sanitizers)
+  vix_enable_sanitizers(vix_cli_cmake_build_errors_tests)
+elseif (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
+  target_link_libraries(vix_cli_cmake_build_errors_tests PRIVATE vix_sanitizers)
+endif()
+
 add_test(
   NAME vix_cli_cmake_build_errors_tests
   COMMAND vix_cli_cmake_build_errors_tests
@@ -61,6 +67,12 @@ endif()
 
 if (TARGET vix_warnings)
   target_link_libraries(vix_cli_package_hash_tests PRIVATE vix_warnings)
+endif()
+
+if (COMMAND vix_enable_sanitizers)
+  vix_enable_sanitizers(vix_cli_package_hash_tests)
+elseif (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
+  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix_sanitizers)
 endif()
 
 add_test(

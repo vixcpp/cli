@@ -40,6 +40,34 @@ add_test(
 )
 
 
+
+add_executable(vix_cli_package_hash_tests
+  PackageHashTests.cpp
+  ../src/util/Hash.cpp
+  ../src/util/Fs.cpp
+)
+
+target_include_directories(vix_cli_package_hash_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+if (TARGET vix::crypto)
+  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix::crypto)
+endif()
+
+if (TARGET vix::utils)
+  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix::utils)
+endif()
+
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix_warnings)
+endif()
+
+add_test(
+  NAME vix_cli_package_hash_tests
+  COMMAND vix_cli_package_hash_tests
+)
+
 add_test(
   NAME vix_cli_global_install_ovi
   COMMAND
@@ -73,5 +101,12 @@ add_test(
   NAME vix_cli_publish_preflight
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/PublishPreflightTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
+  NAME vix_cli_registry_integrity
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/RegistryIntegrityTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )

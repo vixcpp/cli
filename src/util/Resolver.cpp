@@ -433,7 +433,7 @@ namespace vix::cli::util::resolver
       std::string installedDir;
       clone_checkout_or_throw(repoUrl, idDot, commit, installedDir);
 
-      const auto contentHash = vix::cli::util::sha256_directory(installedDir);
+      const auto contentHash = vix::cli::util::sha256_package_directory(installedDir);
       const std::string hashStr = contentHash.value_or("");
 
       upsert_locked_dependency(
@@ -445,7 +445,9 @@ namespace vix::cli::util::resolver
               repoUrl,
               tag,
               commit,
-              hashStr});
+              hashStr,
+              vix::cli::util::PACKAGE_HASH_ALGORITHM,
+              vix::cli::util::PACKAGE_HASH_VERSION});
 
       const auto transitiveDependencies = read_vix_json_deps_v1(fs::path(installedDir));
       for (auto transitiveSpec : transitiveDependencies)

@@ -28,6 +28,8 @@ namespace vix::cli::util::lockfile
     std::string tag;
     std::string commit;
     std::string hash;
+    std::string hashAlgorithm;
+    int hashVersion{0};
   };
 
   void write_lockfile_replace_all_or_throw(

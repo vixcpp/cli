@@ -36,6 +36,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -55,6 +56,7 @@
 #include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/cli/sdk/SdkProfiles.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -71,9 +73,13 @@ namespace vix::commands::BuildCommand
   {
     static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
 
+    static bool g_sdk_resolution_failed = false;
+
     static std::string platform_executable_name(const std::string &name);
 
     static void write_last_binary(const fs::path &path);
+
+    static bool resolve_sdk_for_plan(process::Plan &plan);
 
     static std::optional<fs::path> resolve_main_executable(
         const fs::path &buildDir,
@@ -1148,7 +1154,8 @@ namespace vix::commands::BuildCommand
         const fs::path &toolchainFile,
         const std::optional<std::string> &launcher,
         const std::optional<std::string> &fastLinkerFlag,
-        const fs::path &globalPackagesFile)
+        const fs::path &globalPackagesFile,
+        const fs::path &sdkConfigDir)
     {
       std::vector<std::pair<std::string, std::string>> vars;
       vars.reserve(32);
@@ -1192,6 +1199,9 @@ namespace vix::commands::BuildCommand
         vars.emplace_back("VIX_TARGET_TRIPLE", opt.targetTriple);
 
       (void)globalPackagesFile;
+
+      if (!sdkConfigDir.empty())
+        vars.emplace_back("Vix_DIR", sdkConfigDir.string());
 
       if (launcher && !launcher->empty())
       {
@@ -1361,6 +1371,8 @@ namespace vix::commands::BuildCommand
         const process::Options &opt,
         const fs::path &cwd)
     {
+      g_sdk_resolution_failed = false;
+
       fs::path base = cwd;
 
       if (!opt.dir.empty())
@@ -1442,6 +1454,12 @@ namespace vix::commands::BuildCommand
 
       const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
+      if (!resolve_sdk_for_plan(plan))
+      {
+        g_sdk_resolution_failed = true;
+        return std::nullopt;
+      }
+
       std::string toolchainContent;
 
       if (!opt.targetTriple.empty())
@@ -1456,7 +1474,8 @@ namespace vix::commands::BuildCommand
           plan.toolchainFile,
           plan.launcher,
           plan.fastLinkerFlag,
-          globalPackagesFile);
+          globalPackagesFile,
+          plan.sdkConfigDir);
 
       plan.signature = make_signature(plan, opt, toolchainContent);
 
@@ -1649,6 +1668,160 @@ namespace vix::commands::BuildCommand
           << json_escape_string(fs::absolute(path).string())
           << "\"\n";
       out << "}\n";
+    }
+
+
+    static bool sdk_scan_skip_dir(const fs::path &path)
+    {
+      for (const auto &part : path)
+      {
+        const std::string item = part.string();
+        if (item == ".git" || item == "build" || item == "build-ninja" ||
+            item == "build-release" || item == "CMakeFiles" || item == "_deps" ||
+            item == "node_modules")
+          return true;
+      }
+      return false;
+    }
+
+    static bool sdk_scan_file_name(const fs::path &path)
+    {
+      const std::string name = path.filename().string();
+      return name == "CMakeLists.txt" || name == "vix.app" ||
+             name == "vix.module" || path.extension() == ".cmake";
+    }
+
+    static void collect_vix_targets_from_text(const std::string &text, std::set<std::string> &targets)
+    {
+      const std::string prefix = "vix::";
+      std::size_t pos = 0;
+      while ((pos = text.find(prefix, pos)) != std::string::npos)
+      {
+        std::size_t end = pos + prefix.size();
+        while (end < text.size())
+        {
+          const unsigned char c = static_cast<unsigned char>(text[end]);
+          if (!(std::isalnum(c) || text[end] == '_'))
+            break;
+          ++end;
+        }
+        if (end > pos + prefix.size())
+          targets.insert(text.substr(pos, end - pos));
+        pos = end;
+      }
+    }
+
+    static std::set<std::string> collect_project_vix_targets(const fs::path &projectDir, const fs::path &cmakeSourceDir)
+    {
+      std::set<std::string> targets;
+      std::vector<fs::path> roots{projectDir};
+      if (!cmakeSourceDir.empty() && cmakeSourceDir != projectDir)
+        roots.push_back(cmakeSourceDir);
+
+      for (const fs::path &root : roots)
+      {
+        std::error_code ec;
+        if (!fs::exists(root, ec) || ec)
+          continue;
+
+        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+             !ec && it != fs::recursive_directory_iterator(); ++it)
+        {
+          const fs::path path = it->path();
+          if (it->is_directory(ec))
+          {
+            if (sdk_scan_skip_dir(path.lexically_relative(root)))
+              it.disable_recursion_pending();
+            continue;
+          }
+
+          if (!it->is_regular_file(ec) || !sdk_scan_file_name(path))
+            continue;
+
+          collect_vix_targets_from_text(util::read_text_file_or_empty(path), targets);
+        }
+      }
+
+      return targets;
+    }
+
+    static std::string join_words(const std::vector<std::string> &items)
+    {
+      std::string out;
+      for (const std::string &item : items)
+      {
+        if (!out.empty())
+          out += " ";
+        out += item;
+      }
+      return out;
+    }
+
+    static void print_missing_sdk_modules(const vix::cli::sdk::SdkResolution &resolution)
+    {
+      error("Missing SDK modules:");
+      for (const std::string &module : resolution.missingModules)
+      {
+        const auto providerIt = resolution.moduleProviders.find(module);
+        const std::string provider = providerIt == resolution.moduleProviders.end() ? "unknown" : providerIt->second;
+        hint("  " + vix::cli::sdk::target_for_module(module) + "  provider profile: " + provider);
+      }
+
+      std::vector<std::string> profiles;
+      for (const std::string &module : resolution.missingModules)
+      {
+        const auto providerIt = resolution.moduleProviders.find(module);
+        if (providerIt != resolution.moduleProviders.end())
+          profiles.push_back(providerIt->second);
+      }
+      std::sort(profiles.begin(), profiles.end());
+      profiles.erase(std::unique(profiles.begin(), profiles.end()), profiles.end());
+      if (!profiles.empty())
+        hint("install command: vix upgrade --sdk " + join_words(profiles));
+    }
+
+    static bool resolve_sdk_for_plan(process::Plan &plan)
+    {
+      const std::set<std::string> targets = collect_project_vix_targets(plan.userProjectDir, plan.cmakeSourceDir);
+      const std::set<std::string> modules = vix::cli::sdk::normalize_required_vix_targets(targets);
+      const vix::cli::sdk::SdkResolution resolution = vix::cli::sdk::resolve_profiles_for_modules(modules);
+
+      if (resolution.selectedProfiles.empty())
+        return true;
+
+      if (!resolution.ok)
+      {
+        if (!resolution.error.empty())
+        {
+          error(resolution.error);
+          hint("Install a coherent SDK set: vix upgrade --sdk " + join_words(resolution.selectedProfiles));
+        }
+        if (!resolution.missingModules.empty())
+          print_missing_sdk_modules(resolution);
+        return false;
+      }
+
+      if (resolution.selectedProfiles.size() == 1)
+      {
+        const auto it = resolution.installed.find(resolution.selectedProfiles.front());
+        if (it == resolution.installed.end())
+          return true;
+        plan.sdkConfigDir = it->second.configDir;
+        return true;
+      }
+
+      const std::string identity = resolution.version + "-" + join_words(resolution.selectedProfiles);
+      fs::path composedRoot = plan.buildDir / ".vix-sdk" / identity;
+      std::string sdkError;
+      if (!vix::cli::sdk::write_composed_sdk_config(composedRoot, resolution, sdkError))
+      {
+        error("Unable to compose installed Vix SDK profiles.");
+        hint(sdkError);
+        return false;
+      }
+
+      plan.sdkConfigDir = composedRoot / "lib" / "cmake" / "Vix";
+      return true;
     }
 
     static bool export_built_binary(
@@ -3079,6 +3252,9 @@ namespace vix::commands::BuildCommand
         const auto planOpt = make_plan(opt_, cwd);
         if (!planOpt)
         {
+          if (g_sdk_resolution_failed)
+            return 1;
+
           error("Unable to determine the project directory (missing CMakeLists.txt?)");
           hint("Run from your project root, or pass: vix build --dir <path>");
           return 1;
@@ -3159,7 +3335,8 @@ namespace vix::commands::BuildCommand
             plan_.toolchainFile,
             plan_.launcher,
             plan_.fastLinkerFlag,
-            globalPackagesFile);
+            globalPackagesFile,
+            plan_.sdkConfigDir);
 
         if (!opt_.targetTriple.empty())
         {

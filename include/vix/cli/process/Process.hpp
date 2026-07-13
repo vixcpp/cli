@@ -314,6 +314,11 @@ namespace vix::cli::process
     fs::path toolchainFile;
 
     /**
+     * @brief Resolved Vix SDK CMake package directory, when SDK selection is required.
+     */
+    fs::path sdkConfigDir;
+
+    /**
      * @brief Resolved CMake cache variables passed during configure.
      */
     std::vector<std::pair<std::string, std::string>> cmakeVars;

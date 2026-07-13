@@ -30,7 +30,8 @@ namespace vix::cli::sdk
     {
       std::transform(
           s.begin(), s.end(), s.begin(),
-          [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+          [](unsigned char c)
+          { return static_cast<char>(std::tolower(c)); });
       return s;
     }
 
@@ -228,22 +229,86 @@ namespace vix::cli::sdk
         const std::string &text,
         const std::string &target)
     {
-      const std::string needle = "set_property(TARGET " + target + " APPEND PROPERTY IMPORTED_CONFIGURATIONS";
-      const std::size_t found = text.find(needle);
-      if (found == std::string::npos)
-        return std::nullopt;
+      const std::string importHeader = "# Import target \"" + target + "\"";
+      std::size_t begin = text.find(importHeader);
+      if (begin == std::string::npos)
+      {
+        const std::string needle = "set_property(TARGET " + target + " APPEND PROPERTY IMPORTED_CONFIGURATIONS";
+        const std::size_t found = text.find(needle);
+        if (found == std::string::npos)
+          return std::nullopt;
 
-      const std::size_t startLine = text.rfind('\n', found);
-      const std::size_t begin = (startLine == std::string::npos) ? 0 : startLine + 1;
+        const std::size_t startLine = text.rfind('\n', found);
+        begin = (startLine == std::string::npos) ? 0 : startLine + 1;
+      }
+      else
+      {
+        const std::size_t startLine = text.rfind('\n', begin);
+        begin = (startLine == std::string::npos) ? 0 : startLine + 1;
+      }
 
       std::size_t next = text.find("\n# Import target \"", begin + 1);
-      const std::size_t check = text.find("\nlist(APPEND _cmake_import_check_targets", begin + 1);
-      if (next == std::string::npos || (check != std::string::npos && check < next))
-        next = check;
       if (next == std::string::npos)
         next = text.size();
 
       return text.substr(begin, next - begin);
+    }
+
+    std::string trim_copy_local(const std::string &value)
+    {
+      std::size_t first = 0;
+      while (first < value.size() && std::isspace(static_cast<unsigned char>(value[first])))
+        ++first;
+      std::size_t last = value.size();
+      while (last > first && std::isspace(static_cast<unsigned char>(value[last - 1])))
+        --last;
+      return value.substr(first, last - first);
+    }
+
+    bool starts_with_local(const std::string &value, const std::string &prefix)
+    {
+      return value.rfind(prefix, 0) == 0;
+    }
+
+    std::string target_overlay_block(
+        const std::string &targetBlock,
+        const std::string &target,
+        const fs::path &installDir)
+    {
+      const std::string rewritten = replace_import_prefix(targetBlock, installDir);
+      std::istringstream in(rewritten);
+      std::ostringstream body;
+      std::string addArgs = "INTERFACE IMPORTED";
+      std::string line;
+
+      while (std::getline(in, line))
+      {
+        const std::string trimmed = trim_copy_local(line);
+        const std::string addPrefix = "add_library(" + target;
+        if (starts_with_local(trimmed, "# Create imported target "))
+          continue;
+        if (trimmed == "if(NOT TARGET " + target + ")" ||
+            trimmed == "if (NOT TARGET " + target + ")")
+          continue;
+        if (starts_with_local(trimmed, addPrefix))
+        {
+          const std::size_t argBegin = trimmed.find(target) + target.size();
+          const std::size_t argEnd = trimmed.rfind(')');
+          if (argEnd != std::string::npos && argEnd > argBegin)
+            addArgs = trim_copy_local(trimmed.substr(argBegin, argEnd - argBegin));
+          continue;
+        }
+        if (trimmed == "endif()")
+          continue;
+        body << line << "\n";
+      }
+
+      std::ostringstream out;
+      out << "if(NOT TARGET " << target << ")\n";
+      out << "  add_library(" << target << " " << addArgs << ")\n";
+      out << "endif()\n";
+      out << body.str();
+      return out.str();
     }
 
     std::string profile_for_module_or_empty(const std::string &module)
@@ -562,16 +627,29 @@ namespace vix::cli::sdk
     config << "set(VIX_COMPOSED_SDK_VERSION \"" << resolution.version << "\")\n";
     config << "set(VIX_COMPOSED_SDK_PROFILES \"" << join_strings(resolution.selectedProfiles, ";") << "\")\n\n";
 
+    std::map<std::string, std::string> overlayProviders = resolution.moduleProviders;
+    for (const std::string &profile : resolution.selectedProfiles)
+    {
+      if (profile == primaryProfile)
+        continue;
+      const auto info = profile_info(profile);
+      if (!info)
+        continue;
+      for (const std::string &module : info->modules)
+      {
+        const auto provider = provider_profile_for_module(module);
+        if (provider && *provider == profile)
+          overlayProviders[module] = profile;
+      }
+    }
+
     std::ostringstream overlays;
-    for (const auto &[module, provider] : resolution.moduleProviders)
+    for (const auto &[module, provider] : overlayProviders)
     {
       if (provider == primaryProfile)
         continue;
       const auto sdkIt = resolution.installed.find(provider);
       if (sdkIt == resolution.installed.end())
-        continue;
-
-      if (profile_has_module(primaryProfile, module))
         continue;
 
       const std::string exportedTarget = module_to_exported_target(module);
@@ -584,8 +662,7 @@ namespace vix::cli::sdk
         return false;
       }
 
-      overlays << "if(NOT TARGET " << exportedTarget << ")\n";
-      overlays << replace_import_prefix(*targetBlock, sdkIt->second.installDir) << "\n";
+      overlays << target_overlay_block(*targetBlock, exportedTarget, sdkIt->second.installDir) << "\n";
       for (const fs::path &configFile : target_config_files(sdkIt->second))
       {
         const std::string configText = read_text(configFile);
@@ -593,7 +670,7 @@ namespace vix::cli::sdk
         if (configBlock)
           overlays << replace_import_prefix(*configBlock, sdkIt->second.installDir) << "\n";
       }
-      overlays << "endif()\n\n";
+      overlays << "\n";
 
       if (publicTarget != exportedTarget)
       {
@@ -618,10 +695,17 @@ namespace vix::cli::sdk
     if (!write_text(configDir / "VixConfig.cmake", config.str(), error))
       return false;
 
+    const std::string lowercaseConfig = "include(\"${CMAKE_CURRENT_LIST_DIR}/VixConfig.cmake\")\n";
+    if (!write_text(configDir / "vixConfig.cmake", lowercaseConfig, error))
+      return false;
+
     const fs::path primaryVersion = primaryIt->second.configDir / "VixConfigVersion.cmake";
     if (file_exists(primaryVersion))
     {
-      if (!write_text(configDir / "VixConfigVersion.cmake", read_text(primaryVersion), error))
+      const std::string versionText = read_text(primaryVersion);
+      if (!write_text(configDir / "VixConfigVersion.cmake", versionText, error))
+        return false;
+      if (!write_text(configDir / "vixConfigVersion.cmake", versionText, error))
         return false;
     }
 

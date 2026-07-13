@@ -110,3 +110,10 @@ add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/RegistryIntegrityTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
+
+add_test(
+  NAME vix_cli_sdk_profile_composition
+  COMMAND
+    ${CMAKE_CURRENT_SOURCE_DIR}/SdkProfileCompositionTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)

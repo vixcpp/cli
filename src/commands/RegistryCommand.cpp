@@ -81,9 +81,10 @@ namespace vix::commands
       return name;
     }
 
-    static int normalize_registry_worktree(const fs::path &dir)
+    static int normalize_registry_worktree(const fs::path &dir, bool quiet)
     {
-      step("fetching origin (prune)...");
+      if (!quiet)
+        step("fetching origin (prune)...");
       {
         const std::string cmd =
             "git -C " + dir.string() + " fetch -q origin --prune";
@@ -92,7 +93,8 @@ namespace vix::commands
           return rc;
       }
 
-      step("checking out main...");
+      if (!quiet)
+        step("checking out main...");
       {
         const std::string cmd =
             "git -C " + dir.string() + " checkout -q -B main origin/main";
@@ -101,7 +103,8 @@ namespace vix::commands
           return rc;
       }
 
-      step("resetting to origin/main...");
+      if (!quiet)
+        step("resetting to origin/main...");
       {
         const std::string cmd =
             "git -C " + dir.string() + " reset -q --hard origin/main";
@@ -161,59 +164,73 @@ namespace vix::commands
       return 0;
     }
 
-    int sync_registry()
+    int sync_registry_impl(bool quiet, bool manualHints)
     {
       const fs::path dir = registry_dir();
       fs::create_directories(dir.parent_path());
 
-      vix::cli::util::section(std::cout, "Registry");
-      vix::cli::util::kv(std::cout, "path", dir.string());
+      if (!quiet)
+      {
+        vix::cli::util::section(std::cout, "Registry");
+        vix::cli::util::kv(std::cout, "path", dir.string());
+      }
+
+      auto print_sync_failure = [&]()
+      {
+        if (!quiet)
+          vix::cli::util::err_line(std::cerr, "registry sync failed");
+        if (manualHints)
+          vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
+        if (manualHints && !vix::cli::util::debug_enabled())
+          vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+      };
 
       if (!fs::exists(dir))
       {
-        step("cloning index (depth=1)...");
+        if (!quiet)
+          step("cloning index (depth=1)...");
         const std::string cmd =
             "git clone -q --depth 1 " + registry_repo_url() + " " + dir.string();
 
         const int rc = git_run(cmd);
         if (rc != 0)
         {
-          vix::cli::util::err_line(std::cerr, "registry sync failed");
-          vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
-          if (!vix::cli::util::debug_enabled())
-            vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+          print_sync_failure();
           return rc;
         }
 
-        const int nrc = normalize_registry_worktree(dir);
+        const int nrc = normalize_registry_worktree(dir, quiet);
         if (nrc != 0)
         {
-          vix::cli::util::err_line(std::cerr, "registry sync failed");
-          vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
-          if (!vix::cli::util::debug_enabled())
-            vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+          print_sync_failure();
           return nrc;
         }
 
-        vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
+        if (!quiet)
+          vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
         return 0;
       }
 
-      step("normalizing worktree...");
-      const int nrc = normalize_registry_worktree(dir);
+      if (!quiet)
+        step("normalizing worktree...");
+      const int nrc = normalize_registry_worktree(dir, quiet);
       if (nrc != 0)
       {
-        vix::cli::util::err_line(std::cerr, "registry sync failed");
-        vix::cli::util::warn_line(std::cerr, "Check network + git access, then retry: vix registry sync");
-        if (!vix::cli::util::debug_enabled())
-          vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
+        print_sync_failure();
         return nrc;
       }
 
-      vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
+      if (!quiet)
+        vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
       return 0;
     }
   } // namespace
+
+
+  int RegistryCommand::sync(bool quiet, bool manualHints)
+  {
+    return sync_registry_impl(quiet, manualHints);
+  }
 
   int RegistryCommand::run(const std::vector<std::string> &args)
   {
@@ -223,7 +240,7 @@ namespace vix::commands
     const std::string sub = args[0];
 
     if (sub == "sync")
-      return sync_registry();
+      return RegistryCommand::sync();
 
     if (sub == "path")
     {

@@ -8,6 +8,7 @@ namespace vix::commands
 {
   struct RegistryCommand
   {
+    static int sync(bool quiet = false, bool manualHints = true);
     static int run(const std::vector<std::string> &args);
     static int help();
   };

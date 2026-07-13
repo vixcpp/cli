@@ -460,7 +460,9 @@ if (TARGET vix_warnings)
   target_link_libraries(vix_cli PRIVATE vix_warnings)
 endif()
 
-if (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
+if (COMMAND vix_enable_sanitizers)
+  vix_enable_sanitizers(vix_cli)
+elseif (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
   target_link_libraries(vix_cli PRIVATE vix_sanitizers)
 endif()
 

@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Shell.hpp>
@@ -653,6 +654,193 @@ namespace vix::commands
              dep.hashVersion == vix::cli::util::PACKAGE_HASH_VERSION;
     }
 
+    enum class RegistryLockValidation
+    {
+      Match,
+      Missing,
+      Mismatch,
+    };
+
+    static RegistryLockValidation validate_locked_registry_metadata(
+        const DepResolved &dep,
+        std::string &reason)
+    {
+      reason.clear();
+
+      if (dep.source == "git")
+      {
+        reason = "Git dependencies do not have registry metadata.";
+        return RegistryLockValidation::Mismatch;
+      }
+
+      PkgSpec spec;
+      if (!parse_pkg_spec(dep.id, spec))
+      {
+        reason = "invalid package id in vix.lock: " + dep.id;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      const fs::path p = entry_path(spec.ns, spec.name);
+      if (!fs::exists(p))
+      {
+        reason = "registry metadata not available for " + dep.id;
+        return RegistryLockValidation::Missing;
+      }
+
+      json entry;
+      try
+      {
+        entry = read_json_or_throw(p);
+      }
+      catch (const std::exception &ex)
+      {
+        reason = std::string("cannot read registry metadata for ") + dep.id + ": " + ex.what();
+        return RegistryLockValidation::Mismatch;
+      }
+
+      const std::string registryId = entry.value("id", dep.id);
+      if (registryId != dep.id)
+      {
+        reason = "registry metadata id changed for " + dep.id;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      if (!entry.contains("repo") || !entry["repo"].is_object() ||
+          !entry["repo"].contains("url") || !entry["repo"]["url"].is_string())
+      {
+        reason = "registry metadata is missing repo.url for " + dep.id;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      const std::string registryRepo = entry["repo"]["url"].get<std::string>();
+      if (registryRepo != dep.repo)
+      {
+        reason = "registry metadata repo changed for " + dep.id;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      if (!entry.contains("versions") || !entry["versions"].is_object())
+      {
+        reason = "registry metadata is missing versions for " + dep.id;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      const json &versions = entry["versions"];
+      if (!versions.contains(dep.version) || !versions[dep.version].is_object())
+      {
+        reason = "registry metadata no longer contains " + dep.id + "@" + dep.version;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      const json &version = versions[dep.version];
+      if (!version.contains("tag") || !version["tag"].is_string() ||
+          !version.contains("commit") || !version["commit"].is_string())
+      {
+        reason = "registry metadata is missing tag or commit for " + dep.id + "@" + dep.version;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      if (version["tag"].get<std::string>() != dep.tag)
+      {
+        reason = "registry metadata tag changed for " + dep.id + "@" + dep.version;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      if (version["commit"].get<std::string>() != dep.commit)
+      {
+        reason = "registry metadata commit changed for " + dep.id + "@" + dep.version;
+        return RegistryLockValidation::Mismatch;
+      }
+
+      return RegistryLockValidation::Match;
+    }
+
+    static bool ensure_registry_metadata_still_matches_lock(
+        const DepResolved &dep,
+        std::string &reason)
+    {
+      RegistryLockValidation validation = validate_locked_registry_metadata(dep, reason);
+      if (validation == RegistryLockValidation::Match)
+        return true;
+      if (validation == RegistryLockValidation::Mismatch)
+        return false;
+
+      const int syncRc = RegistryCommand::sync(true, false);
+      if (syncRc == 0)
+      {
+        validation = validate_locked_registry_metadata(dep, reason);
+        return validation == RegistryLockValidation::Match;
+      }
+
+      if (git_checkout_head_matches(dep.checkout, dep.commit) && git_checkout_is_clean(dep.checkout))
+      {
+        reason.clear();
+        return true;
+      }
+
+      reason = "registry metadata is unavailable and the local checkout cannot validate the locked commit";
+      return false;
+    }
+
+    static bool refresh_obsolete_integrity_metadata(
+        DepResolved &dep,
+        json &lockEntry,
+        const std::string &actualHash,
+        bool &printedHeader,
+        bool &printedRefreshLine,
+        std::string &refusalReason)
+    {
+      refusalReason.clear();
+
+      if (lock_hash_metadata_is_current(dep))
+        return false;
+
+      if (dep.source == "git")
+      {
+        refusalReason = "automatic integrity metadata migration is only supported for registry packages";
+        return false;
+      }
+
+      const bool clean = git_checkout_is_clean(dep.checkout);
+      const bool headMatches = git_checkout_head_matches(dep.checkout, dep.commit);
+      if (!clean || !headMatches)
+        return false;
+
+      if (!ensure_registry_metadata_still_matches_lock(dep, refusalReason))
+        return false;
+
+      if (!printedHeader)
+      {
+        vix::cli::util::section(std::cout, "Installing dependencies");
+        printedHeader = true;
+      }
+
+      if (!printedRefreshLine)
+      {
+        std::cout << "  " << CYAN << "•" << RESET << " "
+                  << GRAY << "refreshing obsolete integrity metadata" << RESET << "\n";
+        printedRefreshLine = true;
+      }
+
+      dep.hash = actualHash;
+      dep.hashAlgorithm = vix::cli::util::PACKAGE_HASH_ALGORITHM;
+      dep.hashVersion = vix::cli::util::PACKAGE_HASH_VERSION;
+
+      lockEntry["hash"] = dep.hash;
+      lockEntry["hash_algorithm"] = dep.hashAlgorithm;
+      lockEntry["hash_version"] = dep.hashVersion;
+
+      std::cout << "  " << CYAN << "•" << RESET << " "
+                << CYAN << BOLD << dep.id << RESET
+                << GRAY << "@" << RESET
+                << YELLOW << BOLD << dep.version << RESET
+                << "  "
+                << GRAY << "metadata updated" << RESET
+                << "\n";
+
+      return true;
+    }
+
     static void print_integrity_recovery_hint(const DepResolved &dep, bool clean, bool headMatches)
     {
       if (!headMatches)
@@ -711,6 +899,60 @@ namespace vix::commands
       }
 
       return true;
+    }
+
+    static bool verify_dependency_hash_or_refresh(
+        DepResolved &dep,
+        json &lockEntry,
+        bool &lockChanged,
+        bool &printedHeader,
+        bool &printedRefreshLine)
+    {
+      if (dep.hash.empty())
+        return true;
+
+      const auto actualHashOpt = vix::cli::util::sha256_package_directory(dep.checkout);
+      if (!actualHashOpt)
+      {
+        vix::cli::util::err_line(std::cerr, "integrity check failed: " + dep.id);
+        vix::cli::util::warn_line(std::cerr, "could not compute package hash for checkout: " + dep.checkout.string());
+        vix::cli::util::warn_line(std::cerr, "The checkout appears incomplete or unreadable.");
+        vix::cli::util::warn_line(std::cerr, "Preview project-scoped cleanup first: vix store gc --project --dry-run");
+        return false;
+      }
+
+      if (*actualHashOpt == dep.hash)
+        return true;
+
+      std::string refusalReason;
+      if (refresh_obsolete_integrity_metadata(
+              dep,
+              lockEntry,
+              *actualHashOpt,
+              printedHeader,
+              printedRefreshLine,
+              refusalReason))
+      {
+        lockChanged = true;
+        return true;
+      }
+
+      const bool clean = git_checkout_is_clean(dep.checkout);
+      const bool headMatches = git_checkout_head_matches(dep.checkout, dep.commit);
+
+      vix::cli::util::err_line(std::cerr, "integrity check failed: " + dep.id);
+      vix::cli::util::err_line(std::cerr, "expected: " + dep.hash);
+      vix::cli::util::err_line(std::cerr, "actual:   " + *actualHashOpt);
+      if (!refusalReason.empty())
+      {
+        vix::cli::util::warn_line(std::cerr, refusalReason);
+        vix::cli::util::warn_line(std::cerr, "Refusing to rewrite vix.lock automatically.");
+      }
+      else
+      {
+        print_integrity_recovery_hint(dep, clean, headMatches);
+      }
+      return false;
     }
 
     static void load_dep_manifest(DepResolved &dep)
@@ -3437,6 +3679,8 @@ namespace vix::commands
     {
       bool didWork = false;
       bool printedHeader = false;
+      bool printedRefreshLine = false;
+      bool lockChanged = false;
       std::size_t installedCount = 0;
 
       try
@@ -3475,7 +3719,7 @@ namespace vix::commands
         return 1;
       }
 
-      const auto &depsArr = lock["dependencies"];
+      auto &depsArr = lock["dependencies"];
       if (depsArr.empty())
       {
         vix::cli::util::warn_line(std::cout, "No dependencies to install");
@@ -3487,7 +3731,7 @@ namespace vix::commands
       std::vector<DepResolved> resolved;
       resolved.reserve(depsArr.size());
 
-      for (const auto &d : depsArr)
+      for (auto &d : depsArr)
       {
         DepResolved dep;
         try
@@ -3543,7 +3787,12 @@ namespace vix::commands
           didWork = true;
         }
 
-        if (!verify_dependency_hash(dep))
+        if (!verify_dependency_hash_or_refresh(
+                dep,
+                d,
+                lockChanged,
+                printedHeader,
+                printedRefreshLine))
         {
           return 1;
         }
@@ -3586,6 +3835,20 @@ namespace vix::commands
                     << GRAY << "installed" << RESET
                     << "\n";
         }
+      }
+
+      if (lockChanged)
+      {
+        try
+        {
+          save_lock_json(lock);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("failed to write vix.lock: ") + ex.what());
+          return 1;
+        }
+        didWork = true;
       }
 
       const bool cmakeExistedBefore = fs::exists(project_deps_cmake());

@@ -1201,7 +1201,10 @@ namespace vix::commands::BuildCommand
       (void)globalPackagesFile;
 
       if (!sdkConfigDir.empty())
+      {
         vars.emplace_back("Vix_DIR", sdkConfigDir.string());
+        vars.emplace_back("vix_DIR", sdkConfigDir.string());
+      }
 
       if (launcher && !launcher->empty())
       {
@@ -1451,6 +1454,18 @@ namespace vix::commands::BuildCommand
       plan.buildLog = plan.buildDir / "build.log";
       plan.sigFile = plan.buildDir / ".vix-config.sig";
       plan.toolchainFile = plan.buildDir / "vix-toolchain.cmake";
+
+      if (opt.clean)
+      {
+        try
+        {
+          clean_local_build_dirs(userProjectDir, opt.targetTriple, opt.quiet);
+        }
+        catch (const std::exception &)
+        {
+          return std::nullopt;
+        }
+      }
 
       const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
@@ -1819,15 +1834,6 @@ namespace vix::commands::BuildCommand
         if (!resolution.missingModules.empty())
           print_missing_sdk_modules(resolution);
         return false;
-      }
-
-      if (resolution.selectedProfiles.size() == 1)
-      {
-        const auto it = resolution.installed.find(resolution.selectedProfiles.front());
-        if (it == resolution.installed.end())
-          return true;
-        plan.sdkConfigDir = it->second.configDir;
-        return true;
       }
 
       const std::string identity = resolution.version + "-" + join_words(resolution.selectedProfiles);
@@ -3291,21 +3297,6 @@ namespace vix::commands::BuildCommand
 
         const fs::path globalPackagesFile =
             plan_.buildDir / "vix-global-packages.cmake";
-
-        if (opt_.clean)
-        {
-          try
-          {
-            clean_local_build_dirs(
-                plan_.userProjectDir,
-                opt_.targetTriple,
-                opt_.quiet);
-          }
-          catch (const std::exception &)
-          {
-            return 1;
-          }
-        }
 
         const bool verboseMode = opt_.verbose || opt_.cmakeVerbose;
         const bool defer = (!opt_.quiet && verboseMode);

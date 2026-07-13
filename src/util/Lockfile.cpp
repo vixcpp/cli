@@ -12,6 +12,7 @@
  */
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Fs.hpp>
+#include <vix/cli/util/Hash.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -28,7 +29,7 @@ namespace vix::cli::util::lockfile
   {
     json dependency_to_json(const LockedDependency &dependency)
     {
-      return json{
+      json item{
           {"id", dependency.id},
           {"requested", dependency.requested},
           {"version", dependency.version},
@@ -36,7 +37,14 @@ namespace vix::cli::util::lockfile
           {"tag", dependency.tag},
           {"commit", dependency.commit},
           {"hash", dependency.hash},
+          {"hash_algorithm", dependency.hashAlgorithm.empty()
+                                 ? vix::cli::util::PACKAGE_HASH_ALGORITHM
+                                 : dependency.hashAlgorithm},
+          {"hash_version", dependency.hashVersion > 0
+                               ? dependency.hashVersion
+                               : vix::cli::util::PACKAGE_HASH_VERSION},
       };
+      return item;
     }
   }
 

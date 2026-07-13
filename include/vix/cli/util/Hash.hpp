@@ -90,6 +90,23 @@ namespace vix::cli::util
    */
   std::optional<std::string> sha256_directory(const fs::path &dir);
 
+  inline constexpr const char *PACKAGE_HASH_ALGORITHM = "vix-package-sha256";
+  inline constexpr int PACKAGE_HASH_VERSION = 2;
+
+  /**
+   *  Compute the canonical package integrity hash.
+   *
+   * For Git checkouts, this hashes the tracked working-tree content only.
+   * Git metadata, untracked files, ignored files, generated build output,
+   * and local Vix state are not part of the package hash. Modified or
+   * deleted tracked files still change or invalidate the hash.
+   *
+   * The hash includes relative paths, Git file modes, symlink targets, and
+   * file content hashes so that the same commit and clean checkout produce
+   * the same result on a new machine.
+   */
+  std::optional<std::string> sha256_package_directory(const fs::path &dir);
+
   /**
    * @brief Compute the fingerprint of the CMake-related project configuration
    *

@@ -98,6 +98,8 @@ namespace vix::commands
       std::string tag;
       std::string commit;
       std::string hash;
+      std::string hashAlgorithm;
+      int hashVersion{0};
       std::string source{"registry"};
       std::string requested;
       std::string subdirectory;
@@ -600,23 +602,111 @@ namespace vix::commands
       return parsed;
     }
 
+    static std::string shell_quote_integrity(const std::string &s)
+    {
+      std::string out;
+      out.reserve(s.size() + 2);
+      out.push_back('\'');
+      for (char c : s)
+      {
+        if (c == '\'')
+          out += "'\\''";
+        else
+          out.push_back(c);
+      }
+      out.push_back('\'');
+      return out;
+    }
+
+    static std::string capture_integrity_command(const std::string &cmd, int &code)
+    {
+      return vix::cli::commands::helpers::run_and_capture_with_code(cmd, code);
+    }
+
+    static bool git_checkout_is_clean(const fs::path &checkout)
+    {
+      int code = 0;
+      const std::string out = capture_integrity_command(
+          "git -C " + shell_quote_integrity(checkout.string()) +
+              " status --porcelain --untracked-files=no 2>/dev/null",
+          code);
+      return code == 0 && out.empty();
+    }
+
+    static bool git_checkout_head_matches(const fs::path &checkout, const std::string &commit)
+    {
+      if (commit.empty())
+        return true;
+
+      int code = 0;
+      std::string out = capture_integrity_command(
+          "git -C " + shell_quote_integrity(checkout.string()) +
+              " rev-parse HEAD 2>/dev/null",
+          code);
+      out = trim_copy(out);
+      return code == 0 && out == commit;
+    }
+
+    static bool lock_hash_metadata_is_current(const DepResolved &dep)
+    {
+      return dep.hashAlgorithm == vix::cli::util::PACKAGE_HASH_ALGORITHM &&
+             dep.hashVersion == vix::cli::util::PACKAGE_HASH_VERSION;
+    }
+
+    static void print_integrity_recovery_hint(const DepResolved &dep, bool clean, bool headMatches)
+    {
+      if (!headMatches)
+      {
+        vix::cli::util::warn_line(std::cerr, "The cached checkout points at a different commit than vix.lock.");
+        vix::cli::util::warn_line(std::cerr, "Preview project-scoped cleanup first: vix store gc --project --dry-run");
+        return;
+      }
+
+      if (!clean)
+      {
+        vix::cli::util::warn_line(std::cerr, "The cached checkout has local modifications to tracked files.");
+        vix::cli::util::warn_line(std::cerr, "Use: vix reset");
+        vix::cli::util::warn_line(std::cerr, "If the shared store itself must be cleaned, preview first: vix store gc --project --dry-run");
+        return;
+      }
+
+      if (!lock_hash_metadata_is_current(dep))
+      {
+        vix::cli::util::warn_line(std::cerr, "locked integrity metadata does not match the content produced by the current hash algorithm");
+        vix::cli::util::warn_line(std::cerr, "Use: vix update");
+        return;
+      }
+
+      vix::cli::util::warn_line(std::cerr, "The checkout is Git-clean, but its package hash differs from vix.lock.");
+      vix::cli::util::warn_line(std::cerr, "This usually means registry metadata or lockfile integrity metadata is inconsistent.");
+      vix::cli::util::warn_line(std::cerr, "Use: vix registry sync");
+      vix::cli::util::warn_line(std::cerr, "If the mismatch persists with a fresh checkout, run: vix update");
+    }
+
     static bool verify_dependency_hash(const DepResolved &dep)
     {
       if (dep.hash.empty())
         return true;
 
-      const auto actualHashOpt = vix::cli::util::sha256_directory(dep.checkout);
+      const auto actualHashOpt = vix::cli::util::sha256_package_directory(dep.checkout);
       if (!actualHashOpt)
       {
-        vix::cli::util::warn_line(std::cerr, "could not compute hash for: " + dep.id);
-        return true;
+        vix::cli::util::err_line(std::cerr, "integrity check failed: " + dep.id);
+        vix::cli::util::warn_line(std::cerr, "could not compute package hash for checkout: " + dep.checkout.string());
+        vix::cli::util::warn_line(std::cerr, "The checkout appears incomplete or unreadable.");
+        vix::cli::util::warn_line(std::cerr, "Preview project-scoped cleanup first: vix store gc --project --dry-run");
+        return false;
       }
 
       if (*actualHashOpt != dep.hash)
       {
+        const bool clean = git_checkout_is_clean(dep.checkout);
+        const bool headMatches = git_checkout_head_matches(dep.checkout, dep.commit);
+
         vix::cli::util::err_line(std::cerr, "integrity check failed: " + dep.id);
         vix::cli::util::err_line(std::cerr, "expected: " + dep.hash);
         vix::cli::util::err_line(std::cerr, "actual:   " + *actualHashOpt);
+        print_integrity_recovery_hint(dep, clean, headMatches);
         return false;
       }
 
@@ -848,6 +938,8 @@ namespace vix::commands
       dep.tag = d.value("tag", "");
       dep.commit = d.value("commit", "");
       dep.hash = d.value("hash", "");
+      dep.hashAlgorithm = d.value("hash_algorithm", "");
+      dep.hashVersion = d.value("hash_version", 0);
       dep.subdirectory = d.value("subdirectory", "");
       dep.headerOnly = d.value("header_only", false);
 
@@ -1013,6 +1105,8 @@ namespace vix::commands
           item["tag"] = dep.tag;
           item["commit"] = dep.commit;
           item["hash"] = dep.hash;
+          item["hash_algorithm"] = dep.hashAlgorithm.empty() ? vix::cli::util::PACKAGE_HASH_ALGORITHM : dep.hashAlgorithm;
+          item["hash_version"] = dep.hashVersion > 0 ? dep.hashVersion : vix::cli::util::PACKAGE_HASH_VERSION;
           item["type"] = dep.type;
           item["include"] = dep.include;
           item["installed_path"] = installedPath.string();
@@ -1036,6 +1130,8 @@ namespace vix::commands
             {"tag", dep.tag},
             {"commit", dep.commit},
             {"hash", dep.hash},
+            {"hash_algorithm", dep.hashAlgorithm.empty() ? vix::cli::util::PACKAGE_HASH_ALGORITHM : dep.hashAlgorithm},
+            {"hash_version", dep.hashVersion > 0 ? dep.hashVersion : vix::cli::util::PACKAGE_HASH_VERSION},
             {"type", dep.type},
             {"include", dep.include},
             {"installed_path", installedPath.string()},
@@ -2667,12 +2763,12 @@ namespace vix::commands
           }
 
           dep.checkout = fs::path(outDir);
-          dep.hash = vix::cli::util::sha256_directory(dep.checkout).value_or("");
+          dep.hash = vix::cli::util::sha256_package_directory(dep.checkout).value_or("");
+          dep.hashAlgorithm = vix::cli::util::PACKAGE_HASH_ALGORITHM;
+          dep.hashVersion = vix::cli::util::PACKAGE_HASH_VERSION;
 
           if (!verify_dependency_hash(dep))
           {
-            vix::cli::util::warn_line(std::cerr, "The cached checkout appears modified or corrupt.");
-            vix::cli::util::warn_line(std::cerr, "Try: vix store gc");
             return 1;
           }
 
@@ -2958,7 +3054,9 @@ namespace vix::commands
       dep.tag = selectedTag;
       dep.commit = commit;
       dep.checkout = checkout;
-      dep.hash = vix::cli::util::sha256_directory(checkout).value_or("");
+      dep.hash = vix::cli::util::sha256_package_directory(checkout).value_or("");
+      dep.hashAlgorithm = vix::cli::util::PACKAGE_HASH_ALGORITHM;
+      dep.hashVersion = vix::cli::util::PACKAGE_HASH_VERSION;
       dep.subdirectory = appDep.subdirectory;
       dep.headerOnly = appDep.headerOnly;
       dep.type = appDep.headerOnly ? "header-only" : "library";
@@ -3035,6 +3133,8 @@ namespace vix::commands
       item["tag"] = dep.tag;
       item["commit"] = dep.commit;
       item["hash"] = dep.hash;
+      item["hash_algorithm"] = dep.hashAlgorithm.empty() ? vix::cli::util::PACKAGE_HASH_ALGORITHM : dep.hashAlgorithm;
+      item["hash_version"] = dep.hashVersion > 0 ? dep.hashVersion : vix::cli::util::PACKAGE_HASH_VERSION;
       item["subdirectory"] = dep.subdirectory;
       item["header_only"] = dep.headerOnly;
       item["includes"] = json::array();
@@ -3445,8 +3545,6 @@ namespace vix::commands
 
         if (!verify_dependency_hash(dep))
         {
-          vix::cli::util::warn_line(std::cerr, "The cached checkout appears modified or corrupt.");
-          vix::cli::util::warn_line(std::cerr, "Try: vix store gc && vix install");
           return 1;
         }
 

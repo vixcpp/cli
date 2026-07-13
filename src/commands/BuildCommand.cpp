@@ -1711,6 +1711,23 @@ namespace vix::commands::BuildCommand
       }
     }
 
+    static bool is_vix_source_tree(const fs::path &projectDir)
+    {
+      const fs::path cmakeLists = projectDir / "CMakeLists.txt";
+      if (!util::file_exists(cmakeLists))
+        return false;
+
+      if (!util::file_exists(projectDir / "cmake" / "VixConfig.cmake.in"))
+        return false;
+
+      if (!util::file_exists(projectDir / "modules" / "cli" / "CMakeLists.txt"))
+        return false;
+
+      const std::string text = util::read_text_file_or_empty(cmakeLists);
+      return text.find("project(vix VERSION") != std::string::npos &&
+             text.find("Vix.cpp") != std::string::npos;
+    }
+
     static std::set<std::string> collect_project_vix_targets(const fs::path &projectDir, const fs::path &cmakeSourceDir)
     {
       std::set<std::string> targets;
@@ -1782,6 +1799,9 @@ namespace vix::commands::BuildCommand
 
     static bool resolve_sdk_for_plan(process::Plan &plan)
     {
+      if (is_vix_source_tree(plan.userProjectDir))
+        return true;
+
       const std::set<std::string> targets = collect_project_vix_targets(plan.userProjectDir, plan.cmakeSourceDir);
       const std::set<std::string> modules = vix::cli::sdk::normalize_required_vix_targets(targets);
       const vix::cli::sdk::SdkResolution resolution = vix::cli::sdk::resolve_profiles_for_modules(modules);

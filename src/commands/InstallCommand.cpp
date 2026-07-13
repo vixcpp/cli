@@ -2328,12 +2328,12 @@ namespace vix::commands
 
       for (const auto &dir : current_path_dirs())
       {
-        const std::string d = dir.string();
-        const std::string hs = home.string();
-        if (d == hs || d.rfind(hs + fs::path::preferred_separator, 0) == 0)
+        const std::string d = dir.generic_string();
+        const std::string hs = home.generic_string();
+
+        if (d == hs || d.rfind(hs + '/', 0) == 0)
           return dir;
       }
-
       return std::nullopt;
     }
 

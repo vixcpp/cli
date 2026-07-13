@@ -1367,9 +1367,8 @@ namespace vix::commands
 
         if (!opt.dryRun)
         {
-          std::sort(parentDirs.begin(), parentDirs.end(), [](const fs::path &a, const fs::path &b) {
-            return a.string().size() > b.string().size();
-          });
+          std::sort(parentDirs.begin(), parentDirs.end(), [](const fs::path &a, const fs::path &b)
+                    { return a.string().size() > b.string().size(); });
           for (const auto &dir : parentDirs)
             remove_empty_parents_under_global(dir);
         }
@@ -1400,14 +1399,23 @@ namespace vix::commands
             continue;
 
           const fs::path target = rawTarget.is_absolute()
-              ? rawTarget.lexically_normal()
-              : fs::absolute(shim.parent_path() / rawTarget).lexically_normal();
-          const fs::path globalBin = fs::absolute(global_root_dir() / "bin").lexically_normal();
-          const std::string targetString = target.string();
-          const std::string globalBinString = globalBin.string();
-          if (targetString.rfind(globalBinString + fs::path::preferred_separator, 0) != 0)
+                                      ? rawTarget.lexically_normal()
+                                      : fs::absolute(shim.parent_path() / rawTarget).lexically_normal();
+
+          const fs::path globalBin =
+              fs::absolute(global_root_dir() / "bin").lexically_normal();
+
+          const std::string targetString = target.generic_string();
+          const std::string globalBinString = globalBin.generic_string();
+
+          if (targetString.rfind(globalBinString + '/', 0) != 0)
           {
-            removed.push_back({{"path", shim.string()}, {"kind", "command-shim"}, {"removed", false}, {"error", "target outside vix global bin"}});
+            removed.push_back({
+                {"path", shim.string()},
+                {"kind", "command-shim"},
+                {"removed", false},
+                {"error", "target outside vix global bin"},
+            });
             continue;
           }
 

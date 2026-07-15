@@ -793,7 +793,7 @@ namespace vix
     out << indent(2) << "vix make:class User\n";
     out << indent(2) << "vix add @cnerium/app\n";
     out << indent(2) << "vix install\n";
-    out << indent(2) << "vix login --url http://127.0.0.1:8080\n";
+    out << indent(2) << "vix login\n";
     out << indent(2) << "vix cloud status\n";
     out << indent(2) << "vix game export\n";
     out << indent(2) << "vix agent ask \"Explain Vix.cpp\" --model qwen2.5-coder:1.5b --timeout 120000\n";

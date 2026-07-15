@@ -19,11 +19,13 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -31,6 +33,7 @@
 #include <iterator>
 #include <new>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -39,6 +42,10 @@
 #include <io.h>
 #include <windows.h>
 #else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -1116,51 +1123,489 @@ namespace vix::commands
       terminal::warning("No valid selection was made.");
       return std::nullopt;
     }
+
+
+    std::string url_encode(const std::string &value)
+    {
+      std::ostringstream out;
+      out << std::uppercase << std::hex;
+      for (const char raw : value)
+      {
+        const auto c = static_cast<unsigned char>(raw);
+        if (std::isalnum(c) != 0 || raw == '-' || raw == '_' || raw == '.' || raw == '~')
+        {
+          out << raw;
+        }
+        else
+        {
+          out << '%' << std::setw(2) << std::setfill('0') << static_cast<int>(c);
+        }
+      }
+      return out.str();
+    }
+
+    std::string url_decode(const std::string &value)
+    {
+      std::string out;
+      out.reserve(value.size());
+      for (std::size_t i = 0; i < value.size(); ++i)
+      {
+        if (value[i] == '%' && i + 2 < value.size())
+        {
+          const auto hex = value.substr(i + 1, 2);
+          char *end = nullptr;
+          const auto decoded = std::strtol(hex.c_str(), &end, 16);
+          if (end && *end == '\0')
+          {
+            out.push_back(static_cast<char>(decoded));
+            i += 2;
+            continue;
+          }
+        }
+        out.push_back(value[i] == '+' ? ' ' : value[i]);
+      }
+      return out;
+    }
+
+    std::string random_hex(std::size_t bytes)
+    {
+      static constexpr char digits[] = "0123456789abcdef";
+      std::random_device rng;
+      std::string out;
+      out.reserve(bytes * 2);
+      for (std::size_t i = 0; i < bytes; ++i)
+      {
+        const auto value = static_cast<unsigned int>(rng()) & 0xffU;
+        out.push_back(digits[(value >> 4U) & 0x0fU]);
+        out.push_back(digits[value & 0x0fU]);
+      }
+      return out;
+    }
+
+    std::optional<GlobalCloudConfig> persist_login_session(const std::string &cloud_url, const ApiResult &result, const std::string &email_fallback)
+    {
+      GlobalCloudConfig cfg;
+      cfg.cloud_url = normalize_cloud_url(cloud_url);
+      cfg.session_id = result.data.value("session", json::object()).value("id", "");
+      const auto user = result.data.value("user", json::object());
+      cfg.user_id = user.value("id", "");
+      cfg.email = user.value("email", email_fallback);
+      cfg.display_name = user.value("display_name", user.value("name", ""));
+      if (cfg.session_id.empty())
+        return std::nullopt;
+      if (!save_global_config(cfg))
+        return std::nullopt;
+      return cfg;
+    }
+
+    bool save_login_session(const std::string &cloud_url, const ApiResult &result, const std::string &email_fallback)
+    {
+      const auto cfg = persist_login_session(cloud_url, result, email_fallback);
+      if (!cfg)
+      {
+        if (result.data.value("session", json::object()).value("id", "").empty())
+          cloud_error("Cloud login response did not include a session.");
+        else
+          cloud_error("Unable to write " + global_config_path().string());
+        return false;
+      }
+      cloud_success("Login successful.");
+      cloud_step("Account", cfg->email.empty() ? "unknown" : cfg->email);
+      cloud_step("Cloud URL", cfg->cloud_url);
+      return true;
+    }
+
+    json login_session_json(const GlobalCloudConfig &cfg)
+    {
+      return json{
+          {"ok", true},
+          {"data", {
+                       {"cloud_url", cfg.cloud_url},
+                       {"session", {{"id", cfg.session_id}}},
+                       {"user", {{"id", cfg.user_id}, {"email", cfg.email}, {"display_name", cfg.display_name}}},
+                   }}};
+    }
+
+    json api_result_json(const ApiResult &result)
+    {
+      return json{
+          {"ok", false},
+          {"error", result.error.empty() ? "cloud_error" : result.error},
+          {"message", result.message.empty() ? api_error_text(result) : result.message},
+          {"status", result.status}};
+    }
+
+    bool open_browser(const std::string &url)
+    {
+      std::string output;
+#ifdef _WIN32
+      const auto result = vix::cli::build::run_process_capture({"rundll32", "url.dll,FileProtocolHandler", url}, {}, output);
+#elif defined(__APPLE__)
+      const auto result = vix::cli::build::run_process_capture({"open", url}, {}, output);
+#else
+      const char *browser = vix::utils::vix_getenv("BROWSER");
+      if (browser && *browser)
+      {
+        const auto custom = vix::cli::build::run_process_capture({browser, url}, {}, output);
+        if (custom.exitCode == 0)
+          return true;
+      }
+      const auto result = vix::cli::build::run_process_capture({"xdg-open", url}, {}, output);
+#endif
+      return result.exitCode == 0;
+    }
+
+    struct BrowserCallback
+    {
+      bool ok{false};
+      std::string code;
+      std::string state;
+      std::string error;
+    };
+
+#ifndef _WIN32
+    class LocalCallbackServer
+    {
+    public:
+      LocalCallbackServer() = default;
+      ~LocalCallbackServer()
+      {
+        close_socket();
+      }
+
+      LocalCallbackServer(const LocalCallbackServer &) = delete;
+      LocalCallbackServer &operator=(const LocalCallbackServer &) = delete;
+
+      bool start()
+      {
+        fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd_ < 0)
+        {
+          error_ = "Unable to create local callback socket.";
+          return false;
+        }
+
+        int enabled = 1;
+        (void)::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled));
+
+        sockaddr_in address{};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        address.sin_port = 0;
+
+        if (::bind(fd_, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0)
+        {
+          error_ = "Unable to bind local callback socket.";
+          close_socket();
+          return false;
+        }
+
+        if (::listen(fd_, 1) != 0)
+        {
+          error_ = "Unable to listen on local callback socket.";
+          close_socket();
+          return false;
+        }
+
+        socklen_t length = sizeof(address);
+        if (::getsockname(fd_, reinterpret_cast<sockaddr *>(&address), &length) != 0)
+        {
+          error_ = "Unable to read local callback port.";
+          close_socket();
+          return false;
+        }
+
+        port_ = ntohs(address.sin_port);
+        return port_ != 0;
+      }
+
+      std::string redirect_uri() const
+      {
+        return "http://127.0.0.1:" + std::to_string(port_) + "/callback";
+      }
+
+      const std::string &error() const
+      {
+        return error_;
+      }
+
+      BrowserCallback wait_for_callback(std::chrono::seconds timeout)
+      {
+        BrowserCallback result;
+        if (fd_ < 0)
+        {
+          result.error = error_.empty() ? "Local callback server is not running." : error_;
+          return result;
+        }
+
+        fd_set reads;
+        FD_ZERO(&reads);
+        FD_SET(fd_, &reads);
+        timeval tv{};
+        tv.tv_sec = static_cast<long>(timeout.count());
+        tv.tv_usec = 0;
+
+        const int ready = ::select(fd_ + 1, &reads, nullptr, nullptr, &tv);
+        if (ready <= 0)
+        {
+          result.error = ready == 0 ? "Timed out waiting for browser login." : "Failed while waiting for browser login.";
+          return result;
+        }
+
+        sockaddr_in peer{};
+        socklen_t peer_length = sizeof(peer);
+        const int client = ::accept(fd_, reinterpret_cast<sockaddr *>(&peer), &peer_length);
+        if (client < 0)
+        {
+          result.error = "Unable to accept browser callback.";
+          return result;
+        }
+
+        std::array<char, 4096> buffer{};
+        const ssize_t received = ::recv(client, buffer.data(), buffer.size() - 1, 0);
+        if (received <= 0)
+        {
+          send_response(client, false, "The CLI did not receive a valid callback.");
+          ::close(client);
+          result.error = "Browser callback was empty.";
+          return result;
+        }
+
+        const std::string request(buffer.data(), static_cast<std::size_t>(received));
+        const auto line_end = request.find("\r\n");
+        const std::string request_line = request.substr(0, line_end == std::string::npos ? request.find('\n') : line_end);
+        result = parse_request_line(request_line);
+        send_response(client, result.ok, result.ok ? "You can return to the terminal." : result.error);
+        ::close(client);
+        return result;
+      }
+
+    private:
+      static BrowserCallback parse_request_line(const std::string &line)
+      {
+        BrowserCallback result;
+        const auto first_space = line.find(' ');
+        const auto second_space = first_space == std::string::npos ? std::string::npos : line.find(' ', first_space + 1);
+        if (first_space == std::string::npos || second_space == std::string::npos || line.substr(0, first_space) != "GET")
+        {
+          result.error = "Browser callback used an invalid HTTP request.";
+          return result;
+        }
+
+        const std::string target = line.substr(first_space + 1, second_space - first_space - 1);
+        const auto query_pos = target.find('?');
+        const std::string path = query_pos == std::string::npos ? target : target.substr(0, query_pos);
+        if (path != "/callback")
+        {
+          result.error = "Browser callback used an invalid path.";
+          return result;
+        }
+
+        std::string query = query_pos == std::string::npos ? std::string{} : target.substr(query_pos + 1);
+        while (!query.empty())
+        {
+          const auto amp = query.find('&');
+          const std::string part = query.substr(0, amp);
+          const auto eq = part.find('=');
+          const std::string key = url_decode(eq == std::string::npos ? part : part.substr(0, eq));
+          const std::string value = eq == std::string::npos ? std::string{} : url_decode(part.substr(eq + 1));
+          if (key == "code")
+            result.code = value;
+          else if (key == "state")
+            result.state = value;
+          else if (key == "error")
+            result.error = value;
+          if (amp == std::string::npos)
+            break;
+          query = query.substr(amp + 1);
+        }
+
+        if (!result.error.empty())
+          return result;
+        if (result.code.empty() || result.state.empty())
+        {
+          result.error = "Browser callback did not include code and state.";
+          return result;
+        }
+        result.ok = true;
+        return result;
+      }
+
+      static void send_response(int client, bool ok, const std::string &message)
+      {
+        const std::string title = ok ? "Softadastra Cloud login complete" : "Softadastra Cloud login failed";
+        const std::string html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + title +
+                                 "</title><style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;margin:0;display:grid;place-items:center;min-height:100vh}.box{max-width:520px;padding:32px}p{color:#cbd5e1}</style></head><body><main class=\"box\"><h1>" + title +
+                                 "</h1><p>" + message + "</p></main></body></html>";
+        const std::string response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " +
+                                     std::to_string(html.size()) + "\r\nConnection: close\r\n\r\n" + html;
+        (void)::send(client, response.data(), response.size(), 0);
+      }
+
+      void close_socket()
+      {
+        if (fd_ >= 0)
+        {
+          ::close(fd_);
+          fd_ = -1;
+        }
+      }
+
+      int fd_{-1};
+      std::uint16_t port_{0};
+      std::string error_;
+    };
+#endif
+
+    int login_manual(const std::string &cloud_url, std::string email, std::string password, bool json_output = false)
+    {
+      if (email.empty() && !json_output)
+        email = prompt_line("Email");
+      if (password.empty() && !json_output)
+        password = prompt_password();
+      if (email.empty() || password.empty())
+      {
+        if (json_output)
+          std::cout << json{{"ok", false}, {"error", "credentials_required"}, {"message", "Email and password are required."}}.dump() << "\n";
+        else
+          cloud_error("Email and password are required.");
+        return 1;
+      }
+
+      const auto result = api_post(cloud_url, "/api/auth/login", json{{"email", email}, {"password", password}});
+      if (!result.ok)
+      {
+        if (json_output)
+          std::cout << api_result_json(result).dump() << "\n";
+        else
+          print_api_error(result);
+        return 1;
+      }
+
+      const auto cfg = persist_login_session(cloud_url, result, email);
+      if (!cfg)
+      {
+        if (json_output)
+          std::cout << json{{"ok", false}, {"error", "session_save_failed"}, {"message", "Unable to save the Cloud session."}}.dump() << "\n";
+        else if (result.data.value("session", json::object()).value("id", "").empty())
+          cloud_error("Cloud login response did not include a session.");
+        else
+          cloud_error("Unable to write " + global_config_path().string());
+        return 1;
+      }
+
+      if (json_output)
+        std::cout << login_session_json(*cfg).dump() << "\n";
+      else
+      {
+        cloud_success("Login successful.");
+        cloud_step("Account", cfg->email.empty() ? "unknown" : cfg->email);
+        cloud_step("Cloud URL", cfg->cloud_url);
+      }
+      return 0;
+    }
+
+    int login_with_browser(const std::string &cloud_url)
+    {
+#ifdef _WIN32
+      terminal::warning("Browser login is not available on this platform yet.");
+      return 1;
+#else
+      LocalCallbackServer server;
+      if (!server.start())
+      {
+        cloud_error(server.error());
+        return 1;
+      }
+
+      const std::string state = random_hex(32);
+      const std::string redirect_uri = server.redirect_uri();
+      const std::string login_url = std::string(frontend_cloud_url) + "/cli/login?state=" + url_encode(state) +
+                                    "&redirect_uri=" + url_encode(redirect_uri);
+
+      cloud_step("Login URL", login_url);
+      if (open_browser(login_url))
+      {
+        cloud_success("Browser opened. Complete sign in to continue.");
+      }
+      else
+      {
+        terminal::warning("Could not open the browser automatically.");
+        cloud_hint("Open the Login URL above in your browser.");
+      }
+
+      cloud_step("Callback", redirect_uri);
+      cloud_hint("Waiting for browser login...");
+
+      const auto callback = server.wait_for_callback(std::chrono::seconds(180));
+      if (!callback.ok)
+      {
+        cloud_error(callback.error.empty() ? "Browser login failed." : callback.error);
+        return 1;
+      }
+      if (callback.state != state)
+      {
+        cloud_error("Browser login returned an invalid state value.");
+        return 1;
+      }
+
+      const auto result = api_post(
+          cloud_url,
+          "/api/auth/cli/exchange",
+          json{{"code", callback.code}, {"state", callback.state}, {"redirect_uri", redirect_uri}});
+      if (!result.ok)
+      {
+        print_api_error(result);
+        return 1;
+      }
+      return save_login_session(cloud_url, result, {}) ? 0 : 1;
+#endif
+    }
   }
 
   int CloudCommand::login(const std::vector<std::string> &args)
   {
-    cloud_header("Softadastra Cloud", "Sign in to continue");
-
-    const std::string cloud_url = strip_trailing_slash(arg_value(args, "--url").value_or(default_cloud_url));
+    const bool json_output = has_flag(args, "--json");
+    const std::string cloud_url = normalize_cloud_url(arg_value(args, "--url").value_or(default_cloud_url));
     std::string email = arg_value(args, "--email").value_or("");
     std::string password = arg_value(args, "--password").value_or("");
-    if (email.empty())
-      email = prompt_line("Email");
-    if (password.empty())
-      password = prompt_password();
-    if (email.empty() || password.empty())
+
+    const bool manual_flag = has_flag(args, "--manual") || has_flag(args, "--password") || has_flag(args, "--email") ||
+                             arg_value(args, "--email").has_value() || arg_value(args, "--password").has_value();
+    const bool browser_flag = has_flag(args, "--browser");
+
+    if (json_output && !manual_flag)
     {
-      cloud_error("Email and password are required.");
+      std::cout << json{{"ok", false}, {"error", "login_method_required"}, {"message", "Use --email and --password when --json is set."}}.dump() << "\n";
       return 1;
     }
-    const auto result = api_post(cloud_url, "/api/auth/login", json{{"email", email}, {"password", password}});
-    if (!result.ok)
-    {
-      print_api_error(result);
-      return 1;
-    }
-    GlobalCloudConfig cfg;
-    cfg.cloud_url = cloud_url;
-    cfg.session_id = result.data.value("session", json::object()).value("id", "");
-    const auto user = result.data.value("user", json::object());
-    cfg.user_id = user.value("id", "");
-    cfg.email = user.value("email", email);
-    cfg.display_name = user.value("display_name", user.value("name", ""));
-    if (cfg.session_id.empty())
-    {
-      cloud_error("Cloud login response did not include a session.");
-      return 1;
-    }
-    if (!save_global_config(cfg))
-    {
-      cloud_error("Unable to write " + global_config_path().string());
-      return 1;
-    }
-    cloud_success("Login successful.");
-    cloud_step("Account", cfg.email);
-    cloud_step("Cloud URL", cfg.cloud_url);
-    return 0;
+
+    if (!json_output)
+      cloud_header("Softadastra Cloud", "Sign in to continue");
+
+    if (manual_flag)
+      return login_manual(cloud_url, std::move(email), std::move(password), json_output);
+
+    if (browser_flag)
+      return login_with_browser(cloud_url);
+
+    terminal::section("Choose a login method");
+    std::cout << "  ";
+    terminal::code(std::cout, terminal::cyan);
+    std::cout << "1.";
+    terminal::code(std::cout, terminal::reset);
+    std::cout << " Open browser\n";
+    std::cout << "  ";
+    terminal::code(std::cout, terminal::cyan);
+    std::cout << "2.";
+    terminal::code(std::cout, terminal::reset);
+    std::cout << " Enter email and password\n";
+
+    const std::string choice = prompt_line("Choose login method", "1");
+    if (choice == "2" || lower_copy(choice) == "manual" || lower_copy(choice) == "password")
+      return login_manual(cloud_url, {}, {});
+
+    return login_with_browser(cloud_url);
   }
 
   int CloudCommand::logout(const std::vector<std::string> &)

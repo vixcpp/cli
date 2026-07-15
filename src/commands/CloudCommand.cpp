@@ -318,6 +318,7 @@ namespace vix::commands
       {
         std::cout << "\n  ";
         code(std::cout, bold);
+        code(std::cout, cyan);
         std::cout << title;
         code(std::cout, reset);
         std::cout << "\n";
@@ -1124,7 +1125,6 @@ namespace vix::commands
       return std::nullopt;
     }
 
-
     std::string url_encode(const std::string &value)
     {
       std::ostringstream out;
@@ -1163,6 +1163,38 @@ namespace vix::commands
           }
         }
         out.push_back(value[i] == '+' ? ' ' : value[i]);
+      }
+      return out;
+    }
+
+
+    std::string html_escape(const std::string &value)
+    {
+      std::string out;
+      out.reserve(value.size());
+      for (const char ch : value)
+      {
+        switch (ch)
+        {
+        case '&':
+          out += "&amp;";
+          break;
+        case '<':
+          out += "&lt;";
+          break;
+        case '>':
+          out += "&gt;";
+          break;
+        case '"':
+          out += "&quot;";
+          break;
+        case '\'':
+          out += "&#39;";
+          break;
+        default:
+          out.push_back(ch);
+          break;
+        }
       }
       return out;
     }
@@ -1338,45 +1370,62 @@ namespace vix::commands
           return result;
         }
 
-        fd_set reads;
-        FD_ZERO(&reads);
-        FD_SET(fd_, &reads);
-        timeval tv{};
-        tv.tv_sec = static_cast<long>(timeout.count());
-        tv.tv_usec = 0;
-
-        const int ready = ::select(fd_ + 1, &reads, nullptr, nullptr, &tv);
-        if (ready <= 0)
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (std::chrono::steady_clock::now() < deadline)
         {
-          result.error = ready == 0 ? "Timed out waiting for browser login." : "Failed while waiting for browser login.";
-          return result;
-        }
+          fd_set reads;
+          FD_ZERO(&reads);
+          FD_SET(fd_, &reads);
 
-        sockaddr_in peer{};
-        socklen_t peer_length = sizeof(peer);
-        const int client = ::accept(fd_, reinterpret_cast<sockaddr *>(&peer), &peer_length);
-        if (client < 0)
-        {
-          result.error = "Unable to accept browser callback.";
-          return result;
-        }
+          const auto remaining = std::chrono::duration_cast<std::chrono::seconds>(deadline - std::chrono::steady_clock::now());
+          timeval tv{};
+          tv.tv_sec = static_cast<long>(std::max<std::int64_t>(1, remaining.count()));
+          tv.tv_usec = 0;
 
-        std::array<char, 4096> buffer{};
-        const ssize_t received = ::recv(client, buffer.data(), buffer.size() - 1, 0);
-        if (received <= 0)
-        {
-          send_response(client, false, "The CLI did not receive a valid callback.");
+          const int ready = ::select(fd_ + 1, &reads, nullptr, nullptr, &tv);
+          if (ready <= 0)
+          {
+            result.error = ready == 0 ? "Timed out waiting for browser login." : "Failed while waiting for browser login.";
+            return result;
+          }
+
+          sockaddr_in peer{};
+          socklen_t peer_length = sizeof(peer);
+          const int client = ::accept(fd_, reinterpret_cast<sockaddr *>(&peer), &peer_length);
+          if (client < 0)
+          {
+            result.error = "Unable to accept browser callback.";
+            return result;
+          }
+
+          std::array<char, 4096> buffer{};
+          const ssize_t received = ::recv(client, buffer.data(), buffer.size() - 1, 0);
+          if (received <= 0)
+          {
+            send_response(client, false, "The CLI did not receive a valid callback.");
+            ::close(client);
+            result.error = "Browser callback was empty.";
+            return result;
+          }
+
+          const std::string request(buffer.data(), static_cast<std::size_t>(received));
+          const auto line_end = request.find("\r\n");
+          const std::string request_line = request.substr(0, line_end == std::string::npos ? request.find('\n') : line_end);
+
+          if (request_line.rfind("OPTIONS ", 0) == 0)
+          {
+            send_preflight_response(client);
+            ::close(client);
+            continue;
+          }
+
+          result = parse_request_line(request_line);
+          send_response(client, result.ok, result.ok ? "You can return to the terminal." : result.error);
           ::close(client);
-          result.error = "Browser callback was empty.";
           return result;
         }
 
-        const std::string request(buffer.data(), static_cast<std::size_t>(received));
-        const auto line_end = request.find("\r\n");
-        const std::string request_line = request.substr(0, line_end == std::string::npos ? request.find('\n') : line_end);
-        result = parse_request_line(request_line);
-        send_response(client, result.ok, result.ok ? "You can return to the terminal." : result.error);
-        ::close(client);
+        result.error = "Timed out waiting for browser login.";
         return result;
       }
 
@@ -1431,12 +1480,74 @@ namespace vix::commands
         return result;
       }
 
+      static void send_preflight_response(int client)
+      {
+        const std::string response =
+            "HTTP/1.1 204 No Content\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: GET, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type\r\n"
+            "Access-Control-Allow-Private-Network: true\r\n"
+            "Connection: close\r\n\r\n";
+        (void)::send(client, response.data(), response.size(), 0);
+      }
+
       static void send_response(int client, bool ok, const std::string &message)
       {
-        const std::string title = ok ? "Softadastra Cloud login complete" : "Softadastra Cloud login failed";
-        const std::string html = "<!doctype html><html><head><meta charset=\"utf-8\"><title>" + title +
-                                 "</title><style>body{font-family:system-ui,sans-serif;background:#0f172a;color:#f8fafc;margin:0;display:grid;place-items:center;min-height:100vh}.box{max-width:520px;padding:32px}p{color:#cbd5e1}</style></head><body><main class=\"box\"><h1>" + title +
-                                 "</h1><p>" + message + "</p></main></body></html>";
+        const std::string title = ok ? "Softadastra Cloud is connected" : "Softadastra Cloud login failed";
+        const std::string eyebrow = ok ? "Vix CLI authentication" : "Authentication needs attention";
+        const std::string headline = ok ? "You're signed in." : "We could not finish sign in.";
+        const std::string status_class = ok ? "status status--ok" : "status status--error";
+        const std::string safe_message = html_escape(message);
+        const std::string next_url = ok ? std::string(frontend_cloud_url) + "/cli/success" : std::string(frontend_cloud_url) + "/cli/login";
+        const std::string safe_next_url = html_escape(next_url);
+        const std::string footer_text = ok ? "Redirecting back to Softadastra Cloud..." : "Return to Softadastra Cloud and try again.";
+        const std::string html =
+            "<!doctype html>"
+            "<html lang=\"en\">"
+            "<head>"
+            "<meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            "<title>" +
+            title +
+            "</title>"
+            "<style>"
+            ":root{color-scheme:dark;--bg:#08111f;--panel:#0f172a;--line:#263244;--text:#f8fafc;--muted:#a8b3c7;--accent:#14b8a6;--accent2:#38bdf8;--error:#fb7185}"
+            "*{box-sizing:border-box}body{margin:0;min-height:100vh;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:linear-gradient(135deg,#08111f 0%,#111827 52%,#0b2625 100%);color:var(--text);display:grid;place-items:center;padding:24px}"
+            "body:before{content:\"\";position:fixed;inset:0;background:radial-gradient(circle at 28% 24%,rgba(20,184,166,.20),transparent 30%),radial-gradient(circle at 78% 72%,rgba(56,189,248,.14),transparent 34%);pointer-events:none}"
+            ".shell{position:relative;width:min(100%,560px);border:1px solid rgba(148,163,184,.26);border-radius:10px;background:rgba(15,23,42,.88);box-shadow:0 26px 80px rgba(0,0,0,.42);overflow:hidden}"
+            ".bar{height:44px;display:flex;align-items:center;gap:8px;padding:0 18px;border-bottom:1px solid rgba(148,163,184,.16);background:rgba(2,6,23,.36)}.dot{width:10px;height:10px;border-radius:50%;background:#475569}.dot:first-child{background:#fb7185}.dot:nth-child(2){background:#fbbf24}.dot:nth-child(3){background:#34d399}"
+            ".content{padding:38px 34px 34px}.brand{display:flex;align-items:center;gap:12px;color:#e2e8f0;font-weight:800}.mark{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#031018;font:900 20px/1 ui-monospace,SFMono-Regular,Menlo,monospace}"
+            ".status{width:72px;height:72px;margin:34px 0 22px;border-radius:50%;display:grid;place-items:center;position:relative}.status:before,.status:after{content:\"\";position:absolute;inset:0;border-radius:inherit}.status:before{border:1px solid rgba(148,163,184,.28)}.status:after{border:3px solid transparent;border-top-color:var(--accent);border-right-color:var(--accent2);animation:spin 1.1s linear infinite}.status--error:after{border-top-color:var(--error);border-right-color:#fda4af}.glyph{font-size:30px;font-weight:900;z-index:1;color:var(--accent)}.status--error .glyph{color:var(--error)}"
+            ".eyebrow{margin:0 0 10px;color:var(--accent);font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}h1{margin:0;font-size:clamp(2.1rem,7vw,3.45rem);line-height:.98;letter-spacing:0}p{margin:16px 0 0;color:var(--muted);font-size:1rem;line-height:1.65}.note{margin-top:24px;padding:14px 16px;border:1px solid rgba(148,163,184,.18);border-radius:8px;background:rgba(15,23,42,.78);color:#dbeafe}.footer{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:28px;color:#94a3b8;font-size:13px}.fallback{color:#67e8f9;text-decoration:none}.fallback:hover{text-decoration:underline}.pulse{width:10px;height:10px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 rgba(20,184,166,.55);animation:pulse 1.6s ease-out infinite}"
+            "@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{70%{box-shadow:0 0 0 14px rgba(20,184,166,0)}100%{box-shadow:0 0 0 0 rgba(20,184,166,0)}}"
+            "@media(max-width:520px){.content{padding:30px 24px}.footer{align-items:flex-start;flex-direction:column}}"
+            "</style>"
+            "</head>"
+            "<body>"
+            "<main class=\"shell\" aria-live=\"polite\">"
+            "<div class=\"bar\"><span class=\"dot\"></span><span class=\"dot\"></span><span class=\"dot\"></span></div>"
+            "<section class=\"content\">"
+            "<div class=\"brand\"><span class=\"mark\">$</span><span>Softadastra Cloud</span></div>"
+            "<div class=\"" +
+            status_class +
+            "\"><span class=\"glyph\">" +
+            (ok ? std::string("✓") : std::string("!")) +
+            "</span></div>"
+            "<p class=\"eyebrow\">" +
+            eyebrow +
+            "</p>"
+            "<h1>" +
+            headline +
+            "</h1>"
+            "<p class=\"note\">" +
+            safe_message +
+            "</p>"
+            "<div class=\"footer\"><span>Return to your terminal to continue.</span><span class=\"pulse\" aria-hidden=\"true\"></span></div>"
+            "</section>"
+            "</main>"
+            "</body>"
+            "</html>";
         const std::string response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " +
                                      std::to_string(html.size()) + "\r\nConnection: close\r\n\r\n" + html;
         (void)::send(client, response.data(), response.size(), 0);
@@ -1534,7 +1645,7 @@ namespace vix::commands
         cloud_hint("Open the Login URL above in your browser.");
       }
 
-      cloud_step("Callback", redirect_uri);
+      cloud_step("Local callback", "ready");
       cloud_hint("Waiting for browser login...");
 
       const auto callback = server.wait_for_callback(std::chrono::seconds(180));

@@ -22,16 +22,23 @@
 #include <chrono>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <iterator>
+#include <new>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <io.h>
+#include <windows.h>
+#else
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -43,7 +50,9 @@ namespace vix::commands
 {
   namespace
   {
-    constexpr const char *default_cloud_url = "http://127.0.0.1:8080";
+    constexpr const char *default_cloud_url = "https://api.softadastra.com";
+    constexpr const char *legacy_default_cloud_url = "http://127.0.0.1:8080";
+    constexpr const char *frontend_cloud_url = "https://cloud.softadastra.com";
 
     struct GlobalCloudConfig
     {
@@ -115,7 +124,8 @@ namespace vix::commands
     std::string lower_copy(std::string s)
     {
       std::transform(s.begin(), s.end(), s.begin(),
-                     [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                     [](unsigned char c)
+                     { return static_cast<char>(std::tolower(c)); });
       return s;
     }
 
@@ -124,6 +134,250 @@ namespace vix::commands
       while (value.size() > 1 && value.back() == '/')
         value.pop_back();
       return value;
+    }
+
+    std::string normalize_cloud_url(std::string value)
+    {
+      value = strip_trailing_slash(value);
+      if (value.empty() || value == legacy_default_cloud_url || value == frontend_cloud_url)
+        return default_cloud_url;
+      return value;
+    }
+
+    namespace terminal
+    {
+      constexpr const char *reset = "\033[0m";
+      constexpr const char *bold = "\033[1m";
+
+      constexpr const char *red = "\033[31m";
+      constexpr const char *green = "\033[32m";
+      constexpr const char *yellow = "\033[33m";
+      constexpr const char *cyan = "\033[36m";
+      constexpr const char *white = "\033[97m";
+
+      constexpr const char *dim = "\033[37m";
+
+      bool stream_is_terminal(std::ostream &stream)
+      {
+        int descriptor = -1;
+        if (&stream == &std::cout)
+#ifdef _WIN32
+          descriptor = _fileno(stdout);
+#else
+          descriptor = fileno(stdout);
+#endif
+        else if (&stream == &std::cerr)
+#ifdef _WIN32
+          descriptor = _fileno(stderr);
+#else
+          descriptor = fileno(stderr);
+#endif
+
+        if (descriptor < 0)
+          return false;
+
+#ifdef _WIN32
+        return _isatty(descriptor) != 0;
+#else
+        return isatty(descriptor) != 0;
+#endif
+      }
+
+#ifdef _WIN32
+      void enable_virtual_terminal(std::ostream &stream)
+      {
+        const DWORD standard_handle = (&stream == &std::cerr) ? STD_ERROR_HANDLE : STD_OUTPUT_HANDLE;
+        HANDLE handle = GetStdHandle(standard_handle);
+        if (handle == INVALID_HANDLE_VALUE || handle == nullptr)
+          return;
+
+        DWORD mode = 0;
+        if (GetConsoleMode(handle, &mode) == 0)
+          return;
+        SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+      }
+#endif
+
+      bool color_enabled(std::ostream &stream)
+      {
+        const char *no_color = vix::utils::vix_getenv("NO_COLOR");
+        if (no_color && *no_color)
+          return false;
+
+        const char *term = vix::utils::vix_getenv("TERM");
+        if (term && std::string(term) == "dumb")
+          return false;
+
+        if (!stream_is_terminal(stream))
+          return false;
+
+#ifdef _WIN32
+        static bool stdout_enabled = false;
+        static bool stderr_enabled = false;
+        bool &enabled = (&stream == &std::cerr) ? stderr_enabled : stdout_enabled;
+        if (!enabled)
+        {
+          enable_virtual_terminal(stream);
+          enabled = true;
+        }
+#endif
+        return true;
+      }
+
+      void code(std::ostream &stream, const char *value)
+      {
+        if (color_enabled(stream))
+          stream << value;
+      }
+
+      void symbol(std::ostream &stream, const char *glyph, const char *color)
+      {
+        code(stream, color);
+        stream << glyph;
+        code(stream, reset);
+      }
+
+      void header(const std::string &title, const std::string &subtitle = {})
+      {
+        symbol(std::cout, "◆", cyan);
+        std::cout << " ";
+        code(std::cout, bold);
+        code(std::cout, cyan);
+        std::cout << title;
+        code(std::cout, reset);
+        std::cout << "\n";
+
+        if (!subtitle.empty())
+          std::cout << "  " << subtitle << "\n";
+      }
+
+      void field(const std::string &label, const std::string &value)
+      {
+        if (value.empty())
+          return;
+
+        const auto flags = std::cout.flags();
+        const auto fill = std::cout.fill();
+
+        std::cout << "  ";
+        std::cout << std::left << std::setw(16) << label;
+
+        std::cout.flags(flags);
+        std::cout.fill(fill);
+
+        code(std::cout, bold);
+        code(std::cout, white);
+        std::cout << value;
+        code(std::cout, reset);
+        std::cout << "\n";
+      }
+      void status(std::ostream &stream, const char *glyph, const char *color, const std::string &message)
+      {
+        stream << "  ";
+        symbol(stream, glyph, color);
+        stream << " " << message << "\n";
+      }
+
+      void success(const std::string &message)
+      {
+        status(std::cout, "✓", green, message);
+      }
+
+      void error(const std::string &message)
+      {
+        status(std::cerr, "×", red, message);
+      }
+
+      void warning(const std::string &message)
+      {
+        status(std::cout, "!", yellow, message);
+      }
+
+      void hint(const std::string &message)
+      {
+        std::cout << "  ";
+        symbol(std::cout, "→", cyan);
+        std::cout << " " << message << "\n";
+      }
+
+      void progress(const std::string &message)
+      {
+        std::cout << "  ";
+        symbol(std::cout, "●", cyan);
+        std::cout << " " << message << "\n";
+      }
+
+      void section(const std::string &title)
+      {
+        std::cout << "\n  ";
+        code(std::cout, bold);
+        std::cout << title;
+        code(std::cout, reset);
+        std::cout << "\n";
+      }
+
+      void command(const std::string &usage, const std::string &description = {})
+      {
+        std::cout << "  ";
+        code(std::cout, cyan);
+        std::cout << usage;
+        code(std::cout, reset);
+        if (!description.empty())
+        {
+          std::cout << "\n      ";
+          code(std::cout, dim);
+          std::cout << description;
+          code(std::cout, reset);
+        }
+        std::cout << "\n";
+      }
+
+      void check(const std::string &label, bool ok, const std::string &detail)
+      {
+        const auto flags = std::cout.flags();
+        const auto fill = std::cout.fill();
+        std::cout << "  ";
+        symbol(std::cout, ok ? "✓" : "×", ok ? green : red);
+        std::cout << " " << std::left << std::setw(18) << label;
+        std::cout.flags(flags);
+        std::cout.fill(fill);
+        code(std::cout, ok ? dim : yellow);
+        std::cout << detail;
+        code(std::cout, reset);
+        std::cout << "\n";
+      }
+    }
+
+    void cloud_header(const std::string &title, const std::string &subtitle = {})
+    {
+      terminal::header(title, subtitle);
+    }
+
+    void cloud_step(const std::string &label, const std::string &value)
+    {
+      if (value.empty())
+        return;
+      terminal::field(label, value);
+    }
+
+    void cloud_success(const std::string &message)
+    {
+      terminal::success(message);
+    }
+
+    void cloud_error(const std::string &message)
+    {
+      terminal::error(message);
+    }
+
+    void cloud_hint(const std::string &message)
+    {
+      terminal::hint(message);
+    }
+
+    std::string cloud_bad_alloc_message()
+    {
+      return "Softadastra Cloud returned a response the CLI could not buffer. Check that the Cloud API endpoint is serving JSON. The API URL is https://api.softadastra.com.";
     }
 
     std::string slugify(std::string value)
@@ -189,10 +443,17 @@ namespace vix::commands
 
     std::string prompt_line(const std::string &label, const std::string &fallback = {})
     {
-      std::cout << label;
+      terminal::symbol(std::cout, "?", terminal::cyan);
+      std::cout << " " << label;
       if (!fallback.empty())
-        std::cout << " [" << fallback << "]";
-      std::cout << ": ";
+      {
+        std::cout << " ";
+        terminal::code(std::cout, terminal::dim);
+        std::cout << "[" << fallback << "]";
+        terminal::code(std::cout, terminal::reset);
+      }
+      std::cout << ": " << std::flush;
+
       std::string value;
       std::getline(std::cin, value);
       value = trim_copy(value);
@@ -201,7 +462,8 @@ namespace vix::commands
 
     std::string prompt_password()
     {
-      std::cout << "Password: ";
+      terminal::symbol(std::cout, "?", terminal::cyan);
+      std::cout << " Password: " << std::flush;
       std::string password;
 #ifndef _WIN32
       termios oldt{};
@@ -269,7 +531,7 @@ namespace vix::commands
       if (!read_json_file(global_config_path(), value) || !value.is_object())
         return std::nullopt;
       GlobalCloudConfig cfg;
-      cfg.cloud_url = strip_trailing_slash(value.value("cloud_url", default_cloud_url));
+      cfg.cloud_url = normalize_cloud_url(value.value("cloud_url", default_cloud_url));
       cfg.session_id = value.value("session_id", "");
       if (value.contains("user") && value["user"].is_object())
       {
@@ -294,7 +556,7 @@ namespace vix::commands
       if (!read_json_file(project_config_path(), value) || !value.is_object())
         return std::nullopt;
       ProjectCloudConfig cfg;
-      cfg.cloud_url = strip_trailing_slash(value.value("cloud_url", default_cloud_url));
+      cfg.cloud_url = normalize_cloud_url(value.value("cloud_url", default_cloud_url));
       cfg.workspace_id = value.value("workspace_id", "");
       cfg.project_id = value.value("project_id", "");
       cfg.workspace_name = value.value("workspace_name", "");
@@ -315,6 +577,10 @@ namespace vix::commands
     vix::requests::RequestOptions request_options(const std::optional<GlobalCloudConfig> &cfg = std::nullopt)
     {
       vix::requests::RequestOptions options;
+      options.timeout = vix::requests::Timeout(
+          std::chrono::seconds(10),
+          std::chrono::seconds(20),
+          std::chrono::seconds(30));
       options.headers.set("Accept", "application/json");
       if (cfg && !cfg->session_id.empty())
       {
@@ -329,13 +595,26 @@ namespace vix::commands
       ApiResult result;
       result.status = response.status_code();
       json payload;
+      const auto contentType = response.content_type().value_or("");
+      if (!response.text().empty() &&
+          contentType.find("application/json") == std::string::npos &&
+          contentType.find("+json") == std::string::npos)
+      {
+        result.error = "invalid_cloud_response";
+        result.message = "Softadastra Cloud API returned " +
+                         (contentType.empty() ? std::string("a non-JSON response") : ("Content-Type " + contentType)) +
+                         ". Check that the CLI is using https://api.softadastra.com, not the frontend domain.";
+        return result;
+      }
+
       try
       {
         payload = response.text().empty() ? json::object() : json::parse(response.text());
       }
       catch (...)
       {
-        result.message = "Invalid JSON response from cloud.";
+        result.error = "invalid_cloud_response";
+        result.message = "Softadastra Cloud API returned invalid JSON. Check that the CLI is using https://api.softadastra.com, not the frontend domain.";
         return result;
       }
       result.ok = response.ok() && payload.value("ok", false);
@@ -354,6 +633,10 @@ namespace vix::commands
         const auto response = client.post(strip_trailing_slash(cloud_url) + path, vix::requests::json_body(body.dump()), request_options(cfg));
         return parse_response(response);
       }
+      catch (const std::bad_alloc &)
+      {
+        return ApiResult{false, 0, json::object(), "network_error", cloud_bad_alloc_message()};
+      }
       catch (const std::exception &ex)
       {
         return ApiResult{false, 0, json::object(), "network_error", ex.what()};
@@ -370,6 +653,10 @@ namespace vix::commands
         const auto response = client.post(strip_trailing_slash(cloud_url) + path, vix::requests::binary_body(std::move(body), "application/gzip"), options);
         return parse_response(response);
       }
+      catch (const std::bad_alloc &)
+      {
+        return ApiResult{false, 0, json::object(), "network_error", cloud_bad_alloc_message()};
+      }
       catch (const std::exception &ex)
       {
         return ApiResult{false, 0, json::object(), "network_error", ex.what()};
@@ -383,6 +670,10 @@ namespace vix::commands
         vix::requests::Client client;
         const auto response = client.get(strip_trailing_slash(cloud_url) + path, request_options(cfg));
         return parse_response(response);
+      }
+      catch (const std::bad_alloc &)
+      {
+        return ApiResult{false, 0, json::object(), "network_error", cloud_bad_alloc_message()};
       }
       catch (const std::exception &ex)
       {
@@ -418,12 +709,17 @@ namespace vix::commands
     {
       if (result.status == 403)
       {
-        std::cerr << "You do not have permission to perform this action in this workspace.\n";
+        cloud_error("You do not have permission to perform this action in this workspace.");
         return;
       }
+
+      cloud_error(result.message.empty() ? "Cloud request failed." : result.message);
       if (!result.error.empty())
-        std::cerr << result.error << ": ";
-      std::cerr << (result.message.empty() ? "Cloud request failed." : result.message) << "\n";
+        cloud_step("Error", result.error);
+      if (result.status > 0)
+        cloud_step("HTTP status", std::to_string(result.status));
+      if (result.status == 401)
+        cloud_hint("Run: vix login");
     }
 
     std::optional<GlobalCloudConfig> require_connected()
@@ -431,7 +727,8 @@ namespace vix::commands
       auto cfg = load_global_config();
       if (!cfg || cfg->session_id.empty())
       {
-        std::cerr << "Not connected to Softadastra Cloud. Run `vix login` first.\n";
+        cloud_error("Not connected to Softadastra Cloud.");
+        cloud_hint("Run: vix login");
         return std::nullopt;
       }
       return cfg;
@@ -496,7 +793,6 @@ namespace vix::commands
       return trim_copy(output);
     }
 
-
     std::string json_error_output(const std::string &error, const std::string &message)
     {
       return json{{"ok", false}, {"error", error}, {"message", message}}.dump(2);
@@ -505,9 +801,15 @@ namespace vix::commands
     int print_cloud_publish_error(const CloudPublishOptions &opt, const std::string &error, const std::string &message)
     {
       if (opt.json_output)
+      {
         std::cout << json_error_output(error, message) << "\n";
+      }
       else
-        std::cerr << message << "\n";
+      {
+        cloud_error(message);
+        if (!error.empty())
+          cloud_step("Error", error);
+      }
       return 1;
     }
 
@@ -517,7 +819,8 @@ namespace vix::commands
       for (std::size_t i = 0; i < args.size(); ++i)
       {
         const std::string &a = args[i];
-        auto take = [&](const std::string &name) -> std::string {
+        auto take = [&](const std::string &name) -> std::string
+        {
           if (i + 1 >= args.size())
             throw std::runtime_error(name + " requires a value");
           ++i;
@@ -770,20 +1073,35 @@ namespace vix::commands
       return api_error_text(result);
     }
 
-    std::string item_label(const json &item)
-    {
-      const std::string name = item.value("name", "");
-      const std::string id = item.value("id", "");
-      return name.empty() ? id : name + " (" + id + ")";
-    }
-
     std::optional<json> choose_item(const json &items, const std::string &label)
     {
       if (!items.is_array() || items.empty())
         return std::nullopt;
-      std::cout << label << ":\n";
+
+      terminal::section(label);
       for (std::size_t i = 0; i < items.size(); ++i)
-        std::cout << "  " << (i + 1) << ". " << item_label(items[i]) << "\n";
+      {
+        const std::string name = items[i].value("name", "");
+        const std::string id = items[i].value("id", "");
+
+        std::cout << "  ";
+        terminal::code(std::cout, terminal::cyan);
+        std::cout << (i + 1) << ".";
+        terminal::code(std::cout, terminal::reset);
+        std::cout << " ";
+        terminal::code(std::cout, terminal::bold);
+        std::cout << (name.empty() ? id : name);
+        terminal::code(std::cout, terminal::reset);
+        if (!name.empty() && !id.empty())
+        {
+          std::cout << "  ";
+          terminal::code(std::cout, terminal::dim);
+          std::cout << id;
+          terminal::code(std::cout, terminal::reset);
+        }
+        std::cout << "\n";
+      }
+
       const std::string answer = prompt_line("Choose number");
       try
       {
@@ -794,12 +1112,16 @@ namespace vix::commands
       catch (...)
       {
       }
+
+      terminal::warning("No valid selection was made.");
       return std::nullopt;
     }
   }
 
   int CloudCommand::login(const std::vector<std::string> &args)
   {
+    cloud_header("Softadastra Cloud", "Sign in to continue");
+
     const std::string cloud_url = strip_trailing_slash(arg_value(args, "--url").value_or(default_cloud_url));
     std::string email = arg_value(args, "--email").value_or("");
     std::string password = arg_value(args, "--password").value_or("");
@@ -809,7 +1131,7 @@ namespace vix::commands
       password = prompt_password();
     if (email.empty() || password.empty())
     {
-      std::cerr << "Email and password are required.\n";
+      cloud_error("Email and password are required.");
       return 1;
     }
     const auto result = api_post(cloud_url, "/api/auth/login", json{{"email", email}, {"password", password}});
@@ -827,16 +1149,17 @@ namespace vix::commands
     cfg.display_name = user.value("display_name", user.value("name", ""));
     if (cfg.session_id.empty())
     {
-      std::cerr << "Cloud login response did not include a session.\n";
+      cloud_error("Cloud login response did not include a session.");
       return 1;
     }
     if (!save_global_config(cfg))
     {
-      std::cerr << "Unable to write " << global_config_path() << "\n";
+      cloud_error("Unable to write " + global_config_path().string());
       return 1;
     }
-    std::cout << "Login successful.\n";
-    std::cout << "Connected to Softadastra Cloud as " << cfg.email << ".\n";
+    cloud_success("Login successful.");
+    cloud_step("Account", cfg.email);
+    cloud_step("Cloud URL", cfg.cloud_url);
     return 0;
   }
 
@@ -847,7 +1170,8 @@ namespace vix::commands
       cfg.cloud_url = default_cloud_url;
     cfg.session_id.clear();
     save_global_config(cfg);
-    std::cout << "Logged out from Softadastra Cloud.\n";
+    cloud_header("Softadastra Cloud", "Authentication and project operations");
+    cloud_success("Logged out.");
     return 0;
   }
 
@@ -856,7 +1180,9 @@ namespace vix::commands
     auto cfg = load_global_config();
     if (!cfg || cfg->session_id.empty())
     {
-      std::cout << "Not connected to Softadastra Cloud.\n";
+      cloud_header("Softadastra Cloud", "Authentication and project operations");
+      cloud_error("Not connected to Softadastra Cloud.");
+      cloud_hint("Run: vix login");
       return 0;
     }
     auto result = api_post(cfg->cloud_url, "/api/auth/me", json{{"session_id", cfg->session_id}}, cfg);
@@ -866,8 +1192,10 @@ namespace vix::commands
       return 1;
     }
     const auto user = result.data.value("user", json::object());
-    std::cout << "Connected as " << user.value("email", cfg->email) << "\n";
-    std::cout << "Cloud URL: " << cfg->cloud_url << "\n";
+    cloud_header("Softadastra Cloud", "Authentication and project operations");
+    cloud_success("Session active.");
+    cloud_step("Account", user.value("email", cfg->email));
+    cloud_step("Cloud URL", cfg->cloud_url);
     return 0;
   }
 
@@ -876,6 +1204,9 @@ namespace vix::commands
     auto cfg = require_connected();
     if (!cfg)
       return 1;
+
+    cloud_header("Cloud project link", "Select a workspace and project for this directory");
+
     const std::string cloud_url = strip_trailing_slash(arg_value(args, "--url").value_or(cfg->cloud_url));
     auto workspaces = api_post(cloud_url, "/api/workspaces/list", json{{"owner_user_id", cfg->user_id}}, cfg);
     if (!workspaces.ok)
@@ -886,7 +1217,7 @@ namespace vix::commands
     auto workspace = choose_item(workspaces.data.value("workspaces", json::array()), "Workspaces");
     if (!workspace)
     {
-      std::cerr << "No workspace selected.\n";
+      cloud_error("No workspace selected.");
       return 1;
     }
     const std::string workspace_id = workspace->value("id", "");
@@ -921,17 +1252,18 @@ namespace vix::commands
     linked.project_name = project->value("name", linked.project_id);
     if (linked.workspace_id.empty() || linked.project_id.empty())
     {
-      std::cerr << "Invalid cloud project selection.\n";
+      cloud_error("Invalid cloud project selection.");
       return 1;
     }
     if (!save_project_config(linked))
     {
-      std::cerr << "Unable to write " << project_config_path() << "\n";
+      cloud_error("Unable to write " + project_config_path().string());
       return 1;
     }
-    std::cout << "Project linked to Softadastra Cloud.\n";
-    std::cout << "Workspace: " << linked.workspace_name << "\n";
-    std::cout << "Project: " << linked.project_name << "\n";
+    cloud_success("Project linked.");
+    cloud_step("Workspace", linked.workspace_name);
+    cloud_step("Project", linked.project_name);
+    cloud_step("Cloud URL", linked.cloud_url);
     return 0;
   }
 
@@ -943,12 +1275,14 @@ namespace vix::commands
     auto linked = load_project_config();
     if (!linked || linked->workspace_id.empty() || linked->project_id.empty())
     {
-      std::cerr << "Project is not linked to Softadastra Cloud. Run `vix cloud init`.\n";
+      cloud_error("Project is not linked to Softadastra Cloud.");
+      cloud_hint("Run: vix cloud init");
       return 1;
     }
-    std::cout << "Project is linked to Softadastra Cloud.\n";
-    std::cout << "Workspace: " << linked->workspace_name << "\n";
-    std::cout << "Project: " << linked->project_name << "\n";
+    cloud_header("Softadastra Cloud", "Local project link");
+    cloud_success("Project link is active.");
+    cloud_step("Workspace", linked->workspace_name);
+    cloud_step("Project", linked->project_name);
     return 0;
   }
 
@@ -960,7 +1294,7 @@ namespace vix::commands
     auto ctx = load_cloud_context(context_error);
     if (!ctx)
     {
-      std::cerr << context_error << "\n";
+      cloud_error(context_error);
       return 1;
     }
 
@@ -970,21 +1304,22 @@ namespace vix::commands
 
     if (!fs::exists(lockfile) || !fs::is_regular_file(lockfile))
     {
-      std::cerr << "No vix.lock file found. Run this command from a linked Vix project or pass --file <path>.\n";
+      cloud_error("No vix.lock file found.");
+      cloud_hint("Run this command from a linked Vix project or pass --file <path>.");
       return 1;
     }
 
     const auto content = read_text_file(lockfile);
     if (!content)
     {
-      std::cerr << "Unable to read lockfile: " << lockfile << "\n";
+      cloud_error("Unable to read lockfile: " + lockfile.string());
       return 1;
     }
 
     const auto checksum = vix::cli::util::sha256_file(lockfile);
     if (!checksum)
     {
-      std::cerr << "Unable to calculate lockfile checksum.\n";
+      cloud_error("Unable to calculate lockfile checksum.");
       return 1;
     }
 
@@ -996,10 +1331,18 @@ namespace vix::commands
         {"checksum_sha256", *checksum},
         {"source", "vix"}};
 
+    if (!json_output)
+    {
+      cloud_header("Softadastra Cloud", "Lockfile history");
+      cloud_step("Project", ctx->project.project_name.empty() ? ctx->project.project_id : ctx->project.project_name);
+      cloud_step("File", lockfile.string());
+      terminal::progress("Uploading lockfile...");
+    }
+
     const auto result = api_post(ctx->cloud_url, "/api/lockfiles/upload", payload, ctx->global);
     if (!result.ok)
     {
-      std::cerr << permission_error_text(result, "You do not have permission to upload lockfiles for this project.") << "\n";
+      cloud_error(permission_error_text(result, "You do not have permission to upload lockfiles for this project."));
       return 1;
     }
 
@@ -1009,9 +1352,8 @@ namespace vix::commands
       return 0;
     }
 
-    std::cout << "Lockfile uploaded to Softadastra Cloud.\n";
-    std::cout << "Project: " << (ctx->project.project_name.empty() ? ctx->project.project_id : ctx->project.project_name) << "\n";
-    std::cout << "Checksum: " << *checksum << "\n";
+    cloud_success("Lockfile uploaded.");
+    cloud_step("Checksum", *checksum);
     return 0;
   }
 
@@ -1080,20 +1422,22 @@ namespace vix::commands
 
     if (opt.help)
     {
-      std::cout
-          << "Usage:\n"
-          << "  vix publish --cloud [options]\n"
-          << "  vix cloud publish [options]\n\n"
-          << "Options:\n"
-          << "  --package <name>        Package name, for example vix/http\n"
-          << "  --version <version>     Package version\n"
-          << "  --visibility <private|public>\n"
-          << "  --description <text>\n"
-          << "  --repository-url <url>\n"
-          << "  --archive <path>        Use an existing package.tar.gz\n"
-          << "  --manifest <path>       Use manifest JSON file\n"
-          << "  --dry-run               Show what would be published\n"
-          << "  --json                  Emit machine-readable JSON\n";
+      cloud_header("Cloud publish", "Publish a package version from the current Vix project");
+
+      terminal::section("Usage");
+      terminal::command("vix publish --cloud [options]");
+      terminal::command("vix cloud publish [options]");
+
+      terminal::section("Options");
+      terminal::command("--package <name>", "Package name, for example vix/http");
+      terminal::command("--version <version>", "Package version");
+      terminal::command("--visibility <private|public>", "Package visibility");
+      terminal::command("--description <text>", "Package description");
+      terminal::command("--repository-url <url>", "Source repository URL");
+      terminal::command("--archive <path>", "Use an existing package.tar.gz");
+      terminal::command("--manifest <path>", "Use an existing manifest JSON file");
+      terminal::command("--dry-run", "Prepare and inspect the publish operation without uploading");
+      terminal::command("--json", "Emit machine-readable JSON");
       return 0;
     }
 
@@ -1153,29 +1497,35 @@ namespace vix::commands
       }
       else
       {
-        std::cout << "Cloud publish dry run.\n";
-        std::cout << "Cloud URL: " << ctx->cloud_url << "\n";
-        std::cout << "Workspace: " << ctx->project.workspace_id << "\n";
-        std::cout << "Project: " << ctx->project.project_id << "\n";
-        std::cout << "Package: " << opt.package_name << "\n";
-        std::cout << "Version: " << opt.version << "\n";
-        std::cout << "Manifest: " << manifest.dump() << "\n";
-        std::cout << "Archive: " << archive->path << "\n";
-        std::cout << "Archive size: " << archive->size << "\n";
-        std::cout << "Checksum: " << archive->checksum_sha256 << "\n";
+        cloud_header("Cloud publish", "Dry run");
+        cloud_success("Package is ready to publish.");
+        cloud_step("Cloud URL", ctx->cloud_url);
+        cloud_step("Workspace", ctx->project.workspace_name.empty() ? ctx->project.workspace_id : ctx->project.workspace_name);
+        cloud_step("Project", ctx->project.project_name.empty() ? ctx->project.project_id : ctx->project.project_name);
+        cloud_step("Package", opt.package_name);
+        cloud_step("Version", opt.version);
+        cloud_step("Visibility", opt.visibility);
+        cloud_step("Archive", archive->path.string());
+        cloud_step("Archive size", std::to_string(archive->size) + " bytes");
+        cloud_step("Checksum", archive->checksum_sha256);
+
+        terminal::section("Manifest");
+        terminal::code(std::cout, terminal::dim);
+        std::cout << manifest.dump(2) << "\n";
+        terminal::code(std::cout, terminal::reset);
       }
       return 0;
     }
 
     if (!opt.json_output)
     {
-      std::cout << "Publishing package to Softadastra Cloud...\n";
-      std::cout << "Package: " << opt.package_name << "\n";
-      std::cout << "Version: " << opt.version << "\n";
-      if (!ctx->project.workspace_name.empty())
-        std::cout << "Workspace: " << ctx->project.workspace_name << "\n";
-      std::cout << "Archive: " << archive->size << " bytes\n";
-      std::cout << "Checksum: " << archive->checksum_sha256 << "\n";
+      cloud_header("Cloud publish", "Publishing package version");
+      cloud_step("Package", opt.package_name);
+      cloud_step("Version", opt.version);
+      cloud_step("Workspace", ctx->project.workspace_name.empty() ? ctx->project.workspace_id : ctx->project.workspace_name);
+      cloud_step("Archive size", std::to_string(archive->size) + " bytes");
+      cloud_step("Checksum", archive->checksum_sha256);
+      terminal::progress("Resolving package record...");
     }
 
     ApiResult listResult;
@@ -1185,14 +1535,7 @@ namespace vix::commands
 
     if (!package)
     {
-      auto created = api_post(ctx->cloud_url, "/api/packages", json{
-                                                           {"workspace_id", ctx->project.workspace_id},
-                                                           {"owner_user_id", ctx->global.user_id},
-                                                           {"created_by_user_id", ctx->global.user_id},
-                                                           {"name", opt.package_name},
-                                                           {"description", opt.description},
-                                                           {"repository_url", opt.repository_url},
-                                                           {"visibility", opt.visibility}},
+      auto created = api_post(ctx->cloud_url, "/api/packages", json{{"workspace_id", ctx->project.workspace_id}, {"owner_user_id", ctx->global.user_id}, {"created_by_user_id", ctx->global.user_id}, {"name", opt.package_name}, {"description", opt.description}, {"repository_url", opt.repository_url}, {"visibility", opt.visibility}},
                               ctx->global);
       if (!created.ok)
       {
@@ -1209,7 +1552,7 @@ namespace vix::commands
       {
         package = created.data.value("package", json::object());
         if (!opt.json_output)
-          std::cout << "Package created.\n";
+          cloud_success("Package record created.");
       }
     }
 
@@ -1232,6 +1575,9 @@ namespace vix::commands
                                     vix::requests::url_encode(opt.version) + "?" +
                                     params.to_query_string();
 
+    if (!opt.json_output)
+      terminal::progress("Uploading archive...");
+
     auto uploaded = api_post_binary(ctx->cloud_url, upload_path, std::move(*bytes), ctx->global);
     if (!uploaded.ok)
       return print_cloud_publish_error(opt, uploaded.error.empty() ? "package_upload_failed" : uploaded.error, publish_permission_message(uploaded));
@@ -1252,8 +1598,9 @@ namespace vix::commands
     }
     else
     {
-      std::cout << "Package version published.\n";
-      std::cout << "Download available from Softadastra Cloud.\n";
+      cloud_success("Package version published.");
+      cloud_step("Package ID", package_id);
+      cloud_hint("The version is now available from Softadastra Cloud.");
     }
 
     return 0;
@@ -1261,41 +1608,63 @@ namespace vix::commands
 
   int CloudCommand::doctor(const std::vector<std::string> &)
   {
-    std::cout << "Softadastra Cloud doctor\n\n";
+    cloud_header("Softadastra Cloud doctor", "Connectivity and project readiness");
+
     auto cfg = load_global_config();
     if (!cfg || cfg->session_id.empty())
     {
-      std::cout << "Cloud URL: missing\nSession: missing\nProject: not checked\n";
+      terminal::check("Cloud config", cfg.has_value(), cfg ? "loaded" : "missing");
+      terminal::check("Session", false, "not authenticated");
+      terminal::check("Project link", false, "not checked");
+      cloud_hint("Run: vix login");
       return 1;
     }
+
     auto health = api_get(cfg->cloud_url, "/api/health", cfg);
-    std::cout << "Cloud URL: " << (health.ok ? "OK" : "failed") << "\n";
+    terminal::check("Cloud API", health.ok, health.ok ? cfg->cloud_url : "request failed");
+    if (!health.ok)
+      print_api_error(health);
+
     auto me = api_post(cfg->cloud_url, "/api/auth/me", json{{"session_id", cfg->session_id}}, cfg);
-    std::cout << "Session: " << (me.ok ? "OK" : "failed") << "\n";
+    terminal::check("Session", me.ok, me.ok ? "authenticated" : "invalid or expired");
     if (!me.ok)
     {
       print_api_error(me);
       return 1;
     }
+
     auto linked = load_project_config();
+    const bool lockfile_found = fs::exists(fs::current_path() / "vix.lock");
     if (!linked || linked->workspace_id.empty() || linked->project_id.empty())
     {
-      std::cout << "Workspace: not linked\nProject: not linked\n";
-      std::cout << "Lockfile: " << (fs::exists(fs::current_path() / "vix.lock") ? "found" : "missing") << "\n";
+      terminal::check("Project link", false, "not linked");
+      terminal::check("Lockfile", lockfile_found, lockfile_found ? "vix.lock found" : "vix.lock missing");
+      cloud_hint("Run: vix cloud init");
       return 1;
     }
+
+    terminal::check("Project link", true, linked->project_name.empty() ? linked->project_id : linked->project_name);
+
     const std::string url = linked->cloud_url.empty() ? cfg->cloud_url : linked->cloud_url;
     auto workspace = api_post(url, "/api/workspaces/show", json{{"id", linked->workspace_id}}, cfg);
     auto project = api_post(url, "/api/projects/show", json{{"workspace_id", linked->workspace_id}, {"id", linked->project_id}}, cfg);
-    const bool permissionDenied = workspace.status == 403 || project.status == 403;
+
+    const bool permission_denied = workspace.status == 403 || project.status == 403;
     const bool ready = workspace.ok && project.ok;
-    std::cout << "Workspace: " << (workspace.ok ? "OK" : (workspace.status == 403 ? "permission denied" : "failed")) << "\n";
-    std::cout << "Project: " << (project.ok ? "OK" : (project.status == 403 ? "permission denied" : "failed")) << "\n";
-    std::cout << "Permissions: " << (ready ? "OK" : (permissionDenied ? "permission denied" : "check backend response")) << "\n";
-    std::cout << "Lockfile: " << (fs::exists(fs::current_path() / "vix.lock") ? "found" : "missing") << "\n";
-    std::cout << "Can upload lockfile: " << (ready ? "OK" : (permissionDenied ? "permission denied" : "not ready")) << "\n";
-    std::cout << "Build reports: " << (ready ? "ready" : (permissionDenied ? "permission denied" : "not ready")) << "\n";
-    return (workspace.ok && project.ok) ? 0 : 1;
+
+    terminal::check("Workspace", workspace.ok, workspace.ok ? "reachable" : (workspace.status == 403 ? "permission denied" : "request failed"));
+    terminal::check("Project", project.ok, project.ok ? "reachable" : (project.status == 403 ? "permission denied" : "request failed"));
+    terminal::check("Permissions", ready, ready ? "ready" : (permission_denied ? "permission denied" : "backend check failed"));
+    terminal::check("Lockfile", lockfile_found, lockfile_found ? "vix.lock found" : "vix.lock missing");
+    terminal::check("Lockfile upload", ready, ready ? "ready" : (permission_denied ? "permission denied" : "not ready"));
+    terminal::check("Build reports", ready, ready ? "ready" : (permission_denied ? "permission denied" : "not ready"));
+
+    if (ready)
+      cloud_success("Cloud integration is ready.");
+    else
+      cloud_hint("Review the failed checks above before retrying.");
+
+    return ready ? 0 : 1;
   }
 
   int CloudCommand::run(const std::vector<std::string> &args)
@@ -1314,28 +1683,34 @@ namespace vix::commands
       return doctor(std::vector<std::string>(args.begin() + 1, args.end()));
     if (args[0] == "--help" || args[0] == "-h")
       return help();
-    std::cerr << "unknown cloud command: " << args[0] << "\n";
+    cloud_error("Unknown cloud command: " + args[0]);
+    cloud_hint("Run: vix cloud --help");
     help();
     return 1;
   }
 
   int CloudCommand::help()
   {
-    std::cout
-        << "Usage:\n"
-        << "  vix login [--url <url>] [--email <email>] [--password <password>]\n"
-        << "  vix logout\n"
-        << "  vix cloud status\n"
-        << "  vix cloud init [--url <url>]\n"
-        << "  vix cloud sync\n"
-        << "  vix cloud lockfile upload [--file <path>] [--json]\n"
-        << "  vix cloud lock upload [--file <path>] [--json]\n"
-        << "  vix cloud publish [options]\n"
-        << "  vix publish --cloud [options]\n"
-        << "  vix doctor --cloud\n\n"
-        << "Cloud config:\n"
-        << "  Global session: ~/.vix/cloud/config.json\n"
-        << "  Project link:   .vix/cloud.json\n";
+    cloud_header("Softadastra Cloud", "Runtime operations for packages, lockfiles and build reports");
+
+    terminal::section("Authentication");
+    terminal::command("vix login [--url <url>] [--email <email>] [--password <password>]", "Connect the Vix CLI to Softadastra Cloud");
+    terminal::command("vix logout", "Remove the active local session");
+    terminal::command("vix cloud status", "Check the active Cloud session");
+
+    terminal::section("Project operations");
+    terminal::command("vix cloud init [--url <url>]", "Link the current directory to a workspace project");
+    terminal::command("vix cloud sync", "Verify the local project link");
+    terminal::command("vix cloud lockfile upload [--file <path>] [--json]", "Upload the current dependency lockfile");
+    terminal::command("vix cloud lock upload [--file <path>] [--json]", "Alias for lockfile upload");
+    terminal::command("vix cloud publish [options]", "Publish a package version");
+    terminal::command("vix publish --cloud [options]", "Publish through the top-level publish command");
+    terminal::command("vix doctor --cloud", "Check Cloud connectivity, permissions and project readiness");
+
+    terminal::section("Configuration");
+    cloud_step("Global session", "~/.vix/cloud/config.json");
+    cloud_step("Project link", ".vix/cloud.json");
     return 0;
   }
+
 }

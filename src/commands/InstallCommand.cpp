@@ -13,6 +13,7 @@
  */
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
+#include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Shell.hpp>
@@ -2436,6 +2437,99 @@ namespace vix::commands
       return commands;
     }
 
+    static std::string package_name_from_id(const std::string &id)
+    {
+      const auto slash = id.find('/');
+      return slash == std::string::npos ? id : id.substr(slash + 1);
+    }
+
+    static void copy_built_executable_to_stage(const fs::path &src, const fs::path &stage, const std::string &commandName)
+    {
+      if (!is_safe_executable_name(commandName))
+        throw std::runtime_error("invalid executable name: " + commandName);
+
+      const fs::path dst = stage / "bin" / commandName;
+      std::error_code ec;
+      fs::create_directories(dst.parent_path(), ec);
+      if (ec)
+        throw std::runtime_error("cannot create staged bin directory: " + dst.parent_path().string());
+
+      fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+      if (ec)
+        throw std::runtime_error("cannot stage built executable '" + commandName + "': " + ec.message());
+
+#ifndef _WIN32
+      fs::permissions(
+          dst,
+          fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec,
+          fs::perm_options::add,
+          ec);
+#endif
+    }
+
+    static std::optional<fs::path> find_built_executable_by_name(const fs::path &buildDir, const std::string &name)
+    {
+      if (name.empty())
+        return std::nullopt;
+
+      const fs::path direct = buildDir / name;
+      if (is_executable_filename(direct))
+        return direct;
+
+#ifdef _WIN32
+      const fs::path directExe = buildDir / (name + ".exe");
+      if (is_executable_filename(directExe))
+        return directExe;
+#endif
+
+      return vix::commands::RunCommand::detail::resolve_runnable_executable(buildDir, name);
+    }
+
+    static void stage_built_executables_missing_from_install(
+        const DepResolved &rootDep,
+        const fs::path &buildDir,
+        const fs::path &stage,
+        const std::vector<GlobalExecutableDecl> &declared)
+    {
+      std::set<std::string> installed;
+      for (const auto &cmd : collect_installed_commands(stage))
+        installed.insert(cmd);
+
+      if (!declared.empty())
+      {
+        for (const auto &decl : declared)
+        {
+          if (installed.contains(decl.name))
+            continue;
+
+          std::optional<fs::path> exe = find_built_executable_by_name(buildDir, decl.name);
+
+          if (!exe && !decl.target.empty())
+            exe = find_built_executable_by_name(buildDir, decl.target);
+
+          if (!exe)
+            continue;
+
+          copy_built_executable_to_stage(*exe, stage, decl.name);
+          installed.insert(decl.name);
+        }
+        return;
+      }
+
+      if (!installed.empty())
+        return;
+
+      std::optional<fs::path> exe = find_built_executable_by_name(buildDir, package_name_from_id(rootDep.id));
+
+      if (!exe)
+        exe = vix::commands::RunCommand::detail::resolve_runnable_executable(buildDir);
+
+      if (!exe)
+        return;
+
+      copy_built_executable_to_stage(*exe, stage, executable_command_name(*exe));
+    }
+
     static std::string owner_of_relpath(const json &root, const fs::path &rel)
     {
       const std::string key = rel.generic_string();
@@ -3150,6 +3244,18 @@ namespace vix::commands
         return 1;
       }
 
+      std::vector<GlobalExecutableDecl> declared;
+      try
+      {
+        declared = read_declared_executables(rootDep.checkout / "vix.json");
+        stage_built_executables_missing_from_install(rootDep, buildDir, stageDir, declared);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
       std::vector<fs::path> files = collect_regular_files(stageDir);
       try
       {
@@ -3183,10 +3289,8 @@ namespace vix::commands
       }
 
       std::vector<std::string> commands = collect_installed_commands(stageDir);
-      std::vector<GlobalExecutableDecl> declared;
       try
       {
-        declared = read_declared_executables(rootDep.checkout / "vix.json");
         validate_declared_executables_installed(declared, commands);
       }
       catch (const std::exception &ex)

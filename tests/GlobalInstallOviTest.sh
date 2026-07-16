@@ -62,3 +62,80 @@ test ! -e "$VIX_GLOBAL_PREFIX/bin/ovi-doctor"
 test ! -e "$HOME/.local/bin/ovi"
 test ! -e "$HOME/.local/bin/ovi-doctor"
 test ! -e "$VIX_GLOBAL_PREFIX/include/ovi/ovi.hpp"
+
+
+FALLBACK_REPO="$ROOT/fallback-repo"
+mkdir -p "$FALLBACK_REPO/include/fallback_cli" "$FALLBACK_REPO/src"
+cat > "$FALLBACK_REPO/include/fallback_cli/fallback.hpp" <<'EOF'
+#pragma once
+namespace fallback_cli { inline int answer() { return 42; } }
+EOF
+cat > "$FALLBACK_REPO/src/main.cpp" <<'EOF'
+#include <fallback_cli/fallback.hpp>
+#include <iostream>
+#include <string>
+int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "answer") {
+    std::cout << fallback_cli::answer() << "\n";
+    return 0;
+  }
+  std::cout << "fallback_cli ok\n";
+  return 0;
+}
+EOF
+cat > "$FALLBACK_REPO/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(fallback_cli VERSION 0.1.0 LANGUAGES CXX)
+add_library(fallback_cli_lib INTERFACE)
+target_include_directories(fallback_cli_lib INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+add_executable(fallback_cli src/main.cpp)
+target_link_libraries(fallback_cli PRIVATE fallback_cli_lib)
+install(DIRECTORY include/ DESTINATION include)
+EOF
+cat > "$FALLBACK_REPO/vix.json" <<'EOF'
+{
+  "name": "fallback_cli",
+  "namespace": "vixcpp",
+  "version": "0.1.0",
+  "type": "header-only",
+  "include": "include",
+  "deps": [],
+  "description": "Global install fallback fixture."
+}
+EOF
+
+git -C "$FALLBACK_REPO" init -q
+git -C "$FALLBACK_REPO" config user.email test@example.invalid
+git -C "$FALLBACK_REPO" config user.name "Vix Test"
+git -C "$FALLBACK_REPO" add .
+git -C "$FALLBACK_REPO" commit -q -m "fallback fixture"
+FALLBACK_COMMIT="$(git -C "$FALLBACK_REPO" rev-parse HEAD)"
+
+cat > "$HOME/.vix/registry/index/index/vixcpp.fallback_cli.json" <<JSON
+{
+  "name": "fallback_cli",
+  "namespace": "vixcpp",
+  "repo": { "url": "$FALLBACK_REPO" },
+  "versions": {
+    "0.1.0": {
+      "tag": "v0.1.0",
+      "commit": "$FALLBACK_COMMIT"
+    }
+  }
+}
+JSON
+
+"$VIX_BIN" install -g vixcpp/fallback_cli
+
+test -x "$VIX_GLOBAL_PREFIX/bin/fallback_cli"
+test -f "$VIX_GLOBAL_PREFIX/include/fallback_cli/fallback.hpp"
+command -v fallback_cli | grep -q "$HOME/.local/bin/fallback_cli"
+fallback_cli answer | grep -q "42"
+grep -q '"fallback_cli"' "$VIX_GLOBAL_PREFIX/installed.json"
+
+"$VIX_BIN" uninstall -g vixcpp/fallback_cli
+test ! -e "$VIX_GLOBAL_PREFIX/bin/fallback_cli"
+test ! -e "$HOME/.local/bin/fallback_cli"

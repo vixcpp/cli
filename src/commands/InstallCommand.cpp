@@ -2654,6 +2654,33 @@ namespace vix::commands
       }
     }
 
+    static bool is_package_private_unmanaged_path(const std::string &pkgId, const fs::path &rel, const fs::path &dst)
+    {
+      std::error_code ec;
+      if (fs::is_symlink(dst, ec) || !fs::is_regular_file(dst, ec))
+        return false;
+
+      const std::string name = package_name_from_id(pkgId);
+      const std::string path = rel.generic_string();
+      if (name.empty() || path.empty())
+        return false;
+
+      if (path == "bin/" + name || path == "bin/" + name + ".exe")
+        return true;
+      if (path.rfind("share/" + name + "/", 0) == 0)
+        return true;
+      if (path.rfind("include/" + name + "/", 0) == 0)
+        return true;
+      if (path.rfind("lib/cmake/" + name + "/", 0) == 0)
+        return true;
+      if (path.rfind("lib/pkgconfig/" + name + ".", 0) == 0)
+        return true;
+      if (path.rfind("lib/lib" + name + ".", 0) == 0)
+        return true;
+
+      return false;
+    }
+
     static void ensure_no_global_conflicts(const json &registry, const std::string &pkgId, const fs::path &prefix, const std::vector<fs::path> &files)
     {
       for (const auto &rel : files)
@@ -2666,6 +2693,8 @@ namespace vix::commands
         const std::string owner = owner_of_relpath(registry, rel);
         if (owner.empty())
         {
+          if (is_package_private_unmanaged_path(pkgId, rel, dst))
+            continue;
           throw std::runtime_error("refusing to overwrite unmanaged file: " + dst.string());
         }
 

@@ -1135,6 +1135,8 @@ namespace vix::commands
     options.routeOptions.keepEmbeddedAssetFallback = false;
     options.routeOptions.kernelOptions.projectContext = projectContext;
     options.routeOptions.kernelOptions.extensionRegistry = &extensionManager.registry();
+    options.routeOptions.allowPackageMutations =
+        opts.host == "127.0.0.1" || opts.host == "localhost" || opts.host == "::1";
     options.logRequests = (opts.logMode == NoteLogMode::Normal);
 
     vix::note::NoteServer server(std::move(document), options);

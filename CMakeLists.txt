@@ -70,6 +70,9 @@ list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
 list(REMOVE_DUPLICATES CLI_SOURCES)
+list(REMOVE_ITEM CLI_SOURCES
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/registry/RegistryCatalog.cpp"
+)
 
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(vix::cli ALIAS vix_cli)

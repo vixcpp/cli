@@ -1137,6 +1137,22 @@ namespace vix::commands
     options.routeOptions.kernelOptions.extensionRegistry = &extensionManager.registry();
     options.routeOptions.allowPackageMutations =
         opts.host == "127.0.0.1" || opts.host == "localhost" || opts.host == "::1";
+    // NoteServer is created below in the same scope, so these callbacks cannot
+    // outlive extensionManager or projectContext. They keep NoteRoutes from
+    // owning a hidden extension manager.
+    options.routeOptions.reloadExtensions = [&extensionManager, projectContext, noExtensions = opts.noExtensions]() {
+      extensionManager.reload(projectContext, !noExtensions);
+      return vix::note::NoteResult::success("extensions reloaded");
+    };
+    options.routeOptions.setExtensionEnabled = [&extensionManager](const std::string &packageId, bool enabled) {
+      std::string error;
+      if (!extensionManager.set_extension_enabled(packageId, enabled, error))
+      {
+        return vix::note::NoteResult::failure(error.empty() ? "extension state update failed" : error, 1)
+            .add_error(error.empty() ? "extension state update failed" : error);
+      }
+      return vix::note::NoteResult::success("extension state updated");
+    };
     options.logRequests = (opts.logMode == NoteLogMode::Normal);
 
     vix::note::NoteServer server(std::move(document), options);

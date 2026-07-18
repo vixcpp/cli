@@ -1084,6 +1084,110 @@ namespace vix::commands
       return std::nullopt;
     }
 
+
+    static std::string normalize_extension_id(std::string value)
+    {
+      value = lower_copy(trim_copy(std::move(value)));
+      if (value == "md") return "markdown";
+      if (value == "repl") return "reply";
+      if (value == "c++") return "cpp";
+      return value;
+    }
+
+    static bool is_safe_note_cell_id(const std::string &value)
+    {
+      if (value.empty()) return false;
+      if (value == "markdown" || value == "html" || value == "cpp" || value == "reply") return false;
+      for (char c : value)
+      {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        if (!ok) return false;
+      }
+      return true;
+    }
+
+    static bool is_safe_runtime_command(const std::string &value)
+    {
+      if (value.empty()) return false;
+      if (value.find('/') != std::string::npos || value.find('\\') != std::string::npos) return false;
+      for (char c : value)
+      {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
+        if (!ok) return false;
+      }
+      return true;
+    }
+
+    static json normalize_note_extension_or_throw(const json &note)
+    {
+      if (!note.is_object()) throw std::runtime_error("invalid vix.json: extensions.note must be an object");
+      if (!note.contains("api") || !note["api"].is_string()) throw std::runtime_error("invalid vix.json: extensions.note.api is required");
+      if (note["api"].get<std::string>() != "1") throw std::runtime_error("invalid vix.json: unsupported extensions.note.api `" + note["api"].get<std::string>() + "`");
+      if (!note.contains("cellTypes") || !note["cellTypes"].is_array()) throw std::runtime_error("invalid vix.json: extensions.note.cellTypes must be an array");
+
+      json out = note;
+      json cells = json::array();
+      std::vector<std::string> seen;
+      for (const auto &raw : note["cellTypes"])
+      {
+        if (!raw.is_object()) throw std::runtime_error("invalid vix.json: extensions.note.cellTypes entries must be objects");
+        json cell = raw;
+        const std::string id = normalize_extension_id(cell.value("id", ""));
+        if (!is_safe_note_cell_id(id)) throw std::runtime_error("invalid vix.json: invalid or reserved note cell type id `" + id + "`");
+        if (std::find(seen.begin(), seen.end(), id) != seen.end()) throw std::runtime_error("invalid vix.json: duplicate note cell type id `" + id + "`");
+        seen.push_back(id);
+        cell["id"] = id;
+        if (cell.contains("aliases"))
+        {
+          if (!cell["aliases"].is_array()) throw std::runtime_error("invalid vix.json: note cell aliases must be an array");
+          json aliases = json::array();
+          std::vector<std::string> aliasSeen;
+          for (const auto &aliasRaw : cell["aliases"])
+          {
+            if (!aliasRaw.is_string()) throw std::runtime_error("invalid vix.json: note cell aliases must be strings");
+            const std::string alias = normalize_extension_id(aliasRaw.get<std::string>());
+            if (!is_safe_note_cell_id(alias)) throw std::runtime_error("invalid vix.json: invalid or reserved note cell alias `" + alias + "`");
+            if (std::find(aliasSeen.begin(), aliasSeen.end(), alias) == aliasSeen.end()) { aliasSeen.push_back(alias); aliases.push_back(alias); }
+          }
+          cell["aliases"] = aliases;
+        }
+        cells.push_back(cell);
+      }
+      out["cellTypes"] = cells;
+
+      if (out.contains("runtime"))
+      {
+        if (!out["runtime"].is_object()) throw std::runtime_error("invalid vix.json: extensions.note.runtime must be an object");
+        const json &rt = out["runtime"];
+        if (!rt.contains("protocol") || rt.value("protocol", "") != "vix-note-extension-1") throw std::runtime_error("invalid vix.json: unsupported note runtime protocol");
+        if (!rt.contains("mode") || rt.value("mode", "") != "oneshot") throw std::runtime_error("invalid vix.json: unsupported note runtime mode");
+        if (rt.contains("command") && !is_safe_runtime_command(rt.value("command", ""))) throw std::runtime_error("invalid vix.json: unsafe note runtime command");
+        if (!rt.contains("command") && !rt.contains("path")) throw std::runtime_error("invalid vix.json: note runtime requires command or path");
+      }
+      return out;
+    }
+
+    static json normalize_extensions_or_throw(const json &manifest)
+    {
+      if (!manifest.contains("extensions")) return json();
+      if (!manifest["extensions"].is_object()) throw std::runtime_error("invalid vix.json: extensions must be an object");
+      json out = manifest["extensions"];
+      if (out.contains("note")) out["note"] = normalize_note_extension_or_throw(out["note"]);
+      return out;
+    }
+
+    static json note_extension_summary(const json &extensions)
+    {
+      if (extensions.is_null() || !extensions.contains("note")) return json();
+      const json &note = extensions["note"];
+      json summary = json::object();
+      summary["api"] = note["api"];
+      if (note.contains("capabilities")) summary["capabilities"] = note["capabilities"];
+      if (note.contains("cellTypes")) summary["cellTypes"] = note["cellTypes"];
+      return json::object({{"note", summary}});
+    }
+
     static void validate_publish_manifest_or_throw(const json &manifest,
                                                    const std::string &resolvedVersion,
                                                    const std::string &originRepo)
@@ -1131,6 +1235,7 @@ namespace vix::commands
         if (!is_safe_relative_path(root))
           throw std::runtime_error("invalid vix.json: unsafe include path `" + root + "`");
       }
+      (void)normalize_extensions_or_throw(manifest);
     }
 
     static fs::path create_tag_checkout_or_throw(const std::string &commit)
@@ -1821,6 +1926,9 @@ namespace vix::commands
         entry["homepage"] = httpsUrl;
         entry["repo"] = json::object({{"url", httpsUrl}, {"defaultBranch", defaultBranch}});
         entry["type"] = vixManifest["type"].get<std::string>();
+        const json normalizedExtensions = normalize_extensions_or_throw(vixManifest);
+        const json extensionSummary = note_extension_summary(normalizedExtensions);
+        if (!extensionSummary.is_null()) entry["extensions"] = extensionSummary;
         entry["quality"] = quality;
         entry["versions"] = json::object();
       }
@@ -1843,12 +1951,19 @@ namespace vix::commands
       if (!entry.contains("versions") || !entry["versions"].is_object())
         entry["versions"] = json::object();
 
-      entry["versions"][resolvedVersion] = json::object({
-          {"tag", tag},
-          {"commit", commit},
-          {"manifest", json::object({{"type", vixManifest["type"]}, {"include", manifest_include_roots(vixManifest)}})},
-          {"api", json::object({{"format", "vix-api-1"}, {"path", "vix.api.json"}, {"hash", entry["api"]["hash"]}})},
-      });
+      {
+        json versionEntry = json::object({
+            {"tag", tag},
+            {"commit", commit},
+            {"manifest", json::object({{"type", vixManifest["type"]}, {"include", manifest_include_roots(vixManifest)}})},
+            {"api", json::object({{"format", "vix-api-1"}, {"path", "vix.api.json"}, {"hash", entry["api"]["hash"]}})},
+        });
+        const json normalizedExtensions = normalize_extensions_or_throw(vixManifest);
+        const json extensionSummary = note_extension_summary(normalizedExtensions);
+        if (!extensionSummary.is_null()) entry["extensions"] = extensionSummary;
+        if (!normalizedExtensions.is_null()) versionEntry["extensions"] = normalizedExtensions;
+        entry["versions"][resolvedVersion] = versionEntry;
+      }
 
       if (opt.dryRun)
       {

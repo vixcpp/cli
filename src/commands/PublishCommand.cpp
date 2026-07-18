@@ -1119,6 +1119,22 @@ namespace vix::commands
       return true;
     }
 
+
+    static bool is_safe_note_icon_path(const std::string &value)
+    {
+      if (value.empty() || value.find('\0') != std::string::npos || value.find('\\') != std::string::npos) return false;
+      std::filesystem::path path(value);
+      if (path.is_absolute()) return false;
+      path = path.lexically_normal();
+      for (const auto &part : path)
+      {
+        const std::string text = part.string();
+        if (text.empty() || text == "..") return false;
+      }
+      const std::string ext = path.extension().string();
+      return ext == ".svg" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp";
+    }
+
     static json normalize_note_extension_or_throw(const json &note)
     {
       if (!note.is_object()) throw std::runtime_error("invalid vix.json: extensions.note must be an object");
@@ -1127,6 +1143,13 @@ namespace vix::commands
       if (!note.contains("cellTypes") || !note["cellTypes"].is_array()) throw std::runtime_error("invalid vix.json: extensions.note.cellTypes must be an array");
 
       json out = note;
+      if (out.contains("icon"))
+      {
+        if (!out["icon"].is_string() || !is_safe_note_icon_path(out.value("icon", ""))) throw std::runtime_error("invalid vix.json: unsafe note extension icon path");
+        const std::filesystem::path iconPath = std::filesystem::path(out.value("icon", "")).lexically_normal();
+        if (!std::filesystem::is_regular_file(iconPath)) throw std::runtime_error("invalid vix.json: note extension icon file not found: " + iconPath.generic_string());
+        out["icon"] = iconPath.generic_string();
+      }
       json cells = json::array();
       std::vector<std::string> seen;
       for (const auto &raw : note["cellTypes"])
@@ -1184,6 +1207,7 @@ namespace vix::commands
       json summary = json::object();
       summary["api"] = note["api"];
       if (note.contains("capabilities")) summary["capabilities"] = note["capabilities"];
+      if (note.contains("icon")) summary["icon"] = note["icon"];
       if (note.contains("cellTypes")) summary["cellTypes"] = note["cellTypes"];
       return json::object({{"note", summary}});
     }

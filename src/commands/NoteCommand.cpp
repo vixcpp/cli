@@ -758,6 +758,7 @@ namespace
     int colorOverride = -1; // -1 auto, 0 off, 1 on
     bool noExtensions = false;
     bool listExtensions = false;
+    fs::path assetsDirectory;
   };
 
   // Returns:
@@ -852,6 +853,35 @@ namespace
       if (arg == "--list-extensions")
       {
         opts.listExtensions = true;
+        continue;
+      }
+
+      if (arg == "--assets-dir")
+      {
+        if (i + 1 >= args.size())
+        {
+          out.error("Missing value for --assets-dir.");
+          out.error_hint("Usage: vix note --assets-dir /path/to/share/vix/note");
+          return 1;
+        }
+
+        opts.assetsDirectory = args[++i];
+        if (opts.assetsDirectory.empty())
+        {
+          out.error("Assets directory cannot be empty.");
+          return 1;
+        }
+        continue;
+      }
+
+      if (note_take_prefix(arg, "--assets-dir=", value))
+      {
+        if (value.empty())
+        {
+          out.error("Assets directory cannot be empty.");
+          return 1;
+        }
+        opts.assetsDirectory = std::move(value);
         continue;
       }
 
@@ -1083,10 +1113,26 @@ namespace vix::commands
       return 0;
     }
 
+    vix::note::NoteAssetResolveOptions assetOptions;
+    assetOptions.customDirectory = opts.assetsDirectory;
+    const auto resolvedAssets = vix::note::resolve_note_asset_directory(assetOptions);
+    if (!resolvedAssets.found())
+    {
+      out.error("Vix Note frontend assets were not found.");
+      for (const auto &path : resolvedAssets.checked)
+      {
+        out.error_hint("Checked: " + path.string());
+      }
+      out.error_hint("Reinstall Vix or set VIX_NOTE_ASSETS_DIR.");
+      return 1;
+    }
+
     vix::note::NoteServerOptions options;
     options.host = opts.host;
     options.port = opts.port;
     options.openBrowser = false;
+    options.routeOptions.assetDirectory = resolvedAssets.directory;
+    options.routeOptions.keepEmbeddedAssetFallback = false;
     options.routeOptions.kernelOptions.projectContext = projectContext;
     options.routeOptions.kernelOptions.extensionRegistry = &extensionManager.registry();
     options.logRequests = (opts.logMode == NoteLogMode::Normal);

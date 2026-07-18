@@ -22,6 +22,7 @@
 #ifdef VIX_CLI_HAS_NOTE
 
 #include <vix/note/note.hpp>
+#include <vix/note/extensions/NoteExtensionRegistry.hpp>
 
 #include <vix/utils/Logger.hpp>
 #include <vix/utils/ServerPrettyLogs.hpp>
@@ -755,6 +756,8 @@ namespace
 
     NoteLogMode logMode = NoteLogMode::Normal;
     int colorOverride = -1; // -1 auto, 0 off, 1 on
+    bool noExtensions = false;
+    bool listExtensions = false;
   };
 
   // Returns:
@@ -837,6 +840,18 @@ namespace
           return 1;
         }
 
+        continue;
+      }
+
+      if (arg == "--no-extensions")
+      {
+        opts.noExtensions = true;
+        continue;
+      }
+
+      if (arg == "--list-extensions")
+      {
+        opts.listExtensions = true;
         continue;
       }
 
@@ -1049,11 +1064,31 @@ namespace vix::commands
     vix::note::ProjectContext projectContext =
         vix::note::detect_project_context(note_context_path(opts.notePath));
 
+    vix::note::NoteExtensionManager extensionManager;
+    extensionManager.register_builtins();
+    if (!opts.noExtensions)
+    {
+      extensionManager.discover_global();
+      extensionManager.discover_project(projectContext);
+    }
+
+    if (opts.listExtensions)
+    {
+      for (const auto &ext : extensionManager.registry().list_extensions())
+      {
+        std::cout << ext.id << "  " << ext.version << "  " << (ext.available ? "available" : "unavailable") << "\n";
+        for (const auto &diag : ext.diagnostics)
+          std::cout << "  diagnostic: " << diag << "\n";
+      }
+      return 0;
+    }
+
     vix::note::NoteServerOptions options;
     options.host = opts.host;
     options.port = opts.port;
     options.openBrowser = false;
     options.routeOptions.kernelOptions.projectContext = projectContext;
+    options.routeOptions.kernelOptions.extensionRegistry = &extensionManager.registry();
     options.logRequests = (opts.logMode == NoteLogMode::Normal);
 
     vix::note::NoteServer server(std::move(document), options);
@@ -1146,7 +1181,9 @@ namespace vix::commands
         << "  --host <host>       Host used by the local server. Default: 127.0.0.1\n"
         << "  --host=<host>       Same as --host <host>\n"
         << "  --port <port>       Port used by the local server. Default: 5179\n"
-        << "  --port=<port>       Same as --port <port>\n\n"
+        << "  --port=<port>       Same as --port <port>\n"
+        << "  --no-extensions     Disable external Note extensions, keep builtins\n"
+        << "  --list-extensions   Print detected Note extensions and exit\n\n"
 
         << "Desktop options:\n"
         << "  --desktop, --shell  Open the note UI in a desktop WebView shell\n"

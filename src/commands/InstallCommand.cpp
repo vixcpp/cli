@@ -113,6 +113,7 @@ namespace vix::commands
       std::string include{"include"};
       std::vector<std::string> dependencies;
       std::vector<std::string> cmakeTargets;
+      json extensions;
 
       fs::path checkout;
       fs::path linkDir;
@@ -1289,6 +1290,8 @@ namespace vix::commands
       dep.repo = entry.at("repo").at("url").get<std::string>();
       dep.tag = v.at("tag").get<std::string>();
       dep.commit = v.at("commit").get<std::string>();
+      dep.type = entry.value("type", "header-only");
+      if (v.contains("extensions") && v["extensions"].is_object()) dep.extensions = v["extensions"];
       dep.checkout = store_checkout_path(dep.id, dep.commit);
 
       return dep;
@@ -1358,6 +1361,8 @@ namespace vix::commands
           item["files"] = make_files_json(files);
           item["executables"] = make_strings_json(executables);
           item["shims"] = make_strings_json(shims);
+          if (!dep.extensions.is_null()) item["extensions"] = dep.extensions;
+          else item.erase("extensions");
           updated = true;
           break;
         }
@@ -1365,7 +1370,7 @@ namespace vix::commands
 
       if (!updated)
       {
-        arr.push_back({
+        json newItem = {
             {"id", dep.id},
             {"package", dep.id},
             {"version", dep.version},
@@ -1383,7 +1388,9 @@ namespace vix::commands
             {"files", make_files_json(files)},
             {"executables", make_strings_json(executables)},
             {"shims", make_strings_json(shims)},
-        });
+        };
+        if (!dep.extensions.is_null()) newItem["extensions"] = dep.extensions;
+        arr.push_back(std::move(newItem));
       }
 
       save_global_manifest(root);

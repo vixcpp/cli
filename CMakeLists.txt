@@ -70,9 +70,6 @@ list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
 list(REMOVE_DUPLICATES CLI_SOURCES)
-list(REMOVE_ITEM CLI_SOURCES
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/registry/RegistryCatalog.cpp"
-)
 
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(vix::cli ALIAS vix_cli)
@@ -121,13 +118,32 @@ endfunction()
 # ----------------------------------------------------
 get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
-set(_VIX_REPLY_DIR "${_VIX_MODULES_DIR}/reply")
+set(_VIX_REPLY_DIR    "${_VIX_MODULES_DIR}/reply")
+set(_VIX_PROCESS_DIR  "${_VIX_MODULES_DIR}/process")
 set(_VIX_NOTE_DIR     "${_VIX_MODULES_DIR}/note")
 set(_VIX_UI_DIR       "${_VIX_MODULES_DIR}/ui")
 set(_VIX_REQUESTS_DIR "${_VIX_MODULES_DIR}/requests")
 
 if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
   add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
+endif()
+
+if (EXISTS "${_VIX_PROCESS_DIR}/CMakeLists.txt" AND NOT TARGET vix::process)
+  set(VIX_PROCESS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(VIX_PROCESS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
+  add_subdirectory(
+    "${_VIX_PROCESS_DIR}"
+    "${CMAKE_BINARY_DIR}/_vix_process"
+  )
+endif()
+
+if (TARGET vix::process)
+  target_link_libraries(vix_cli PRIVATE vix::process)
+else()
+  message(FATAL_ERROR
+    "[cli] RegistryCatalog requires the vix::process target"
+  )
 endif()
 
 if (EXISTS "${_VIX_NOTE_DIR}/CMakeLists.txt" AND NOT TARGET vix::note)

@@ -18,11 +18,18 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <unordered_map>
 
 #ifdef VIX_CLI_HAS_NOTE
 
 #include <vix/note/note.hpp>
 #include <vix/note/extensions/NoteExtensionRegistry.hpp>
+#include <vix/cli/registry/RegistryCatalog.hpp>
+#include <vix/cli/util/Semver.hpp>
+#include <nlohmann/json.hpp>
 
 #include <vix/utils/Logger.hpp>
 #include <vix/utils/ServerPrettyLogs.hpp>
@@ -302,6 +309,531 @@ namespace
   }
 
   // -------------------------------------------------------------------------
+  // Registry bridge
+  //
+  // RegistryCatalog belongs to the CLI. Note only receives generic route
+  // callbacks and remains independently buildable.
+  // -------------------------------------------------------------------------
+
+  std::string note_lower_copy(std::string value)
+  {
+    for (char &character : value)
+    {
+      if (character >= 'A' && character <= 'Z')
+      {
+        character =
+            static_cast<char>(character - 'A' + 'a');
+      }
+    }
+
+    return value;
+  }
+
+  bool note_starts_with(
+      std::string_view value,
+      std::string_view prefix)
+  {
+    return value.size() >= prefix.size() &&
+           value.substr(0, prefix.size()) == prefix;
+  }
+
+  std::string note_url_decode(std::string_view value)
+  {
+    std::string output;
+    output.reserve(value.size());
+
+    const auto hex_value = [](char character) -> int
+    {
+      if (character >= '0' && character <= '9')
+      {
+        return character - '0';
+      }
+
+      if (character >= 'a' && character <= 'f')
+      {
+        return character - 'a' + 10;
+      }
+
+      if (character >= 'A' && character <= 'F')
+      {
+        return character - 'A' + 10;
+      }
+
+      return -1;
+    };
+
+    for (std::size_t index = 0; index < value.size(); ++index)
+    {
+      if (value[index] == '+')
+      {
+        output.push_back(' ');
+        continue;
+      }
+
+      if (value[index] == '%' && index + 2 < value.size())
+      {
+        const int high = hex_value(value[index + 1]);
+        const int low = hex_value(value[index + 2]);
+
+        if (high >= 0 && low >= 0)
+        {
+          output.push_back(
+              static_cast<char>((high << 4) | low));
+
+          index += 2;
+          continue;
+        }
+      }
+
+      output.push_back(value[index]);
+    }
+
+    return output;
+  }
+
+  std::map<std::string, std::string> note_query_params(
+      std::string_view path)
+  {
+    std::map<std::string, std::string> output;
+
+    const std::size_t queryPosition = path.find('?');
+
+    if (queryPosition == std::string_view::npos ||
+        queryPosition + 1 >= path.size())
+    {
+      return output;
+    }
+
+    std::string_view remaining =
+        path.substr(queryPosition + 1);
+
+    while (!remaining.empty())
+    {
+      const std::size_t ampersand =
+          remaining.find('&');
+
+      const std::string_view part =
+          ampersand == std::string_view::npos
+              ? remaining
+              : remaining.substr(0, ampersand);
+
+      const std::size_t equals =
+          part.find('=');
+
+      const std::string key =
+          note_url_decode(
+              equals == std::string_view::npos
+                  ? part
+                  : part.substr(0, equals));
+
+      const std::string value =
+          equals == std::string_view::npos
+              ? std::string{}
+              : note_url_decode(part.substr(equals + 1));
+
+      if (!key.empty())
+      {
+        output[key] = value;
+      }
+
+      if (ampersand == std::string_view::npos)
+      {
+        break;
+      }
+
+      remaining.remove_prefix(ampersand + 1);
+    }
+
+    return output;
+  }
+
+  std::string note_extension_source_string(
+      vix::note::NoteExtensionSource source)
+  {
+    switch (source)
+    {
+    case vix::note::NoteExtensionSource::Builtin:
+      return "builtin";
+
+    case vix::note::NoteExtensionSource::Global:
+      return "global";
+
+    case vix::note::NoteExtensionSource::Project:
+      return "project";
+    }
+
+    return "unknown";
+  }
+
+  struct NoteLocalExtensionState
+  {
+    bool installed = false;
+    bool enabled = false;
+    bool available = false;
+    bool builtin = false;
+
+    std::string version;
+    std::string source;
+  };
+
+  std::unordered_map<std::string, NoteLocalExtensionState>
+  note_local_extension_states(
+      const vix::note::NoteExtensionRegistry &registry)
+  {
+    std::unordered_map<std::string, NoteLocalExtensionState> output;
+
+    for (const auto &extension : registry.list_extensions())
+    {
+      NoteLocalExtensionState state;
+
+      state.installed =
+          extension.source ==
+              vix::note::NoteExtensionSource::Global ||
+          extension.source ==
+              vix::note::NoteExtensionSource::Project;
+
+      state.enabled = extension.enabled;
+      state.available = extension.available;
+
+      state.builtin =
+          extension.source ==
+          vix::note::NoteExtensionSource::Builtin;
+
+      state.version = extension.version;
+      state.source =
+          note_extension_source_string(extension.source);
+
+      output[extension.id] = std::move(state);
+    }
+
+    return output;
+  }
+
+  std::string note_marketplace_icon(
+      const vix::cli::registry::PackageSummary &package)
+  {
+    if (!package.iconData.empty())
+    {
+      return package.iconData;
+    }
+
+    if (!package.iconUrl.empty())
+    {
+      return package.iconUrl;
+    }
+
+    const std::string lowered =
+        note_lower_copy(package.icon);
+
+    if (note_starts_with(lowered, "data:image/") ||
+        note_starts_with(lowered, "https://"))
+    {
+      return package.icon;
+    }
+
+    return {};
+  }
+
+  nlohmann::json note_registry_package_json(
+      const vix::cli::registry::PackageSummary &package,
+      const std::unordered_map<
+          std::string,
+          NoteLocalExtensionState> &localStates)
+  {
+    nlohmann::json item =
+        vix::cli::registry::package_summary_json(package);
+
+    item["iconPath"] = package.icon;
+    item["iconUrl"] = package.iconUrl;
+    item["iconData"] = package.iconData;
+    item["icon"] = note_marketplace_icon(package);
+
+    const auto found =
+        localStates.find(package.id);
+
+    const bool installed =
+        found != localStates.end() &&
+        found->second.installed;
+
+    const bool enabled =
+        found != localStates.end()
+            ? found->second.enabled
+            : false;
+
+    const bool available =
+        found != localStates.end()
+            ? found->second.available
+            : false;
+
+    bool updateAvailable = false;
+
+    if (installed &&
+        !package.version.empty() &&
+        !found->second.version.empty())
+    {
+      updateAvailable =
+          vix::cli::util::semver::compare(
+              package.version,
+              found->second.version) > 0;
+    }
+
+    nlohmann::json cellTypes =
+        nlohmann::json::array();
+
+    for (const std::string &cellType : package.cellTypes)
+    {
+      cellTypes.push_back(
+          {
+              {"id", cellType},
+              {"label", cellType},
+              {"extension", package.id},
+          });
+    }
+
+    item["cellTypes"] = std::move(cellTypes);
+    item["installed"] = installed;
+    item["enabled"] = enabled;
+    item["available"] = available;
+    item["builtin"] = false;
+    item["updateAvailable"] = updateAvailable;
+
+    if (found != localStates.end())
+    {
+      item["installedVersion"] =
+          found->second.version;
+
+      item["installedSource"] =
+          found->second.source;
+    }
+
+    return item;
+  }
+
+  nlohmann::json note_registry_payload_json(
+      const vix::cli::registry::SearchResult &result,
+      const vix::note::NoteExtensionRegistry &registry,
+      bool excludeInstalled,
+      std::size_t limit)
+  {
+    nlohmann::json payload;
+
+    payload["ok"] = result.ok;
+    payload["source"] = result.metadata.source;
+
+    payload["syncedAt"] =
+        result.metadata.syncedAt.empty()
+            ? nlohmann::json(nullptr)
+            : nlohmann::json(result.metadata.syncedAt);
+
+    payload["stale"] = result.metadata.stale;
+    payload["syncing"] = result.metadata.syncing;
+
+    payload["error"] =
+        result.error.empty()
+            ? result.metadata.error
+            : result.error;
+
+    payload["registry"] =
+        vix::cli::registry::catalog_metadata_json(
+            result.metadata);
+
+    payload["total"] = result.total;
+    payload["extensions"] = nlohmann::json::array();
+
+    const auto localStates =
+        note_local_extension_states(registry);
+
+    std::size_t added = 0;
+
+    for (const auto &package : result.items)
+    {
+      const auto found =
+          localStates.find(package.id);
+
+      if (excludeInstalled &&
+          found != localStates.end() &&
+          found->second.installed)
+      {
+        continue;
+      }
+
+      payload["extensions"].push_back(
+          note_registry_package_json(
+              package,
+              localStates));
+
+      ++added;
+
+      if (limit > 0 && added >= limit)
+      {
+        break;
+      }
+    }
+
+    payload["count"] = added;
+
+    return payload;
+  }
+
+  vix::note::NoteRouteResponse
+  note_registry_recommended_response(
+      const vix::note::NoteExtensionRegistry &registry)
+  {
+    vix::cli::registry::RegistryCatalog catalog;
+
+    const auto result =
+        catalog.recommended_note_extensions(50);
+
+    nlohmann::json payload =
+        note_registry_payload_json(
+            result,
+            registry,
+            true,
+            8);
+
+    return vix::note::NoteRouteResponse::json(
+        result.ok ? 200 : 503,
+        payload.dump());
+  }
+
+  vix::note::NoteRouteResponse
+  note_registry_marketplace_response(
+      std::string_view path,
+      const vix::note::NoteExtensionRegistry &registry)
+  {
+    const auto parameters =
+        note_query_params(path);
+
+    vix::cli::registry::SearchFilters filters;
+
+    filters.extensionHost = "note";
+    filters.limit = 50;
+
+    if (const auto found = parameters.find("q");
+        found != parameters.end())
+    {
+      filters.query = found->second;
+    }
+
+    if (filters.query.empty())
+    {
+      if (const auto found = parameters.find("id");
+          found != parameters.end())
+      {
+        filters.query = found->second;
+      }
+    }
+
+    if (const auto found = parameters.find("capability");
+        found != parameters.end())
+    {
+      filters.capability = found->second;
+    }
+
+    if (const auto found = parameters.find("type");
+        found != parameters.end())
+    {
+      filters.cellType = found->second;
+    }
+
+    if (const auto found = parameters.find("limit");
+        found != parameters.end())
+    {
+      int parsedLimit = 0;
+
+      if (note_parse_positive_int(
+              found->second,
+              parsedLimit))
+      {
+        filters.limit =
+            std::clamp<std::size_t>(
+                static_cast<std::size_t>(parsedLimit),
+                1,
+                100);
+      }
+    }
+
+    vix::cli::registry::RegistryCatalog catalog;
+
+    const auto result =
+        catalog.search_packages(filters);
+
+    nlohmann::json payload =
+        note_registry_payload_json(
+            result,
+            registry,
+            true,
+            filters.limit);
+
+    payload["query"] = filters.query;
+
+    return vix::note::NoteRouteResponse::json(
+        result.ok ? 200 : 503,
+        payload.dump());
+  }
+
+  vix::note::NoteRouteResponse
+  note_registry_sync_response(
+      vix::note::NoteExtensionManager &extensionManager,
+      const vix::note::ProjectContext &projectContext,
+      bool noExtensions)
+  {
+    vix::cli::registry::RegistryCatalog catalog;
+
+    const auto sync =
+        catalog.sync_catalog();
+
+    extensionManager.reload(
+        projectContext,
+        !noExtensions);
+
+    const auto result =
+        catalog.recommended_note_extensions(50);
+
+    nlohmann::json payload =
+        note_registry_payload_json(
+            result,
+            extensionManager.registry(),
+            true,
+            8);
+
+    payload["ok"] = sync.ok || result.ok;
+    payload["synced"] = sync.ok;
+    payload["syncError"] = sync.error;
+
+    payload["registry"] =
+        vix::cli::registry::catalog_metadata_json(
+            sync.metadata);
+
+    payload["source"] = sync.metadata.source;
+
+    payload["syncedAt"] =
+        sync.metadata.syncedAt.empty()
+            ? nlohmann::json(nullptr)
+            : nlohmann::json(sync.metadata.syncedAt);
+
+    payload["stale"] = sync.metadata.stale;
+
+    payload["error"] =
+        sync.ok
+            ? std::string{}
+            : sync.error;
+
+    return vix::note::NoteRouteResponse::json(
+        sync.ok ? 200 : 503,
+        payload.dump());
+  }
+
+  std::string note_registry_metadata_json()
+  {
+    vix::cli::registry::RegistryCatalog catalog;
+
+    return vix::cli::registry::catalog_metadata_json(
+               catalog.metadata())
+        .dump();
+  }
+
+  // -------------------------------------------------------------------------
   //  Shared output-flag parsing
   // -------------------------------------------------------------------------
 
@@ -420,7 +952,6 @@ namespace
 
     return fs::path(".");
   }
-
 
   // Returns 0 if valid, otherwise a non-zero exit code.
   int note_validate_path(const NoteReporter &out, const fs::path &notePath)
@@ -1140,11 +1671,14 @@ namespace vix::commands
     // NoteServer is created below in the same scope, so these callbacks cannot
     // outlive extensionManager or projectContext. They keep NoteRoutes from
     // owning a hidden extension manager.
-    options.routeOptions.reloadExtensions = [&extensionManager, projectContext, noExtensions = opts.noExtensions]() {
+    options.routeOptions.reloadExtensions = [&extensionManager, projectContext, noExtensions = opts.noExtensions]()
+    {
       extensionManager.reload(projectContext, !noExtensions);
       return vix::note::NoteResult::success("extensions reloaded");
     };
-    options.routeOptions.setExtensionEnabled = [&extensionManager](const std::string &packageId, bool enabled) {
+
+    options.routeOptions.setExtensionEnabled = [&extensionManager](const std::string &packageId, bool enabled)
+    {
       std::string error;
       if (!extensionManager.set_extension_enabled(packageId, enabled, error))
       {
@@ -1153,6 +1687,40 @@ namespace vix::commands
       }
       return vix::note::NoteResult::success("extension state updated");
     };
+
+    options.routeOptions.registryRecommended =
+        [](const vix::note::NoteExtensionRegistry &registry)
+    {
+      return note_registry_recommended_response(registry);
+    };
+
+    options.routeOptions.registryMarketplace =
+        [](std::string_view path,
+           const vix::note::NoteExtensionRegistry &registry)
+    {
+      return note_registry_marketplace_response(
+          path,
+          registry);
+    };
+
+    options.routeOptions.registrySync =
+        [&extensionManager,
+         projectContext,
+         noExtensions = opts.noExtensions](
+            const vix::note::NoteExtensionRegistry &)
+    {
+      return note_registry_sync_response(
+          extensionManager,
+          projectContext,
+          noExtensions);
+    };
+
+    options.routeOptions.registryMetadataJson =
+        []()
+    {
+      return note_registry_metadata_json();
+    };
+
     options.logRequests = (opts.logMode == NoteLogMode::Normal);
 
     vix::note::NoteServer server(std::move(document), options);

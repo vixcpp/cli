@@ -1096,17 +1096,14 @@ namespace vix::commands
         terminal::code(std::cout, terminal::cyan);
         std::cout << (i + 1) << ".";
         terminal::code(std::cout, terminal::reset);
-        std::cout << " ";
-        terminal::code(std::cout, terminal::bold);
-        std::cout << (name.empty() ? id : name);
-        terminal::code(std::cout, terminal::reset);
+
+        std::cout << " " << (name.empty() ? id : name);
+
         if (!name.empty() && !id.empty())
         {
-          std::cout << "  ";
-          terminal::code(std::cout, terminal::dim);
-          std::cout << id;
-          terminal::code(std::cout, terminal::reset);
+          std::cout << "  " << id;
         }
+
         std::cout << "\n";
       }
 
@@ -1166,7 +1163,6 @@ namespace vix::commands
       }
       return out;
     }
-
 
     std::string html_escape(const std::string &value)
     {

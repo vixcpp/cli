@@ -598,6 +598,7 @@ namespace vix::commands
         const fs::path &path,
         const std::string &dependency,
         const std::string &linkTarget,
+        const std::vector<std::string> &replacedPackageIds,
         std::string &error)
     {
       if (!fs::exists(path))
@@ -624,6 +625,23 @@ namespace vix::commands
 
       std::vector<std::string> links =
           parse_ini_array(original, "deps", "links");
+
+      registry.erase(
+          std::remove_if(
+              registry.begin(),
+              registry.end(),
+              [&](const std::string &existingDependency)
+              {
+                PkgSpec existingSpec;
+
+                if (!parse_pkg_spec(existingDependency, existingSpec))
+                  return false;
+
+                return contains_string(
+                    replacedPackageIds,
+                    existingSpec.id());
+              }),
+          registry.end());
 
       if (!contains_string(registry, dependency))
         registry.push_back(dependency);
@@ -761,6 +779,128 @@ namespace vix::commands
       json j;
       in >> j;
       return j;
+    }
+
+    void write_json_file_or_throw(
+        const fs::path &path,
+        const json &value)
+    {
+      std::ofstream out(path);
+
+      if (!out)
+      {
+        throw std::runtime_error(
+            "cannot write file: " + path.string());
+      }
+
+      out << value.dump(2) << "\n";
+
+      if (!out.good())
+      {
+        throw std::runtime_error(
+            "failed to write file: " + path.string());
+      }
+    }
+
+    std::vector<std::string> find_packages_moved_to(
+        const std::string &targetPackageId)
+    {
+      std::vector<std::string> packageIds;
+      const fs::path indexPath = registry_index_dir();
+
+      if (!fs::exists(indexPath))
+        return packageIds;
+
+      for (const auto &item :
+           fs::directory_iterator(indexPath))
+      {
+        if (!item.is_regular_file() ||
+            item.path().extension() != ".json")
+        {
+          continue;
+        }
+
+        try
+        {
+          const json entry =
+              read_json_file_or_throw(item.path());
+
+          const std::string movedTo =
+              entry.value("movedTo", std::string{});
+
+          if (movedTo != targetPackageId)
+            continue;
+
+          const std::string ns =
+              entry.value("namespace", std::string{});
+
+          const std::string name =
+              entry.value("name", std::string{});
+
+          if (ns.empty() || name.empty())
+            continue;
+
+          const std::string packageId =
+              ns + "/" + name;
+
+          if (!contains_string(packageIds, packageId))
+            packageIds.push_back(packageId);
+        }
+        catch (...)
+        {
+        }
+      }
+
+      return packageIds;
+    }
+
+    std::size_t remove_manifest_dependencies(
+        const fs::path &path,
+        const std::vector<std::string> &packageIds)
+    {
+      if (packageIds.empty())
+        return 0;
+
+      json manifest = read_json_file_or_throw(path);
+
+      if (!manifest.contains("deps") ||
+          !manifest["deps"].is_array())
+      {
+        return 0;
+      }
+
+      json dependencies = json::array();
+      std::size_t removed = 0;
+
+      for (const auto &dependency : manifest["deps"])
+      {
+        if (!dependency.is_object() ||
+            !dependency.contains("id") ||
+            !dependency["id"].is_string())
+        {
+          dependencies.push_back(dependency);
+          continue;
+        }
+
+        const std::string packageId =
+            dependency["id"].get<std::string>();
+
+        if (contains_string(packageIds, packageId))
+        {
+          ++removed;
+          continue;
+        }
+
+        dependencies.push_back(dependency);
+      }
+
+      if (removed > 0)
+      {
+        manifest["deps"] = std::move(dependencies);
+        write_json_file_or_throw(path, manifest);
+      }
+
+      return removed;
     }
 
     fs::path entry_path(const std::string &ns, const std::string &name)
@@ -1062,7 +1202,9 @@ namespace vix::commands
       return 1;
     }
 
-    const fs::path packageEntryPath = entry_path(spec.ns, spec.name);
+    fs::path packageEntryPath =
+        entry_path(spec.ns, spec.name);
+
     if (!fs::exists(packageEntryPath))
     {
       vix::cli::util::err_line(std::cerr, "package not found: " + spec.id());
@@ -1084,9 +1226,57 @@ namespace vix::commands
 
     try
     {
-      const json entry = read_json_file_or_throw(packageEntryPath);
+      json entry =
+          read_json_file_or_throw(packageEntryPath);
 
-      const int resolveRc = resolve_version_v1(entry, spec);
+      const std::string originalPackageId = spec.id();
+
+      if (entry.contains("movedTo") &&
+          entry["movedTo"].is_string())
+      {
+        const std::string movedTo =
+            trim_copy(entry["movedTo"].get<std::string>());
+
+        if (!movedTo.empty())
+        {
+          PkgSpec movedSpec;
+
+          if (!parse_pkg_spec(movedTo, movedSpec))
+          {
+            throw std::runtime_error(
+                "invalid movedTo package id: " + movedTo);
+          }
+
+          movedSpec.requestedVersion =
+              spec.requestedVersion;
+
+          movedSpec.resolvedVersion.clear();
+
+          spec = std::move(movedSpec);
+
+          packageEntryPath =
+              entry_path(spec.ns, spec.name);
+
+          if (!fs::exists(packageEntryPath))
+          {
+            throw std::runtime_error(
+                "moved package not found: " + spec.id());
+          }
+
+          entry =
+              read_json_file_or_throw(packageEntryPath);
+
+          vix::cli::util::warn_line(
+              std::cout,
+              "Package moved: " +
+                  originalPackageId +
+                  " -> " +
+                  spec.id());
+        }
+      }
+
+      const int resolveRc =
+          resolve_version_v1(entry, spec);
       if (resolveRc != 0)
       {
         return resolveRc;
@@ -1146,6 +1336,9 @@ namespace vix::commands
       const std::string dependencySpec =
           packageId + "@" + requested;
 
+      const std::vector<std::string> replacedPackageIds =
+          find_packages_moved_to(packageId);
+
       if (!options.moduleName.empty())
       {
         const std::string linkTarget =
@@ -1159,6 +1352,7 @@ namespace vix::commands
                 module_manifest_path(options.moduleName),
                 dependencySpec,
                 linkTarget,
+                replacedPackageIds,
                 moduleError))
         {
           vix::cli::util::err_line(std::cerr, moduleError);
@@ -1199,11 +1393,28 @@ namespace vix::commands
         return 0;
       }
 
+      const std::size_t replacedCount =
+          remove_manifest_dependencies(
+              manifest_path(),
+              replacedPackageIds);
+
       vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
           manifest_path(),
           vix::cli::util::manifest::Dependency{
               packageId,
               requested});
+
+      if (replacedCount > 0)
+      {
+        for (const std::string &oldPackageId :
+             replacedPackageIds)
+        {
+          vix::cli::util::kv(
+              std::cout,
+              "replaced",
+              oldPackageId + " -> " + packageId);
+        }
+      }
 
       vix::cli::util::section(std::cout, "Add");
       vix::cli::util::kv(std::cout, "id", packageId);

@@ -62,6 +62,7 @@ namespace vix::commands
       std::string id;
       std::string currentVersion;
       std::string latestVersion;
+      std::string movedTo;
       bool outdated{false};
       bool foundInRegistry{false};
     };
@@ -440,35 +441,108 @@ namespace vix::commands
       return items;
     }
 
-    std::optional<std::string> read_latest_from_registry(const std::string &id)
+    struct RegistryLookup
     {
-      const auto slash = id.find('/');
-      if (slash == std::string::npos)
+      bool found{false};
+      std::string latestVersion;
+      std::string movedTo;
+    };
+
+    RegistryLookup read_registry_lookup(const std::string &packageId)
+    {
+      RegistryLookup result;
+
+      std::string currentId = packageId;
+      std::set<std::string> visited;
+
+      for (int depth = 0; depth < 16; ++depth)
       {
-        return std::nullopt;
+        if (!visited.insert(currentId).second)
+        {
+          throw std::runtime_error(
+              "package migration cycle detected: " + currentId);
+        }
+
+        const auto slash = currentId.find('/');
+
+        if (slash == std::string::npos)
+        {
+          throw std::runtime_error(
+              "invalid package id in registry migration: " +
+              currentId);
+        }
+
+        const std::string ns =
+            currentId.substr(0, slash);
+
+        const std::string name =
+            currentId.substr(slash + 1);
+
+        const fs::path path =
+            entry_path(ns, name);
+
+        if (!fs::exists(path))
+        {
+          return result;
+        }
+
+        const json entry =
+            read_json_or_throw(path);
+
+        const std::string movedTo =
+            trim_copy(
+                entry.value(
+                    "movedTo",
+                    std::string{}));
+
+        if (!movedTo.empty())
+        {
+          result.movedTo = movedTo;
+          currentId = movedTo;
+          continue;
+        }
+
+        const std::string latest =
+            find_latest_version(entry);
+
+        if (latest.empty())
+        {
+          return result;
+        }
+
+        result.found = true;
+        result.latestVersion = latest;
+        return result;
       }
 
-      const std::string ns = id.substr(0, slash);
-      const std::string name = id.substr(slash + 1);
-
-      const fs::path p = entry_path(ns, name);
-      if (!fs::exists(p))
-      {
-        return std::nullopt;
-      }
-
-      const json entry = read_json_or_throw(p);
-      const std::string latest = find_latest_version(entry);
-
-      if (latest.empty())
-      {
-        return std::nullopt;
-      }
-
-      return latest;
+      throw std::runtime_error(
+          "too many package migrations for: " +
+          packageId);
     }
 
-    void print_json_result(const std::vector<OutdatedItem> &items)
+    std::string outdated_status(
+        const OutdatedItem &item)
+    {
+      if (!item.foundInRegistry)
+      {
+        return "missing";
+      }
+
+      if (!item.movedTo.empty())
+      {
+        return "moved -> " + item.movedTo;
+      }
+
+      if (item.outdated)
+      {
+        return "outdated";
+      }
+
+      return "current";
+    }
+
+    void print_json_result(
+        const std::vector<OutdatedItem> &items)
     {
       json out;
       out["command"] = "outdated";
@@ -477,82 +551,101 @@ namespace vix::commands
       for (const auto &item : items)
       {
         json row;
+
         row["spec"] = item.rawSpec;
         row["id"] = item.id;
         row["current"] = item.currentVersion;
         row["latest"] = item.latestVersion;
         row["outdated"] = item.outdated;
-        row["found_in_registry"] = item.foundInRegistry;
+        row["moved"] = !item.movedTo.empty();
+        row["moved_to"] = item.movedTo;
+        row["found_in_registry"] =
+            item.foundInRegistry;
+
         out["packages"].push_back(row);
       }
 
       std::cout << out.dump(2) << "\n";
     }
 
-    void print_table(const std::vector<OutdatedItem> &items)
+    void print_table(
+        const std::vector<OutdatedItem> &items)
     {
-      std::size_t idWidth = std::string("Package").size();
-      std::size_t currentWidth = std::string("Current").size();
-      std::size_t latestWidth = std::string("Latest").size();
-      std::size_t statusWidth = std::string("Status").size();
+      std::size_t idWidth =
+          std::string("Package").size();
+
+      std::size_t currentWidth =
+          std::string("Current").size();
+
+      std::size_t latestWidth =
+          std::string("Latest").size();
+
+      std::size_t statusWidth =
+          std::string("Status").size();
 
       for (const auto &item : items)
       {
-        idWidth = std::max(idWidth, item.id.size());
-        currentWidth = std::max(currentWidth, item.currentVersion.size());
-        latestWidth = std::max(latestWidth, item.latestVersion.size());
+        idWidth =
+            std::max(idWidth, item.id.size());
 
-        std::string status;
-        if (!item.foundInRegistry)
-        {
-          status = "missing";
-        }
-        else if (item.outdated)
-        {
-          status = "outdated";
-        }
-        else
-        {
-          status = "current";
-        }
+        currentWidth =
+            std::max(
+                currentWidth,
+                item.currentVersion.size());
 
-        statusWidth = std::max(statusWidth, status.size());
+        latestWidth =
+            std::max(
+                latestWidth,
+                item.latestVersion.size());
+
+        statusWidth =
+            std::max(
+                statusWidth,
+                outdated_status(item).size());
       }
 
-      std::cout << std::left
-                << std::setw(static_cast<int>(idWidth) + 2) << "Package"
-                << std::setw(static_cast<int>(currentWidth) + 2) << "Current"
-                << std::setw(static_cast<int>(latestWidth) + 2) << "Latest"
-                << std::setw(static_cast<int>(statusWidth) + 2) << "Status"
-                << "\n";
+      std::cout
+          << std::left
+          << std::setw(
+                 static_cast<int>(idWidth) + 2)
+          << "Package"
+          << std::setw(
+                 static_cast<int>(currentWidth) + 2)
+          << "Current"
+          << std::setw(
+                 static_cast<int>(latestWidth) + 2)
+          << "Latest"
+          << std::setw(
+                 static_cast<int>(statusWidth) + 2)
+          << "Status"
+          << "\n";
 
       for (const auto &item : items)
       {
-        std::string latest = item.latestVersion.empty() ? "-" : item.latestVersion;
-        std::string status;
+        const std::string latest =
+            item.latestVersion.empty()
+                ? "-"
+                : item.latestVersion;
 
-        if (!item.foundInRegistry)
-        {
-          status = "missing";
-        }
-        else if (item.outdated)
-        {
-          status = "outdated";
-        }
-        else
-        {
-          status = "current";
-        }
-
-        std::cout << std::left
-                  << std::setw(static_cast<int>(idWidth) + 2) << item.id
-                  << std::setw(static_cast<int>(currentWidth) + 2) << item.currentVersion
-                  << std::setw(static_cast<int>(latestWidth) + 2) << latest
-                  << std::setw(static_cast<int>(statusWidth) + 2) << status
-                  << "\n";
+        std::cout
+            << std::left
+            << std::setw(
+                   static_cast<int>(idWidth) + 2)
+            << item.id
+            << std::setw(
+                   static_cast<int>(currentWidth) + 2)
+            << item.currentVersion
+            << std::setw(
+                   static_cast<int>(latestWidth) + 2)
+            << latest
+            << std::setw(
+                   static_cast<int>(statusWidth) + 2)
+            << outdated_status(item)
+            << "\n";
       }
     }
-  }
+
+  } // namespace
 
   int OutdatedCommand::run(const std::vector<std::string> &args)
   {
@@ -600,12 +693,21 @@ namespace vix::commands
 
       for (auto &item : items)
       {
-        const auto latest = read_latest_from_registry(item.id);
-        if (latest.has_value())
+        const RegistryLookup lookup =
+            read_registry_lookup(item.id);
+
+        item.movedTo = lookup.movedTo;
+
+        if (lookup.found)
         {
           item.foundInRegistry = true;
-          item.latestVersion = *latest;
-          item.outdated = (item.currentVersion != item.latestVersion);
+          item.latestVersion =
+              lookup.latestVersion;
+
+          item.outdated =
+              !item.movedTo.empty() ||
+              item.currentVersion !=
+                  item.latestVersion;
         }
         else
         {
@@ -625,17 +727,22 @@ namespace vix::commands
         print_table(items);
 
         std::size_t outdatedCount = 0;
+        std::size_t movedCount = 0;
         std::size_t missingCount = 0;
 
         for (const auto &item : items)
         {
           if (!item.foundInRegistry)
           {
-            missingCount++;
+            ++missingCount;
+          }
+          else if (!item.movedTo.empty())
+          {
+            ++movedCount;
           }
           else if (item.outdated)
           {
-            outdatedCount++;
+            ++outdatedCount;
           }
         }
 
@@ -643,9 +750,14 @@ namespace vix::commands
 
         vix::cli::util::ok_line(
             std::cout,
-            "checked " + std::to_string(items.size()) +
-                (opt.all ? " locked package(s), outdated " : " direct package(s), outdated ") +
-                std::to_string(outdatedCount));
+            "checked " +
+                std::to_string(items.size()) +
+                (opt.all
+                     ? " locked package(s), outdated "
+                     : " direct package(s), outdated ") +
+                std::to_string(outdatedCount) +
+                ", moved " +
+                std::to_string(movedCount));
 
         if (missingCount > 0)
         {

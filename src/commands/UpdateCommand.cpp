@@ -16,6 +16,7 @@
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Manifest.hpp>
+#include <vix/cli/util/Semver.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -61,6 +62,8 @@ namespace vix::commands
     {
       std::string rawSpec;
       std::string id;
+      std::string targetId;
+      std::string movedTo;
 
       std::string beforeVersion;
       std::string beforeHash;
@@ -70,6 +73,7 @@ namespace vix::commands
       std::string afterVersion;
       std::string afterHash;
 
+      bool moved{false};
       bool versionChanged{false};
       bool lockChanged{false};
       bool skipped{false};
@@ -283,57 +287,120 @@ namespace vix::commands
       return {};
     }
 
-    std::string read_latest_registry_version(const std::string &id)
+    struct RegistryLookup
     {
-      const auto slash = id.find('/');
-      if (slash == std::string::npos)
+      bool found{false};
+      std::string resolvedId;
+      std::string latestVersion;
+      std::string movedTo;
+    };
+
+    RegistryLookup read_registry_lookup(
+        const std::string &packageId)
+    {
+      RegistryLookup result;
+
+      const char *home = std::getenv("HOME");
+
+      if (home == nullptr ||
+          std::string(home).empty())
       {
-        return {};
+        return result;
       }
 
-      const std::string ns = id.substr(0, slash);
-      const std::string name = id.substr(slash + 1);
+      std::string currentId = packageId;
+      std::set<std::string> visited;
 
-      if (ns.empty() || name.empty())
+      for (int depth = 0; depth < 16; ++depth)
       {
-        return {};
+        if (!visited.insert(currentId).second)
+        {
+          throw std::runtime_error(
+              "package migration cycle detected: " +
+              currentId);
+        }
+
+        const auto slash = currentId.find('/');
+
+        if (slash == std::string::npos)
+        {
+          throw std::runtime_error(
+              "invalid package id in registry migration: " +
+              currentId);
+        }
+
+        const std::string ns =
+            currentId.substr(0, slash);
+
+        const std::string name =
+            currentId.substr(slash + 1);
+
+        if (ns.empty() || name.empty())
+        {
+          return result;
+        }
+
+        const fs::path registryEntry =
+            fs::path(home) /
+            ".vix" /
+            "registry" /
+            "index" /
+            "index" /
+            (ns + "." + name + ".json");
+
+        if (!fs::exists(registryEntry))
+        {
+          return result;
+        }
+
+        const json entry =
+            read_json_or_throw(registryEntry);
+
+        const std::string movedTo =
+            trim_copy(
+                entry.value(
+                    "movedTo",
+                    std::string{}));
+
+        if (!movedTo.empty())
+        {
+          result.movedTo = movedTo;
+          currentId = movedTo;
+          continue;
+        }
+
+        if (!entry.contains("versions") ||
+            !entry["versions"].is_object())
+        {
+          return result;
+        }
+
+        std::vector<std::string> versions;
+
+        for (auto it = entry["versions"].begin();
+             it != entry["versions"].end();
+             ++it)
+        {
+          versions.push_back(it.key());
+        }
+
+        if (versions.empty())
+        {
+          return result;
+        }
+
+        result.found = true;
+        result.resolvedId = currentId;
+        result.latestVersion =
+            vix::cli::util::semver::findLatest(
+                versions);
+
+        return result;
       }
 
-      const fs::path registryEntry =
-          fs::path(std::getenv("HOME")) /
-          ".vix" /
-          "registry" /
-          "index" /
-          "index" /
-          (ns + "." + name + ".json");
-
-      if (!fs::exists(registryEntry))
-      {
-        return {};
-      }
-
-      const json entry = read_json_or_throw(registryEntry);
-
-      if (!entry.contains("versions") || !entry["versions"].is_object())
-      {
-        return {};
-      }
-
-      std::vector<std::string> versions;
-
-      for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it)
-      {
-        versions.push_back(it.key());
-      }
-
-      if (versions.empty())
-      {
-        return {};
-      }
-
-      std::sort(versions.begin(), versions.end());
-
-      return versions.back();
+      throw std::runtime_error(
+          "too many package migrations for: " +
+          packageId);
     }
 
     std::vector<UpdateItem> collect_targets(
@@ -425,6 +492,13 @@ namespace vix::commands
         json row;
         row["spec"] = item.rawSpec;
         row["id"] = item.id;
+        row["target_id"] =
+            item.targetId.empty()
+                ? item.id
+                : item.targetId;
+
+        row["moved"] = item.moved;
+        row["moved_to"] = item.movedTo;
         row["before"] = item.beforeVersion;
         row["after"] = item.afterVersion;
         row["version_changed"] = item.versionChanged;
@@ -498,45 +572,129 @@ namespace vix::commands
       for (auto &item : items)
       {
         PkgSpec requestedSpec;
-        if (!parse_pkg_spec(item.rawSpec, requestedSpec))
+
+        if (!parse_pkg_spec(
+                item.rawSpec,
+                requestedSpec))
         {
-          vix::cli::util::err_line(std::cerr, "invalid package spec");
+          vix::cli::util::err_line(
+              std::cerr,
+              "invalid package spec");
+
           return 1;
         }
 
-        if (!requestedSpec.requestedVersion.empty())
+        const RegistryLookup lookup =
+            read_registry_lookup(item.id);
+
+        if (!lookup.found)
         {
-          item.latestVersion = requestedSpec.requestedVersion;
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to resolve package from registry: " +
+                  item.id);
+
+          return 1;
+        }
+
+        item.targetId = lookup.resolvedId;
+        item.movedTo = lookup.movedTo;
+
+        item.moved =
+            !item.movedTo.empty() &&
+            item.targetId != item.id;
+
+        std::string updateSpec;
+
+        if (item.moved)
+        {
+          if (!opt.rawTargets.empty() &&
+              !requestedSpec.requestedVersion.empty())
+          {
+            item.latestVersion =
+                requestedSpec.requestedVersion;
+
+            updateSpec =
+                make_raw_spec(
+                    item.targetId,
+                    requestedSpec.requestedVersion);
+          }
+          else
+          {
+            item.latestVersion =
+                lookup.latestVersion;
+
+            updateSpec = item.targetId;
+          }
+        }
+        else if (!requestedSpec.requestedVersion.empty())
+        {
+          item.latestVersion =
+              requestedSpec.requestedVersion;
+
+          updateSpec = item.rawSpec;
         }
         else
         {
-          item.latestVersion = read_latest_registry_version(item.id);
+          item.latestVersion =
+              lookup.latestVersion;
+
+          updateSpec = item.id;
         }
 
         if (item.latestVersion.empty())
         {
           vix::cli::util::err_line(
               std::cerr,
-              "failed to resolve latest version for: " + item.id);
+              "failed to resolve latest version for: " +
+                  item.id);
+
           return 1;
         }
 
-        item.versionChanged = item.beforeVersion != item.latestVersion;
+        item.versionChanged =
+            item.moved ||
+            item.beforeVersion !=
+                item.latestVersion;
 
         if (!opt.jsonOutput)
         {
-          if (opt.dryRun)
+          if (item.moved)
+          {
+            const std::string action =
+                opt.dryRun
+                    ? "would migrate "
+                    : "migrating ";
+
+            vix::cli::util::step(
+                action +
+                item.id +
+                " -> " +
+                item.targetId +
+                " " +
+                item.beforeVersion +
+                " -> " +
+                item.latestVersion);
+          }
+          else if (opt.dryRun)
           {
             if (item.versionChanged)
             {
               vix::cli::util::step(
-                  "would update " + item.id + " " + item.beforeVersion + " -> " +
+                  "would update " +
+                  item.id +
+                  " " +
+                  item.beforeVersion +
+                  " -> " +
                   item.latestVersion);
             }
             else
             {
               vix::cli::util::step(
-                  "would refresh " + item.id + "@" + item.latestVersion +
+                  "would refresh " +
+                  item.id +
+                  "@" +
+                  item.latestVersion +
                   " lock metadata");
             }
           }
@@ -545,13 +703,20 @@ namespace vix::commands
             if (item.versionChanged)
             {
               vix::cli::util::step(
-                  "updating " + item.id + " " + item.beforeVersion + " -> " +
+                  "updating " +
+                  item.id +
+                  " " +
+                  item.beforeVersion +
+                  " -> " +
                   item.latestVersion);
             }
             else
             {
               vix::cli::util::step(
-                  "refreshing " + item.id + "@" + item.latestVersion +
+                  "refreshing " +
+                  item.id +
+                  "@" +
+                  item.latestVersion +
                   " lock metadata");
             }
           }
@@ -565,16 +730,8 @@ namespace vix::commands
           continue;
         }
 
-        if (!requestedSpec.requestedVersion.empty())
-        {
-          vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
-              manifest_path(),
-              vix::cli::util::manifest::Dependency{
-                  requestedSpec.id(),
-                  requestedSpec.requestedVersion});
-        }
-
-        const int rc = AddCommand::run({item.rawSpec});
+        const int rc =
+            AddCommand::run({updateSpec});
         if (rc != 0)
         {
           return rc;
@@ -582,16 +739,33 @@ namespace vix::commands
 
         const json refreshedLock = read_lock_or_throw();
 
-        item.afterVersion = read_locked_version(refreshedLock, item.id);
-        item.afterHash = read_locked_hash(refreshedLock, item.id);
+        const std::string resolvedId =
+            item.targetId.empty()
+                ? item.id
+                : item.targetId;
+
+        item.afterVersion =
+            read_locked_version(
+                refreshedLock,
+                resolvedId);
+
+        item.afterHash =
+            read_locked_hash(
+                refreshedLock,
+                resolvedId);
 
         item.versionChanged =
-            !item.afterVersion.empty() &&
-            item.afterVersion != item.beforeVersion;
+            item.moved ||
+            (!item.afterVersion.empty() &&
+             item.afterVersion !=
+                 item.beforeVersion);
 
         item.lockChanged =
-            item.afterVersion != item.beforeVersion ||
-            item.afterHash != item.beforeHash;
+            item.moved ||
+            item.afterVersion !=
+                item.beforeVersion ||
+            item.afterHash !=
+                item.beforeHash;
 
         item.skipped =
             !item.versionChanged &&
@@ -643,6 +817,21 @@ namespace vix::commands
 
         const std::string after =
             item.afterVersion.empty() ? item.beforeVersion : item.afterVersion;
+
+        if (item.moved)
+        {
+          vix::cli::util::ok_line(
+              std::cout,
+              item.id +
+                  " -> " +
+                  item.targetId +
+                  ": " +
+                  item.beforeVersion +
+                  " -> " +
+                  after);
+
+          continue;
+        }
 
         if (item.versionChanged)
         {

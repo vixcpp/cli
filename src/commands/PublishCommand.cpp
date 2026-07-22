@@ -34,6 +34,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -1053,7 +1054,7 @@ namespace vix::commands
     }
 
     static std::optional<std::pair<std::string, fs::path>> find_registry_entry_by_repository(const fs::path &regIndex,
-                                                                                            const std::string &normalizedRepo)
+                                                                                             const std::string &normalizedRepo)
     {
       if (normalizedRepo.empty() || !fs::exists(regIndex))
         return std::nullopt;
@@ -1084,52 +1085,262 @@ namespace vix::commands
       return std::nullopt;
     }
 
+    struct RegistryMoveCandidate
+    {
+      std::string packageId;
+      fs::path entryPath;
+      json entry;
+    };
+
+    static std::string registry_repository_url(const json &entry)
+    {
+      if (entry.contains("repo") &&
+          entry["repo"].is_object() &&
+          entry["repo"].contains("url") &&
+          entry["repo"]["url"].is_string())
+      {
+        return normalize_repository_url(
+            entry["repo"]["url"].get<std::string>());
+      }
+
+      if (entry.contains("repository") &&
+          entry["repository"].is_string())
+      {
+        return normalize_repository_url(
+            entry["repository"].get<std::string>());
+      }
+
+      return {};
+    }
+
+    static std::unordered_set<std::string> git_local_commits()
+    {
+      std::unordered_set<std::string> commits;
+
+      const auto result =
+          run_process_capture({"git", "rev-list", "--all"});
+
+      if (result.exitCode != 0)
+        return commits;
+
+      std::istringstream input(result.out);
+      std::string commit;
+
+      while (std::getline(input, commit))
+      {
+        commit = trim_copy(commit);
+
+        if (!commit.empty())
+          commits.insert(commit);
+      }
+
+      return commits;
+    }
+
+    static std::optional<std::string> git_remote_head(
+        const std::string &repository)
+    {
+      const auto result = run_process_retry_debug(
+          {"git", "ls-remote", repository, "HEAD"});
+
+      if (result.exitCode != 0 || result.out.empty())
+        return std::nullopt;
+
+      std::istringstream input(result.out);
+      std::string commit;
+
+      input >> commit;
+
+      if (commit.empty())
+        return std::nullopt;
+
+      return commit;
+    }
+
+    static bool registry_entry_shares_history(
+        const json &entry,
+        const std::unordered_set<std::string> &localCommits)
+    {
+      if (!entry.contains("versions") ||
+          !entry["versions"].is_object())
+      {
+        return false;
+      }
+
+      for (const auto &[version, value] :
+           entry["versions"].items())
+      {
+        if (!value.is_object())
+          continue;
+
+        const std::string commit =
+            value.value("commit", std::string{});
+
+        if (!commit.empty() &&
+            localCommits.contains(commit))
+        {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    static std::optional<RegistryMoveCandidate>
+    find_moved_registry_entry(
+        const fs::path &registryIndex,
+        const std::string &currentRepository,
+        const std::string &currentPackageId)
+    {
+      if (!fs::exists(registryIndex))
+        return std::nullopt;
+
+      const auto localCommits = git_local_commits();
+
+      if (localCommits.empty())
+        return std::nullopt;
+
+      const auto currentHead =
+          git_remote_head(currentRepository);
+
+      if (!currentHead)
+        return std::nullopt;
+
+      std::optional<RegistryMoveCandidate> candidate;
+      std::error_code ec;
+
+      for (auto it = fs::directory_iterator(registryIndex, ec);
+           !ec && it != fs::directory_iterator();
+           ++it)
+      {
+        if (!it->is_regular_file() ||
+            it->path().extension() != ".json")
+        {
+          continue;
+        }
+
+        try
+        {
+          json entry = read_json_or_throw(it->path());
+
+          const std::string oldNamespace =
+              entry.value("namespace", std::string{});
+
+          const std::string oldName =
+              entry.value("name", std::string{});
+
+          if (oldNamespace.empty() || oldName.empty())
+            continue;
+
+          const std::string oldPackageId =
+              oldNamespace + "/" + oldName;
+
+          if (oldPackageId == currentPackageId)
+            continue;
+
+          if (!registry_entry_shares_history(
+                  entry,
+                  localCommits))
+          {
+            continue;
+          }
+
+          const std::string oldRepository =
+              registry_repository_url(entry);
+
+          if (oldRepository.empty() ||
+              oldRepository == currentRepository)
+          {
+            continue;
+          }
+
+          const auto oldHead =
+              git_remote_head(oldRepository);
+
+          // GitHub redirige l’ancienne URL vers le nouveau dépôt.
+          if (!oldHead || *oldHead != *currentHead)
+            continue;
+
+          if (candidate)
+          {
+            throw std::runtime_error(
+                "multiple registry packages match this repository history");
+          }
+
+          candidate = RegistryMoveCandidate{
+              oldPackageId,
+              it->path(),
+              std::move(entry),
+          };
+        }
+        catch (const std::runtime_error &)
+        {
+          throw;
+        }
+        catch (...)
+        {
+        }
+      }
+
+      return candidate;
+    }
 
     static std::string normalize_extension_id(std::string value)
     {
       value = lower_copy(trim_copy(std::move(value)));
-      if (value == "md") return "markdown";
-      if (value == "repl") return "reply";
-      if (value == "c++") return "cpp";
+      if (value == "md")
+        return "markdown";
+      if (value == "repl")
+        return "reply";
+      if (value == "c++")
+        return "cpp";
       return value;
     }
 
     static bool is_safe_note_cell_id(const std::string &value)
     {
-      if (value.empty()) return false;
-      if (value == "markdown" || value == "html" || value == "cpp" || value == "reply") return false;
+      if (value.empty())
+        return false;
+      if (value == "markdown" || value == "html" || value == "cpp" || value == "reply")
+        return false;
       for (char c : value)
       {
         const bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
-        if (!ok) return false;
+        if (!ok)
+          return false;
       }
       return true;
     }
 
     static bool is_safe_runtime_command(const std::string &value)
     {
-      if (value.empty()) return false;
-      if (value.find('/') != std::string::npos || value.find('\\') != std::string::npos) return false;
+      if (value.empty())
+        return false;
+      if (value.find('/') != std::string::npos || value.find('\\') != std::string::npos)
+        return false;
       for (char c : value)
       {
         const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                         (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.';
-        if (!ok) return false;
+        if (!ok)
+          return false;
       }
       return true;
     }
 
-
     static bool is_safe_note_icon_path(const std::string &value)
     {
-      if (value.empty() || value.find('\0') != std::string::npos || value.find('\\') != std::string::npos) return false;
+      if (value.empty() || value.find('\0') != std::string::npos || value.find('\\') != std::string::npos)
+        return false;
       std::filesystem::path path(value);
-      if (path.is_absolute()) return false;
+      if (path.is_absolute())
+        return false;
       path = path.lexically_normal();
       for (const auto &part : path)
       {
         const std::string text = part.string();
-        if (text.empty() || text == "..") return false;
+        if (text.empty() || text == "..")
+          return false;
       }
       const std::string ext = path.extension().string();
       return ext == ".svg" || ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".webp";
@@ -1137,41 +1348,57 @@ namespace vix::commands
 
     static json normalize_note_extension_or_throw(const json &note)
     {
-      if (!note.is_object()) throw std::runtime_error("invalid vix.json: extensions.note must be an object");
-      if (!note.contains("api") || !note["api"].is_string()) throw std::runtime_error("invalid vix.json: extensions.note.api is required");
-      if (note["api"].get<std::string>() != "1") throw std::runtime_error("invalid vix.json: unsupported extensions.note.api `" + note["api"].get<std::string>() + "`");
-      if (!note.contains("cellTypes") || !note["cellTypes"].is_array()) throw std::runtime_error("invalid vix.json: extensions.note.cellTypes must be an array");
+      if (!note.is_object())
+        throw std::runtime_error("invalid vix.json: extensions.note must be an object");
+      if (!note.contains("api") || !note["api"].is_string())
+        throw std::runtime_error("invalid vix.json: extensions.note.api is required");
+      if (note["api"].get<std::string>() != "1")
+        throw std::runtime_error("invalid vix.json: unsupported extensions.note.api `" + note["api"].get<std::string>() + "`");
+      if (!note.contains("cellTypes") || !note["cellTypes"].is_array())
+        throw std::runtime_error("invalid vix.json: extensions.note.cellTypes must be an array");
 
       json out = note;
       if (out.contains("icon"))
       {
-        if (!out["icon"].is_string() || !is_safe_note_icon_path(out.value("icon", ""))) throw std::runtime_error("invalid vix.json: unsafe note extension icon path");
+        if (!out["icon"].is_string() || !is_safe_note_icon_path(out.value("icon", "")))
+          throw std::runtime_error("invalid vix.json: unsafe note extension icon path");
         const std::filesystem::path iconPath = std::filesystem::path(out.value("icon", "")).lexically_normal();
-        if (!std::filesystem::is_regular_file(iconPath)) throw std::runtime_error("invalid vix.json: note extension icon file not found: " + iconPath.generic_string());
+        if (!std::filesystem::is_regular_file(iconPath))
+          throw std::runtime_error("invalid vix.json: note extension icon file not found: " + iconPath.generic_string());
         out["icon"] = iconPath.generic_string();
       }
       json cells = json::array();
       std::vector<std::string> seen;
       for (const auto &raw : note["cellTypes"])
       {
-        if (!raw.is_object()) throw std::runtime_error("invalid vix.json: extensions.note.cellTypes entries must be objects");
+        if (!raw.is_object())
+          throw std::runtime_error("invalid vix.json: extensions.note.cellTypes entries must be objects");
         json cell = raw;
         const std::string id = normalize_extension_id(cell.value("id", ""));
-        if (!is_safe_note_cell_id(id)) throw std::runtime_error("invalid vix.json: invalid or reserved note cell type id `" + id + "`");
-        if (std::find(seen.begin(), seen.end(), id) != seen.end()) throw std::runtime_error("invalid vix.json: duplicate note cell type id `" + id + "`");
+        if (!is_safe_note_cell_id(id))
+          throw std::runtime_error("invalid vix.json: invalid or reserved note cell type id `" + id + "`");
+        if (std::find(seen.begin(), seen.end(), id) != seen.end())
+          throw std::runtime_error("invalid vix.json: duplicate note cell type id `" + id + "`");
         seen.push_back(id);
         cell["id"] = id;
         if (cell.contains("aliases"))
         {
-          if (!cell["aliases"].is_array()) throw std::runtime_error("invalid vix.json: note cell aliases must be an array");
+          if (!cell["aliases"].is_array())
+            throw std::runtime_error("invalid vix.json: note cell aliases must be an array");
           json aliases = json::array();
           std::vector<std::string> aliasSeen;
           for (const auto &aliasRaw : cell["aliases"])
           {
-            if (!aliasRaw.is_string()) throw std::runtime_error("invalid vix.json: note cell aliases must be strings");
+            if (!aliasRaw.is_string())
+              throw std::runtime_error("invalid vix.json: note cell aliases must be strings");
             const std::string alias = normalize_extension_id(aliasRaw.get<std::string>());
-            if (!is_safe_note_cell_id(alias)) throw std::runtime_error("invalid vix.json: invalid or reserved note cell alias `" + alias + "`");
-            if (std::find(aliasSeen.begin(), aliasSeen.end(), alias) == aliasSeen.end()) { aliasSeen.push_back(alias); aliases.push_back(alias); }
+            if (!is_safe_note_cell_id(alias))
+              throw std::runtime_error("invalid vix.json: invalid or reserved note cell alias `" + alias + "`");
+            if (std::find(aliasSeen.begin(), aliasSeen.end(), alias) == aliasSeen.end())
+            {
+              aliasSeen.push_back(alias);
+              aliases.push_back(alias);
+            }
           }
           cell["aliases"] = aliases;
         }
@@ -1181,34 +1408,46 @@ namespace vix::commands
 
       if (out.contains("runtime"))
       {
-        if (!out["runtime"].is_object()) throw std::runtime_error("invalid vix.json: extensions.note.runtime must be an object");
+        if (!out["runtime"].is_object())
+          throw std::runtime_error("invalid vix.json: extensions.note.runtime must be an object");
         const json &rt = out["runtime"];
-        if (!rt.contains("protocol") || rt.value("protocol", "") != "vix-note-extension-1") throw std::runtime_error("invalid vix.json: unsupported note runtime protocol");
-        if (!rt.contains("mode") || rt.value("mode", "") != "oneshot") throw std::runtime_error("invalid vix.json: unsupported note runtime mode");
-        if (rt.contains("command") && !is_safe_runtime_command(rt.value("command", ""))) throw std::runtime_error("invalid vix.json: unsafe note runtime command");
-        if (!rt.contains("command") && !rt.contains("path")) throw std::runtime_error("invalid vix.json: note runtime requires command or path");
+        if (!rt.contains("protocol") || rt.value("protocol", "") != "vix-note-extension-1")
+          throw std::runtime_error("invalid vix.json: unsupported note runtime protocol");
+        if (!rt.contains("mode") || rt.value("mode", "") != "oneshot")
+          throw std::runtime_error("invalid vix.json: unsupported note runtime mode");
+        if (rt.contains("command") && !is_safe_runtime_command(rt.value("command", "")))
+          throw std::runtime_error("invalid vix.json: unsafe note runtime command");
+        if (!rt.contains("command") && !rt.contains("path"))
+          throw std::runtime_error("invalid vix.json: note runtime requires command or path");
       }
       return out;
     }
 
     static json normalize_extensions_or_throw(const json &manifest)
     {
-      if (!manifest.contains("extensions")) return json();
-      if (!manifest["extensions"].is_object()) throw std::runtime_error("invalid vix.json: extensions must be an object");
+      if (!manifest.contains("extensions"))
+        return json();
+      if (!manifest["extensions"].is_object())
+        throw std::runtime_error("invalid vix.json: extensions must be an object");
       json out = manifest["extensions"];
-      if (out.contains("note")) out["note"] = normalize_note_extension_or_throw(out["note"]);
+      if (out.contains("note"))
+        out["note"] = normalize_note_extension_or_throw(out["note"]);
       return out;
     }
 
     static json note_extension_summary(const json &extensions)
     {
-      if (extensions.is_null() || !extensions.contains("note")) return json();
+      if (extensions.is_null() || !extensions.contains("note"))
+        return json();
       const json &note = extensions["note"];
       json summary = json::object();
       summary["api"] = note["api"];
-      if (note.contains("capabilities")) summary["capabilities"] = note["capabilities"];
-      if (note.contains("icon")) summary["icon"] = note["icon"];
-      if (note.contains("cellTypes")) summary["cellTypes"] = note["cellTypes"];
+      if (note.contains("capabilities"))
+        summary["capabilities"] = note["capabilities"];
+      if (note.contains("icon"))
+        summary["icon"] = note["icon"];
+      if (note.contains("cellTypes"))
+        summary["cellTypes"] = note["cellTypes"];
       return json::object({{"note", summary}});
     }
 
@@ -1526,7 +1765,6 @@ namespace vix::commands
       return r.exitCode == 0;
     }
 
-
     static bool has_cloud_flag(const std::vector<std::string> &args)
     {
       return std::find(args.begin(), args.end(), "--cloud") != args.end();
@@ -1651,7 +1889,6 @@ namespace vix::commands
         return 1;
       }
       const std::string commit = *commitOpt;
-
 
       const auto originRaw = git_origin_url();
       if (!originRaw)
@@ -1801,7 +2038,18 @@ namespace vix::commands
 
       const bool entryExists = fs::exists(entryPath);
 
+      std::optional<RegistryMoveCandidate> moveCandidate;
+
+      if (!entryExists)
+      {
+        moveCandidate = find_moved_registry_entry(
+            regIndex,
+            originRepo,
+            pkgId);
+      }
+
       json entry = json::object();
+      json previousEntry = json::object();
 
       if (entryExists)
       {
@@ -1855,6 +2103,64 @@ namespace vix::commands
                     << "\n\n  Registry commit\n  " << registeredCommit
                     << "\n\n  Current tag commit\n  " << commit << "\n";
           return 1;
+        }
+      }
+      else if (moveCandidate)
+      {
+        entry = moveCandidate->entry;
+        previousEntry = moveCandidate->entry;
+
+        entry.erase("deprecated");
+        entry.erase("movedTo");
+        entry.erase("deprecationMessage");
+
+        entry["namespace"] = *ns;
+        entry["name"] = *name;
+        entry["description"] = vixManifest["description"];
+        entry["license"] = vixManifest["license"];
+        entry["type"] = vixManifest["type"];
+        entry["homepage"] = originRepo;
+        entry["documentation"] =
+            vixManifest.contains("documentation") &&
+                    vixManifest["documentation"].is_string()
+                ? vixManifest["documentation"].get<std::string>()
+                : originRepo + "#readme";
+
+        entry["repo"] = json::object({
+            {"url", originRepo},
+            {"defaultBranch", guess_default_branch()},
+        });
+
+        entry["migratedFrom"] = moveCandidate->packageId;
+
+        if (vixManifest.contains("keywords") &&
+            vixManifest["keywords"].is_array())
+        {
+          entry["keywords"] = vixManifest["keywords"];
+        }
+
+        if (vixManifest.contains("maintainers") &&
+            vixManifest["maintainers"].is_array())
+        {
+          entry["maintainers"] = vixManifest["maintainers"];
+        }
+        else if (vixManifest.contains("authors") &&
+                 vixManifest["authors"].is_array())
+        {
+          entry["maintainers"] = vixManifest["authors"];
+        }
+
+        previousEntry["deprecated"] = true;
+        previousEntry["movedTo"] = pkgId;
+        previousEntry["deprecationMessage"] =
+            "This package moved to " + pkgId + ".";
+
+        if (opt.verbose && !opt.jsonOut)
+        {
+          vix::cli::util::kv(
+              std::cout,
+              "move",
+              moveCandidate->packageId + " -> " + pkgId);
         }
       }
       else
@@ -1952,7 +2258,8 @@ namespace vix::commands
         entry["type"] = vixManifest["type"].get<std::string>();
         const json normalizedExtensions = normalize_extensions_or_throw(vixManifest);
         const json extensionSummary = note_extension_summary(normalizedExtensions);
-        if (!extensionSummary.is_null()) entry["extensions"] = extensionSummary;
+        if (!extensionSummary.is_null())
+          entry["extensions"] = extensionSummary;
         entry["quality"] = quality;
         entry["versions"] = json::object();
       }
@@ -1984,8 +2291,10 @@ namespace vix::commands
         });
         const json normalizedExtensions = normalize_extensions_or_throw(vixManifest);
         const json extensionSummary = note_extension_summary(normalizedExtensions);
-        if (!extensionSummary.is_null()) entry["extensions"] = extensionSummary;
-        if (!normalizedExtensions.is_null()) versionEntry["extensions"] = normalizedExtensions;
+        if (!extensionSummary.is_null())
+          entry["extensions"] = extensionSummary;
+        if (!normalizedExtensions.is_null())
+          versionEntry["extensions"] = normalizedExtensions;
         entry["versions"][resolvedVersion] = versionEntry;
       }
 
@@ -2025,30 +2334,73 @@ namespace vix::commands
       try
       {
         write_json_or_throw(entryPath, entry);
+
+        if (moveCandidate)
+        {
+          write_json_or_throw(
+              moveCandidate->entryPath,
+              previousEntry);
+        }
       }
       catch (const std::exception &ex)
       {
-        vix::cli::util::err_line(std::cerr,
-                                 std::string("failed to write registry entry: ") + ex.what());
+        vix::cli::util::err_line(
+            std::cerr,
+            std::string("failed to write registry entry: ") +
+                ex.what());
         return 1;
       }
 
       {
-        const std::string relEntry =
-            (fs::path("index") / registry_file_name(*ns, *name)).generic_string();
-        const auto r = run_process_retry_debug(
-            {"git", "-C", regRepo.string(), "add", relEntry});
+        std::vector<std::string> addCommand{
+            "git",
+            "-C",
+            regRepo.string(),
+            "add",
+            fs::relative(entryPath, regRepo).generic_string(),
+        };
+
+        if (moveCandidate)
+        {
+          addCommand.push_back(
+              fs::relative(
+                  moveCandidate->entryPath,
+                  regRepo)
+                  .generic_string());
+        }
+
+        const auto r =
+            run_process_retry_debug(addCommand);
+
         if (r.exitCode != 0)
         {
-          vix::cli::util::err_line(std::cerr, "failed to add registry entry");
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to add registry entries");
+
           if (!r.err.empty())
-            vix::cli::util::warn_line(std::cerr, r.err);
+            vix::cli::util::warn_line(
+                std::cerr,
+                r.err);
+
           return r.exitCode;
         }
       }
 
       {
-        const std::string msg = "registry: " + pkgId + " v" + resolvedVersion;
+        const std::string msg =
+            moveCandidate
+                ? "registry: move " +
+                      moveCandidate->packageId +
+                      " to " +
+                      pkgId +
+                      " and publish v" +
+                      resolvedVersion
+                : "registry: " +
+                      pkgId +
+                      " v" +
+                      resolvedVersion;
+
         const auto r = run_process_retry_debug(
             {"git", "-C", regRepo.string(), "commit", "-q", "-m", msg});
         if (r.exitCode != 0)
@@ -2096,22 +2448,119 @@ namespace vix::commands
         }
       }
 
-      bool prCreated = false;
-
-      if (command_exists_on_path("gh") && gh_is_authed())
+      if (!command_exists_on_path("gh"))
       {
-        const std::string title = "registry: add " + pkgId + " v" + resolvedVersion;
+        vix::cli::util::err_line(
+            std::cerr,
+            "GitHub CLI is required to create the registry pull request.");
 
-        std::ostringstream body;
-        body << "Publish package `" << pkgId << "` version `" << resolvedVersion << "`.\n\n";
-        body << "- tag: `" << tag << "`\n";
-        body << "- commit: `" << commit << "`\n";
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Install `gh`, then run: gh auth login");
 
-        if (!trim_copy(opt.notes).empty())
-          body << "\nNotes:\n"
-               << opt.notes << "\n";
+        return 1;
+      }
 
-        const auto r = run_process_retry_debug({
+      if (!gh_is_authed())
+      {
+        vix::cli::util::err_line(
+            std::cerr,
+            "GitHub CLI is not authenticated.");
+
+        vix::cli::util::warn_line(
+            std::cerr,
+            "Run: gh auth login");
+
+        return 1;
+      }
+
+      const std::string title =
+          moveCandidate
+              ? "registry: move " +
+                    moveCandidate->packageId +
+                    " to " +
+                    pkgId +
+                    " and publish v" +
+                    resolvedVersion
+              : "registry: add " +
+                    pkgId +
+                    " v" +
+                    resolvedVersion;
+
+      std::ostringstream body;
+
+      if (moveCandidate)
+      {
+        body << "Move package `"
+             << moveCandidate->packageId
+             << "` to `"
+             << pkgId
+             << "` and publish version `"
+             << resolvedVersion
+             << "`.\n\n";
+      }
+      else
+      {
+        body << "Publish package `"
+             << pkgId
+             << "` version `"
+             << resolvedVersion
+             << "`.\n\n";
+      }
+
+      body << "- tag: `" << tag << "`\n";
+      body << "- commit: `" << commit << "`\n";
+
+      if (!trim_copy(opt.notes).empty())
+      {
+        body << "\nNotes:\n"
+             << opt.notes
+             << "\n";
+      }
+
+      std::string prUrl;
+
+      {
+        const auto existingPr = run_process_retry_debug({
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            "vixcpp/registry",
+            "--base",
+            "main",
+            "--head",
+            branch,
+            "--state",
+            "open",
+            "--json",
+            "url",
+            "--jq",
+            ".[0].url",
+        });
+
+        if (existingPr.exitCode != 0)
+        {
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to check existing registry pull requests");
+
+          if (!existingPr.err.empty())
+          {
+            vix::cli::util::warn_line(
+                std::cerr,
+                existingPr.err);
+          }
+
+          return existingPr.exitCode;
+        }
+
+        prUrl = trim_copy(existingPr.out);
+      }
+
+      if (prUrl.empty())
+      {
+        const auto createPr = run_process_retry_debug({
             "gh",
             "pr",
             "create",
@@ -2127,44 +2576,61 @@ namespace vix::commands
             body.str(),
         });
 
-        if (r.exitCode == 0)
-          prCreated = true;
-        else
+        if (createPr.exitCode != 0)
         {
-          if (opt.verbose && !opt.jsonOut)
-          {
-            vix::cli::util::warn_line(std::cout,
-                                      "gh pr create failed, continuing without failing publish.");
-            if (!r.err.empty())
-              vix::cli::util::warn_line(std::cout, r.err);
-          }
-        }
-      }
+          vix::cli::util::err_line(
+              std::cerr,
+              "failed to create registry pull request");
 
-      if (prCreated)
-      {
-        if (opt.jsonOut)
-        {
-          json out = {{"status", "published"}, {"package", pkgId}, {"version", resolvedVersion}, {"tag", tag}, {"commit", commit}, {"branch", branch}};
-          std::cout << out.dump(2) << "\n";
+          if (!createPr.err.empty())
+          {
+            vix::cli::util::warn_line(
+                std::cerr,
+                createPr.err);
+          }
+
+          return createPr.exitCode;
         }
-        else
-        {
-          vix::cli::util::ok_line(std::cout, "published " + pkgId + "@" + resolvedVersion);
-        }
-        return 0;
+
+        prUrl = trim_copy(createPr.out);
       }
 
       if (opt.jsonOut)
       {
-        json out = {{"status", "submitted"}, {"package", pkgId}, {"version", resolvedVersion}, {"tag", tag}, {"commit", commit}, {"branch", branch}};
+        json out = {
+            {"status", "submitted"},
+            {"package", pkgId},
+            {"version", resolvedVersion},
+            {"tag", tag},
+            {"commit", commit},
+            {"branch", branch},
+            {"pullRequest", prUrl},
+        };
+
         std::cout << out.dump(2) << "\n";
       }
       else
       {
-        vix::cli::util::ok_line(std::cout, "submitted " + pkgId + "@" + resolvedVersion);
-        std::cout << "  Branch: " << branch << "\n";
+        vix::cli::util::ok_line(
+            std::cout,
+            "submitted " +
+                pkgId +
+                "@" +
+                resolvedVersion);
+
+        if (!prUrl.empty())
+        {
+          vix::cli::util::kv(
+              std::cout,
+              "pull request",
+              prUrl);
+        }
+
+        vix::cli::util::info_line(
+            std::cout,
+            "Registry validation and auto-merge started.");
       }
+
       return 0;
     }
   } // namespace

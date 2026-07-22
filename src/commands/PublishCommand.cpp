@@ -1476,8 +1476,17 @@ namespace vix::commands
         throw std::runtime_error("invalid vix.json: `name` contains unsupported characters");
       if (version != resolvedVersion)
         throw std::runtime_error("Version mismatch\n\n  vix.json\n  " + version + "\n\n  Git tag\n  v" + resolvedVersion);
-      if (type != "header-only" && type != "library" && type != "header-and-source" && type != "executable")
-        throw std::runtime_error("invalid vix.json: unsupported package type `" + type + "`");
+      if (type != "header-only" &&
+          type != "library" &&
+          type != "header-and-source" &&
+          type != "executable" &&
+          type != "workspace")
+      {
+        throw std::runtime_error(
+            "invalid vix.json: unsupported package type `" +
+            type +
+            "`");
+      }
       if (description.size() < 8)
         throw std::runtime_error("invalid vix.json: description is too short");
       if (license.empty())

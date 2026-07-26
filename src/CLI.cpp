@@ -665,145 +665,132 @@ namespace vix
 
     std::ostream &out = std::cout;
 
-    auto indent = [](int level) -> std::string
+    auto command = [&](std::string_view name, std::string_view description)
     {
-      return std::string(static_cast<size_t>(level) * 2, ' ');
+      constexpr std::size_t command_width = 18;
+
+      out << "    " << CYAN << name << RESET;
+
+      if (name.size() < command_width)
+        out << std::string(command_width - name.size(), ' ');
+      else
+        out << ' ';
+
+      out << description << "\n";
     };
 
-    auto docs = [&](const char *path)
+    auto group = [&](std::string_view title)
     {
-      out << indent(2)
-          << "Docs: "
-          << link(std::string("https://docs.vixcpp.com") + path)
-          << "\n";
+      out << "\n";
+      section_title(out, std::string(title));
     };
 
-    out << "Vix.cpp\n";
-    out << "Fast. Simple. Built for real apps.\n";
-    out << "Version: " << VIX_CLI_VERSION << "\n\n";
+    section_title(out, "Usage");
 
-    out << indent(1) << "Usage:\n";
-    out << indent(2) << "vix <command> [options]\n";
-    out << indent(2) << "vix help [command]\n";
-    out << indent(2) << "vix <file.cpp>\n";
-    out << indent(2) << "vix make:<type> <name>\n\n";
+    out << "    vix <command> [options]\n";
+    out << "    vix <file.cpp>\n";
+    out << "    vix help <command>\n";
 
-    out << indent(1) << "Core workflow:\n";
-    out << indent(2) << "new       Create a new project\n";
-    out << indent(2) << "add       Add a dependency\n";
-    out << indent(2) << "install   Install dependencies\n";
-    out << indent(2) << "run       Build and run\n";
-    out << indent(2) << "dev       Start development mode\n";
-    out << indent(2) << "build     Build project or file\n\n";
+    group("Common commands");
 
-    out << indent(1) << "Commands:\n\n";
+    command("new <name>", "Create a new project");
+    command("add <package>", "Add a dependency");
+    command("install", "Install project dependencies");
+    command("run", "Build and run a project or C++ file");
+    command("dev", "Start development mode");
+    command("build", "Configure and build");
+    command("test", "Run project tests");
+    command("deploy", "Deploy the application");
 
-    out << indent(2) << "Project:\n";
-    docs("/cli/");
-    out << indent(3) << "new <name>         Create a new Vix project\n";
-    out << indent(3) << "make               Generate C++ scaffolding\n";
-    out << indent(3) << "make:<type>        Shortcut for make subcommands\n";
-    out << indent(3) << "build              Configure and build project\n";
-    out << indent(3) << "run                Build if needed, then run\n";
-    out << indent(3) << "dev                Hot reload development mode\n";
-    out << indent(3) << "replay             Replay a recorded execution\n";
-    out << indent(3) << "check              Validate build or script\n";
-    out << indent(3) << "tests              Run tests\n";
-    out << indent(3) << "test               Alias for tests\n";
-    out << indent(3) << "repl               Start interactive REPL\n";
-    out << indent(3) << "note               Open a .vixnote document in a local UI\n";
-    out << indent(3) << "desktop           Open a Vix web UI app in a desktop shell\n";
-    out << indent(3) << "mobile            Generate mobile WebView shells for Vix web apps\n";
-    out << indent(3) << "fmt                Format C++ source files\n";
-    out << indent(3) << "clean              Remove local cache directories\n";
-    out << indent(3) << "reset              Clean cache and reinstall dependencies\n";
-    out << indent(3) << "task               Run reusable project tasks\n";
-    out << indent(3) << "service            Install and manage a production systemd service\n";
-    out << indent(3) << "proxy              Generate and validate reverse proxy configs\n";
-    out << indent(3) << "health             Check local, public and WebSocket app health\n";
-    out << indent(3) << "deploy             Run the production deployment workflow\n";
-    out << indent(3) << "logs               Show production app and proxy logs\n";
-    out << indent(3) << "env                Check project and production environment variables\n";
-    out << indent(3) << "production         Show and validate production status\n";
-    out << indent(3) << "ws                 Check and diagnose WebSocket endpoints\n";
-    out << indent(3) << "modules            Manage optional project modules\n\n";
+    group("Project");
 
-    out << indent(2) << "Cloud:\n";
-    out << indent(3) << "login              Connect to Softadastra Cloud\n";
-    out << indent(3) << "logout             Remove the local cloud session\n";
-    out << indent(3) << "cloud              Manage Softadastra Cloud project links\n";
-    out << indent(3) << "doctor --cloud     Diagnose Softadastra Cloud connectivity\n\n";
+    command("make", "Generate C++ scaffolding");
+    command("check", "Validate a project or source file");
+    command("replay", "Replay a recorded execution");
+    command("repl", "Start the interactive REPL");
+    command("task", "Run project tasks");
+    command("fmt", "Format C++ source files");
+    command("clean", "Remove local build caches");
+    command("reset", "Reset caches and dependencies");
+    command("modules", "Manage optional project modules");
 
-    out << indent(2) << "Registry and dependencies:\n";
-    docs("/cli/registry");
-    out << indent(3) << "registry           Sync/search the registry index\n";
-    out << indent(3) << "add <pkg>          Add dependency from registry\n";
-    out << indent(3) << "search <query>     Search packages offline\n";
-    out << indent(3) << "remove <pkg>       Remove dependency from vix.lock\n";
-    out << indent(3) << "list               List project dependencies\n";
-    out << indent(3) << "install            Install dependencies from vix.lock\n";
-    out << indent(3) << "i                  Alias for install\n";
-    out << indent(3) << "deps               Deprecated alias for install\n";
-    out << indent(3) << "update             Update dependencies\n";
-    out << indent(3) << "up                 Alias for update\n";
-    out << indent(3) << "outdated           Check outdated dependencies\n";
-    out << indent(3) << "store              Manage local store cache\n";
-    out << indent(3) << "publish            Publish a package version\n";
-    out << indent(3) << "unpublish          Remove a published package\n\n";
+    group("Applications");
 
-    out << indent(2) << "Packaging:\n";
-    docs("/cli/pack");
-    out << indent(3) << "pack               Create distributable package\n";
-    out << indent(3) << "verify             Verify package integrity\n";
-    out << indent(3) << "cache              Cache package into local store\n\n";
+    command("note", "Open a Vix Note document");
+    command("desktop", "Run a web application as desktop");
+    command("mobile", "Generate mobile WebView shells");
+    command("game", "Manage Vix game projects");
+    command("agent", "Run local AI agent commands");
 
-    out << indent(2) << "Runtime and advanced:\n";
-    docs("/cli/commands");
-    out << indent(3) << "agent              Run local AI agent commands\n";
-    out << indent(3) << "game               Export and manage Vix game projects\n";
-    out << indent(3) << "p2p                Run P2P node/tools\n";
-    out << indent(3) << "orm                Database migrations/status/rollback\n\n";
-    out << indent(3) << "db                 Inspect SQLite database and storage status\n\n";
+    group("Production");
 
-    out << indent(2) << "System:\n";
-    docs("/cli/info");
-    out << indent(3) << "completion         Generate shell completion script\n";
-    out << indent(3) << "upgrade            Upgrade the Vix CLI binary\n";
-    out << indent(3) << "info               Show environment and cache locations\n";
-    out << indent(3) << "doctor             Check toolchain and install health\n";
-    out << indent(3) << "uninstall          Remove Vix CLI from the system\n\n";
+    command("deploy", "Run the deployment workflow");
+    command("production", "Show production status");
+    command("service", "Manage the system service");
+    command("proxy", "Manage reverse proxy configuration");
+    command("health", "Check application health");
+    command("logs", "Show application and proxy logs");
+    command("env", "Validate environment variables");
+    command("ws", "Diagnose WebSocket endpoints");
 
-    out << indent(2) << "Help:\n";
-    out << indent(3) << "help [command]     Show command help\n";
-    out << indent(3) << "version            Show version\n";
-    out << indent(3) << "-h, --help         Show help\n";
-    out << indent(3) << "-v, --version      Show version\n\n";
+    group("Dependencies and registry");
 
-    out << indent(1) << "Global options:\n";
-    out << indent(2) << "--verbose          Enable debug logs\n";
-    out << indent(2) << "-q, --quiet        Only warnings/errors\n";
-    out << indent(2) << "--log-level        trace|debug|info|warn|error|critical\n\n";
+    command("registry", "Manage the registry index");
+    command("search <query>", "Search registry packages");
+    command("list", "List project dependencies");
+    command("remove <package>", "Remove a dependency");
+    command("update", "Update dependencies");
+    command("outdated", "Check outdated dependencies");
+    command("store", "Manage the local package store");
+    command("publish", "Publish a package version");
+    command("unpublish", "Remove a published version");
 
-    out << indent(1) << "Examples:\n";
-    out << indent(2) << "vix init\n";
-    out << indent(2) << "vix new hello\n";
-    out << indent(2) << "vix run main.cpp\n";
-    out << indent(2) << "vix note examples/hello.vixnote\n";
-    out << indent(2) << "vix build main.cpp --out app\n";
-    out << indent(2) << "vix make:class User\n";
-    out << indent(2) << "vix add @cnerium/app\n";
-    out << indent(2) << "vix install\n";
-    out << indent(2) << "vix login\n";
-    out << indent(2) << "vix cloud status\n";
-    out << indent(2) << "vix game export\n";
-    out << indent(2) << "vix agent ask \"Explain Vix.cpp\" --model qwen2.5-coder:1.5b --timeout 120000\n";
-    out << indent(2) << "vix help run\n\n";
+    group("Packaging");
 
-    out << indent(1) << "Links:\n";
-    out << indent(2) << "Docs:     " << link("https://docs.vixcpp.com") << "\n";
-    out << indent(2) << "CLI:      " << link("https://docs.vixcpp.com/cli/") << "\n";
-    out << indent(2) << "Registry: " << link("https://registry.vixcpp.com") << "\n";
-    out << indent(2) << "GitHub:   " << link("https://github.com/vixcpp/vix") << "\n\n";
+    command("pack", "Create a distributable package");
+    command("verify", "Verify package integrity");
+    command("cache", "Cache a package locally");
+
+    group("Cloud");
+
+    command("login", "Connect to Softadastra Cloud");
+    command("logout", "Remove the local cloud session");
+    command("cloud", "Manage Cloud project links");
+    command("doctor --cloud", "Diagnose Cloud connectivity");
+
+    group("Data and networking");
+
+    command("db", "Inspect SQLite databases");
+    command("orm", "Manage database migrations");
+    command("p2p", "Run P2P tools");
+
+    group("System");
+
+    command("doctor", "Check the installation and toolchain");
+    command("info", "Show environment information");
+    command("completion", "Generate shell completions");
+    command("upgrade", "Upgrade the Vix CLI");
+    command("uninstall", "Uninstall the Vix CLI");
+
+    group("Global options");
+
+    command("--verbose", "Enable debug output");
+    command("-q, --quiet", "Only show warnings and errors");
+    command("--log-level <level>", "Set trace, debug, info, warn, error or critical");
+    command("-h, --help", "Show command help");
+    command("-v, --version", "Show the installed version");
+
+    out << "\n";
+    out << GRAY
+        << "Run `vix help <command>` for detailed command usage."
+        << RESET
+        << "\n";
+
+    out << GRAY
+        << "Documentation: "
+        << RESET
+        << link("https://docs.vixcpp.com/cli/")
+        << "\n\n";
 
     return 0;
   }

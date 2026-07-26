@@ -1755,7 +1755,7 @@ namespace vix::commands::BuildCommand
       return argument.rfind(prefix, 0) == 0;
     }
 
-    static bool has_explicit_vix_discovery(
+    static bool has_explicit_vix_discovery_override(
         const process::Options &opt)
     {
       const char *environmentVariables[] = {
@@ -1763,7 +1763,6 @@ namespace vix::commands::BuildCommand
           "vix_DIR",
           "Vix_ROOT",
           "vix_ROOT",
-          "CMAKE_PREFIX_PATH",
           "CMAKE_FIND_ROOT_PATH",
           "CMAKE_TOOLCHAIN_FILE"};
 
@@ -1782,7 +1781,6 @@ namespace vix::commands::BuildCommand
           "vix_DIR",
           "Vix_ROOT",
           "vix_ROOT",
-          "CMAKE_PREFIX_PATH",
           "CMAKE_FIND_ROOT_PATH",
           "CMAKE_TOOLCHAIN_FILE"};
 
@@ -1850,11 +1848,64 @@ namespace vix::commands::BuildCommand
       return out;
     }
 
+    static std::string sdk_resolution_error_message(
+        const vix::cli::sdk::SdkResolution &resolution)
+    {
+      std::ostringstream out;
+
+      if (!resolution.missingModules.empty())
+      {
+        out << "Missing SDK modules\n";
+        for (const std::string &module : resolution.missingModules)
+        {
+          const std::string target =
+              vix::cli::sdk::target_for_module(module);
+          std::string provider;
+          const auto providerIt =
+              resolution.moduleProviders.find(module);
+          if (providerIt != resolution.moduleProviders.end())
+            provider = providerIt->second;
+          else if (const auto fallback =
+                       vix::cli::sdk::provider_profile_for_module(module))
+            provider = *fallback;
+
+          out << target;
+          if (!provider.empty())
+            out << "  provider profile: " << provider;
+          out << "\n";
+        }
+
+        std::set<std::string> providers;
+        for (const std::string &module : resolution.missingModules)
+        {
+          const auto providerIt =
+              resolution.moduleProviders.find(module);
+          if (providerIt != resolution.moduleProviders.end())
+            providers.insert(providerIt->second);
+        }
+
+        for (const std::string &provider : providers)
+          out << "run: vix upgrade --sdk " << provider << "\n";
+      }
+
+      if (!resolution.error.empty())
+      {
+        if (out.tellp() > 0)
+          out << "\n";
+        out << "Managed Vix SDK profiles error: "
+            << resolution.error
+            << "\n";
+      }
+
+      return out.str();
+    }
+
     static void resolve_sdk_for_plan(
         process::Plan &plan,
         const process::Options &opt)
     {
       plan.sdkConfigDir.clear();
+      plan.sdkResolutionError.clear();
 
       if (is_vix_source_tree(plan.userProjectDir))
         return;
@@ -1862,10 +1913,10 @@ namespace vix::commands::BuildCommand
       /*
        * Explicit CMake discovery always has priority.
        *
-       * Vix must not override Vix_DIR, CMAKE_PREFIX_PATH,
+       * Vix must not override explicit Vix package hints,
        * custom package roots or package-manager toolchains.
        */
-      if (has_explicit_vix_discovery(opt))
+      if (has_explicit_vix_discovery_override(opt))
         return;
 
       const std::set<std::string> targets =
@@ -1895,6 +1946,14 @@ namespace vix::commands::BuildCommand
       if (!resolution.ok ||
           resolution.selectedProfiles.empty())
       {
+        if (!resolution.ok)
+        {
+          plan.sdkResolutionError =
+              sdk_resolution_error_message(
+                  resolution);
+          return;
+        }
+
         if (opt.verbose)
         {
           if (!resolution.error.empty())
@@ -3383,6 +3442,12 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = *planOpt;
+
+        if (!plan_.sdkResolutionError.empty())
+        {
+          error(plan_.sdkResolutionError);
+          return 1;
+        }
 
         if (opt_.warnings)
         {

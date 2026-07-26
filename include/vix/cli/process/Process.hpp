@@ -319,6 +319,11 @@ namespace vix::cli::process
     fs::path sdkConfigDir;
 
     /**
+     * @brief Fatal managed SDK resolution error to report before configuring CMake.
+     */
+    std::string sdkResolutionError;
+
+    /**
      * @brief Resolved CMake cache variables passed during configure.
      */
     std::vector<std::pair<std::string, std::string>> cmakeVars;

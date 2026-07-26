@@ -78,7 +78,7 @@ composed_config() {
 run_build() {
   local home="$1"
   local project="$2"
-  HOME="$home" "$VIX_BIN" build --preset release --dir "$project" -- -DCMAKE_VERBOSE_MAKEFILE=OFF >/tmp/vix-sdk-compose-build.log 2>&1
+  CMAKE_PREFIX_PATH="$ROOT/ambient-prefix" HOME="$home" "$VIX_BIN" build --preset release --dir "$project" -- -DCMAKE_VERBOSE_MAKEFILE=OFF >/tmp/vix-sdk-compose-build.log 2>&1
 }
 
 HOME_A="$ROOT/home-a"

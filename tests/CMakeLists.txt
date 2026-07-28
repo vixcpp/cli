@@ -171,6 +171,14 @@ add_test(
 )
 
 add_test(
+  NAME vix_cli_build_planning_compat
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/BuildPlanningCompatTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
   NAME vix_cli_global_install_ovi
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/GlobalInstallOviTest.sh

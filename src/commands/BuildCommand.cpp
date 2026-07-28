@@ -62,6 +62,9 @@
 #include <vix/cli/sdk/SdkProfiles.hpp>
 #include <vix/engine/BuildTools.hpp>
 #include <vix/engine/CMakeConfiguration.hpp>
+#include <vix/engine/ConfigurationSignature.hpp>
+#include <vix/engine/ConfigureDecision.hpp>
+#include <vix/engine/ExecutionPlanning.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -1005,11 +1008,6 @@ namespace vix::commands::BuildCommand
       return vix::engine::detect_fast_linker_flag(opt.linker);
     }
 
-    static bool has_cmake_cache(const fs::path &buildDir)
-    {
-      return util::file_exists(buildDir / "CMakeCache.txt");
-    }
-
     static void clean_local_build_dirs(
         const fs::path &projectDir,
         const std::string &targetTriple,
@@ -1073,51 +1071,35 @@ namespace vix::commands::BuildCommand
       return vix::engine::make_cmake_variables(engineOptions);
     }
 
-    static std::string make_signature(
+    static vix::engine::ConfigurationSignatureOptions
+    configuration_signature_options(
+        const process::Options &opt,
+        const std::string &toolchainContent)
+    {
+      vix::engine::ConfigurationSignatureOptions options;
+      options.linkStatic = opt.linkStatic;
+      options.targetTriple = opt.targetTriple;
+      options.sysroot = opt.sysroot;
+      options.fast = opt.fast;
+      options.useCache = opt.useCache;
+      options.warningCheck = opt.warningCheck;
+      options.linker = opt.linker;
+      options.launcher = opt.launcher;
+      options.verbose = opt.verbose;
+      options.cmakeVerbose = opt.cmakeVerbose;
+      options.rawCMakeArgs = opt.cmakeArgs;
+      options.toolchainContent = toolchainContent;
+      return options;
+    }
+
+    static std::string build_configuration_signature(
         const process::Plan &plan,
         const process::Options &opt,
         const std::string &toolchainContent)
     {
-      std::ostringstream oss;
-
-      oss << "preset=" << plan.preset.name << "\n";
-      oss << "generator=" << plan.preset.generator << "\n";
-      oss << "buildType=" << plan.preset.buildType << "\n";
-      oss << "static=" << (opt.linkStatic ? "1" : "0") << "\n";
-      oss << "targetTriple=" << opt.targetTriple << "\n";
-      oss << "sysroot=" << opt.sysroot << "\n";
-      oss << "fast=" << (opt.fast ? "1" : "0") << "\n";
-      oss << "useCache=" << (opt.useCache ? "1" : "0") << "\n";
-      oss << "warningCheck=" << (opt.warningCheck ? "1" : "0") << "\n";
-      oss << "linker=" << static_cast<int>(opt.linker) << "\n";
-      oss << "launcher=" << static_cast<int>(opt.launcher) << "\n";
-      oss << "verbose=" << (opt.verbose ? "1" : "0") << "\n";
-      oss << "cmakeVerbose=" << (opt.cmakeVerbose ? "1" : "0") << "\n";
-
-      if (plan.launcher)
-        oss << "launcherTool=" << *plan.launcher << "\n";
-
-      if (plan.fastLinkerFlag)
-        oss << "linkerFlag=" << *plan.fastLinkerFlag << "\n";
-
-      oss << "projectFingerprint=" << plan.projectFingerprint << "\n";
-
-      oss << "vars:\n";
-      oss << util::signature_join(plan.cmakeVars);
-
-      oss << "rawCMakeArgs:\n";
-      for (const auto &arg : opt.cmakeArgs)
-        oss << arg << "\n";
-
-      if (!opt.targetTriple.empty())
-      {
-        oss << "toolchain:\n";
-        oss << toolchainContent;
-        if (!toolchainContent.empty() && toolchainContent.back() != '\n')
-          oss << "\n";
-      }
-
-      return util::trim(oss.str()) + "\n";
+      return vix::engine::make_configuration_signature(
+          plan,
+          configuration_signature_options(opt, toolchainContent));
     }
 
     static std::uint64_t fast_file_size_or_zero(const fs::path &path)
@@ -1259,28 +1241,26 @@ namespace vix::commands::BuildCommand
       if (!presetOpt)
         return std::nullopt;
 
-      process::Plan plan;
-      plan.userProjectDir = userProjectDir;
-      plan.cmakeSourceDir = cmakeSourceDir;
-      plan.projectDir = userProjectDir;
-      plan.defaultTargetName = defaultTargetName;
-      plan.generatedFromVixApp = generatedFromVixApp;
-      plan.preset = *presetOpt;
+      vix::engine::ExecutionPlanLayoutOptions layoutOptions;
+      layoutOptions.userProjectDir = userProjectDir;
+      layoutOptions.cmakeSourceDir = cmakeSourceDir;
+      layoutOptions.defaultTargetName = defaultTargetName;
+      layoutOptions.generatedFromVixApp = generatedFromVixApp;
+      layoutOptions.preset = *presetOpt;
+      layoutOptions.targetTriple = opt.targetTriple;
+
+      const vix::engine::ExecutionPlanLayoutResult layout =
+          vix::engine::make_execution_plan_layout(layoutOptions);
+
+      if (!layout.success())
+        return std::nullopt;
+
+      process::Plan plan = layout.plan;
 
       plan.launcher = detect_launcher(opt);
       plan.fastLinkerFlag = detect_fast_linker_flag(opt);
       plan.projectFingerprint =
           util::compute_cmake_config_fingerprint(plan.cmakeSourceDir);
-
-      if (!opt.targetTriple.empty())
-        plan.buildDir = userProjectDir / (plan.preset.buildDirName + "-" + opt.targetTriple);
-      else
-        plan.buildDir = userProjectDir / plan.preset.buildDirName;
-
-      plan.configureLog = plan.buildDir / "configure.log";
-      plan.buildLog = plan.buildDir / "build.log";
-      plan.sigFile = plan.buildDir / ".vix-config.sig";
-      plan.toolchainFile = plan.buildDir / "vix-toolchain.cmake";
 
       if (opt.clean)
       {
@@ -1315,21 +1295,22 @@ namespace vix::commands::BuildCommand
           globalPackagesFile,
           plan.sdkConfigDir);
 
-      plan.signature = make_signature(plan, opt, toolchainContent);
+      plan.signature = build_configuration_signature(plan, opt, toolchainContent);
 
       return plan;
     }
-    static bool need_configure(const process::Options &opt, const process::Plan &plan)
+    static vix::engine::ConfigureDecision
+    evaluate_configure_decision(
+        const process::Options &opt,
+        const process::Plan &plan)
     {
-      if (!opt.useCache)
-        return true;
-      if (opt.clean)
-        return true;
-      if (!has_cmake_cache(plan.buildDir))
-        return true;
-      if (!util::signature_matches(plan.sigFile, plan.signature))
-        return true;
-      return false;
+      vix::engine::ConfigureDecisionOptions options;
+      options.useCache = opt.useCache;
+      options.clean = opt.clean;
+      options.buildDir = plan.buildDir;
+      options.signatureFile = plan.sigFile;
+      options.expectedSignature = plan.signature;
+      return vix::engine::evaluate_configuration(options);
     }
 
     static std::string platform_executable_name(const std::string &name)
@@ -3358,7 +3339,7 @@ namespace vix::commands::BuildCommand
               opt_.sysroot);
         }
 
-        plan_.signature = make_signature(plan_, opt_, tc);
+        plan_.signature = build_configuration_signature(plan_, opt_, tc);
 #endif
 
         if (!opt_.targetTriple.empty())
@@ -3544,7 +3525,10 @@ namespace vix::commands::BuildCommand
         bool configuredThisRun = false;
         long long totalMs = 0;
 
-        if (need_configure(opt_, plan_))
+        const vix::engine::ConfigureDecision configureDecision =
+            evaluate_configure_decision(opt_, plan_);
+
+        if (configureDecision.needs_configure())
         {
           configuredThisRun = true;
 
@@ -3611,7 +3595,9 @@ namespace vix::commands::BuildCommand
 
           if (opt_.useCache)
           {
-            if (!util::write_text_file_atomic(plan_.sigFile, plan_.signature))
+            if (!vix::engine::write_configuration_signature(
+                    plan_.sigFile,
+                    plan_.signature))
             {
               if (!opt_.quiet)
                 hint("Warning: unable to write config signature file");

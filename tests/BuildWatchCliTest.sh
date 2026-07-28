@@ -72,6 +72,18 @@ CPP
 
 wait_for_output "change  src/main.cpp"
 wait_for_output "Rebuilt project"
+sleep 0.5
+rebuilt_count="$(grep -c 'Rebuilt project' "$WATCH_OUT" || true)"
+if [[ "$rebuilt_count" != "1" ]]; then
+  cat "$WATCH_OUT" >&2
+  echo "expected one rebuild for one source save, saw $rebuilt_count" >&2
+  exit 1
+fi
+if grep -q 'ninja: no work to do' "$WATCH_OUT"; then
+  cat "$WATCH_OUT" >&2
+  echo "unexpected no-op Ninja rebuild after source save" >&2
+  exit 1
+fi
 
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || code=$?

@@ -13,18 +13,13 @@
 #ifndef VIX_CLI_TOOLCHAIN_HPP
 #define VIX_CLI_TOOLCHAIN_HPP
 
-#include <string>
-#include <string_view>
-#include <vector>
+#include <vix/engine/Toolchain.hpp>
 
 namespace vix::cli::build
 {
-  std::string infer_processor_from_triple(std::string_view triple);
-  std::string toolchain_contents_for_triple(
-      const std::string &triple,
-      const std::string &sysroot);
-
-  std::vector<std::string> detect_available_targets();
+  using vix::engine::detect_available_targets;
+  using vix::engine::infer_processor_from_triple;
+  using vix::engine::toolchain_contents_for_triple;
 } // namespace vix::cli::build
 
 #endif

@@ -60,6 +60,8 @@
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/sdk/SdkProfiles.hpp>
+#include <vix/engine/BuildTools.hpp>
+#include <vix/engine/CMakeConfiguration.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -995,117 +997,12 @@ namespace vix::commands::BuildCommand
 
     static std::optional<std::string> detect_launcher(const process::Options &opt)
     {
-      switch (opt.launcher)
-      {
-      case process::LauncherMode::None:
-        return std::nullopt;
-      case process::LauncherMode::Sccache:
-        return util::executable_on_path("sccache")
-                   ? std::optional<std::string>("sccache")
-                   : std::nullopt;
-      case process::LauncherMode::Ccache:
-        return util::executable_on_path("ccache")
-                   ? std::optional<std::string>("ccache")
-                   : std::nullopt;
-      case process::LauncherMode::Auto:
-      default:
-        if (util::executable_on_path("sccache"))
-          return std::optional<std::string>("sccache");
-        if (util::executable_on_path("ccache"))
-          return std::optional<std::string>("ccache");
-        return std::nullopt;
-      }
+      return vix::engine::detect_compiler_launcher(opt.launcher);
     }
 
     static std::optional<std::string> detect_fast_linker_flag(const process::Options &opt)
     {
-#ifdef _WIN32
-      (void)opt;
-      return std::nullopt;
-#else
-      const bool has_mold = util::executable_on_path("mold");
-      const bool has_ld_lld = util::executable_on_path("ld.lld");
-
-      if (opt.linker == process::LinkerMode::Default)
-        return std::nullopt;
-
-      if (opt.linker == process::LinkerMode::Mold)
-        return has_mold ? std::optional<std::string>("-fuse-ld=mold")
-                        : std::nullopt;
-
-      if (opt.linker == process::LinkerMode::Lld)
-        return has_ld_lld ? std::optional<std::string>("-fuse-ld=lld")
-                          : std::nullopt;
-
-      if (has_mold)
-        return std::optional<std::string>("-fuse-ld=mold");
-      if (has_ld_lld)
-        return std::optional<std::string>("-fuse-ld=lld");
-
-      return std::nullopt;
-#endif
-    }
-
-    static std::string warning_check_cxx_compiler()
-    {
-      const char *cxx = std::getenv("CXX");
-
-      if (cxx && *cxx)
-        return cxx;
-
-      if (util::executable_on_path("clang++"))
-        return "clang++";
-
-      if (util::executable_on_path("g++"))
-        return "g++";
-
-      return "c++";
-    }
-
-    static std::optional<std::string> warning_check_c_compiler(
-        const std::string &cxxCompiler)
-    {
-      const char *cc = std::getenv("CC");
-
-      if (cc && *cc)
-        return std::string(cc);
-
-      if (cxxCompiler == "clang++" && util::executable_on_path("clang"))
-        return std::string("clang");
-
-      if (cxxCompiler == "g++" && util::executable_on_path("gcc"))
-        return std::string("gcc");
-
-      return std::nullopt;
-    }
-
-    static bool warning_check_uses_clang(const std::string &compiler)
-    {
-      return compiler.find("clang") != std::string::npos;
-    }
-
-    static std::string warning_check_cxx_flags(
-        const std::string &compiler)
-    {
-      std::string flags =
-          "-Wall "
-          "-Wextra "
-          "-Wpedantic "
-          "-Wshadow "
-          "-Wconversion "
-          "-Wsign-conversion "
-          "-Wformat=2 "
-          "-Wold-style-cast "
-          "-Woverloaded-virtual";
-
-      if (warning_check_uses_clang(compiler))
-      {
-        flags +=
-            " -Wlogical-op-parentheses"
-            " -Wunreachable-code";
-      }
-
-      return flags;
+      return vix::engine::detect_fast_linker_flag(opt.linker);
     }
 
     static bool has_cmake_cache(const fs::path &buildDir)
@@ -1160,91 +1057,20 @@ namespace vix::commands::BuildCommand
         const fs::path &globalPackagesFile,
         const fs::path &sdkConfigDir)
     {
-      std::vector<std::pair<std::string, std::string>> vars;
-      vars.reserve(32);
+      vix::engine::CMakeConfigurationOptions engineOptions;
+      engineOptions.buildType = p.buildType;
+      engineOptions.targetTriple = opt.targetTriple;
+      engineOptions.linkStatic = opt.linkStatic;
+      engineOptions.withSqlite = opt.withSqlite;
+      engineOptions.withMySql = opt.withMySql;
+      engineOptions.warningCheck = opt.warningCheck;
+      engineOptions.toolchainFile = toolchainFile;
+      engineOptions.globalPackagesFile = globalPackagesFile;
+      engineOptions.sdkConfigDir = sdkConfigDir;
+      engineOptions.launcher = launcher;
+      engineOptions.fastLinkerFlag = fastLinkerFlag;
 
-      vars.emplace_back("CMAKE_BUILD_TYPE", p.buildType);
-      vars.emplace_back("CMAKE_EXPORT_COMPILE_COMMANDS", "ON");
-
-#ifndef _WIN32
-      if (util::file_exists("/usr/bin/ar"))
-        vars.emplace_back("CMAKE_AR", "/usr/bin/ar");
-
-      if (util::file_exists("/usr/bin/ranlib"))
-        vars.emplace_back("CMAKE_RANLIB", "/usr/bin/ranlib");
-#endif
-
-      if (opt.warningCheck)
-      {
-        const std::string cxxCompiler = warning_check_cxx_compiler();
-        const std::optional<std::string> cCompiler =
-            warning_check_c_compiler(cxxCompiler);
-
-        vars.emplace_back("VIX_ENABLE_WARNINGS", "ON");
-        vars.emplace_back(
-            "CMAKE_CXX_FLAGS",
-            warning_check_cxx_flags(cxxCompiler));
-
-        if (!std::getenv("CXX"))
-          vars.emplace_back("CMAKE_CXX_COMPILER", cxxCompiler);
-
-        if (!std::getenv("CC") && cCompiler)
-          vars.emplace_back("CMAKE_C_COMPILER", *cCompiler);
-      }
-
-      if (!opt.targetTriple.empty())
-        vars.emplace_back("CMAKE_TOOLCHAIN_FILE", toolchainFile.string());
-
-      if (opt.linkStatic)
-        vars.emplace_back("VIX_LINK_STATIC", "ON");
-
-      if (!opt.targetTriple.empty())
-        vars.emplace_back("VIX_TARGET_TRIPLE", opt.targetTriple);
-
-      (void)globalPackagesFile;
-
-      if (!sdkConfigDir.empty())
-      {
-        vars.emplace_back("Vix_DIR", sdkConfigDir.string());
-        vars.emplace_back("vix_DIR", sdkConfigDir.string());
-      }
-
-      if (launcher && !launcher->empty())
-      {
-        vars.emplace_back("CMAKE_C_COMPILER_LAUNCHER", *launcher);
-        vars.emplace_back("CMAKE_CXX_COMPILER_LAUNCHER", *launcher);
-      }
-
-      if (fastLinkerFlag && !fastLinkerFlag->empty())
-      {
-        vars.emplace_back("CMAKE_EXE_LINKER_FLAGS", *fastLinkerFlag);
-        vars.emplace_back("CMAKE_SHARED_LINKER_FLAGS", *fastLinkerFlag);
-        vars.emplace_back("CMAKE_MODULE_LINKER_FLAGS", *fastLinkerFlag);
-      }
-
-      if (opt.withSqlite)
-      {
-        vars.emplace_back("VIX_ENABLE_DB", "ON");
-        vars.emplace_back("VIX_DB_USE_SQLITE", "ON");
-        vars.emplace_back("VIX_DB_REQUIRE_SQLITE", "ON");
-      }
-
-      if (opt.withMySql)
-      {
-        vars.emplace_back("VIX_ENABLE_DB", "ON");
-        vars.emplace_back("VIX_DB_USE_MYSQL", "ON");
-        vars.emplace_back("VIX_DB_REQUIRE_MYSQL", "ON");
-      }
-
-      std::sort(
-          vars.begin(),
-          vars.end(),
-          [](const auto &a, const auto &b)
-          {
-            return a.first < b.first;
-          });
-
-      return vars;
+      return vix::engine::make_cmake_variables(engineOptions);
     }
 
     static std::string make_signature(
@@ -3904,24 +3730,24 @@ namespace vix::commands::BuildCommand
           build::BuildGraphExecutorDependencies executorDependencies;
           executorDependencies.executeCompileTask =
               [](build::BuildTask &task)
-              {
-                return build::execute_build_task_process(task);
-              };
+          {
+            return build::execute_build_task_process(task);
+          };
           executorDependencies.executeNinjaTarget =
               [&](const build::BuildGraphExecutorNinjaRequest &request)
-              {
-                return build::execute_graph_ninja_target(
-                    request,
-                    opt_.quiet);
-              };
+          {
+            return build::execute_graph_ninja_target(
+                request,
+                opt_.quiet);
+          };
           executorDependencies.onEvent =
               [&](const build::BuildGraphExecutorEvent &event)
-              {
-                build::render_graph_debug_event(
-                    event,
-                    opt_.quiet,
-                    verboseMode);
-              };
+          {
+            build::render_graph_debug_event(
+                event,
+                opt_.quiet,
+                verboseMode);
+          };
 
           build::BuildGraphExecutor executor(
               executorOptions,

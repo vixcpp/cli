@@ -1,6 +1,6 @@
 /**
  *
- *  @file BuildStyle.hpp
+ *  @file BuildDependencyFile.hpp
  *  @author Gaspard Kirira
  *
  *  Copyright 2026, Gaspard Kirira.  All rights reserved.

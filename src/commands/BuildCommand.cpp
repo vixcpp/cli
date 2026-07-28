@@ -1509,7 +1509,7 @@ namespace vix::commands::BuildCommand
         const std::string item = part.string();
         if (item == ".git" || item == "build" || item == "build-ninja" ||
             item == "build-release" || item == "CMakeFiles" || item == "_deps" ||
-            item == "node_modules")
+            item == "deps" || item == "node_modules")
           return true;
       }
       return false;
@@ -1559,70 +1559,227 @@ namespace vix::commands::BuildCommand
              text.find("Vix.cpp") != std::string::npos;
     }
 
-    static bool has_nonempty_environment_variable(
-        const char *name)
+    static bool sdk_debug_enabled()
     {
-      const char *value = std::getenv(name);
+      const char *level = std::getenv("VIX_LOG_LEVEL");
+      if (!level)
+        return false;
 
-      return value != nullptr &&
-             *value != '\0';
+      std::string value(level);
+      std::transform(
+          value.begin(),
+          value.end(),
+          value.begin(),
+          [](unsigned char c)
+          {
+            return static_cast<char>(std::tolower(c));
+          });
+
+      return value == "debug" || value == "trace";
     }
 
     static bool cmake_argument_sets_variable(
         const std::string &argument,
         const std::string &name)
     {
-      const std::string prefix =
-          "-D" + name + "=";
+      const std::string prefix = "-D" + name;
 
-      return argument.rfind(prefix, 0) == 0;
+      if (argument.rfind(prefix, 0) != 0)
+        return false;
+
+      if (argument.size() <= prefix.size())
+        return false;
+
+      const char next = argument[prefix.size()];
+      return next == '=' || next == ':';
     }
 
-    static bool has_explicit_vix_discovery_override(
-        const process::Options &opt)
+    static std::optional<std::string> cmake_argument_variable_value(
+        const std::string &argument,
+        const std::string &name)
     {
-      const char *environmentVariables[] = {
-          "Vix_DIR",
-          "vix_DIR",
-          "Vix_ROOT",
-          "vix_ROOT",
-          "CMAKE_FIND_ROOT_PATH",
-          "CMAKE_TOOLCHAIN_FILE"};
+      if (!cmake_argument_sets_variable(argument, name))
+        return std::nullopt;
 
-      for (const char *name :
-           environmentVariables)
+      const std::size_t eq = argument.find('=');
+      if (eq == std::string::npos)
+        return std::nullopt;
+
+      return argument.substr(eq + 1);
+    }
+
+    static bool vix_config_file_exists(const fs::path &dir)
+    {
+      return util::file_exists(dir / "VixConfig.cmake") ||
+             util::file_exists(dir / "vixConfig.cmake");
+    }
+
+    static bool valid_vix_config_dir_hint(const std::string &raw)
+    {
+      if (raw.empty())
+        return false;
+
+      const fs::path path(raw);
+
+      if (util::file_exists(path))
       {
-        if (has_nonempty_environment_variable(
-                name))
+        const std::string name = path.filename().string();
+        return name == "VixConfig.cmake" ||
+               name == "vixConfig.cmake";
+      }
+
+      return vix_config_file_exists(path);
+    }
+
+    static std::vector<std::string> split_cmake_path_list(
+        const std::string &value)
+    {
+      std::vector<std::string> out;
+      std::string current;
+
+      auto flush =
+          [&]()
+      {
+        if (!current.empty())
+          out.push_back(current);
+        current.clear();
+      };
+
+      for (char c : value)
+      {
+#ifdef _WIN32
+        const bool sep = c == ';';
+#else
+        const bool sep = c == ';' || c == ':';
+#endif
+        if (sep)
+          flush();
+        else
+          current.push_back(c);
+      }
+
+      flush();
+      return out;
+    }
+
+    static bool valid_vix_prefix_hint(const std::string &raw)
+    {
+      for (const std::string &entry : split_cmake_path_list(raw))
+      {
+        if (entry.empty())
+          continue;
+
+        const fs::path prefix(entry);
+
+        if (vix_config_file_exists(prefix / "lib" / "cmake" / "Vix") ||
+            vix_config_file_exists(prefix / "share" / "cmake" / "Vix") ||
+            vix_config_file_exists(prefix / "share" / "Vix" / "cmake") ||
+            vix_config_file_exists(prefix))
         {
           return true;
         }
       }
 
-      const char *cmakeVariables[] = {
+      return false;
+    }
+
+    static bool valid_existing_file_hint(const std::string &raw)
+    {
+      return !raw.empty() && util::file_exists(fs::path(raw));
+    }
+
+    static bool has_explicit_vix_discovery_override(
+        const process::Options &opt)
+    {
+      const char *configDirEnvironmentVariables[] = {
           "Vix_DIR",
-          "vix_DIR",
+          "vix_DIR"};
+
+      for (const char *name : configDirEnvironmentVariables)
+      {
+        const char *value = std::getenv(name);
+        if (value && valid_vix_config_dir_hint(value))
+          return true;
+      }
+
+      const char *prefixEnvironmentVariables[] = {
           "Vix_ROOT",
           "vix_ROOT",
-          "CMAKE_FIND_ROOT_PATH",
-          "CMAKE_TOOLCHAIN_FILE"};
+          "CMAKE_PREFIX_PATH",
+          "CMAKE_FIND_ROOT_PATH"};
+
+      for (const char *name : prefixEnvironmentVariables)
+      {
+        const char *value = std::getenv(name);
+        if (value && valid_vix_prefix_hint(value))
+          return true;
+      }
+
+      if (const char *value = std::getenv("CMAKE_TOOLCHAIN_FILE"))
+      {
+        if (valid_existing_file_hint(value))
+          return true;
+      }
+
+      const char *configDirCmakeVariables[] = {
+          "Vix_DIR",
+          "vix_DIR"};
+
+      const char *prefixCmakeVariables[] = {
+          "Vix_ROOT",
+          "vix_ROOT",
+          "CMAKE_PREFIX_PATH",
+          "CMAKE_FIND_ROOT_PATH"};
 
       for (const std::string &argument :
            opt.cmakeArgs)
       {
-        for (const char *name :
-             cmakeVariables)
+        for (const char *name : configDirCmakeVariables)
         {
-          if (cmake_argument_sets_variable(
-                  argument,
-                  name))
-          {
+          const auto value =
+              cmake_argument_variable_value(argument, name);
+          if (value && valid_vix_config_dir_hint(*value))
             return true;
-          }
+        }
+
+        for (const char *name : prefixCmakeVariables)
+        {
+          const auto value =
+              cmake_argument_variable_value(argument, name);
+          if (value && valid_vix_prefix_hint(*value))
+            return true;
+        }
+
+        if (const auto value =
+                cmake_argument_variable_value(
+                    argument,
+                    "CMAKE_TOOLCHAIN_FILE"))
+        {
+          if (valid_existing_file_hint(*value))
+            return true;
         }
       }
 
       return false;
+    }
+
+    static bool has_local_vix_dependency_modules(
+        const fs::path &projectDir,
+        const std::set<std::string> &modules)
+    {
+      if (modules.empty())
+        return false;
+
+      const fs::path root =
+          projectDir / "deps" / "vix";
+
+      for (const std::string &module : modules)
+      {
+        if (!util::file_exists(root / module / "CMakeLists.txt"))
+          return false;
+      }
+
+      return true;
     }
 
     static std::set<std::string> collect_project_vix_targets(const fs::path &projectDir, const fs::path &cmakeSourceDir)
@@ -1731,7 +1888,14 @@ namespace vix::commands::BuildCommand
       plan.sdkResolutionError.clear();
 
       if (is_vix_source_tree(plan.userProjectDir))
+      {
+        if (sdk_debug_enabled() && !opt.quiet)
+        {
+          hint("SDK resolution:");
+          hint("  route: Vix source tree");
+        }
         return;
+      }
 
       /*
        * Explicit CMake discovery always has priority.
@@ -1740,7 +1904,14 @@ namespace vix::commands::BuildCommand
        * custom package roots or package-manager toolchains.
        */
       if (has_explicit_vix_discovery_override(opt))
+      {
+        if (sdk_debug_enabled() && !opt.quiet)
+        {
+          hint("SDK resolution:");
+          hint("  route: explicit CMake discovery override");
+        }
         return;
+      }
 
       const std::set<std::string> targets =
           collect_project_vix_targets(
@@ -1754,6 +1925,24 @@ namespace vix::commands::BuildCommand
       if (modules.empty())
         return;
 
+      if (has_local_vix_dependency_modules(
+              plan.userProjectDir,
+              modules))
+      {
+        if (sdk_debug_enabled() && !opt.quiet)
+        {
+          hint("SDK resolution:");
+          hint("  route: local deps/vix source modules");
+          hint("  required modules: " +
+               join_words(
+                   std::vector<std::string>(
+                       modules.begin(),
+                       modules.end())));
+        }
+
+        return;
+      }
+
       /*
        * Managed SDK profiles are optional.
        *
@@ -1765,6 +1954,26 @@ namespace vix::commands::BuildCommand
       const vix::cli::sdk::SdkResolution resolution =
           vix::cli::sdk::resolve_profiles_for_modules(
               modules);
+
+      if (sdk_debug_enabled() && !opt.quiet)
+      {
+        hint("SDK resolution:");
+        hint("  route: managed profile candidate");
+        hint("  required modules: " +
+             join_words(
+                 std::vector<std::string>(
+                     modules.begin(),
+                     modules.end())));
+        hint("  selected profiles: " +
+             (resolution.selectedProfiles.empty()
+                  ? std::string("none")
+                  : join_words(resolution.selectedProfiles)));
+        if (!resolution.missingModules.empty())
+        {
+          hint("  missing modules: " +
+               join_words(resolution.missingModules));
+        }
+      }
 
       if (!resolution.ok ||
           resolution.selectedProfiles.empty())
@@ -4519,6 +4728,31 @@ namespace vix::commands::BuildCommand
       std::cout << "\n";
     };
 
+    auto drain_pending_events =
+        [&]() -> std::optional<vix::engine::watch::Batch>
+    {
+      vix::engine::watch::Batch drained;
+
+      while (!g_watch_stop_requested)
+      {
+        auto next =
+            watcher.wait_for_batch(std::chrono::milliseconds(0));
+        if (!next || next->empty())
+          break;
+
+        drained.overflowed = drained.overflowed || next->overflowed;
+        drained.events.insert(
+            drained.events.end(),
+            next->events.begin(),
+            next->events.end());
+      }
+
+      if (drained.empty())
+        return std::nullopt;
+
+      return drained;
+    };
+
     auto run_full_refresh =
         [&]() -> int
     {
@@ -4634,18 +4868,33 @@ namespace vix::commands::BuildCommand
       return 0;
     };
 
+    std::optional<vix::engine::watch::Batch> pendingBatch;
+
     while (!g_watch_stop_requested)
     {
-      auto batchOpt = watcher.wait_for_batch(std::chrono::milliseconds(100));
+      std::optional<vix::engine::watch::Batch> batchOpt;
+
+      if (pendingBatch)
+      {
+        batchOpt = std::move(pendingBatch);
+        pendingBatch.reset();
+      }
+      else
+      {
+        batchOpt =
+            watcher.wait_for_batch(std::chrono::milliseconds(100));
+      }
+
       if (!batchOpt || batchOpt->empty())
         continue;
 
       const auto &batch = *batchOpt;
-      print_change_summary(batch);
 
       if (!graph)
       {
+        print_change_summary(batch);
         lastCode = run_full_refresh();
+        pendingBatch = drain_pending_events();
         continue;
       }
 
@@ -4654,6 +4903,16 @@ namespace vix::commands::BuildCommand
 
       if (!invalidation.relevant)
         continue;
+
+      if (!batch.overflowed &&
+          !invalidation.structuralChange &&
+          invalidation.changedNodes == 0 &&
+          invalidation.affectedTasks == 0)
+      {
+        continue;
+      }
+
+      print_change_summary(batch);
 
       if (sessionOpt.verbose && !sessionOpt.quiet)
       {
@@ -4664,10 +4923,12 @@ namespace vix::commands::BuildCommand
       if (batch.overflowed || invalidation.structuralChange)
       {
         lastCode = run_full_refresh();
+        pendingBatch = drain_pending_events();
         continue;
       }
 
       lastCode = run_incremental(*graph, invalidation);
+      pendingBatch = drain_pending_events();
     }
 
     watcher.stop();

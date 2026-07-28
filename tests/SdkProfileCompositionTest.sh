@@ -133,6 +133,50 @@ run_build "$HOME_A" "$ROOT/project-web"
 make_project "$ROOT/project-data" vix::db vix::orm vix::cache vix::kv
 run_build "$HOME_A" "$ROOT/project-data"
 
+HOME_LOCAL="$ROOT/home-local"
+mkdir -p "$HOME_LOCAL"
+PROJECT_LOCAL="$ROOT/project-local-vix-deps"
+mkdir -p "$PROJECT_LOCAL/deps/vix/core" "$PROJECT_LOCAL"
+cat > "$PROJECT_LOCAL/deps/vix/core/CMakeLists.txt" <<'CMAKE'
+add_library(vix_core INTERFACE)
+add_library(vix::core ALIAS vix_core)
+CMAKE
+cat > "$PROJECT_LOCAL/CMakeLists.txt" <<'CMAKE'
+cmake_minimum_required(VERSION 3.20)
+project(vix_local_deps_fixture LANGUAGES CXX)
+add_subdirectory(deps/vix/core)
+add_executable(app main.cpp)
+target_link_libraries(app PRIVATE vix::core)
+CMAKE
+cat > "$PROJECT_LOCAL/main.cpp" <<'CPP'
+int main() { return 0; }
+CPP
+HOME="$HOME_LOCAL" "$VIX_BIN" build --preset release --dir "$PROJECT_LOCAL" >"$ROOT/local-deps.log" 2>&1
+if grep -q "Missing SDK modules" "$ROOT/local-deps.log"; then
+  cat "$ROOT/local-deps.log" >&2
+  exit 1
+fi
+
+HOME_PREFIX="$ROOT/home-prefix"
+PREFIX="$ROOT/explicit-prefix"
+PROJECT_PREFIX="$ROOT/project-explicit-prefix"
+mkdir -p "$HOME_PREFIX" "$PREFIX/lib/cmake/Vix" "$PROJECT_PREFIX"
+cat > "$PREFIX/lib/cmake/Vix/VixConfig.cmake" <<'CMAKE'
+if(NOT TARGET vix::core)
+  add_library(vix::core INTERFACE IMPORTED)
+endif()
+CMAKE
+make_project "$PROJECT_PREFIX" vix::core
+HOME="$HOME_PREFIX" "$VIX_BIN" build --preset release --dir "$PROJECT_PREFIX" -- -DCMAKE_PREFIX_PATH="$PREFIX" >"$ROOT/explicit-prefix.log" 2>&1
+if grep -q "Missing SDK modules" "$ROOT/explicit-prefix.log"; then
+  cat "$ROOT/explicit-prefix.log" >&2
+  exit 1
+fi
+if [[ -n "$(composed_config "$PROJECT_PREFIX")" ]]; then
+  echo "explicit CMAKE_PREFIX_PATH should not compose managed SDK config" >&2
+  exit 1
+fi
+
 HOME_B="$ROOT/home-b"
 mkdir -p "$HOME_B"
 make_profile "$HOME_B" web v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json vix::requests vix::vix_webrpc vix::middleware 'vix::websocket|vix::core;vix::utils;vix::json' vix::vix_validation

@@ -27,6 +27,7 @@ namespace vix::cli::build
   using vix::engine::build_task_state_from_string;
   using vix::engine::BuildGraph;
   using vix::engine::BuildGraphConfig;
+  using vix::engine::BuildGraphInvalidationResult;
   using vix::engine::BuildGraphScanResult;
   using vix::engine::BuildNode;
   using vix::engine::BuildNodeKind;

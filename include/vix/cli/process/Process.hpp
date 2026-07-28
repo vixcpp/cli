@@ -93,6 +93,11 @@ namespace vix::cli::process
     bool explain = false;
 
     /**
+     * @brief Keep the build process alive and rebuild after project changes.
+     */
+    bool watch = false;
+
+    /**
      * @brief Optional project directory passed with `--dir`.
      */
     std::string dir;

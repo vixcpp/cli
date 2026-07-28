@@ -29,8 +29,10 @@
 #include <vix/cli/app/AppProjectResolver.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -65,6 +67,7 @@
 #include <vix/engine/ConfigurationSignature.hpp>
 #include <vix/engine/ConfigureDecision.hpp>
 #include <vix/engine/ExecutionPlanning.hpp>
+#include <vix/engine/Watch.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -80,6 +83,12 @@ namespace vix::commands::BuildCommand
   namespace
   {
     static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
+    static volatile std::sig_atomic_t g_watch_stop_requested = 0;
+
+    static void on_watch_signal(int)
+    {
+      g_watch_stop_requested = 1;
+    }
 
     static std::string platform_executable_name(const std::string &name);
 
@@ -567,6 +576,10 @@ namespace vix::commands::BuildCommand
         else if (a == "--explain")
         {
           o.explain = true;
+        }
+        else if (a == "--watch")
+        {
+          o.watch = true;
         }
         else if (a == "--warnings")
         {
@@ -3212,6 +3225,9 @@ namespace vix::commands::BuildCommand
 
       int run()
       {
+        if (opt_.watch)
+          return run_watch();
+
         const fs::path cwd = fs::current_path();
         const auto commandStart = std::chrono::steady_clock::now();
 
@@ -4024,6 +4040,7 @@ namespace vix::commands::BuildCommand
 
     private:
       int run_single_cpp_build();
+      int run_watch();
 
     private:
       process::Options opt_;
@@ -4041,6 +4058,20 @@ namespace vix::commands::BuildCommand
     {
       error("Options --bin and --out cannot be used together.");
       hint("Use either --bin or --out <path>.");
+      return 2;
+    }
+
+    if (opt.watch && opt.warnings)
+    {
+      error("Options --watch and --warnings cannot be used together.");
+      hint("--watch rebuilds continuously; --warnings reads the last completed build log.");
+      return 2;
+    }
+
+    if (opt.watch && opt.report)
+    {
+      error("Options --watch and --report cannot be used together.");
+      hint("Cloud build reports are only submitted for one-shot builds.");
       return 2;
     }
 
@@ -4165,6 +4196,490 @@ namespace vix::commands::BuildCommand
     return export_built_binary(exePath, dest, opt_.quiet) ? 0 : 1;
   }
 
+  int BuildCommand::run_watch()
+  {
+    if (opt_.singleCpp)
+    {
+      process::Options buildOpt = opt_;
+      buildOpt.watch = false;
+
+      BuildCommand initial(buildOpt);
+      int lastCode = initial.run_single_cpp_build();
+
+      const fs::path source = fs::absolute(opt_.cppFile).lexically_normal();
+      const fs::path root = source.parent_path();
+
+      vix::engine::watch::Options watchOptions;
+      watchOptions.root = root;
+      watchOptions.debounce = std::chrono::milliseconds(25);
+      watchOptions.maxBatchWindow = std::chrono::milliseconds(100);
+
+      vix::engine::watch::FileWatcher watcher(watchOptions);
+      const auto started = watcher.start();
+      if (!started.ok)
+      {
+        error("Unable to start build watcher.");
+        hint(started.error);
+        return 1;
+      }
+
+      g_watch_stop_requested = 0;
+      using SignalHandler = void (*)(int);
+      SignalHandler oldInt = std::signal(SIGINT, on_watch_signal);
+      SignalHandler oldTerm = std::signal(SIGTERM, on_watch_signal);
+
+      if (!buildOpt.quiet)
+      {
+        if (lastCode == 0)
+          hint("Watching project files. Press Ctrl+C to stop.");
+        else
+          hint("Initial build failed. Watching for changes...");
+      }
+
+      while (!g_watch_stop_requested)
+      {
+        auto batchOpt = watcher.wait_for_batch(std::chrono::milliseconds(100));
+        if (!batchOpt || batchOpt->empty())
+          continue;
+
+        bool relevant = batchOpt->overflowed;
+        for (const auto &event : batchOpt->events)
+        {
+          if (event.path.lexically_normal() == source)
+            relevant = true;
+        }
+
+        if (!relevant)
+          continue;
+
+        if (!buildOpt.quiet)
+          std::cout << "\nchange  " << source.filename().string() << "\n";
+
+        const auto t0 = std::chrono::steady_clock::now();
+        BuildCommand rebuild(buildOpt);
+        lastCode = rebuild.run_single_cpp_build();
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+
+        if (!buildOpt.quiet)
+        {
+          if (lastCode == 0)
+            success("Rebuilt " + source.filename().string() +
+                    " in " + util::format_seconds(ms));
+          else
+            hint("Waiting for changes...");
+        }
+      }
+
+      watcher.stop();
+      std::signal(SIGINT, oldInt);
+      std::signal(SIGTERM, oldTerm);
+
+      if (!buildOpt.quiet)
+        hint("Stopped build watcher.");
+
+      return 130;
+    }
+
+    {
+      fs::path base = fs::current_path();
+      if (!opt_.dir.empty())
+        base = fs::absolute(fs::path(opt_.dir));
+
+      const app::AppProjectResolveResult project =
+          app::resolve_app_project(base);
+
+      if (project.success() &&
+          project.kind == app::AppProjectKind::VixApp)
+      {
+        const app::AppManifestLoadResult loadResult =
+            app::load_app_manifest(project.appManifestPath);
+
+        if (!loadResult.success())
+        {
+          error("Failed to load vix.app.");
+          hint(loadResult.error);
+          return 1;
+        }
+
+        if (!opt_.warnings &&
+            can_use_native_vix_app_build(opt_, loadResult.manifest))
+        {
+          process::Options buildOpt = opt_;
+          buildOpt.watch = false;
+
+          int lastCode =
+              run_native_vix_app_build(
+                  buildOpt,
+                  project.userProjectDir,
+                  loadResult.manifest,
+                  std::chrono::steady_clock::now());
+
+          vix::engine::watch::Options watchOptions;
+          watchOptions.root = project.userProjectDir;
+          watchOptions.debounce = std::chrono::milliseconds(25);
+          watchOptions.maxBatchWindow = std::chrono::milliseconds(100);
+          watchOptions.ignoredRoots.push_back(
+              native_vix_app_build_dir(project.userProjectDir, buildOpt));
+          watchOptions.ignoredRoots.push_back(project.userProjectDir / ".git");
+          watchOptions.ignoredRoots.push_back(project.userProjectDir / ".vix");
+
+          vix::engine::watch::FileWatcher watcher(watchOptions);
+          const auto started = watcher.start();
+          if (!started.ok)
+          {
+            error("Unable to start build watcher.");
+            hint(started.error);
+            return 1;
+          }
+
+          g_watch_stop_requested = 0;
+          using SignalHandler = void (*)(int);
+          SignalHandler oldInt = std::signal(SIGINT, on_watch_signal);
+          SignalHandler oldTerm = std::signal(SIGTERM, on_watch_signal);
+
+          if (!buildOpt.quiet)
+          {
+            if (lastCode == 0)
+              hint("Watching project files. Press Ctrl+C to stop.");
+            else
+              hint("Initial build failed. Watching for changes...");
+          }
+
+          while (!g_watch_stop_requested)
+          {
+            auto batchOpt = watcher.wait_for_batch(std::chrono::milliseconds(100));
+            if (!batchOpt || batchOpt->empty())
+              continue;
+
+            bool relevant = batchOpt->overflowed;
+            for (const auto &event : batchOpt->events)
+            {
+              const std::string ext = event.path.extension().string();
+              const std::string name = event.path.filename().string();
+              if (ext == ".cpp" || ext == ".cc" || ext == ".cxx" ||
+                  ext == ".c" || ext == ".hpp" || ext == ".hh" ||
+                  ext == ".hxx" || ext == ".h" || name == "vix.app")
+              {
+                relevant = true;
+              }
+            }
+
+            if (!relevant)
+              continue;
+
+            if (!buildOpt.quiet)
+            {
+              if (batchOpt->events.size() == 1)
+                std::cout << "\nchange  "
+                          << fs::relative(batchOpt->events.front().path, project.userProjectDir).string()
+                          << "\n";
+              else
+                std::cout << "\nchange  " << batchOpt->events.size() << " files\n";
+            }
+
+            const auto t0 = std::chrono::steady_clock::now();
+            lastCode =
+                run_native_vix_app_build(
+                    buildOpt,
+                    project.userProjectDir,
+                    loadResult.manifest,
+                    t0);
+            const auto ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0)
+                    .count();
+
+            if (!buildOpt.quiet)
+            {
+              if (lastCode == 0)
+                success("Rebuilt Native vix.app in " + util::format_seconds(ms));
+              else
+                hint("Waiting for changes...");
+            }
+          }
+
+          watcher.stop();
+          std::signal(SIGINT, oldInt);
+          std::signal(SIGTERM, oldTerm);
+
+          if (!buildOpt.quiet)
+            hint("Stopped build watcher.");
+
+          return 130;
+        }
+      }
+    }
+
+    process::Options initialOpt = opt_;
+    initialOpt.watch = false;
+
+    BuildCommand initial(std::move(initialOpt));
+    int lastCode = initial.run();
+    plan_ = initial.plan_;
+
+    if (plan_.userProjectDir.empty())
+    {
+      if (lastCode != 0)
+        return lastCode;
+
+      error("Unable to start watch mode: project plan was not available.");
+      return 1;
+    }
+
+    process::Options sessionOpt = opt_;
+    sessionOpt.watch = false;
+    sessionOpt.clean = false;
+
+    const fs::path graphPath =
+        build::BuildGraph::default_graph_path(plan_.buildDir);
+    std::optional<build::BuildGraph> graph =
+        build::BuildGraph::load(graphPath);
+
+    vix::engine::watch::Options watchOptions;
+    watchOptions.root = plan_.userProjectDir;
+    watchOptions.debounce = std::chrono::milliseconds(25);
+    watchOptions.maxBatchWindow = std::chrono::milliseconds(100);
+    watchOptions.ignoredRoots.push_back(plan_.buildDir);
+    watchOptions.ignoredRoots.push_back(plan_.userProjectDir / ".git");
+    watchOptions.ignoredRoots.push_back(plan_.userProjectDir / ".hg");
+    watchOptions.ignoredRoots.push_back(plan_.userProjectDir / ".svn");
+    watchOptions.ignoredRoots.push_back(plan_.userProjectDir / ".vix");
+    watchOptions.ignoredRoots.push_back(plan_.userProjectDir / "node_modules");
+    watchOptions.ignoredRoots.push_back(plan_.userProjectDir / ".cache");
+
+    if (!sessionOpt.outPath.empty())
+    {
+      const fs::path outPath = fs::absolute(fs::path(sessionOpt.outPath));
+      if (outPath.has_parent_path())
+        watchOptions.ignoredRoots.push_back(outPath);
+    }
+
+    vix::engine::watch::FileWatcher watcher(watchOptions);
+    const auto watchStart = watcher.start();
+    if (!watchStart.ok)
+    {
+      error("Unable to start build watcher.");
+      hint(watchStart.error);
+      return 1;
+    }
+
+    g_watch_stop_requested = 0;
+    using SignalHandler = void (*)(int);
+    SignalHandler oldInt = std::signal(SIGINT, on_watch_signal);
+    SignalHandler oldTerm = std::signal(SIGTERM, on_watch_signal);
+
+    if (!sessionOpt.quiet)
+    {
+      if (lastCode == 0)
+        hint("Watching project files. Press Ctrl+C to stop.");
+      else
+        hint("Initial build failed. Watching for changes...");
+
+      if (sessionOpt.verbose)
+        hint("watch backend: " + watcher.backend());
+    }
+
+    auto restore_signals =
+        [&]()
+    {
+      std::signal(SIGINT, oldInt);
+      std::signal(SIGTERM, oldTerm);
+    };
+
+    auto print_change_summary =
+        [&](const vix::engine::watch::Batch &batch)
+    {
+      if (sessionOpt.quiet || batch.empty())
+        return;
+
+      if (batch.overflowed)
+      {
+        std::cout << "\nchange  filesystem event overflow\n";
+        return;
+      }
+
+      if (batch.events.size() == 1)
+      {
+        std::cout << "\nchange  "
+                  << fs::relative(batch.events.front().path, plan_.userProjectDir).string()
+                  << "\n";
+        return;
+      }
+
+      std::cout << "\nchange  " << batch.events.size() << " files";
+      const std::size_t sample = std::min<std::size_t>(batch.events.size(), 3);
+      for (std::size_t i = 0; i < sample; ++i)
+      {
+        std::cout << (i == 0 ? ": " : ", ")
+                  << fs::relative(batch.events[i].path, plan_.userProjectDir).string();
+      }
+      std::cout << "\n";
+    };
+
+    auto run_full_refresh =
+        [&]() -> int
+    {
+      BuildCommand cmd(sessionOpt);
+      const int code = cmd.run();
+      if (!cmd.plan_.userProjectDir.empty())
+        plan_ = cmd.plan_;
+      graph = build::BuildGraph::load(
+          build::BuildGraph::default_graph_path(plan_.buildDir));
+      return code;
+    };
+
+    auto run_incremental =
+        [&](build::BuildGraph &currentGraph,
+            const build::BuildGraphInvalidationResult &invalidation) -> int
+    {
+      const auto t0 = std::chrono::steady_clock::now();
+
+      if (sessionOpt.explain && !sessionOpt.quiet)
+      {
+        hint("affected tasks: " + std::to_string(invalidation.affectedTasks));
+        for (const std::string &taskId : invalidation.dirtyTaskIds)
+          step(taskId);
+      }
+
+      build::BuildGraphExecutorOptions executorOptions;
+      executorOptions.buildDir = plan_.buildDir;
+      executorOptions.target =
+          sessionOpt.buildTarget.empty()
+              ? std::string("all")
+              : build::default_graph_target_name(sessionOpt, plan_);
+      executorOptions.jobs = sessionOpt.jobs;
+      executorOptions.allowNinjaFallback = true;
+
+      build::BuildGraphExecutorDependencies executorDependencies;
+      executorDependencies.executeCompileTask =
+          [](build::BuildTask &task)
+      {
+        return build::execute_build_task_process(task);
+      };
+      executorDependencies.executeNinjaTarget =
+          [&](const build::BuildGraphExecutorNinjaRequest &request)
+      {
+        return build::execute_graph_ninja_target(
+            request,
+            sessionOpt.quiet);
+      };
+      executorDependencies.onEvent =
+          [&](const build::BuildGraphExecutorEvent &event)
+      {
+        build::render_graph_debug_event(
+            event,
+            sessionOpt.quiet,
+            sessionOpt.verbose);
+      };
+
+      build::BuildGraphExecutor executor(
+          executorOptions,
+          std::move(executorDependencies));
+
+      const build::BuildGraphExecutorResult result =
+          executor.run_target(currentGraph);
+
+      const auto ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - t0)
+              .count();
+
+      if (!result.ok)
+      {
+        if (!sessionOpt.quiet)
+        {
+          error("Rebuild failed in " + util::format_seconds(ms));
+          if (!result.output.empty())
+            std::cerr << result.output;
+          hint("Waiting for changes...");
+        }
+        return result.exitCode == 0 ? 1 : result.exitCode;
+      }
+
+      if (!currentGraph.save(
+              build::BuildGraph::default_graph_path(plan_.buildDir)) &&
+          !sessionOpt.quiet)
+      {
+        hint("Warning: unable to write Vix build graph");
+      }
+
+      if (sessionOpt.exportBin || !sessionOpt.outPath.empty())
+      {
+        const auto exeOpt = resolve_main_executable(
+            plan_.buildDir,
+            plan_.userProjectDir,
+            sessionOpt.buildTarget,
+            plan_.defaultTargetName);
+
+        if (exeOpt)
+        {
+          fs::path dest;
+          if (sessionOpt.exportBin)
+            dest = plan_.userProjectDir / exeOpt->filename();
+          else
+            dest = fs::absolute(fs::path(sessionOpt.outPath));
+
+          if (!export_built_binary(*exeOpt, dest, sessionOpt.quiet))
+            return 1;
+        }
+      }
+
+      if (!sessionOpt.quiet)
+        success("Rebuilt " + build::default_build_target_name(sessionOpt, plan_) +
+                " in " + util::format_seconds(ms));
+
+      return 0;
+    };
+
+    while (!g_watch_stop_requested)
+    {
+      auto batchOpt = watcher.wait_for_batch(std::chrono::milliseconds(100));
+      if (!batchOpt || batchOpt->empty())
+        continue;
+
+      const auto &batch = *batchOpt;
+      print_change_summary(batch);
+
+      if (!graph)
+      {
+        lastCode = run_full_refresh();
+        continue;
+      }
+
+      build::BuildGraphInvalidationResult invalidation =
+          graph->invalidate_paths(batch.events);
+
+      if (!invalidation.relevant)
+        continue;
+
+      if (sessionOpt.verbose && !sessionOpt.quiet)
+      {
+        hint(std::string("watch classification: ") +
+             (invalidation.structuralChange ? "structural" : "incremental"));
+      }
+
+      if (batch.overflowed || invalidation.structuralChange)
+      {
+        lastCode = run_full_refresh();
+        continue;
+      }
+
+      lastCode = run_incremental(*graph, invalidation);
+    }
+
+    watcher.stop();
+    restore_signals();
+
+    if (!sessionOpt.quiet)
+      hint("Stopped build watcher.");
+
+    (void)lastCode;
+    return 130;
+  }
+
   int help()
   {
     std::ostream &out = std::cout;
@@ -4205,6 +4720,7 @@ namespace vix::commands::BuildCommand
     out << "  -j, --jobs <n>            Number of parallel build jobs\n";
     out << "  --jobs=<n>                Same as --jobs <n>\n";
     out << "  --clean                   Remove local build directories and configure again\n";
+    out << "  --watch                   Watch project files and rebuild incrementally\n";
     out << "  --fast                    Use fast no-op detection when possible\n";
     out << "  --explain                 Explain why files or targets rebuild\n";
     out << "  --warnings                Show warnings from the last build log\n";
@@ -4261,6 +4777,7 @@ namespace vix::commands::BuildCommand
     out << "  vix build --fast\n";
     out << "  vix build --report\n";
     out << "  vix build --clean\n";
+    out << "  vix build --watch\n";
     out << "  vix build --explain\n";
     out << "  vix build --warnings\n";
     out << "  vix build --warning-check --build-target all -v --clean\n";

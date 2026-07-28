@@ -108,6 +108,33 @@ add_test(
   COMMAND vix_cli_build_task_process_executor_tests
 )
 
+add_executable(vix_cli_build_context_compat_tests
+  BuildContextCompatTests.cpp
+)
+
+target_include_directories(vix_cli_build_context_compat_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_build_context_compat_tests PRIVATE vix::engine)
+endif()
+
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_build_context_compat_tests PRIVATE vix_warnings)
+endif()
+
+if (COMMAND vix_enable_sanitizers)
+  vix_enable_sanitizers(vix_cli_build_context_compat_tests)
+elseif (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
+  target_link_libraries(vix_cli_build_context_compat_tests PRIVATE vix_sanitizers)
+endif()
+
+add_test(
+  NAME vix_cli_build_context_compat_tests
+  COMMAND vix_cli_build_context_compat_tests
+)
+
 add_test(
   NAME vix_cli_global_install_ovi
   COMMAND

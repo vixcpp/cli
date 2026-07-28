@@ -21,6 +21,8 @@
 #include <optional>
 #include <string>
 
+#include <vix/engine/BuildContext.hpp>
+
 #include <vix/cli/process/Process.hpp>
 
 namespace vix::cli::build
@@ -28,20 +30,29 @@ namespace vix::cli::build
   namespace fs = std::filesystem;
   namespace process = vix::cli::process;
 
-  std::optional<process::Preset> resolve_builtin_preset(
-      const std::string &name);
+  using vix::engine::BuildTargetOptions;
+  using vix::engine::resolve_builtin_preset;
 
-  std::string default_build_target_name(
+  inline std::string default_build_target_name(
       const process::Options &opt,
-      const process::Plan &plan);
+      const process::Plan &plan)
+  {
+    return vix::engine::default_build_target_name(opt.buildTarget, plan);
+  }
 
-  std::string default_graph_target_name(
+  inline std::string default_graph_target_name(
       const process::Options &opt,
-      const process::Plan &plan);
+      const process::Plan &plan)
+  {
+    return vix::engine::default_graph_target_name(opt.buildTarget, plan);
+  }
 
-  fs::path default_project_executable_path(
+  inline fs::path default_project_executable_path(
       const process::Options &opt,
-      const process::Plan &plan);
+      const process::Plan &plan)
+  {
+    return vix::engine::default_project_executable_path(opt.buildTarget, plan);
+  }
 
 } // namespace vix::cli::build
 

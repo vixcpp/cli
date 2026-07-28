@@ -20,6 +20,7 @@
 #include <vix/cli/build/BuildScheduler.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
 #include <vix/cli/build/BuildGraphExecutor.hpp>
+#include <vix/cli/build/BuildTaskProcessExecutor.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/build/BuildContext.hpp>
 #include <vix/cli/app/AppManifest.hpp>
@@ -2178,7 +2179,7 @@ namespace vix::commands::BuildCommand
         return result;
       }
 
-      result = build::BuildScheduler::execute_command_task(task);
+      result = build::execute_build_task_process(task);
 
       if (result.exitCode != 0)
         return result;
@@ -2854,10 +2855,16 @@ namespace vix::commands::BuildCommand
             scheduler.run(
                 [&](build::BuildTask &task)
                 {
-                  return run_cached_graph_compile_task(
-                      graph,
-                      objectCache,
-                      task);
+                  build::BuildTaskResult taskResult =
+                      run_cached_graph_compile_task(
+                          graph,
+                          objectCache,
+                          task);
+
+                  if (!opt.quiet && !taskResult.output.empty())
+                    std::cout << taskResult.output;
+
+                  return taskResult;
                 });
 
         if (!result.success())
@@ -3301,10 +3308,16 @@ namespace vix::commands::BuildCommand
           scheduler.run(
               [&](build::BuildTask &task)
               {
-                return run_cached_graph_compile_task(
-                    graph,
-                    objectCache,
-                    task);
+                build::BuildTaskResult taskResult =
+                    run_cached_graph_compile_task(
+                        graph,
+                        objectCache,
+                        task);
+
+                if (!opt.quiet && !taskResult.output.empty())
+                  std::cout << taskResult.output;
+
+                return taskResult;
               });
 
       if (!result.success())

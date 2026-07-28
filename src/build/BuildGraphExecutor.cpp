@@ -30,6 +30,7 @@
 
 #include <vix/cli/build/DependencyFile.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
+#include <vix/cli/build/BuildTaskProcessExecutor.hpp>
 #include <vix/cli/cmake/CMakeBuild.hpp>
 
 namespace vix::cli::build
@@ -349,7 +350,7 @@ namespace vix::cli::build
         return result;
       }
 
-      result = BuildScheduler::execute_command_task(task);
+      result = execute_build_task_process(task);
 
       if (result.exitCode != 0)
         return result;

@@ -22,6 +22,7 @@
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Strings.hpp>
 
+#include <vix/engine/Process.hpp>
 #include <vix/utils/Env.hpp>
 
 #ifndef _WIN32
@@ -219,59 +220,27 @@ namespace vix::cli::build
       const std::vector<std::pair<std::string, std::string>> &extraEnv,
       std::string &outText)
   {
+    vix::engine::process::Command command;
+    command.argv = argv;
+    command.environment = extraEnv;
+    command.mergeStdErr = true;
+
+    const vix::engine::process::Result processResult =
+        vix::engine::process::execute(command);
+
+    outText = processResult.output;
+    if (!processResult.errorMessage.empty())
+      outText += processResult.errorMessage + "\n";
+
     process::ExecResult r;
-    r.displayCommand = util::join_display_cmd(argv);
+    r.exitCode = processResult.exitCode;
+    r.displayCommand = processResult.displayCommand;
+    r.producedOutput = !outText.empty();
 
-    int pipefd[2];
-    if (::pipe(pipefd) != 0)
-    {
-      r.exitCode = 127;
-      return r;
-    }
+    const auto newline = outText.find('\n');
+    r.capturedFirstLine =
+        util::trim(newline == std::string::npos ? outText : outText.substr(0, newline));
 
-    pid_t pid = ::fork();
-    if (pid == 0)
-    {
-      ::dup2(pipefd[1], STDOUT_FILENO);
-      ::dup2(pipefd[1], STDERR_FILENO);
-      ::close(pipefd[0]);
-      ::close(pipefd[1]);
-
-      for (const auto &kv : extraEnv)
-        ::setenv(kv.first.c_str(), kv.second.c_str(), 1);
-
-      std::vector<char *> cargv;
-      cargv.reserve(argv.size() + 1);
-      for (const auto &s : argv)
-        cargv.push_back(const_cast<char *>(s.c_str()));
-      cargv.push_back(nullptr);
-
-      ::execvp(cargv[0], cargv.data());
-      _exit(127);
-    }
-
-    ::close(pipefd[1]);
-
-    std::string buf(8 * 1024, '\0');
-    while (true)
-    {
-      const ssize_t n = ::read(pipefd[0], &buf[0], buf.size());
-      if (n > 0)
-        outText.append(buf.data(), static_cast<std::size_t>(n));
-      else
-        break;
-    }
-
-    ::close(pipefd[0]);
-
-    int status = 0;
-    if (::waitpid(pid, &status, 0) < 0)
-    {
-      r.exitCode = 127;
-      return r;
-    }
-
-    r.exitCode = process::normalize_exit_code(status);
     return r;
   }
 
@@ -845,32 +814,27 @@ namespace vix::cli::build
       const std::vector<std::pair<std::string, std::string>> &extraEnv,
       std::string &outText)
   {
+    vix::engine::process::Command command;
+    command.argv = argv;
+    command.environment = extraEnv;
+    command.mergeStdErr = true;
+
+    const vix::engine::process::Result processResult =
+        vix::engine::process::execute(command);
+
+    outText = processResult.output;
+    if (!processResult.errorMessage.empty())
+      outText += processResult.errorMessage + "\n";
+
     process::ExecResult r;
-    r.displayCommand = util::join_display_cmd(argv);
+    r.exitCode = processResult.exitCode;
+    r.displayCommand = processResult.displayCommand;
+    r.producedOutput = !outText.empty();
 
-    for (const auto &kv : extraEnv)
-    {
-      std::string e = kv.first + "=" + kv.second;
-      (void)_putenv(e.c_str());
-    }
+    const auto newline = outText.find('\n');
+    r.capturedFirstLine =
+        util::trim(newline == std::string::npos ? outText : outText.substr(0, newline));
 
-    fs::path tmp = fs::temp_directory_path() / "vix_build_capture.tmp";
-
-    std::ostringstream oss;
-    for (std::size_t i = 0; i < argv.size(); ++i)
-    {
-      if (i)
-        oss << " ";
-      oss << "\"" << argv[i] << "\"";
-    }
-
-    const std::string cmd = oss.str() + " > \"" + tmp.string() + "\" 2>&1";
-    const int raw = std::system(cmd.c_str());
-    r.exitCode = process::normalize_exit_code(raw);
-
-    outText = util::read_text_file_or_empty(tmp);
-    std::error_code ec{};
-    fs::remove(tmp, ec);
     return r;
   }
 

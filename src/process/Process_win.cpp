@@ -12,13 +12,15 @@
  */
 #include <vix/cli/process/Process.hpp>
 
+#include <vix/engine/Process.hpp>
+
 #ifdef _WIN32
 
 namespace vix::cli::process
 {
   int normalize_exit_code(int raw) noexcept
   {
-    return raw;
+    return vix::engine::process::normalize_exit_code(raw);
   }
 } // namespace vix::cli::process
 

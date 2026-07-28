@@ -12,23 +12,15 @@
  */
 #include <vix/cli/process/Process.hpp>
 
+#include <vix/engine/Process.hpp>
+
 #ifndef _WIN32
-#include <sys/wait.h>
 
 namespace vix::cli::process
 {
   int normalize_exit_code(int raw) noexcept
   {
-    if (raw == -1)
-      return 127;
-
-    if (WIFEXITED(raw))
-      return WEXITSTATUS(raw);
-
-    if (WIFSIGNALED(raw))
-      return 128 + WTERMSIG(raw);
-
-    return raw;
+    return vix::engine::process::normalize_exit_code(raw);
   }
 } // namespace vix::cli::process
 

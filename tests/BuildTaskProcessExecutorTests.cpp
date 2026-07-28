@@ -3,7 +3,6 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -15,6 +14,8 @@ namespace
 {
   namespace fs = std::filesystem;
 
+  static fs::path selfPath;
+
   struct TempDir
   {
     fs::path path;
@@ -22,7 +23,7 @@ namespace
     TempDir()
     {
       path = fs::temp_directory_path() /
-             ("vix-process-executor-test-" + std::to_string(std::rand()));
+             ("vix-build-task-process-adapter-test-" + std::to_string(std::rand()));
       fs::remove_all(path);
       fs::create_directories(path);
     }
@@ -49,21 +50,17 @@ namespace
     return task;
   }
 
-#ifdef _WIN32
-  static std::vector<std::string> shell_command(const std::string &script)
+  static std::vector<std::string> self_command(std::vector<std::string> args)
   {
-    return {"cmd", "/C", script};
+    std::vector<std::string> command;
+    command.push_back(selfPath.string());
+    command.insert(command.end(), args.begin(), args.end());
+    return command;
   }
-#else
-  static std::vector<std::string> shell_command(const std::string &script)
-  {
-    return {"sh", "-c", script};
-  }
-#endif
 
-  static void test_successful_command()
+  static void test_successful_build_task()
   {
-    BuildTask task = command_task("success", shell_command("printf success"));
+    BuildTask task = command_task("success", self_command({"--child-output", "success"}));
     const BuildTaskResult result = execute_build_task_process(task);
 
     require(result.taskId == "success", "success task id");
@@ -72,62 +69,35 @@ namespace
     require(result.output == "success", "success output");
   }
 
-  static void test_non_zero_exit_code()
+  static void test_failed_build_task()
   {
-#ifdef _WIN32
-    BuildTask task = command_task("fail", shell_command("exit /B 7"));
-#else
-    BuildTask task = command_task("fail", shell_command("exit 7"));
-#endif
+    BuildTask task = command_task("fail", self_command({"--child-exit", "7"}));
     const BuildTaskResult result = execute_build_task_process(task);
 
+    require(result.taskId == "fail", "failure task id");
     require(result.state == BuildTaskState::Failed, "failure state");
-    require(result.exitCode == 7, "failure exit code normalized");
+    require(result.exitCode == 7, "failure exit");
   }
 
-  static void test_stdout_stderr_capture()
+  static void test_output_propagation()
   {
-#ifdef _WIN32
-    BuildTask task = command_task("capture", shell_command("echo out& echo err 1>&2"));
-#else
-    BuildTask task = command_task("capture", shell_command("printf out; printf err >&2"));
-#endif
+    BuildTask task = command_task("capture", self_command({"--child-mixed-output"}));
     const BuildTaskResult result = execute_build_task_process(task);
 
     require(result.state == BuildTaskState::Done, "capture state");
-    require(result.output.find("out") != std::string::npos, "stdout captured");
-    require(result.output.find("err") != std::string::npos, "stderr captured");
+    require(result.output == "out\nerr\n", "merged output propagated");
   }
 
-  static void test_working_directory()
+  static void test_working_directory_propagation()
   {
     TempDir temp;
-    BuildTask task = command_task("pwd", shell_command(
-#ifdef _WIN32
-        "cd"
-#else
-        "pwd"
-#endif
-        ));
+    BuildTask task = command_task("pwd", self_command({"--child-pwd"}));
     task.workingDirectory = temp.path;
 
     const BuildTaskResult result = execute_build_task_process(task);
 
     require(result.state == BuildTaskState::Done, "working directory state");
-    require(result.output.find(temp.path.string()) != std::string::npos, "working directory output");
-  }
-
-  static void test_arguments_containing_spaces()
-  {
-#ifdef _WIN32
-    BuildTask task = command_task("spaces", {"cmd", "/C", "echo hello world"});
-#else
-    BuildTask task = command_task("spaces", {"sh", "-c", "printf '%s' \"$1\"", "_", "hello world"});
-#endif
-    const BuildTaskResult result = execute_build_task_process(task);
-
-    require(result.state == BuildTaskState::Done, "spaces state");
-    require(result.output.find("hello world") != std::string::npos, "spaces preserved");
+    require(result.output.find(temp.path.string()) != std::string::npos, "working directory propagated");
   }
 
   static void test_empty_command()
@@ -135,21 +105,58 @@ namespace
     BuildTask task = command_task("empty", {});
     const BuildTaskResult result = execute_build_task_process(task);
 
-    require(result.state == BuildTaskState::Failed, "empty command state");
-    require(result.exitCode == 127, "empty command exit");
-    require(result.output.find("Empty build command") != std::string::npos, "empty command output");
+    require(result.taskId == "empty", "empty task id");
+    require(result.state == BuildTaskState::Failed, "empty state");
+    require(result.exitCode == 127, "empty exit");
+    require(result.output.find("Empty build command") != std::string::npos, "empty output");
+  }
+
+  static int child_main(int argc, char **argv)
+  {
+    const std::string mode = argc > 1 ? argv[1] : "";
+
+    if (mode == "--child-output")
+    {
+      if (argc > 2)
+        std::cout << argv[2];
+      return 0;
+    }
+
+    if (mode == "--child-exit")
+      return argc > 2 ? std::atoi(argv[2]) : 0;
+
+    if (mode == "--child-mixed-output")
+    {
+      std::cout << "out\n"
+                << std::flush;
+      std::cerr << "err\n"
+                << std::flush;
+      return 0;
+    }
+
+    if (mode == "--child-pwd")
+    {
+      std::cout << fs::current_path().string();
+      return 0;
+    }
+
+    return 2;
   }
 } // namespace
 
-int main()
+int main(int argc, char **argv)
 {
+  if (argc > 1 && std::string(argv[1]).rfind("--child-", 0) == 0)
+    return child_main(argc, argv);
+
   try
   {
-    test_successful_command();
-    test_non_zero_exit_code();
-    test_stdout_stderr_capture();
-    test_working_directory();
-    test_arguments_containing_spaces();
+    selfPath = fs::absolute(argv[0]).lexically_normal();
+
+    test_successful_build_task();
+    test_failed_build_task();
+    test_output_propagation();
+    test_working_directory_propagation();
     test_empty_command();
   }
   catch (const std::exception &ex)

@@ -19,6 +19,9 @@
 #include <utility>
 #include <vector>
 
+#include <vix/engine/ExecutionPlan.hpp>
+#include <vix/engine/Preset.hpp>
+
 namespace vix::cli::process
 {
   namespace fs = std::filesystem;
@@ -206,148 +209,8 @@ namespace vix::cli::process
     std::string capturedFirstLine;
   };
 
-  /**
-   * @brief Embedded build preset description.
-   */
-  struct Preset
-  {
-    /**
-     * @brief Preset public name.
-     */
-    std::string name;
-
-    /**
-     * @brief CMake generator name, usually "Ninja".
-     */
-    std::string generator;
-
-    /**
-     * @brief CMake build type, such as "Debug" or "Release".
-     */
-    std::string buildType;
-
-    /**
-     * @brief Build directory name associated with the preset.
-     */
-    std::string buildDirName;
-  };
-
-  /**
-   * @brief Fully resolved execution plan for a build.
-   *
-   * This contains all derived paths, resolved tools, generated files,
-   * and CMake variables needed to configure and build the project.
-   */
-  struct Plan
-  {
-    /**
-     * @brief User project root directory.
-     *
-     * This is the real directory where the user runs Vix from.
-     * Build directories, exported binaries, local build state, and project
-     * input snapshots should be based on this path.
-     *
-     * For normal CMake projects, this is the same as cmakeSourceDir.
-     * For vix.app projects, this is the directory containing vix.app.
-     */
-    fs::path userProjectDir;
-
-    /**
-     * @brief CMake source directory passed to `cmake -S`.
-     *
-     * For normal CMake projects, this is the same as userProjectDir.
-     * For vix.app projects, this points to the generated internal CMake
-     * directory under `.vix/generated/app`.
-     */
-    fs::path cmakeSourceDir;
-
-    /**
-     * @brief Root project directory.
-     *
-     * Kept for backward compatibility with existing build code.
-     * New code should prefer userProjectDir or cmakeSourceDir depending on
-     * the operation being performed.
-     */
-    fs::path projectDir;
-
-    /**
-     * @brief Default target name used when --build-target is not provided.
-     *
-     * For normal CMake projects, this is usually the project directory name.
-     * For vix.app projects, this is the manifest `name`.
-     */
-    std::string defaultTargetName;
-
-    /**
-     * @brief True when the active CMake project was generated from vix.app.
-     */
-    bool generatedFromVixApp{false};
-
-    /**
-     * @brief Resolved embedded preset.
-     */
-    Preset preset;
-
-    /**
-     * @brief Build directory used for configure/build artifacts.
-     */
-    fs::path buildDir;
-
-    /**
-     * @brief Path to the configure log file.
-     */
-    fs::path configureLog;
-
-    /**
-     * @brief Path to the build log file.
-     */
-    fs::path buildLog;
-
-    /**
-     * @brief Path to the configuration signature file.
-     */
-    fs::path sigFile;
-
-    /**
-     * @brief Path to the generated toolchain file when cross-compiling.
-     */
-    fs::path toolchainFile;
-
-    /**
-     * @brief Resolved Vix SDK CMake package directory, when SDK selection is required.
-     */
-    fs::path sdkConfigDir;
-
-    /**
-     * @brief Fatal managed SDK resolution error to report before configuring CMake.
-     */
-    std::string sdkResolutionError;
-
-    /**
-     * @brief Resolved CMake cache variables passed during configure.
-     */
-    std::vector<std::pair<std::string, std::string>> cmakeVars;
-
-    /**
-     * @brief Signature used to detect whether reconfigure is needed.
-     */
-    std::string signature;
-
-    /**
-     * @brief Resolved compiler launcher executable, if any.
-     */
-    std::optional<std::string> launcher;
-
-    /**
-     * @brief Resolved fast-linker compiler flag, if any.
-     */
-    std::optional<std::string> fastLinkerFlag;
-
-    /**
-     * @brief Fingerprint of important project files used for caching.
-     */
-    std::string projectFingerprint;
-  };
+  using Preset = vix::engine::Preset;
+  using Plan = vix::engine::ExecutionPlan;
 
   /**
    * @brief Normalizes a raw process exit status into a standard exit code.

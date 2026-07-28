@@ -120,6 +120,7 @@ get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUT
 
 set(_VIX_REPLY_DIR    "${_VIX_MODULES_DIR}/reply")
 set(_VIX_PROCESS_DIR  "${_VIX_MODULES_DIR}/process")
+set(_VIX_ENGINE_DIR   "${_VIX_MODULES_DIR}/engine")
 set(_VIX_NOTE_DIR     "${_VIX_MODULES_DIR}/note")
 set(_VIX_UI_DIR       "${_VIX_MODULES_DIR}/ui")
 set(_VIX_REQUESTS_DIR "${_VIX_MODULES_DIR}/requests")
@@ -143,6 +144,19 @@ if (TARGET vix::process)
 else()
   message(FATAL_ERROR
     "[cli] RegistryCatalog requires the vix::process target"
+  )
+endif()
+
+if (EXISTS "${_VIX_ENGINE_DIR}/CMakeLists.txt" AND NOT TARGET vix::engine)
+  set(VIX_ENGINE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  add_subdirectory("${_VIX_ENGINE_DIR}" "${CMAKE_BINARY_DIR}/_vix_engine")
+endif()
+
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli PRIVATE vix::engine)
+else()
+  message(FATAL_ERROR
+    "[cli] Build graph components require the vix::engine target"
   )
 endif()
 
@@ -204,6 +218,7 @@ else()
   set(_VIX_NOTE_DIR      "${_VIX_MODULES_DIR}/note")
   set(_VIX_UI_DIR        "${_VIX_MODULES_DIR}/ui")
   set(_VIX_REQUESTS_DIR  "${_VIX_MODULES_DIR}/requests")
+  set(_VIX_ENGINE_DIR    "${_VIX_MODULES_DIR}/engine")
 
   set(_LOCAL_LAYOUT_OK FALSE)
   if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
@@ -260,6 +275,11 @@ else()
 
     if (EXISTS "${_VIX_CACHE_DIR}/CMakeLists.txt" AND NOT TARGET vix::cache)
       add_subdirectory("${_VIX_CACHE_DIR}" "${CMAKE_BINARY_DIR}/_vix_cache")
+    endif()
+
+    if (EXISTS "${_VIX_ENGINE_DIR}/CMakeLists.txt" AND NOT TARGET vix::engine)
+      set(VIX_ENGINE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+      add_subdirectory("${_VIX_ENGINE_DIR}" "${CMAKE_BINARY_DIR}/_vix_engine")
     endif()
 
     if (EXISTS "${_VIX_AGENT_DIR}/CMakeLists.txt" AND NOT TARGET vix::ai_agent)
@@ -325,6 +345,10 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::cache)
     endif()
 
+    if (TARGET vix::engine)
+      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::engine)
+    endif()
+
     if (TARGET vix::ai_agent)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ai_agent)
     endif()
@@ -361,6 +385,7 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ENGINE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_AGENT_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_DB_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_WEBSOCKET_DIR}/include")
@@ -393,6 +418,7 @@ else()
     find_package(vixp2p CONFIG QUIET)
     find_package(vix_note CONFIG QUIET)
     find_package(vix_requests CONFIG QUIET)
+    find_package(vix_engine CONFIG QUIET)
 
     if (TARGET vix::vix)
       message(STATUS "[cli] Using installed package target vix::vix")
@@ -407,6 +433,10 @@ else()
 
       if (TARGET vix::p2p)
         target_link_libraries(vix_cli PRIVATE vix::p2p)
+      endif()
+
+      if (TARGET vix::engine)
+        target_link_libraries(vix_cli PRIVATE vix::engine)
       endif()
     else()
       message(FATAL_ERROR

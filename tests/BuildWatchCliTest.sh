@@ -5,19 +5,41 @@ VIX_BIN="${1:?vix binary required}"
 ROOT="$(mktemp -d)"
 trap 'if [[ -n "${WATCH_PID:-}" ]]; then kill -INT "$WATCH_PID" 2>/dev/null || true; wait "$WATCH_PID" 2>/dev/null || true; fi; rm -rf "$ROOT"' EXIT
 
-PROJECT="$ROOT/project"
+PROJECT="$ROOT/shop"
 HOME_DIR="$ROOT/home"
-mkdir -p "$PROJECT/src" "$HOME_DIR"
+mkdir -p "$PROJECT/src" "$PROJECT/include" "$HOME_DIR"
 
 cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)
-project(watch_project LANGUAGES CXX)
+project(shop LANGUAGES CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-add_executable(watch_project src/main.cpp)
+add_executable(shop
+  src/main.cpp
+  src/one.cpp
+  src/two.cpp
+  src/three.cpp)
+target_include_directories(shop PRIVATE include)
 CMAKE
 
+cat >"$PROJECT/include/shop.hpp" <<'HPP'
+#pragma once
+int one();
+int two();
+int three();
+HPP
+
 cat >"$PROJECT/src/main.cpp" <<'CPP'
-int main() { return 0; }
+#include "shop.hpp"
+int main() { return one() + two() + three(); }
+CPP
+cat >"$PROJECT/src/one.cpp" <<'CPP'
+int one() { return 0; }
+CPP
+cat >"$PROJECT/src/two.cpp" <<'CPP'
+int two() { return 0; }
+CPP
+cat >"$PROJECT/src/three.cpp" <<'CPP'
+int three() { return 0; }
 CPP
 
 help_output="$("$VIX_BIN" build --help)"
@@ -41,54 +63,148 @@ WATCH_PID=$!
 
 wait_for_output() {
   local needle="$1"
-  local deadline=$((SECONDS + 15))
+  local file="${2:-$WATCH_OUT}"
+  local deadline=$((SECONDS + 20))
   while (( SECONDS < deadline )); do
-    if grep -q -- "$needle" "$WATCH_OUT"; then
+    if grep -q -- "$needle" "$file"; then
       return 0
     fi
-    if ! kill -0 "$WATCH_PID" 2>/dev/null; then
-      cat "$WATCH_OUT" >&2
+    if [[ "$file" == "$WATCH_OUT" ]] && ! kill -0 "$WATCH_PID" 2>/dev/null; then
+      cat "$file" >&2
       echo "watch process exited before '$needle'" >&2
       exit 1
     fi
     sleep 0.05
   done
-  cat "$WATCH_OUT" >&2
+  cat "$file" >&2
   echo "timed out waiting for '$needle'" >&2
   exit 1
 }
 
-wait_for_output "Watching project files"
+reject_output() {
+  local needle="$1"
+  local file="${2:-$WATCH_OUT}"
+  if grep -q -- "$needle" "$file"; then
+    cat "$file" >&2
+    echo "unexpected output: $needle" >&2
+    exit 1
+  fi
+}
 
-before_changes="$(grep -c '^change  ' "$WATCH_OUT" || true)"
+wait_for_output "^watching shop$"
+wait_for_output "^ready in "
+
+reject_output "Compiling shop"
+reject_output "build \\["
+reject_output "Configured"
+reject_output "Built ("
+reject_output "Done in"
+reject_output "Watching project files"
+reject_output "✔"
+reject_output "➜"
+
 printf 'ignored\n' >"$PROJECT/build-ninja/ignored.tmp"
 sleep 0.2
-after_ignored="$(grep -c '^change  ' "$WATCH_OUT" || true)"
-test "$before_changes" = "$after_ignored"
+if [[ "$(grep -c 'rebuilt in' "$WATCH_OUT" || true)" != "0" ]]; then
+  cat "$WATCH_OUT" >&2
+  echo "build-directory event produced rebuild output" >&2
+  exit 1
+fi
 
 cat >"$PROJECT/src/main.cpp" <<'CPP'
-int main() { return 1; }
+#include "shop.hpp"
+int main() { return one() + two() + three() + 1; }
 CPP
 
-wait_for_output "change  src/main.cpp"
-wait_for_output "Rebuilt project"
-sleep 0.5
-rebuilt_count="$(grep -c 'Rebuilt project' "$WATCH_OUT" || true)"
-if [[ "$rebuilt_count" != "1" ]]; then
+wait_for_output "^src/main.cpp rebuilt in "
+sleep 0.4
+if [[ "$(grep -c '^src/main.cpp rebuilt in ' "$WATCH_OUT" || true)" != "1" ]]; then
   cat "$WATCH_OUT" >&2
-  echo "expected one rebuild for one source save, saw $rebuilt_count" >&2
+  echo "expected one compact rebuild line for one source save" >&2
   exit 1
 fi
-if grep -q 'ninja: no work to do' "$WATCH_OUT"; then
+
+reject_output "^change  "
+reject_output "ninja:"
+reject_output "Building CXX object"
+reject_output "Linking CXX executable"
+reject_output "Rebuilt shop"
+reject_output "\\[1/"
+reject_output "\\[2/"
+
+cat >"$PROJECT/src/one.cpp" <<'CPP'
+int one() { return 1; }
+CPP
+cat >"$PROJECT/src/two.cpp" <<'CPP'
+int two() { return 2; }
+CPP
+cat >"$PROJECT/src/three.cpp" <<'CPP'
+int three() { return 3; }
+CPP
+
+wait_for_output "^3 files rebuilt in "
+
+cat >>"$PROJECT/CMakeLists.txt" <<'CMAKE'
+# watch reconfigure
+CMAKE
+
+wait_for_output "^CMakeLists.txt reconfigured in "
+if grep -A1 '^CMakeLists.txt reconfigured in ' "$WATCH_OUT" | grep -q 'rebuilt in'; then
   cat "$WATCH_OUT" >&2
-  echo "unexpected no-op Ninja rebuild after source save" >&2
+  echo "reconfigure iteration printed an extra rebuild line" >&2
   exit 1
 fi
+
+cat >"$PROJECT/src/main.cpp" <<'CPP'
+int main() { return nope; }
+CPP
+
+wait_for_output "^src/main.cpp rebuild failed$"
+wait_for_output "nope"
+reject_output "waiting for changes"
+reject_output "ninja: Entering directory"
+
+cat >"$PROJECT/src/main.cpp" <<'CPP'
+#include "shop.hpp"
+int main() { return one() + two() + three(); }
+CPP
+
+wait_for_output "^src/main.cpp rebuilt in "
 
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || code=$?
 WATCH_PID=""
 test "${code:-130}" = "130"
-grep -q -- "Stopped build watcher." "$WATCH_OUT"
+reject_output "stopped"
+reject_output "Stopped build watcher"
+reject_output "Watching stopped"
+
+if grep -n '^$' "$WATCH_OUT" >/dev/null; then
+  cat "$WATCH_OUT" >&2
+  echo "compact watch output contains blank lines" >&2
+  exit 1
+fi
+
+VERBOSE_OUT="$ROOT/verbose.out"
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --verbose --launcher none --linker default --dir "$PROJECT" >"$VERBOSE_OUT" 2>&1 &
+WATCH_PID=$!
+wait_for_output "Watching project files" "$VERBOSE_OUT"
+wait_for_output "watch backend:" "$VERBOSE_OUT"
+kill -INT "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" || true
+WATCH_PID=""
+
+QUIET_OUT="$ROOT/quiet.out"
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --quiet --launcher none --linker default --dir "$PROJECT" >"$QUIET_OUT" 2>&1 &
+WATCH_PID=$!
+sleep 1
+kill -INT "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" || true
+WATCH_PID=""
+if [[ -s "$QUIET_OUT" ]]; then
+  cat "$QUIET_OUT" >&2
+  echo "quiet watch produced successful-output text" >&2
+  exit 1
+fi
 
 echo "BuildWatchCliTest passed"

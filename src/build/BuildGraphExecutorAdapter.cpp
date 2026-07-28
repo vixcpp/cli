@@ -19,7 +19,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 
 #include <vix/cli/cmake/CMakeBuild.hpp>
@@ -41,6 +43,17 @@ namespace vix::cli::build
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
       return value == "debug" || value == "trace";
+    }
+
+    static std::string read_text_file_or_empty(const fs::path &path)
+    {
+      std::ifstream in(path, std::ios::binary);
+      if (!in)
+        return {};
+
+      return std::string(
+          std::istreambuf_iterator<char>(in),
+          std::istreambuf_iterator<char>());
     }
   } // namespace
 
@@ -64,8 +77,15 @@ namespace vix::cli::build
     result.producedOutput = execResult.producedOutput;
     result.displayCommand = execResult.displayCommand;
 
-    if (execResult.producedOutput && !execResult.capturedFirstLine.empty())
+    if (execResult.exitCode != 0 && quiet)
+    {
+      result.output =
+          read_text_file_or_empty(request.buildDir / "build.log");
+    }
+    else if (execResult.producedOutput && !execResult.capturedFirstLine.empty())
+    {
       result.output = execResult.capturedFirstLine + "\n";
+    }
 
     return result;
   }

@@ -84,10 +84,491 @@ namespace vix::commands::BuildCommand
   {
     static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
     static volatile std::sig_atomic_t g_watch_stop_requested = 0;
+    static constexpr const char *WATCH_PRIMARY = "\033[97m";
 
     static void on_watch_signal(int)
     {
       g_watch_stop_requested = 1;
+    }
+
+    struct WatchCapturedRun
+    {
+      int code{0};
+      std::string diagnostics;
+    };
+
+    struct WatchDisplayContext
+    {
+      fs::path projectDir;
+      bool quiet{false};
+      bool verbose{false};
+    };
+
+    enum class WatchDisplayAction
+    {
+      Rebuilt,
+      Reconfigured
+    };
+
+    static std::string watch_format_duration(long long ms)
+    {
+      if (ms > 0 && ms < 1000)
+        return std::to_string(ms) + "ms";
+
+      return util::format_seconds(ms);
+    }
+
+    static std::string watch_relative_path(
+        const fs::path &path,
+        const fs::path &projectDir)
+    {
+      std::error_code ec;
+      fs::path relative = fs::relative(path, projectDir, ec);
+
+      if (ec || relative.empty())
+        relative = path.lexically_normal().lexically_relative(projectDir);
+
+      if (relative.empty())
+        relative = path.filename();
+
+      return relative.lexically_normal().generic_string();
+    }
+
+    static bool watch_is_config_path(const fs::path &path)
+    {
+      const std::string name = path.filename().string();
+      const std::string ext = path.extension().string();
+
+      return name == "CMakeLists.txt" ||
+             name == "CMakePresets.json" ||
+             name == "CMakeUserPresets.json" ||
+             name == "vix.app" ||
+             name == "vix.json" ||
+             name == "vix.toml" ||
+             name == "vix.lock" ||
+             name == "vix.module" ||
+             ext == ".cmake";
+    }
+
+    static std::vector<vix::engine::watch::Event> watch_effective_events(
+        const vix::engine::watch::Batch &batch)
+    {
+      std::vector<vix::engine::watch::Event> events;
+
+      for (const auto &event : batch.events)
+      {
+        if (event.kind == vix::engine::watch::EventKind::Overflow)
+          continue;
+        if (event.path.empty())
+          continue;
+        events.push_back(event);
+      }
+
+      std::sort(
+          events.begin(),
+          events.end(),
+          [](const auto &a, const auto &b)
+          {
+            return a.path.lexically_normal().generic_string() <
+                   b.path.lexically_normal().generic_string();
+          });
+
+      return events;
+    }
+
+    static std::string watch_change_subject(
+        const vix::engine::watch::Batch &batch,
+        const fs::path &projectDir,
+        bool configurationChange,
+        bool structuralChange)
+    {
+      const auto events = watch_effective_events(batch);
+
+      if (events.empty())
+      {
+        if (configurationChange)
+          return "build configuration";
+        if (structuralChange)
+          return "project structure";
+        return "project";
+      }
+
+      if (events.size() == 1)
+      {
+        const auto &event = events.front();
+        if (event.kind == vix::engine::watch::EventKind::Renamed &&
+            !event.oldPath.empty())
+        {
+          return watch_relative_path(event.oldPath, projectDir) +
+                 " -> " +
+                 watch_relative_path(event.path, projectDir);
+        }
+
+        return watch_relative_path(event.path, projectDir);
+      }
+
+      if (configurationChange)
+        return "build configuration";
+      if (structuralChange)
+        return "project structure";
+
+      return std::to_string(events.size()) + " files";
+    }
+
+    static bool watch_batch_has_configuration_path(
+        const vix::engine::watch::Batch &batch)
+    {
+      for (const auto &event : batch.events)
+      {
+        if (watch_is_config_path(event.path) ||
+            (!event.oldPath.empty() && watch_is_config_path(event.oldPath)))
+        {
+          return true;
+        }
+      }
+
+      return batch.overflowed;
+    }
+
+    static void watch_print_line(
+        const WatchDisplayContext &display,
+        const std::string &line,
+        std::ostream &out = std::cout)
+    {
+      if (display.quiet)
+        return;
+
+      out << line << "\n";
+      out.flush();
+    }
+
+    static const char *watch_duration_color(long long ms)
+    {
+      if (ms >= 10000)
+        return RED;
+
+      if (ms >= 3000)
+        return YELLOW;
+
+      return GREEN;
+    }
+
+    static void watch_print_header(
+        const WatchDisplayContext &display,
+        const std::string &target)
+    {
+      if (display.verbose)
+        return;
+
+      std::ostringstream line;
+
+      line << CYAN << BOLD << "Watch" << RESET
+           << " "
+           << WATCH_PRIMARY << BOLD << target << RESET;
+
+      watch_print_line(display, line.str());
+    }
+
+    static void watch_print_waiting(
+        const WatchDisplayContext &display,
+        std::ostream &out = std::cout)
+    {
+      std::ostringstream line;
+
+      line << "  "
+           << GRAY
+           << "watching for changes · Ctrl+C to stop"
+           << RESET;
+
+      watch_print_line(display, line.str(), out);
+    }
+
+    static void watch_finish_terminal(
+        const WatchDisplayContext &display)
+    {
+      if (display.quiet)
+        return;
+
+      std::cout << RESET << "\n"
+                << std::flush;
+    }
+
+    static void watch_print_started(
+        const WatchDisplayContext &display,
+        const vix::engine::watch::Batch &batch,
+        WatchDisplayAction action,
+        bool structuralChange)
+    {
+      if (display.verbose)
+        return;
+
+      const bool configurationChange =
+          action == WatchDisplayAction::Reconfigured;
+
+      const std::string subject =
+          watch_change_subject(
+              batch,
+              display.projectDir,
+              configurationChange,
+              structuralChange);
+
+      const char *icon = "↻";
+      const char *iconColor = CYAN;
+      const char *verb = "rebuilding...";
+
+      if (configurationChange)
+      {
+        verb = "reconfiguring...";
+      }
+      else if (structuralChange)
+      {
+        icon = "✦";
+        iconColor = YELLOW;
+      }
+
+      std::ostringstream line;
+
+      line << "  "
+           << iconColor << icon << RESET
+           << " "
+           << WATCH_PRIMARY << BOLD << subject << RESET
+           << "  "
+           << iconColor << verb << RESET;
+
+      watch_print_line(display, line.str());
+    }
+
+    static bool watch_is_ninja_progress_line(const std::string &line)
+    {
+      if (line.empty() || line.front() != '[')
+        return false;
+
+      const std::size_t slash = line.find('/');
+      const std::size_t close = line.find(']');
+
+      return slash != std::string::npos &&
+             close != std::string::npos &&
+             slash < close;
+    }
+
+    static std::string watch_filter_failure_diagnostics(
+        const std::string &diagnostics)
+    {
+      std::istringstream in(diagnostics);
+      std::ostringstream out;
+      std::string line;
+
+      while (std::getline(in, line))
+      {
+        if (line.rfind("ninja: Entering directory", 0) == 0)
+          continue;
+        if (line == "ninja: build stopped: subcommand failed.")
+          continue;
+        if (line.rfind("ninja -C ", 0) == 0)
+          continue;
+        if (line.rfind("FAILED: ", 0) == 0)
+          continue;
+        if (line.rfind("Unable to resolve a unique graph output target:", 0) == 0)
+          continue;
+        if (watch_is_ninja_progress_line(line))
+          continue;
+        if (line.rfind("/", 0) == 0 &&
+            line.find(" -c ") != std::string::npos)
+          continue;
+        if (line.rfind("ccache ", 0) == 0 &&
+            line.find(" -c ") != std::string::npos)
+          continue;
+
+        out << line << "\n";
+      }
+
+      return out.str();
+    }
+
+    static void watch_print_ready(
+        const WatchDisplayContext &display,
+        const std::string &target,
+        long long ms)
+    {
+      if (display.verbose)
+        return;
+
+      watch_print_header(display, target);
+
+      std::ostringstream status;
+
+      status << "  "
+             << GREEN << "✔" << RESET
+             << " "
+             << GREEN << BOLD << "ready" << RESET
+             << GRAY << " in " << RESET
+             << watch_duration_color(ms)
+             << BOLD
+             << watch_format_duration(ms)
+             << RESET;
+
+      watch_print_line(display, status.str());
+      watch_print_waiting(display);
+      watch_print_line(display, "");
+    }
+
+    static void watch_print_initial_failed(
+        const WatchDisplayContext &display,
+        const std::string &target,
+        const std::string &diagnostics)
+    {
+      if (display.verbose)
+        return;
+
+      watch_print_header(display, target);
+
+      std::ostringstream status;
+
+      status << "  "
+             << RED << "✖" << RESET
+             << " "
+             << RED << BOLD << "initial build failed" << RESET;
+
+      watch_print_line(display, status.str(), std::cerr);
+
+      const std::string filtered =
+          watch_filter_failure_diagnostics(diagnostics);
+
+      if (!display.quiet && !filtered.empty())
+      {
+        std::cerr << "\n"
+                  << filtered;
+
+        if (filtered.back() != '\n')
+          std::cerr << "\n";
+
+        std::cerr.flush();
+      }
+
+      watch_print_waiting(display, std::cerr);
+      watch_print_line(display, "", std::cerr);
+    }
+
+    static void watch_print_completed(
+        const WatchDisplayContext &display,
+        const vix::engine::watch::Batch &batch,
+        WatchDisplayAction action,
+        bool structuralChange,
+        long long ms)
+    {
+      if (display.verbose)
+        return;
+
+      const bool configurationChange =
+          action == WatchDisplayAction::Reconfigured;
+
+      const std::string subject =
+          watch_change_subject(
+              batch,
+              display.projectDir,
+              configurationChange,
+              structuralChange);
+
+      const char *icon = "✔";
+      const char *iconColor = GREEN;
+      const char *verb = "rebuilt in ";
+
+      if (configurationChange)
+      {
+        icon = "↻";
+        iconColor = CYAN;
+        verb = "reconfigured in ";
+      }
+      else if (structuralChange)
+      {
+        icon = "✦";
+        iconColor = YELLOW;
+      }
+
+      std::ostringstream line;
+
+      line << "  "
+           << iconColor << icon << RESET
+           << " "
+           << WATCH_PRIMARY << BOLD << subject << RESET
+           << "  "
+           << GRAY << verb << RESET
+           << watch_duration_color(ms)
+           << BOLD
+           << watch_format_duration(ms)
+           << RESET;
+
+      watch_print_line(display, line.str());
+    }
+
+    static void watch_print_failed(
+        const WatchDisplayContext &display,
+        const vix::engine::watch::Batch &batch,
+        WatchDisplayAction action,
+        bool structuralChange,
+        const std::string &diagnostics)
+    {
+      if (display.verbose)
+        return;
+
+      const bool configurationChange =
+          action == WatchDisplayAction::Reconfigured;
+
+      const std::string subject =
+          watch_change_subject(
+              batch,
+              display.projectDir,
+              configurationChange,
+              structuralChange);
+
+      const std::string actionLabel =
+          configurationChange
+              ? "reconfiguration failed"
+              : "rebuild failed";
+
+      std::ostringstream line;
+
+      line << "  "
+           << RED << "✖" << RESET
+           << " "
+           << WATCH_PRIMARY << BOLD << subject << RESET
+           << "  "
+           << RED << BOLD << actionLabel << RESET;
+
+      watch_print_line(display, line.str(), std::cerr);
+
+      const std::string filtered =
+          watch_filter_failure_diagnostics(diagnostics);
+
+      if (!display.quiet && !filtered.empty())
+      {
+        std::cerr << "\n"
+                  << filtered;
+
+        if (filtered.back() != '\n')
+          std::cerr << "\n";
+
+        std::cerr.flush();
+      }
+
+      watch_print_waiting(display, std::cerr);
+      watch_print_line(display, "", std::cerr);
+    }
+
+    template <typename Fn>
+    static WatchCapturedRun watch_run_capturing_stderr(
+        bool capture,
+        Fn &&fn)
+    {
+      if (!capture)
+        return {fn(), {}};
+
+      std::ostringstream diagnostics;
+      std::streambuf *old = std::cerr.rdbuf(diagnostics.rdbuf());
+      const int code = fn();
+      std::cerr.rdbuf(old);
+
+      return {code, diagnostics.str()};
     }
 
     static std::string platform_executable_name(const std::string &name);
@@ -4407,16 +4888,36 @@ namespace vix::commands::BuildCommand
 
   int BuildCommand::run_watch()
   {
+    const bool compactWatchOutput = !opt_.quiet && !opt_.verbose;
+
     if (opt_.singleCpp)
     {
       process::Options buildOpt = opt_;
       buildOpt.watch = false;
+      if (compactWatchOutput)
+        buildOpt.quiet = true;
 
       BuildCommand initial(buildOpt);
-      int lastCode = initial.run_single_cpp_build();
+      const auto initialT0 = std::chrono::steady_clock::now();
+      WatchCapturedRun initialRun =
+          watch_run_capturing_stderr(
+              compactWatchOutput,
+              [&]()
+              {
+                return initial.run_single_cpp_build();
+              });
+      int lastCode = initialRun.code;
+      const auto initialMs =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - initialT0)
+              .count();
 
       const fs::path source = fs::absolute(opt_.cppFile).lexically_normal();
       const fs::path root = source.parent_path();
+      WatchDisplayContext display;
+      display.projectDir = root;
+      display.quiet = opt_.quiet;
+      display.verbose = opt_.verbose;
 
       vix::engine::watch::Options watchOptions;
       watchOptions.root = root;
@@ -4437,7 +4938,17 @@ namespace vix::commands::BuildCommand
       SignalHandler oldInt = std::signal(SIGINT, on_watch_signal);
       SignalHandler oldTerm = std::signal(SIGTERM, on_watch_signal);
 
-      if (!buildOpt.quiet)
+      if (compactWatchOutput)
+      {
+        if (lastCode == 0)
+          watch_print_ready(display, source.stem().string(), initialMs);
+        else
+          watch_print_initial_failed(
+              display,
+              source.stem().string(),
+              initialRun.diagnostics);
+      }
+      else if (!buildOpt.quiet)
       {
         if (lastCode == 0)
           hint("Watching project files. Press Ctrl+C to stop.");
@@ -4461,18 +4972,58 @@ namespace vix::commands::BuildCommand
         if (!relevant)
           continue;
 
-        if (!buildOpt.quiet)
+        vix::engine::watch::Batch displayBatch;
+        displayBatch.events.push_back(
+            {vix::engine::watch::EventKind::Modified, source, {}, false});
+
+        if (compactWatchOutput)
+        {
+          watch_print_started(
+              display,
+              displayBatch,
+              WatchDisplayAction::Rebuilt,
+              false);
+        }
+
+        if (!buildOpt.quiet && !compactWatchOutput)
           std::cout << "\nchange  " << source.filename().string() << "\n";
 
         const auto t0 = std::chrono::steady_clock::now();
         BuildCommand rebuild(buildOpt);
-        lastCode = rebuild.run_single_cpp_build();
+        WatchCapturedRun run =
+            watch_run_capturing_stderr(
+                compactWatchOutput,
+                [&]()
+                {
+                  return rebuild.run_single_cpp_build();
+                });
+        lastCode = run.code;
         const auto ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0)
                 .count();
 
-        if (!buildOpt.quiet)
+        if (g_watch_stop_requested)
+          break;
+
+        if (compactWatchOutput)
+        {
+          if (lastCode == 0)
+            watch_print_completed(
+                display,
+                displayBatch,
+                WatchDisplayAction::Rebuilt,
+                false,
+                ms);
+          else
+            watch_print_failed(
+                display,
+                displayBatch,
+                WatchDisplayAction::Rebuilt,
+                false,
+                run.diagnostics);
+        }
+        else if (!buildOpt.quiet)
         {
           if (lastCode == 0)
             success("Rebuilt " + source.filename().string() +
@@ -4486,7 +5037,9 @@ namespace vix::commands::BuildCommand
       std::signal(SIGINT, oldInt);
       std::signal(SIGTERM, oldTerm);
 
-      if (!buildOpt.quiet)
+      if (compactWatchOutput)
+        watch_finish_terminal(display);
+      else if (!buildOpt.quiet)
         hint("Stopped build watcher.");
 
       return 130;
@@ -4518,13 +5071,26 @@ namespace vix::commands::BuildCommand
         {
           process::Options buildOpt = opt_;
           buildOpt.watch = false;
+          if (compactWatchOutput)
+            buildOpt.quiet = true;
 
-          int lastCode =
-              run_native_vix_app_build(
-                  buildOpt,
-                  project.userProjectDir,
-                  loadResult.manifest,
-                  std::chrono::steady_clock::now());
+          const auto initialT0 = std::chrono::steady_clock::now();
+          WatchCapturedRun initialRun =
+              watch_run_capturing_stderr(
+                  compactWatchOutput,
+                  [&]()
+                  {
+                    return run_native_vix_app_build(
+                        buildOpt,
+                        project.userProjectDir,
+                        loadResult.manifest,
+                        std::chrono::steady_clock::now());
+                  });
+          int lastCode = initialRun.code;
+          const auto initialMs =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - initialT0)
+                  .count();
 
           vix::engine::watch::Options watchOptions;
           watchOptions.root = project.userProjectDir;
@@ -4549,7 +5115,29 @@ namespace vix::commands::BuildCommand
           SignalHandler oldInt = std::signal(SIGINT, on_watch_signal);
           SignalHandler oldTerm = std::signal(SIGTERM, on_watch_signal);
 
-          if (!buildOpt.quiet)
+          WatchDisplayContext display;
+          display.projectDir = project.userProjectDir;
+          display.quiet = opt_.quiet;
+          display.verbose = opt_.verbose;
+
+          if (compactWatchOutput)
+          {
+            if (lastCode == 0)
+              watch_print_ready(
+                  display,
+                  loadResult.manifest.name.empty()
+                      ? std::string("vix.app")
+                      : loadResult.manifest.name,
+                  initialMs);
+            else
+              watch_print_initial_failed(
+                  display,
+                  loadResult.manifest.name.empty()
+                      ? std::string("vix.app")
+                      : loadResult.manifest.name,
+                  initialRun.diagnostics);
+          }
+          else if (!buildOpt.quiet)
           {
             if (lastCode == 0)
               hint("Watching project files. Press Ctrl+C to stop.");
@@ -4579,7 +5167,21 @@ namespace vix::commands::BuildCommand
             if (!relevant)
               continue;
 
-            if (!buildOpt.quiet)
+            const WatchDisplayAction action =
+                watch_batch_has_configuration_path(*batchOpt)
+                    ? WatchDisplayAction::Reconfigured
+                    : WatchDisplayAction::Rebuilt;
+
+            if (compactWatchOutput)
+            {
+              watch_print_started(
+                  display,
+                  *batchOpt,
+                  action,
+                  false);
+            }
+
+            if (!buildOpt.quiet && !compactWatchOutput)
             {
               if (batchOpt->events.size() == 1)
                 std::cout << "\nchange  "
@@ -4590,18 +5192,44 @@ namespace vix::commands::BuildCommand
             }
 
             const auto t0 = std::chrono::steady_clock::now();
-            lastCode =
-                run_native_vix_app_build(
-                    buildOpt,
-                    project.userProjectDir,
-                    loadResult.manifest,
-                    t0);
+            WatchCapturedRun run =
+                watch_run_capturing_stderr(
+                    compactWatchOutput,
+                    [&]()
+                    {
+                      return run_native_vix_app_build(
+                          buildOpt,
+                          project.userProjectDir,
+                          loadResult.manifest,
+                          t0);
+                    });
+            lastCode = run.code;
             const auto ms =
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t0)
                     .count();
 
-            if (!buildOpt.quiet)
+            if (g_watch_stop_requested)
+              break;
+
+            if (compactWatchOutput)
+            {
+              if (lastCode == 0)
+                watch_print_completed(
+                    display,
+                    *batchOpt,
+                    action,
+                    false,
+                    ms);
+              else
+                watch_print_failed(
+                    display,
+                    *batchOpt,
+                    action,
+                    false,
+                    run.diagnostics);
+            }
+            else if (!buildOpt.quiet)
             {
               if (lastCode == 0)
                 success("Rebuilt Native vix.app in " + util::format_seconds(ms));
@@ -4614,7 +5242,9 @@ namespace vix::commands::BuildCommand
           std::signal(SIGINT, oldInt);
           std::signal(SIGTERM, oldTerm);
 
-          if (!buildOpt.quiet)
+          if (compactWatchOutput)
+            watch_finish_terminal(display);
+          else if (!buildOpt.quiet)
             hint("Stopped build watcher.");
 
           return 130;
@@ -4624,9 +5254,23 @@ namespace vix::commands::BuildCommand
 
     process::Options initialOpt = opt_;
     initialOpt.watch = false;
+    if (compactWatchOutput)
+      initialOpt.quiet = true;
 
     BuildCommand initial(std::move(initialOpt));
-    int lastCode = initial.run();
+    const auto initialT0 = std::chrono::steady_clock::now();
+    WatchCapturedRun initialRun =
+        watch_run_capturing_stderr(
+            compactWatchOutput,
+            [&]()
+            {
+              return initial.run();
+            });
+    int lastCode = initialRun.code;
+    const auto initialMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - initialT0)
+            .count();
     plan_ = initial.plan_;
 
     if (plan_.userProjectDir.empty())
@@ -4641,6 +5285,8 @@ namespace vix::commands::BuildCommand
     process::Options sessionOpt = opt_;
     sessionOpt.watch = false;
     sessionOpt.clean = false;
+    if (compactWatchOutput)
+      sessionOpt.quiet = true;
 
     const fs::path graphPath =
         build::BuildGraph::default_graph_path(plan_.buildDir);
@@ -4680,7 +5326,29 @@ namespace vix::commands::BuildCommand
     SignalHandler oldInt = std::signal(SIGINT, on_watch_signal);
     SignalHandler oldTerm = std::signal(SIGTERM, on_watch_signal);
 
-    if (!sessionOpt.quiet)
+    WatchDisplayContext watchDisplay;
+    watchDisplay.projectDir = plan_.userProjectDir;
+    watchDisplay.quiet = opt_.quiet;
+    watchDisplay.verbose = opt_.verbose;
+
+    if (compactWatchOutput)
+    {
+      if (lastCode == 0)
+      {
+        watch_print_ready(
+            watchDisplay,
+            build::default_build_target_name(sessionOpt, plan_),
+            initialMs);
+      }
+      else
+      {
+        watch_print_initial_failed(
+            watchDisplay,
+            build::default_build_target_name(sessionOpt, plan_),
+            initialRun.diagnostics);
+      }
+    }
+    else if (!sessionOpt.quiet)
     {
       if (lastCode == 0)
         hint("Watching project files. Press Ctrl+C to stop.");
@@ -4754,21 +5422,38 @@ namespace vix::commands::BuildCommand
     };
 
     auto run_full_refresh =
-        [&]() -> int
+        [&]() -> WatchCapturedRun
     {
       BuildCommand cmd(sessionOpt);
-      const int code = cmd.run();
+      WatchCapturedRun run =
+          watch_run_capturing_stderr(
+              compactWatchOutput,
+              [&]()
+              {
+                return cmd.run();
+              });
       if (!cmd.plan_.userProjectDir.empty())
         plan_ = cmd.plan_;
       graph = build::BuildGraph::load(
           build::BuildGraph::default_graph_path(plan_.buildDir));
-      return code;
+      watchDisplay.projectDir = plan_.userProjectDir;
+      return run;
     };
 
     auto run_incremental =
         [&](build::BuildGraph &currentGraph,
-            const build::BuildGraphInvalidationResult &invalidation) -> int
+            const build::BuildGraphInvalidationResult &invalidation,
+            const vix::engine::watch::Batch &batch) -> int
     {
+      if (compactWatchOutput)
+      {
+        watch_print_started(
+            watchDisplay,
+            batch,
+            WatchDisplayAction::Rebuilt,
+            false);
+      }
+
       const auto t0 = std::chrono::steady_clock::now();
 
       if (sessionOpt.explain && !sessionOpt.quiet)
@@ -4821,9 +5506,21 @@ namespace vix::commands::BuildCommand
               std::chrono::steady_clock::now() - t0)
               .count();
 
+      if (g_watch_stop_requested)
+        return 130;
+
       if (!result.ok)
       {
-        if (!sessionOpt.quiet)
+        if (compactWatchOutput)
+        {
+          watch_print_failed(
+              watchDisplay,
+              batch,
+              WatchDisplayAction::Rebuilt,
+              false,
+              result.output);
+        }
+        else if (!sessionOpt.quiet)
         {
           error("Rebuild failed in " + util::format_seconds(ms));
           if (!result.output.empty())
@@ -4861,9 +5558,20 @@ namespace vix::commands::BuildCommand
         }
       }
 
-      if (!sessionOpt.quiet)
+      if (compactWatchOutput)
+      {
+        watch_print_completed(
+            watchDisplay,
+            batch,
+            WatchDisplayAction::Rebuilt,
+            false,
+            ms);
+      }
+      else if (!sessionOpt.quiet)
+      {
         success("Rebuilt " + build::default_build_target_name(sessionOpt, plan_) +
                 " in " + util::format_seconds(ms));
+      }
 
       return 0;
     };
@@ -4892,8 +5600,51 @@ namespace vix::commands::BuildCommand
 
       if (!graph)
       {
-        print_change_summary(batch);
-        lastCode = run_full_refresh();
+        if (!compactWatchOutput)
+          print_change_summary(batch);
+
+        const WatchDisplayAction action =
+            watch_batch_has_configuration_path(batch)
+                ? WatchDisplayAction::Reconfigured
+                : WatchDisplayAction::Rebuilt;
+
+        if (compactWatchOutput)
+        {
+          watch_print_started(
+              watchDisplay,
+              batch,
+              action,
+              action == WatchDisplayAction::Rebuilt);
+        }
+
+        const auto t0 = std::chrono::steady_clock::now();
+        WatchCapturedRun run = run_full_refresh();
+        lastCode = run.code;
+
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+
+        if (g_watch_stop_requested)
+          break;
+        if (compactWatchOutput)
+        {
+          if (lastCode == 0)
+            watch_print_completed(
+                watchDisplay,
+                batch,
+                action,
+                action == WatchDisplayAction::Rebuilt,
+                ms);
+          else
+            watch_print_failed(
+                watchDisplay,
+                batch,
+                action,
+                action == WatchDisplayAction::Rebuilt,
+                run.diagnostics);
+        }
         pendingBatch = drain_pending_events();
         continue;
       }
@@ -4912,7 +5663,8 @@ namespace vix::commands::BuildCommand
         continue;
       }
 
-      print_change_summary(batch);
+      if (!compactWatchOutput)
+        print_change_summary(batch);
 
       if (sessionOpt.verbose && !sessionOpt.quiet)
       {
@@ -4922,19 +5674,66 @@ namespace vix::commands::BuildCommand
 
       if (batch.overflowed || invalidation.structuralChange)
       {
-        lastCode = run_full_refresh();
+        const WatchDisplayAction action =
+            watch_batch_has_configuration_path(batch)
+                ? WatchDisplayAction::Reconfigured
+                : WatchDisplayAction::Rebuilt;
+
+        if (compactWatchOutput)
+        {
+          watch_print_started(
+              watchDisplay,
+              batch,
+              action,
+              action == WatchDisplayAction::Rebuilt);
+        }
+
+        const auto t0 = std::chrono::steady_clock::now();
+        WatchCapturedRun run = run_full_refresh();
+        lastCode = run.code;
+
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+
+        if (g_watch_stop_requested)
+          break;
+        if (compactWatchOutput)
+        {
+          if (lastCode == 0)
+            watch_print_completed(
+                watchDisplay,
+                batch,
+                action,
+                action == WatchDisplayAction::Rebuilt,
+                ms);
+          else
+            watch_print_failed(
+                watchDisplay,
+                batch,
+                action,
+                action == WatchDisplayAction::Rebuilt,
+                run.diagnostics);
+        }
         pendingBatch = drain_pending_events();
         continue;
       }
 
-      lastCode = run_incremental(*graph, invalidation);
+      lastCode = run_incremental(*graph, invalidation, batch);
+
+      if (g_watch_stop_requested)
+        break;
+
       pendingBatch = drain_pending_events();
     }
 
     watcher.stop();
     restore_signals();
 
-    if (!sessionOpt.quiet)
+    if (compactWatchOutput)
+      watch_finish_terminal(watchDisplay);
+    else if (!sessionOpt.quiet)
       hint("Stopped build watcher.");
 
     (void)lastCode;

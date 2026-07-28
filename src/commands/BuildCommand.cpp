@@ -20,6 +20,7 @@
 #include <vix/cli/build/BuildScheduler.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
 #include <vix/cli/build/BuildGraphExecutor.hpp>
+#include <vix/cli/build/BuildGraphExecutorAdapter.hpp>
 #include <vix/cli/build/BuildTaskProcessExecutor.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/build/BuildContext.hpp>
@@ -41,6 +42,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <vix/cli/cmake/CMakeBuild.hpp>
@@ -3898,10 +3900,32 @@ namespace vix::commands::BuildCommand
           executorOptions.buildDir = plan_.buildDir;
           executorOptions.target = build::default_graph_target_name(opt_, plan_);
           executorOptions.jobs = opt_.jobs;
-          executorOptions.quiet = opt_.quiet;
-          executorOptions.verbose = verboseMode;
 
-          build::BuildGraphExecutor executor(executorOptions);
+          build::BuildGraphExecutorDependencies executorDependencies;
+          executorDependencies.executeCompileTask =
+              [](build::BuildTask &task)
+              {
+                return build::execute_build_task_process(task);
+              };
+          executorDependencies.executeNinjaTarget =
+              [&](const build::BuildGraphExecutorNinjaRequest &request)
+              {
+                return build::execute_graph_ninja_target(
+                    request,
+                    opt_.quiet);
+              };
+          executorDependencies.onEvent =
+              [&](const build::BuildGraphExecutorEvent &event)
+              {
+                build::render_graph_debug_event(
+                    event,
+                    opt_.quiet,
+                    verboseMode);
+              };
+
+          build::BuildGraphExecutor executor(
+              executorOptions,
+              std::move(executorDependencies));
 
           const build::BuildGraphExecutorResult graphResult =
               executor.run_target(graph);

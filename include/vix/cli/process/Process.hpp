@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include <vix/engine/BuildTools.hpp>
 #include <vix/engine/ExecutionPlan.hpp>
 #include <vix/engine/Preset.hpp>
 
@@ -26,27 +27,8 @@ namespace vix::cli::process
 {
   namespace fs = std::filesystem;
 
-  /**
-   * @brief Selects which linker strategy Vix should use for builds.
-   */
-  enum class LinkerMode
-  {
-    Auto,
-    Default,
-    Mold,
-    Lld
-  };
-
-  /**
-   * @brief Selects which compiler launcher/cache Vix should use.
-   */
-  enum class LauncherMode
-  {
-    Auto,
-    None,
-    Sccache,
-    Ccache
-  };
+  using LinkerMode = vix::engine::LinkerMode;
+  using LauncherMode = vix::engine::LauncherMode;
 
   /**
    * @brief Parsed options for the `vix build` command.

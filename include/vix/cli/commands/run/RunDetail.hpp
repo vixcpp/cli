@@ -296,6 +296,7 @@ namespace vix::commands::RunCommand::detail
     fs::path stderrLogPath;
 
     std::string cacheKey;
+    std::string rebuildReason;
     bool cacheHit = false;
     bool needsRebuild = true;
   };
@@ -712,6 +713,11 @@ namespace vix::commands::RunCommand::detail
    * @brief Load the cache state for a directly compiled script plan.
    */
   DirectScriptCacheState load_direct_script_cache_state(const DirectScriptPlan &plan);
+
+  /**
+   * @brief Persist positive direct script cache metadata after a successful compile.
+   */
+  bool persist_direct_script_cache_metadata(const DirectScriptPlan &plan);
 
   // ===========================================================================
   // Script mode execution

@@ -42,6 +42,11 @@ namespace vix::commands::RunCommand::detail
   DirectScriptCacheState load_direct_script_cache_state(const DirectScriptPlan &plan);
 
   /**
+   * @brief Persist positive direct script cache metadata after a successful compile.
+   */
+  bool persist_direct_script_cache_metadata(const DirectScriptPlan &plan);
+
+  /**
    * @brief Build a direct compile plan for a probed script.
    */
   DirectScriptPlan make_direct_script_plan(

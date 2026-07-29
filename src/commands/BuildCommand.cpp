@@ -822,6 +822,28 @@ namespace vix::commands::BuildCommand
       std::chrono::steady_clock::time_point started_;
     };
 
+    struct BuildPhaseTiming
+    {
+      std::string name;
+      long long ms{0};
+    };
+
+    static void build_print_phase_timings(
+        const std::vector<BuildPhaseTiming> &timings)
+    {
+      if (timings.empty())
+        return;
+
+      for (const BuildPhaseTiming &timing : timings)
+      {
+        std::cout << timing.name << ": "
+                  << watch_format_duration(timing.ms)
+                  << "\n";
+      }
+
+      std::cout.flush();
+    }
+
     static bool watch_is_ninja_progress_line(const std::string &line)
     {
       if (line.empty() || line.front() != '[')
@@ -3970,7 +3992,9 @@ namespace vix::commands::BuildCommand
               outputBinary);
 
       if (linkCode != 0)
+      {
         return linkCode;
+      }
 
       if (!store_project_target_artifact(projectArtifact, opt, plan) &&
           !opt.quiet &&
@@ -4008,7 +4032,9 @@ namespace vix::commands::BuildCommand
         const fs::path dest = plan.userProjectDir / outputBinary.filename();
 
         if (!export_built_binary(outputBinary, dest, opt.quiet))
+        {
           return 1;
+        }
       }
       else if (!opt.outPath.empty())
       {
@@ -4466,6 +4492,9 @@ namespace vix::commands::BuildCommand
 
       if (!result.success())
       {
+        if (progress)
+          progress->stop();
+
         for (const auto &taskResult : result.results)
         {
           if (!taskResult.output.empty())
@@ -4600,7 +4629,8 @@ namespace vix::commands::BuildCommand
           run_native_vix_app_tasks(
               opt,
               session,
-              {});
+              {},
+              nullptr);
 
       if (compileCode != 0)
         return compileCode;
@@ -4610,7 +4640,8 @@ namespace vix::commands::BuildCommand
               opt,
               projectDir,
               manifest,
-              session);
+              session,
+              nullptr);
 
       if (linkCode != 0)
         return linkCode;
@@ -4641,6 +4672,20 @@ namespace vix::commands::BuildCommand
 
         const fs::path cwd = fs::current_path();
         const auto commandStart = std::chrono::steady_clock::now();
+        std::vector<BuildPhaseTiming> phaseTimings;
+        auto measurePhase =
+            [&](const std::string &name, const auto &fn)
+        {
+          const auto t0 = std::chrono::steady_clock::now();
+          auto result = fn();
+          const auto ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0)
+                  .count();
+          if (opt_.explain)
+            phaseTimings.push_back({name, ms});
+          return result;
+        };
 
         if (opt_.singleCpp)
           return run_single_cpp_build();
@@ -4682,7 +4727,13 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        const auto planOpt = make_plan(opt_, cwd);
+        const auto planOpt =
+            measurePhase(
+                "resolve project",
+                [&]()
+                {
+                  return make_plan(opt_, cwd);
+                });
         if (!planOpt)
         {
           error("Unable to determine the project directory (missing CMakeLists.txt?)");
@@ -4711,6 +4762,37 @@ namespace vix::commands::BuildCommand
         const bool verboseMode = opt_.verbose || opt_.cmakeVerbose;
         const bool defer = (!opt_.quiet && verboseMode);
         DeferredConsole out(defer);
+        bool buildHeaderPrinted = false;
+        auto printBuildHeaderEarly =
+            [&]()
+        {
+          if (opt_.quiet || buildHeaderPrinted)
+            return;
+
+          if (verboseMode)
+          {
+            build::print_build_header_full(
+                std::cout,
+                build::default_build_target_name(opt_, plan_),
+                display_build_profile(plan_),
+                plan_.launcher,
+                plan_.fastLinkerFlag,
+                opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
+          }
+          else
+          {
+            build::print_build_header_full(
+                std::cout,
+                build::default_build_target_name(opt_, plan_),
+                display_build_profile(plan_),
+                std::nullopt,
+                std::nullopt,
+                0);
+          }
+
+          buildHeaderPrinted = true;
+          std::cout.flush();
+        };
 
         std::string tc;
 
@@ -4798,6 +4880,8 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        printBuildHeaderEarly();
+
         artifact_cache::Artifact projectArtifact =
             make_project_artifact(plan_, opt_, tc);
 
@@ -4805,24 +4889,29 @@ namespace vix::commands::BuildCommand
             artifact_cache::ArtifactCache::read_build_state(plan_.buildDir);
 
         const bool canFastNoopCheck =
-            opt_.useCache &&
-            !opt_.clean &&
-            previousState &&
-            previousState->signature == plan_.signature &&
-            previousState->projectFingerprint == plan_.projectFingerprint &&
-            previousState->buildTarget == opt_.buildTarget &&
-            previousState->preset == plan_.preset.name &&
-            previousState->buildType == plan_.preset.buildType &&
-            previousState->target == projectArtifact.target &&
-            previousState->compiler == projectArtifact.compiler &&
-            !previousState->lastBinary.empty() &&
-            !previousState->artifactRoot.empty() &&
-            util::file_exists(previousState->lastBinary) &&
-            util::dir_exists(previousState->artifactRoot) &&
-            previous_project_inputs_still_current(
-                plan_.userProjectDir,
-                previousState->inputs) &&
-            cmake_globs_still_current(plan_.buildDir);
+            measurePhase(
+                "up-to-date check",
+                [&]()
+                {
+                  return opt_.useCache &&
+                         !opt_.clean &&
+                         previousState &&
+                         previousState->signature == plan_.signature &&
+                         previousState->projectFingerprint == plan_.projectFingerprint &&
+                         previousState->buildTarget == opt_.buildTarget &&
+                         previousState->preset == plan_.preset.name &&
+                         previousState->buildType == plan_.preset.buildType &&
+                         previousState->target == projectArtifact.target &&
+                         previousState->compiler == projectArtifact.compiler &&
+                         !previousState->lastBinary.empty() &&
+                         !previousState->artifactRoot.empty() &&
+                         util::file_exists(previousState->lastBinary) &&
+                         util::dir_exists(previousState->artifactRoot) &&
+                         previous_project_inputs_still_current(
+                             plan_.userProjectDir,
+                             previousState->inputs) &&
+                         cmake_globs_still_current(plan_.buildDir);
+                });
 
         if (previousState && !canFastNoopCheck && debug_build_details_enabled() && !opt_.quiet)
         {
@@ -4862,7 +4951,9 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
-            print_vix_build_header("Checking", opt_, plan_);
+            build_print_phase_timings(phaseTimings);
+            if (!buildHeaderPrinted)
+              print_vix_build_header("Checking", opt_, plan_);
             print_vix_build_success_timed("Up to date", ms);
           }
 
@@ -4907,7 +4998,9 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
-            print_vix_build_header("Checking", opt_, plan_);
+            build_print_phase_timings(phaseTimings);
+            if (!buildHeaderPrinted)
+              print_vix_build_header("Checking", opt_, plan_);
             print_vix_build_success_timed("Up to date", ms);
           }
 
@@ -4953,7 +5046,12 @@ namespace vix::commands::BuildCommand
         long long totalMs = 0;
 
         const vix::engine::ConfigureDecision configureDecision =
-            evaluate_configure_decision(opt_, plan_);
+            measurePhase(
+                "configuration check",
+                [&]()
+                {
+                  return evaluate_configure_decision(opt_, plan_);
+                });
 
         if (configureDecision.needs_configure())
         {
@@ -5058,12 +5156,17 @@ namespace vix::commands::BuildCommand
         build::BuildGraphScanResult scan{};
 
         build::BuildGraph graph =
-            make_build_graph_after_configure(
-                opt_,
-                plan_,
-                importedCompileCommands,
-                importedNinjaTasks,
-                scan);
+            measurePhase(
+                "graph load",
+                [&]()
+                {
+                  return make_build_graph_after_configure(
+                      opt_,
+                      plan_,
+                      importedCompileCommands,
+                      importedNinjaTasks,
+                      scan);
+                });
 
         const fs::path graphPath =
             build::BuildGraph::default_graph_path(plan_.buildDir);
@@ -5108,7 +5211,8 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
-            print_vix_build_header("Restoring", opt_, plan_);
+            if (!buildHeaderPrinted)
+              print_vix_build_header("Restoring", opt_, plan_);
             print_vix_build_success("Artifact cache hit");
             print_vix_build_success("Done");
           }
@@ -5151,7 +5255,7 @@ namespace vix::commands::BuildCommand
           {
             return build::execute_graph_ninja_target(
                 request,
-                opt_.quiet);
+                !opt_.cmakeVerbose);
           };
           executorDependencies.onEvent =
               [&](const build::BuildGraphExecutorEvent &event)
@@ -5167,7 +5271,12 @@ namespace vix::commands::BuildCommand
               std::move(executorDependencies));
 
           const build::BuildGraphExecutorResult graphResult =
-              executor.run_target(graph);
+              measurePhase(
+                  "build",
+                  [&]()
+                  {
+                    return executor.run_target(graph);
+                  });
 
           if (graphResult.ok)
           {
@@ -5215,7 +5324,9 @@ namespace vix::commands::BuildCommand
 
             if (!opt_.quiet)
             {
-              print_vix_build_header("Building", opt_, plan_);
+              build_print_phase_timings(phaseTimings);
+              if (!buildHeaderPrinted)
+                print_vix_build_header("Building", opt_, plan_);
 
               print_graph_warnings_modern(graphResult.output);
 
@@ -5247,59 +5358,48 @@ namespace vix::commands::BuildCommand
 
         if (graph_executor_enabled() && can_use_graph_build(opt_, plan_, scan))
         {
-          return run_graph_build(
-              graph,
-              graphPath,
-              opt_,
-              plan_,
-              projectArtifact,
-              projectInputs,
-              verboseMode);
+          const int graphBuildCode =
+              measurePhase(
+                  "build",
+                  [&]()
+                  {
+                    return run_graph_build(
+                        graph,
+                        graphPath,
+                        opt_,
+                        plan_,
+                        projectArtifact,
+                        projectInputs,
+                        verboseMode);
+                  });
+
+          if (opt_.explain && !opt_.quiet)
+            build_print_phase_timings(phaseTimings);
+
+          return graphBuildCode;
         }
 
         {
-          if (!opt_.quiet)
-          {
-            if (verboseMode)
-            {
-              out.flush_to_stdout();
-
-              build::print_build_header_full(
-                  std::cout,
-                  build::default_build_target_name(opt_, plan_),
-                  display_build_profile(plan_),
-                  plan_.launcher,
-                  plan_.fastLinkerFlag,
-                  opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
-            }
-            else
-            {
-              build::print_build_header_full(
-                  std::cout,
-                  build::default_build_target_name(opt_, plan_),
-                  display_build_profile(plan_),
-                  std::nullopt,
-                  std::nullopt,
-                  0);
-            }
-
-            std::cout.flush();
-          }
-
           const auto t0 = std::chrono::steady_clock::now();
           const auto argv = build::cmake_build_argv(plan_, opt_);
           const auto env = build::ninja_env(opt_, plan_);
 
           const bool showRawBuildOutput = opt_.cmakeVerbose;
-          const bool progressOnly = !showRawBuildOutput;
+          const bool progressOnly = !showRawBuildOutput && watch_stdout_is_tty();
 
-          const process::ExecResult r = build::run_process_live_to_log(
-              argv,
-              env,
-              plan_.buildLog,
-              opt_.quiet,
-              opt_.cmakeVerbose,
-              progressOnly);
+          const process::ExecResult r =
+              measurePhase(
+                  "build",
+                  [&]()
+                  {
+                    return build::run_process_live_to_log(
+                        argv,
+                        env,
+                        plan_.buildLog,
+                        opt_.quiet,
+                        opt_.cmakeVerbose,
+                        progressOnly);
+                  });
 
           const auto ms =
               std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -5383,8 +5483,22 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet)
           {
+            build_print_phase_timings(phaseTimings);
             if (verboseMode)
             {
+              out.flush_to_stdout();
+
+              if (!buildHeaderPrinted)
+              {
+                build::print_build_header_full(
+                    std::cout,
+                    build::default_build_target_name(opt_, plan_),
+                    display_build_profile(plan_),
+                    plan_.launcher,
+                    plan_.fastLinkerFlag,
+                    opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
+              }
+
               const std::string profile =
                   (plan_.preset.buildType == "Release")
                       ? "release [optimized]"
@@ -5397,6 +5511,17 @@ namespace vix::commands::BuildCommand
             }
             else
             {
+              if (!buildHeaderPrinted)
+              {
+                build::print_build_header_full(
+                    std::cout,
+                    build::default_build_target_name(opt_, plan_),
+                    display_build_profile(plan_),
+                    std::nullopt,
+                    std::nullopt,
+                    0);
+              }
+
               if (configuredThisRun)
                 build::print_build_success(std::cout, "Configured");
 
@@ -5617,8 +5742,6 @@ namespace vix::commands::BuildCommand
     {
       process::Options buildOpt = opt_;
       buildOpt.watch = false;
-      if (structuredWatchOutput && !rawBuildOutput)
-        buildOpt.quiet = true;
 
       BuildCommand initial(buildOpt);
       const auto initialT0 = std::chrono::steady_clock::now();
@@ -5690,6 +5813,9 @@ namespace vix::commands::BuildCommand
               source.stem().string(),
               initialRun.diagnostics);
       }
+
+      if (structuredWatchOutput && !rawBuildOutput)
+        buildOpt.quiet = true;
 
       WatchContentFingerprints contentFingerprints(root, watchOptions.ignoredRoots);
       contentFingerprints.seed();
@@ -5799,8 +5925,6 @@ namespace vix::commands::BuildCommand
           app::AppManifest activeManifest = loadResult.manifest;
           process::Options buildOpt = opt_;
           buildOpt.watch = false;
-          if (structuredWatchOutput && !rawBuildOutput)
-            buildOpt.quiet = true;
 
           const auto initialT0 = std::chrono::steady_clock::now();
           WatchCapturedRun initialRun =
@@ -5907,6 +6031,9 @@ namespace vix::commands::BuildCommand
                       : activeManifest.name,
                   initialRun.diagnostics);
           }
+
+          if (structuredWatchOutput && !rawBuildOutput)
+            buildOpt.quiet = true;
 
           WatchContentFingerprints contentFingerprints(
               project.userProjectDir,
@@ -6100,8 +6227,6 @@ namespace vix::commands::BuildCommand
 
     process::Options initialOpt = opt_;
     initialOpt.watch = false;
-    if (structuredWatchOutput && !rawBuildOutput)
-      initialOpt.quiet = true;
 
     BuildCommand initial(std::move(initialOpt));
     const auto initialT0 = std::chrono::steady_clock::now();

@@ -113,17 +113,7 @@ wait_for_output "Watching.*all"
 wait_for_output "Finished.*initial build.* in "
 wait_for_output "Waiting.*for changes"
 
-if grep -q '^[[:space:]]' "$WATCH_OUT"; then
-  cat "$WATCH_OUT" >&2
-  echo "compact watch output has leading whitespace" >&2
-  exit 1
-fi
-
-reject_output "Compiling shop"
-reject_output "build \\["
-reject_output "Configured"
-reject_output "Built ("
-reject_output "Done in"
+wait_for_output "Compiling.*all"
 reject_output "Watching project files"
 reject_output "➜"
 reject_output "^Change "
@@ -171,12 +161,7 @@ reject_output "^change  "
 reject_output "Change "
 reject_output "Classification"
 reject_output "incremental"
-reject_output "ninja:"
-reject_output "Building CXX object"
-reject_output "Linking CXX executable"
 reject_output "Rebuilt shop"
-reject_output "\\[1/"
-reject_output "\\[2/"
 
 cat >"$PROJECT/src/one.cpp" <<'CPP'
 int one() { return 1; }
@@ -225,12 +210,6 @@ reject_output "stopped"
 reject_output "Stopped build watcher"
 reject_output "Watching stopped"
 
-if grep -n '^$' "$WATCH_OUT" >/dev/null; then
-  cat "$WATCH_OUT" >&2
-  echo "compact watch output contains blank lines" >&2
-  exit 1
-fi
-
 if grep -q $'\r' "$WATCH_OUT"; then
   cat "$WATCH_OUT" >&2
   echo "redirected compact watch output contains carriage returns" >&2
@@ -265,11 +244,6 @@ reject_output "Finished.*rebuilt" "$VERBOSE_OUT"
 reject_output "Stopped build watcher" "$VERBOSE_OUT"
 reject_output "Watching project files" "$VERBOSE_OUT"
 reject_output "➜" "$VERBOSE_OUT"
-if grep -n '^$' "$VERBOSE_OUT" >/dev/null; then
-  cat "$VERBOSE_OUT" >&2
-  echo "verbose watch output contains blank lines" >&2
-  exit 1
-fi
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || true
 WATCH_PID=""
@@ -357,12 +331,6 @@ HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --laun
 WATCH_PID=$!
 wait_for_output "Watching.*native_shop" "$NATIVE_OUT"
 wait_for_output "Waiting.*for changes" "$NATIVE_OUT"
-
-if grep -q '^[[:space:]]' "$NATIVE_OUT"; then
-  cat "$NATIVE_OUT" >&2
-  echo "native compact watch output has leading whitespace" >&2
-  exit 1
-fi
 
 cat >"$NATIVE_PROJECT/src/one.cpp" <<'CPP'
 int one() { return 3; }

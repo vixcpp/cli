@@ -58,7 +58,7 @@ fi
 grep -q -- "Options --watch and --report cannot be used together." "$ROOT/report.out"
 
 WATCH_OUT="$ROOT/watch.out"
-HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --launcher none --linker default --dir "$PROJECT" >"$WATCH_OUT" 2>&1 &
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --build-target all --launcher none --linker default --dir "$PROJECT" >"$WATCH_OUT" 2>&1 &
 WATCH_PID=$!
 
 wait_for_output() {
@@ -91,7 +91,7 @@ reject_output() {
   fi
 }
 
-wait_for_output "Watching.*shop"
+wait_for_output "Watching.*all"
 wait_for_output "Finished.*initial build.* in "
 wait_for_output "Waiting.*for changes"
 
@@ -200,10 +200,48 @@ if grep -q $'\r' "$WATCH_OUT"; then
 fi
 
 VERBOSE_OUT="$ROOT/verbose.out"
-HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --verbose --launcher none --linker default --dir "$PROJECT" >"$VERBOSE_OUT" 2>&1 &
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --build-target all --verbose --launcher none --linker default --dir "$PROJECT" >"$VERBOSE_OUT" 2>&1 &
 WATCH_PID=$!
-wait_for_output "Watching project files" "$VERBOSE_OUT"
-wait_for_output "watch backend:" "$VERBOSE_OUT"
+wait_for_output "Watching.*all" "$VERBOSE_OUT"
+wait_for_output "Backend.*inotify" "$VERBOSE_OUT"
+wait_for_output "Build directory.*build-ninja" "$VERBOSE_OUT"
+wait_for_output "Target.*all" "$VERBOSE_OUT"
+wait_for_output "Finished.*initial build.* in " "$VERBOSE_OUT"
+wait_for_output "Waiting.*for changes" "$VERBOSE_OUT"
+
+cat >"$PROJECT/src/two.cpp" <<'CPP'
+int two() { return 20; }
+CPP
+
+wait_for_output "Classification.*incremental" "$VERBOSE_OUT"
+wait_for_output "Affected tasks.*[0-9]" "$VERBOSE_OUT"
+wait_for_output "Finished.*rebuilt.*src/two.cpp.* in " "$VERBOSE_OUT"
+reject_output "ninja: Entering directory" "$VERBOSE_OUT"
+reject_output "\\[[0-9]*/" "$VERBOSE_OUT"
+reject_output "^change  " "$VERBOSE_OUT"
+reject_output "watch classification" "$VERBOSE_OUT"
+reject_output "Rebuilt all" "$VERBOSE_OUT"
+reject_output "Stopped build watcher" "$VERBOSE_OUT"
+reject_output "Watching project files" "$VERBOSE_OUT"
+reject_output "➜" "$VERBOSE_OUT"
+kill -INT "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" || true
+WATCH_PID=""
+
+CMAKE_VERBOSE_OUT="$ROOT/cmake-verbose.out"
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --build-target all --cmake-verbose --launcher none --linker default --dir "$PROJECT" >"$CMAKE_VERBOSE_OUT" 2>&1 &
+WATCH_PID=$!
+wait_for_output "Watching.*all" "$CMAKE_VERBOSE_OUT"
+wait_for_output "Waiting.*for changes" "$CMAKE_VERBOSE_OUT"
+
+cat >"$PROJECT/src/three.cpp" <<'CPP'
+int three() { return 30; }
+CPP
+
+wait_for_output "ninja: Entering directory" "$CMAKE_VERBOSE_OUT"
+wait_for_output "Finished.*rebuilt.*src/three.cpp.* in " "$CMAKE_VERBOSE_OUT"
+reject_output "Rebuilt all" "$CMAKE_VERBOSE_OUT"
+reject_output "Stopped build watcher" "$CMAKE_VERBOSE_OUT"
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || true
 WATCH_PID=""
@@ -333,6 +371,9 @@ CPP
   kill -INT "$WATCH_PID" 2>/dev/null || true
   wait "$WATCH_PID" || true
   WATCH_PID=""
+
+  reject_output "Stopped build watcher" "$TTY_OUT"
+  reject_output "➜ Stopped" "$TTY_OUT"
 fi
 
 echo "BuildWatchCliTest passed"

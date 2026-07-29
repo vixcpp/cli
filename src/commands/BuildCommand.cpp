@@ -50,6 +50,7 @@
 #ifdef _WIN32
 #include <io.h>
 #else
+#include <sys/ioctl.h>
 #include <unistd.h>
 #endif
 
@@ -248,6 +249,57 @@ namespace vix::commands::BuildCommand
       out.flush();
     }
 
+    static bool watch_stdout_is_tty()
+    {
+#ifdef _WIN32
+      return ::_isatty(1) != 0;
+#else
+      return ::isatty(STDOUT_FILENO) != 0;
+#endif
+    }
+
+    static int watch_terminal_columns()
+    {
+#ifdef _WIN32
+      return 100;
+#else
+      struct winsize ws{};
+
+      if (::ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+        return static_cast<int>(ws.ws_col);
+
+      return 100;
+#endif
+    }
+
+    static std::string watch_truncate_plain(
+        const std::string &value,
+        int width)
+    {
+      if (width <= 0)
+        return {};
+
+      if (static_cast<int>(value.size()) <= width)
+        return value;
+
+      if (width <= 1)
+        return value.substr(0, static_cast<std::size_t>(width));
+
+      return value.substr(0, static_cast<std::size_t>(width - 1)) + "~";
+    }
+
+    static std::string watch_fit_terminal_subject(
+        const std::string &subject,
+        int reservedColumns)
+    {
+      if (!watch_stdout_is_tty())
+        return subject;
+
+      const int columns = watch_terminal_columns();
+      const int subjectWidth = std::max(12, columns - reservedColumns);
+      return watch_truncate_plain(subject, subjectWidth);
+    }
+
     static std::string watch_label(
         const char *color,
         const std::string &label)
@@ -309,19 +361,105 @@ namespace vix::commands::BuildCommand
       if (display.quiet)
         return;
 
-#ifdef _WIN32
-      const bool stdoutIsTty = ::_isatty(1) != 0;
-#else
-      const bool stdoutIsTty = ::isatty(STDOUT_FILENO) != 0;
-#endif
-
       std::cout << RESET;
 
-      if (stdoutIsTty)
+      if (watch_stdout_is_tty())
         std::cout << "\n";
 
       std::cout << std::flush;
     }
+
+    class WatchProgressLine
+    {
+    public:
+      WatchProgressLine(
+          const WatchDisplayContext &display,
+          const vix::engine::watch::Batch &batch,
+          WatchDisplayAction action,
+          bool structuralChange,
+          std::string detail = {})
+          : active_(!display.quiet && !display.verbose && watch_stdout_is_tty()),
+            subject_(
+                watch_change_subject(
+                    batch,
+                    display.projectDir,
+                    action == WatchDisplayAction::Reconfigured,
+                    structuralChange)),
+            action_(action),
+            detail_(std::move(detail)),
+            started_(std::chrono::steady_clock::now())
+      {
+        if (!active_)
+          return;
+
+        worker_ = std::thread(
+            [this]()
+            {
+              while (!stop_.load())
+              {
+                render();
+                std::this_thread::sleep_for(std::chrono::milliseconds(120));
+              }
+            });
+      }
+
+      ~WatchProgressLine()
+      {
+        stop();
+      }
+
+      WatchProgressLine(const WatchProgressLine &) = delete;
+      WatchProgressLine &operator=(const WatchProgressLine &) = delete;
+
+      void stop()
+      {
+        if (!active_)
+          return;
+
+        stop_.store(true);
+
+        if (worker_.joinable())
+          worker_.join();
+
+        std::cout << "\r\033[2K" << std::flush;
+        active_ = false;
+      }
+
+    private:
+      void render()
+      {
+        const auto ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - started_)
+                .count();
+
+        const std::string verb =
+            action_ == WatchDisplayAction::Reconfigured
+                ? "Configuring"
+                : "Building";
+
+        std::ostringstream line;
+        line << verb << " " << subject_;
+
+        if (!detail_.empty())
+          line << " (" << detail_ << ")";
+
+        line << " " << watch_format_duration(ms);
+
+        const int columns = watch_terminal_columns();
+        std::cout << "\r\033[2K"
+                  << watch_truncate_plain(line.str(), columns)
+                  << std::flush;
+      }
+
+      bool active_{false};
+      std::atomic<bool> stop_{false};
+      std::thread worker_;
+      std::string subject_;
+      WatchDisplayAction action_{WatchDisplayAction::Rebuilt};
+      std::string detail_;
+      std::chrono::steady_clock::time_point started_;
+    };
 
     static bool watch_is_ninja_progress_line(const std::string &line)
     {
@@ -461,16 +599,28 @@ namespace vix::commands::BuildCommand
         labelColor = YELLOW;
       }
 
+      const std::string duration = watch_format_duration(ms);
+      const int reservedColumns =
+          static_cast<int>(
+              std::string("Finished ").size() +
+              std::string(verb).size() +
+              std::string("  in ").size() +
+              duration.size() +
+              (detail.empty() ? 0 : detail.size() + 3));
+
+      const std::string fittedSubject =
+          watch_fit_terminal_subject(subject, reservedColumns);
+
       std::ostringstream line;
 
       line << watch_label(labelColor, "Finished")
            << verb
            << " "
-           << WATCH_PRIMARY << BOLD << subject << RESET
+           << WATCH_PRIMARY << BOLD << fittedSubject << RESET
            << GRAY << " in " << RESET
            << watch_duration_color(ms)
            << BOLD
-           << watch_format_duration(ms)
+           << duration
            << RESET;
 
       if (!detail.empty())
@@ -504,10 +654,19 @@ namespace vix::commands::BuildCommand
               ? "reconfiguration failed"
               : "rebuild failed";
 
+      const int reservedColumns =
+          static_cast<int>(
+              std::string("Error ").size() +
+              actionLabel.size() +
+              1);
+
+      const std::string fittedSubject =
+          watch_fit_terminal_subject(subject, reservedColumns);
+
       std::ostringstream line;
 
       line << watch_label(RED, "Error")
-           << WATCH_PRIMARY << BOLD << subject << RESET
+           << WATCH_PRIMARY << BOLD << fittedSubject << RESET
            << " "
            << RED << BOLD << actionLabel << RESET;
 
@@ -5081,6 +5240,11 @@ namespace vix::commands::BuildCommand
           std::cout << "\nchange  " << source.filename().string() << "\n";
 
         const auto t0 = std::chrono::steady_clock::now();
+        WatchProgressLine progress(
+            display,
+            displayBatch,
+            WatchDisplayAction::Rebuilt,
+            false);
         BuildCommand rebuild(buildOpt);
         WatchCapturedRun run =
             watch_run_capturing_stderr(
@@ -5094,6 +5258,8 @@ namespace vix::commands::BuildCommand
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0)
                 .count();
+
+        progress.stop();
 
         if (g_watch_stop_requested)
           break;
@@ -5319,6 +5485,12 @@ namespace vix::commands::BuildCommand
             }
 
             const auto t0 = std::chrono::steady_clock::now();
+            WatchProgressLine progress(
+                display,
+                *batchOpt,
+                action,
+                false,
+                sourceOnlyChange ? std::string() : std::string("full refresh"));
             WatchCapturedRun run =
                 watch_run_capturing_stderr(
                     compactWatchOutput,
@@ -5394,6 +5566,8 @@ namespace vix::commands::BuildCommand
                 std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - t0)
                     .count();
+
+            progress.stop();
 
             if (g_watch_stop_requested)
               break;
@@ -5633,6 +5807,11 @@ namespace vix::commands::BuildCommand
             const vix::engine::watch::Batch &batch) -> int
     {
       const auto t0 = std::chrono::steady_clock::now();
+      WatchProgressLine progress(
+          watchDisplay,
+          batch,
+          WatchDisplayAction::Rebuilt,
+          false);
 
       if (sessionOpt.explain && !sessionOpt.quiet)
       {
@@ -5683,6 +5862,8 @@ namespace vix::commands::BuildCommand
           std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::steady_clock::now() - t0)
               .count();
+
+      progress.stop();
 
       if (g_watch_stop_requested)
         return 130;
@@ -5787,6 +5968,12 @@ namespace vix::commands::BuildCommand
                 : WatchDisplayAction::Rebuilt;
 
         const auto t0 = std::chrono::steady_clock::now();
+        WatchProgressLine progress(
+            watchDisplay,
+            batch,
+            action,
+            action == WatchDisplayAction::Rebuilt,
+            "full refresh");
         WatchCapturedRun run = run_full_refresh();
         lastCode = run.code;
 
@@ -5794,6 +5981,8 @@ namespace vix::commands::BuildCommand
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0)
                 .count();
+
+        progress.stop();
 
         if (g_watch_stop_requested)
           break;
@@ -5850,6 +6039,12 @@ namespace vix::commands::BuildCommand
                 : WatchDisplayAction::Rebuilt;
 
         const auto t0 = std::chrono::steady_clock::now();
+        WatchProgressLine progress(
+            watchDisplay,
+            batch,
+            action,
+            action == WatchDisplayAction::Rebuilt,
+            "full refresh");
         WatchCapturedRun run = run_full_refresh();
         lastCode = run.code;
 
@@ -5857,6 +6052,8 @@ namespace vix::commands::BuildCommand
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0)
                 .count();
+
+        progress.stop();
 
         if (g_watch_stop_requested)
           break;

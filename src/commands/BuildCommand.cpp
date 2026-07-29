@@ -44,6 +44,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -353,16 +354,87 @@ namespace vix::commands::BuildCommand
       watch_print_line(display, line.str(), out);
     }
 
-    static void watch_print_detail(
+    static std::string watch_normalize_linker(std::string linker)
+    {
+      constexpr std::string_view prefix = "-fuse-ld=";
+
+      if (linker.rfind(prefix, 0) == 0)
+        return linker.substr(prefix.size());
+
+      return linker;
+    }
+
+    static std::string watch_relative_build_dir(
         const WatchDisplayContext &display,
-        const std::string &label,
-        const std::string &value)
+        const fs::path &buildDir)
+    {
+      const fs::path normalizedBuildDir =
+          fs::absolute(buildDir).lexically_normal();
+      const fs::path normalizedProjectDir =
+          fs::absolute(display.projectDir).lexically_normal();
+
+      const std::string build = normalizedBuildDir.string();
+      const std::string project = normalizedProjectDir.string();
+
+      if (!project.empty() &&
+          build.size() > project.size() &&
+          build.compare(0, project.size(), project) == 0 &&
+          build[project.size()] == fs::path::preferred_separator)
+      {
+        return fs::relative(normalizedBuildDir, normalizedProjectDir).string();
+      }
+
+      return buildDir.string();
+    }
+
+    static void watch_print_session_metadata(
+        const WatchDisplayContext &display,
+        const std::string &backend,
+        const fs::path &buildDir,
+        const std::string &target,
+        int jobs,
+        const std::optional<std::string> &launcher,
+        const std::optional<std::string> &linker)
     {
       if (display.quiet)
         return;
 
+      std::ostringstream first;
+      first << "  " << CYAN << "backend " << RESET
+            << WATCH_PRIMARY << backend << RESET
+            << YELLOW << " · " << RESET
+            << CYAN << "target " << RESET
+            << WATCH_PRIMARY << target << RESET
+            << YELLOW << " · " << RESET
+            << CYAN << "jobs " << RESET
+            << WATCH_PRIMARY << jobs << RESET;
+      watch_print_line(display, first.str());
+
+      std::ostringstream second;
+      second << "  " << CYAN << "build " << RESET
+             << WATCH_PRIMARY << watch_relative_build_dir(display, buildDir)
+             << RESET;
+
+      if (launcher)
+        second << YELLOW << " · " << RESET
+               << CYAN << "launcher " << RESET
+               << WATCH_PRIMARY << *launcher << RESET;
+
+      if (linker)
+        second << YELLOW << " · " << RESET
+               << CYAN << "linker " << RESET
+               << WATCH_PRIMARY << watch_normalize_linker(*linker) << RESET;
+
+      watch_print_line(display, second.str());
+    }
+
+    static void watch_print_explain_affected_tasks(
+        const WatchDisplayContext &display,
+        std::size_t affectedTasks)
+    {
       std::ostringstream line;
-      line << watch_label(CYAN, label) << value;
+      line << "  " << YELLOW << affectedTasks << RESET
+           << GRAY << " affected tasks" << RESET;
       watch_print_line(display, line.str());
     }
 
@@ -646,7 +718,7 @@ namespace vix::commands::BuildCommand
               : std::move(subjectOverride);
 
       const char *labelColor = GREEN;
-      const char *verb = "rebuilt";
+      const char *verb = "";
 
       if (configurationChange)
       {
@@ -659,11 +731,13 @@ namespace vix::commands::BuildCommand
       }
 
       const std::string duration = watch_format_duration(ms);
+      const std::string verbText = verb;
       const int reservedColumns =
           static_cast<int>(
               std::string("Finished ").size() +
-              std::string(verb).size() +
-              std::string("  in ").size() +
+              verbText.size() +
+              (verbText.empty() ? 0 : 1) +
+              std::string(" in ").size() +
               duration.size() +
               (detail.empty() ? 0 : detail.size() + 3));
 
@@ -673,8 +747,7 @@ namespace vix::commands::BuildCommand
       std::ostringstream line;
 
       line << watch_label(labelColor, "Finished")
-           << verb
-           << " "
+           << (verbText.empty() ? "" : verbText + " ")
            << WATCH_PRIMARY << BOLD << fittedSubject << RESET
            << GRAY << " in " << RESET
            << watch_duration_color(ms)
@@ -707,8 +780,8 @@ namespace vix::commands::BuildCommand
 
       const std::string actionLabel =
           configurationChange
-              ? "reconfiguration failed"
-              : "rebuild failed";
+              ? "reconfiguring"
+              : "rebuilding";
 
       const int reservedColumns =
           static_cast<int>(
@@ -722,9 +795,9 @@ namespace vix::commands::BuildCommand
       std::ostringstream line;
 
       line << watch_label(RED, "Error")
-           << WATCH_PRIMARY << BOLD << fittedSubject << RESET
+           << RED << BOLD << actionLabel << RESET
            << " "
-           << RED << BOLD << actionLabel << RESET;
+           << WATCH_PRIMARY << BOLD << fittedSubject << RESET;
 
       watch_print_line(display, line.str(), std::cerr);
 
@@ -5354,8 +5427,14 @@ namespace vix::commands::BuildCommand
           if (verboseWatchDetails)
           {
             watch_print_header(display, source.stem().string());
-            watch_print_detail(display, "Backend", watcher.backend());
-            watch_print_detail(display, "Target", source.stem().string());
+            watch_print_session_metadata(
+                display,
+                watcher.backend(),
+                root,
+                source.stem().string(),
+                buildOpt.jobs <= 0 ? build::default_jobs() : buildOpt.jobs,
+                std::nullopt,
+                std::nullopt);
             watch_print_initial_done(display, initialMs);
             watch_print_waiting(display);
           }
@@ -5556,17 +5635,14 @@ namespace vix::commands::BuildCommand
               if (verboseWatchDetails)
               {
                 watch_print_header(display, targetName);
-                watch_print_detail(display, "Backend", watcher.backend());
-                watch_print_detail(display, "Build directory", nativeSession.plan.buildDir.string());
-                watch_print_detail(display, "Target", targetName);
-                watch_print_detail(display, "Jobs", std::to_string(buildOpt.jobs <= 0 ? build::default_jobs() : buildOpt.jobs));
-
-                if (nativeSession.plan.launcher)
-                  watch_print_detail(display, "Launcher", *nativeSession.plan.launcher);
-
-                if (nativeSession.plan.fastLinkerFlag)
-                  watch_print_detail(display, "Linker", *nativeSession.plan.fastLinkerFlag);
-
+                watch_print_session_metadata(
+                    display,
+                    watcher.backend(),
+                    nativeSession.plan.buildDir,
+                    targetName,
+                    buildOpt.jobs <= 0 ? build::default_jobs() : buildOpt.jobs,
+                    nativeSession.plan.launcher,
+                    nativeSession.plan.fastLinkerFlag);
                 watch_print_initial_done(display, initialMs);
                 watch_print_waiting(display);
               }
@@ -5854,17 +5930,14 @@ namespace vix::commands::BuildCommand
         if (verboseWatchDetails)
         {
           watch_print_header(watchDisplay, targetName);
-          watch_print_detail(watchDisplay, "Backend", watcher.backend());
-          watch_print_detail(watchDisplay, "Build directory", plan_.buildDir.string());
-          watch_print_detail(watchDisplay, "Target", targetName);
-          watch_print_detail(watchDisplay, "Jobs", std::to_string(sessionOpt.jobs <= 0 ? build::default_jobs() : sessionOpt.jobs));
-
-          if (plan_.launcher)
-            watch_print_detail(watchDisplay, "Launcher", *plan_.launcher);
-
-          if (plan_.fastLinkerFlag)
-            watch_print_detail(watchDisplay, "Linker", *plan_.fastLinkerFlag);
-
+          watch_print_session_metadata(
+              watchDisplay,
+              watcher.backend(),
+              plan_.buildDir,
+              targetName,
+              sessionOpt.jobs <= 0 ? build::default_jobs() : sessionOpt.jobs,
+              plan_.launcher,
+              plan_.fastLinkerFlag);
           watch_print_initial_done(watchDisplay, initialMs);
           watch_print_waiting(watchDisplay);
         }
@@ -5948,11 +6021,17 @@ namespace vix::commands::BuildCommand
       std::vector<std::string> observedCompileTaskIds;
       std::set<std::string> observedCompileTaskSet;
 
-      if (sessionOpt.explain && !sessionOpt.quiet)
+      if (sessionOpt.explain && structuredWatchOutput)
       {
-        hint("affected tasks: " + std::to_string(invalidation.affectedTasks));
-        for (const std::string &taskId : invalidation.dirtyTaskIds)
-          step(taskId);
+        watch_print_explain_affected_tasks(
+            watchDisplay,
+            invalidation.affectedTasks);
+
+        if (!sessionOpt.quiet)
+        {
+          for (const std::string &taskId : invalidation.dirtyTaskIds)
+            step(taskId);
+        }
       }
 
       build::BuildGraphExecutorOptions executorOptions;
@@ -6143,7 +6222,7 @@ namespace vix::commands::BuildCommand
             watchDisplay,
             batch,
             action,
-            action == WatchDisplayAction::Rebuilt,
+            false,
             "full refresh");
         WatchCapturedRun run = run_full_refresh();
         lastCode = run.code;
@@ -6164,7 +6243,7 @@ namespace vix::commands::BuildCommand
                 watchDisplay,
                 batch,
                 action,
-                action == WatchDisplayAction::Rebuilt,
+                false,
                 ms,
                 "full refresh");
           else
@@ -6172,7 +6251,7 @@ namespace vix::commands::BuildCommand
                 watchDisplay,
                 batch,
                 action,
-                action == WatchDisplayAction::Rebuilt,
+                false,
                 run.diagnostics);
         }
         pendingBatch = drain_pending_events();
@@ -6193,18 +6272,6 @@ namespace vix::commands::BuildCommand
         continue;
       }
 
-      if (verboseWatchDetails)
-      {
-        watch_print_detail(
-            watchDisplay,
-            "Classification",
-            invalidation.structuralChange ? "structural" : "incremental");
-        watch_print_detail(
-            watchDisplay,
-            "Affected tasks",
-            std::to_string(invalidation.affectedTasks));
-      }
-
       if (batch.overflowed || invalidation.structuralChange)
       {
         const WatchDisplayAction action =
@@ -6212,12 +6279,17 @@ namespace vix::commands::BuildCommand
                 ? WatchDisplayAction::Reconfigured
                 : WatchDisplayAction::Rebuilt;
 
+        if (sessionOpt.explain && structuredWatchOutput)
+          watch_print_explain_affected_tasks(
+              watchDisplay,
+              invalidation.affectedTasks);
+
         const auto t0 = std::chrono::steady_clock::now();
         WatchProgressLine progress(
             watchDisplay,
             batch,
             action,
-            action == WatchDisplayAction::Rebuilt,
+            false,
             "full refresh");
         WatchCapturedRun run = run_full_refresh();
         lastCode = run.code;
@@ -6238,7 +6310,7 @@ namespace vix::commands::BuildCommand
                 watchDisplay,
                 batch,
                 action,
-                action == WatchDisplayAction::Rebuilt,
+                false,
                 ms,
                 "full refresh");
           else
@@ -6246,7 +6318,7 @@ namespace vix::commands::BuildCommand
                 watchDisplay,
                 batch,
                 action,
-                action == WatchDisplayAction::Rebuilt,
+                false,
                 run.diagnostics);
         }
         pendingBatch = drain_pending_events();

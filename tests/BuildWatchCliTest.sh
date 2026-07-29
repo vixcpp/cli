@@ -113,7 +113,7 @@ reject_output "^Building incremental graph"
 
 printf 'ignored\n' >"$PROJECT/build-ninja/ignored.tmp"
 sleep 0.2
-if [[ "$(grep -c 'Finished.*rebuilt' "$WATCH_OUT" || true)" != "0" ]]; then
+if [[ "$(grep -c 'Finished.*src/' "$WATCH_OUT" || true)" != "0" ]]; then
   cat "$WATCH_OUT" >&2
   echo "build-directory event produced rebuild output" >&2
   exit 1
@@ -124,15 +124,18 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return one() + two() + three() + 1; }
 CPP
 
-wait_for_output "Finished.*rebuilt.*src/main.cpp.* in "
+wait_for_output "Finished.*src/main.cpp.* in "
 sleep 0.4
-if [[ "$(grep -c 'Finished.*rebuilt.*src/main.cpp.* in ' "$WATCH_OUT" || true)" != "1" ]]; then
+if [[ "$(grep -c 'Finished.*src/main.cpp.* in ' "$WATCH_OUT" || true)" != "1" ]]; then
   cat "$WATCH_OUT" >&2
   echo "expected one compact rebuild line for one source save" >&2
   exit 1
 fi
 
 reject_output "^change  "
+reject_output "Change "
+reject_output "Classification"
+reject_output "incremental"
 reject_output "ninja:"
 reject_output "Building CXX object"
 reject_output "Linking CXX executable"
@@ -150,14 +153,14 @@ cat >"$PROJECT/src/three.cpp" <<'CPP'
 int three() { return 3; }
 CPP
 
-wait_for_output "Finished.*rebuilt.*3 files.* in "
+wait_for_output "Finished.*3 files.* in "
 
 cat >>"$PROJECT/CMakeLists.txt" <<'CMAKE'
 # watch reconfigure
 CMAKE
 
 wait_for_output "Finished.*reconfigured.*CMakeLists.txt.* in .*full refresh"
-if grep -A1 'Finished.*reconfigured.*CMakeLists.txt.* in ' "$WATCH_OUT" | grep -q 'Finished.*rebuilt'; then
+if grep -A1 'Finished.*reconfigured.*CMakeLists.txt.* in ' "$WATCH_OUT" | grep -q 'Finished.*src/'; then
   cat "$WATCH_OUT" >&2
   echo "reconfigure iteration printed an extra rebuild line" >&2
   exit 1
@@ -167,7 +170,7 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return nope; }
 CPP
 
-wait_for_output "Error.*src/main.cpp.*rebuild failed"
+wait_for_output "Error.*rebuilding.*src/main.cpp"
 wait_for_output "nope"
 reject_output "waiting for changes"
 reject_output "ninja: Entering directory"
@@ -177,7 +180,7 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return one() + two() + three(); }
 CPP
 
-wait_for_output "Finished.*rebuilt.*src/main.cpp.* in "
+wait_for_output "Finished.*src/main.cpp.* in "
 
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || code=$?
@@ -203,9 +206,8 @@ VERBOSE_OUT="$ROOT/verbose.out"
 HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --build-target all --verbose --launcher none --linker default --dir "$PROJECT" >"$VERBOSE_OUT" 2>&1 &
 WATCH_PID=$!
 wait_for_output "Watching.*all" "$VERBOSE_OUT"
-wait_for_output "Backend.*inotify" "$VERBOSE_OUT"
-wait_for_output "Build directory.*build-ninja" "$VERBOSE_OUT"
-wait_for_output "Target.*all" "$VERBOSE_OUT"
+wait_for_output "^  .*backend.*inotify.*·.*target.*all.*·.*jobs" "$VERBOSE_OUT"
+wait_for_output "^  .*build.*build-ninja" "$VERBOSE_OUT"
 wait_for_output "Finished.*initial build.* in " "$VERBOSE_OUT"
 wait_for_output "Waiting.*for changes" "$VERBOSE_OUT"
 
@@ -213,17 +215,45 @@ cat >"$PROJECT/src/two.cpp" <<'CPP'
 int two() { return 20; }
 CPP
 
-wait_for_output "Classification.*incremental" "$VERBOSE_OUT"
-wait_for_output "Affected tasks.*[0-9]" "$VERBOSE_OUT"
-wait_for_output "Finished.*rebuilt.*src/two.cpp.* in " "$VERBOSE_OUT"
+wait_for_output "Finished.*src/two.cpp.* in " "$VERBOSE_OUT"
 reject_output "ninja: Entering directory" "$VERBOSE_OUT"
 reject_output "\\[[0-9]*/" "$VERBOSE_OUT"
 reject_output "^change  " "$VERBOSE_OUT"
+reject_output "Change " "$VERBOSE_OUT"
+reject_output "$PROJECT/build-ninja" "$VERBOSE_OUT"
+reject_output "Classification" "$VERBOSE_OUT"
+reject_output "Affected tasks" "$VERBOSE_OUT"
+reject_output "incremental" "$VERBOSE_OUT"
 reject_output "watch classification" "$VERBOSE_OUT"
 reject_output "Rebuilt all" "$VERBOSE_OUT"
+reject_output "Finished.*rebuilt" "$VERBOSE_OUT"
 reject_output "Stopped build watcher" "$VERBOSE_OUT"
 reject_output "Watching project files" "$VERBOSE_OUT"
 reject_output "➜" "$VERBOSE_OUT"
+if grep -n '^$' "$VERBOSE_OUT" >/dev/null; then
+  cat "$VERBOSE_OUT" >&2
+  echo "verbose watch output contains blank lines" >&2
+  exit 1
+fi
+kill -INT "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" || true
+WATCH_PID=""
+
+EXPLAIN_OUT="$ROOT/explain.out"
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --build-target all --verbose --explain --launcher none --linker default --dir "$PROJECT" >"$EXPLAIN_OUT" 2>&1 &
+WATCH_PID=$!
+wait_for_output "Watching.*all" "$EXPLAIN_OUT"
+wait_for_output "Waiting.*for changes" "$EXPLAIN_OUT"
+
+cat >"$PROJECT/src/one.cpp" <<'CPP'
+int one() { return 10; }
+CPP
+
+wait_for_output "affected tasks" "$EXPLAIN_OUT"
+wait_for_output "Finished.*src/one.cpp.* in " "$EXPLAIN_OUT"
+reject_output "Change " "$EXPLAIN_OUT"
+reject_output "Classification" "$EXPLAIN_OUT"
+reject_output "Affected tasks" "$EXPLAIN_OUT"
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || true
 WATCH_PID=""
@@ -239,7 +269,7 @@ int three() { return 30; }
 CPP
 
 wait_for_output "ninja: Entering directory" "$CMAKE_VERBOSE_OUT"
-wait_for_output "Finished.*rebuilt.*src/three.cpp.* in " "$CMAKE_VERBOSE_OUT"
+wait_for_output "Finished.*src/three.cpp.* in " "$CMAKE_VERBOSE_OUT"
 reject_output "Rebuilt all" "$CMAKE_VERBOSE_OUT"
 reject_output "Stopped build watcher" "$CMAKE_VERBOSE_OUT"
 kill -INT "$WATCH_PID" 2>/dev/null || true
@@ -303,7 +333,7 @@ cat >"$NATIVE_PROJECT/src/one.cpp" <<'CPP'
 int one() { return 3; }
 CPP
 
-wait_for_output "Finished.*rebuilt.*src/one.cpp.* in " "$NATIVE_OUT"
+wait_for_output "Finished.*src/one.cpp.* in " "$NATIVE_OUT"
 reject_output "^Change " "$NATIVE_OUT"
 reject_output "^Building incremental graph" "$NATIVE_OUT"
 reject_output "Configuring.*project graph" "$NATIVE_OUT"
@@ -360,7 +390,7 @@ CPP
 
   wait_for_output "Building .*[.][.][.].*ExtremelyLongHealthControllerNameForTerminalTruncation.cpp" "$TTY_OUT"
   wait_for_output "Linking tty_shop" "$TTY_OUT"
-  wait_for_output "Finished.*rebuilt.*[.][.][.].*ExtremelyLongHealthControllerNameForTerminalTruncation.cpp.* in " "$TTY_OUT"
+  wait_for_output "Finished.*[.][.][.].*ExtremelyLongHealthControllerNameForTerminalTruncation.cpp.* in " "$TTY_OUT"
 
   if grep -q 'Finished.*Building ' "$TTY_OUT"; then
     cat "$TTY_OUT" >&2

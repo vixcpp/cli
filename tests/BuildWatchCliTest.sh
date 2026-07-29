@@ -193,6 +193,12 @@ if grep -n '^$' "$WATCH_OUT" >/dev/null; then
   exit 1
 fi
 
+if grep -q $'\r' "$WATCH_OUT"; then
+  cat "$WATCH_OUT" >&2
+  echo "redirected compact watch output contains carriage returns" >&2
+  exit 1
+fi
+
 VERBOSE_OUT="$ROOT/verbose.out"
 HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --verbose --launcher none --linker default --dir "$PROJECT" >"$VERBOSE_OUT" 2>&1 &
 WATCH_PID=$!
@@ -267,5 +273,66 @@ reject_output "Configuring.*project graph" "$NATIVE_OUT"
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || true
 WATCH_PID=""
+
+if command -v script >/dev/null 2>&1; then
+  TTY_PROJECT="$ROOT/tty-native-shop"
+  mkdir -p "$TTY_PROJECT/src/shop/presentation/controllers" "$TTY_PROJECT/include" "$ROOT/bin"
+
+  REAL_CXX="$(command -v c++)"
+  cat >"$ROOT/bin/c++" <<SH
+#!/usr/bin/env bash
+sleep 0.6
+exec "$REAL_CXX" "\$@"
+SH
+  chmod +x "$ROOT/bin/c++"
+
+  cat >"$TTY_PROJECT/vix.app" <<'APP'
+name = "tty_shop"
+type = "executable"
+standard = "c++20"
+sources = [
+  "src/main.cpp",
+  "src/shop/presentation/controllers/ExtremelyLongHealthControllerNameForTerminalTruncation.cpp"
+]
+include_dirs = ["include"]
+APP
+
+  cat >"$TTY_PROJECT/include/shop.hpp" <<'HPP'
+#pragma once
+int health();
+HPP
+
+  cat >"$TTY_PROJECT/src/main.cpp" <<'CPP'
+#include "shop.hpp"
+int main() { return health(); }
+CPP
+  cat >"$TTY_PROJECT/src/shop/presentation/controllers/ExtremelyLongHealthControllerNameForTerminalTruncation.cpp" <<'CPP'
+int health() { return 0; }
+CPP
+
+  TTY_OUT="$ROOT/tty-watch.out"
+  : >"$TTY_OUT"
+  script -q -f "$TTY_OUT" -c "env HOME='$HOME_DIR' CCACHE_DISABLE=1 PATH='$ROOT/bin:$PATH' '$VIX_BIN' build --watch --launcher none --linker default --dir '$TTY_PROJECT'" >/dev/null 2>&1 &
+  WATCH_PID=$!
+  wait_for_output "Waiting.*for changes" "$TTY_OUT"
+
+  cat >"$TTY_PROJECT/src/shop/presentation/controllers/ExtremelyLongHealthControllerNameForTerminalTruncation.cpp" <<'CPP'
+int health() { return 1; }
+CPP
+
+  wait_for_output "Building .*[.][.][.].*ExtremelyLongHealthControllerNameForTerminalTruncation.cpp" "$TTY_OUT"
+  wait_for_output "Linking tty_shop" "$TTY_OUT"
+  wait_for_output "Finished.*rebuilt.*[.][.][.].*ExtremelyLongHealthControllerNameForTerminalTruncation.cpp.* in " "$TTY_OUT"
+
+  if grep -q 'Finished.*Building ' "$TTY_OUT"; then
+    cat "$TTY_OUT" >&2
+    echo "final watch line contains leftover dynamic progress text" >&2
+    exit 1
+  fi
+
+  kill -INT "$WATCH_PID" 2>/dev/null || true
+  wait "$WATCH_PID" || true
+  WATCH_PID=""
+fi
 
 echo "BuildWatchCliTest passed"

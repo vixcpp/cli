@@ -39,6 +39,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -282,10 +283,10 @@ namespace vix::commands::BuildCommand
       if (static_cast<int>(value.size()) <= width)
         return value;
 
-      if (width <= 1)
+      if (width <= 3)
         return value.substr(0, static_cast<std::size_t>(width));
 
-      return value.substr(0, static_cast<std::size_t>(width - 1)) + "~";
+      return "..." + value.substr(value.size() - static_cast<std::size_t>(width - 3));
     }
 
     static std::string watch_fit_terminal_subject(
@@ -389,6 +390,11 @@ namespace vix::commands::BuildCommand
             detail_(std::move(detail)),
             started_(std::chrono::steady_clock::now())
       {
+        verb_ =
+            action_ == WatchDisplayAction::Reconfigured
+                ? "Configuring"
+                : "Building";
+
         if (!active_)
           return;
 
@@ -410,6 +416,20 @@ namespace vix::commands::BuildCommand
 
       WatchProgressLine(const WatchProgressLine &) = delete;
       WatchProgressLine &operator=(const WatchProgressLine &) = delete;
+
+      void update(
+          std::string verb,
+          std::string subject,
+          std::string detail = {})
+      {
+        if (!active_)
+          return;
+
+        std::lock_guard<std::mutex> lock(mutex_);
+        verb_ = std::move(verb);
+        subject_ = std::move(subject);
+        detail_ = std::move(detail);
+      }
 
       void stop()
       {
@@ -433,20 +453,36 @@ namespace vix::commands::BuildCommand
                 std::chrono::steady_clock::now() - started_)
                 .count();
 
-        const std::string verb =
-            action_ == WatchDisplayAction::Reconfigured
-                ? "Configuring"
-                : "Building";
+        std::string verb;
+        std::string subject;
+        std::string detail;
 
-        std::ostringstream line;
-        line << verb << " " << subject_;
-
-        if (!detail_.empty())
-          line << " (" << detail_ << ")";
-
-        line << " " << watch_format_duration(ms);
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          verb = verb_;
+          subject = subject_;
+          detail = detail_;
+        }
 
         const int columns = watch_terminal_columns();
+        const std::string duration = watch_format_duration(ms);
+        const int reservedColumns =
+            static_cast<int>(
+                verb.size() +
+                std::string("  ").size() +
+                duration.size() +
+                (detail.empty() ? 0 : detail.size() + 3));
+        const int subjectWidth = std::max(12, columns - reservedColumns);
+
+        std::ostringstream line;
+        line << verb << " "
+             << watch_truncate_plain(subject, subjectWidth);
+
+        if (!detail.empty())
+          line << " (" << detail << ")";
+
+        line << " " << duration;
+
         std::cout << "\r\033[2K"
                   << watch_truncate_plain(line.str(), columns)
                   << std::flush;
@@ -455,6 +491,8 @@ namespace vix::commands::BuildCommand
       bool active_{false};
       std::atomic<bool> stop_{false};
       std::thread worker_;
+      std::mutex mutex_;
+      std::string verb_{"Building"};
       std::string subject_;
       WatchDisplayAction action_{WatchDisplayAction::Rebuilt};
       std::string detail_;
@@ -571,7 +609,8 @@ namespace vix::commands::BuildCommand
         WatchDisplayAction action,
         bool structuralChange,
         long long ms,
-        std::string detail = {})
+        std::string detail = {},
+        std::string subjectOverride = {})
     {
       if (display.verbose)
         return;
@@ -580,11 +619,13 @@ namespace vix::commands::BuildCommand
           action == WatchDisplayAction::Reconfigured;
 
       const std::string subject =
-          watch_change_subject(
-              batch,
-              display.projectDir,
-              configurationChange,
-              structuralChange);
+          subjectOverride.empty()
+              ? watch_change_subject(
+                    batch,
+                    display.projectDir,
+                    configurationChange,
+                    structuralChange)
+              : std::move(subjectOverride);
 
       const char *labelColor = GREEN;
       const char *verb = "rebuilt";
@@ -2779,6 +2820,74 @@ namespace vix::commands::BuildCommand
       return !sourcePath.empty() && !objectPath.empty();
     }
 
+    static std::string compile_task_source_subject(
+        const build::BuildGraph &graph,
+        const build::BuildTask &task,
+        const fs::path &projectDir)
+    {
+      fs::path sourcePath;
+      fs::path objectPath;
+      std::vector<fs::path> dependencyPaths;
+
+      if (!collect_compile_task_paths(
+              graph,
+              task,
+              sourcePath,
+              objectPath,
+              dependencyPaths))
+      {
+        return task.id;
+      }
+
+      return watch_relative_path(sourcePath, projectDir);
+    }
+
+    static std::string compile_task_subject_for_id(
+        const build::BuildGraph &graph,
+        const std::string &taskId,
+        const fs::path &projectDir)
+    {
+      const build::BuildTask *task = graph.find_task(taskId);
+
+      if (!task)
+        return taskId;
+
+      return compile_task_source_subject(graph, *task, projectDir);
+    }
+
+    static std::string compile_task_summary_subject(
+        const build::BuildGraph &graph,
+        const std::vector<std::string> &taskIds,
+        const fs::path &projectDir)
+    {
+      std::set<std::string> sourceSubjects;
+
+      for (const std::string &taskId : taskIds)
+      {
+        const build::BuildTask *task = graph.find_task(taskId);
+
+        if (!task)
+          continue;
+
+        sourceSubjects.insert(
+            compile_task_source_subject(
+                graph,
+                *task,
+                projectDir));
+      }
+
+      if (sourceSubjects.size() == 1)
+        return *sourceSubjects.begin();
+
+      if (!sourceSubjects.empty())
+        return std::to_string(sourceSubjects.size()) + " files";
+
+      if (taskIds.size() == 1)
+        return taskIds.front();
+
+      return std::to_string(taskIds.size()) + " files";
+    }
+
     static build::BuildTaskResult run_cached_graph_compile_task(
         const build::BuildGraph &graph,
         const build::ObjectCache &objectCache,
@@ -3966,7 +4075,9 @@ namespace vix::commands::BuildCommand
     static int run_native_vix_app_tasks(
         const process::Options &opt,
         NativeVixAppBuildSession &session,
-        const std::vector<std::string> &taskIds)
+        const std::vector<std::string> &taskIds,
+        WatchProgressLine *progress = nullptr,
+        const std::string &progressDetail = {})
     {
       build::ObjectCache objectCache(session.plan.buildDir);
 
@@ -4001,6 +4112,17 @@ namespace vix::commands::BuildCommand
           scheduler.run(
               [&](build::BuildTask &task)
               {
+                if (progress)
+                {
+                  progress->update(
+                      "Building",
+                      compile_task_source_subject(
+                          session.graph,
+                          task,
+                          session.plan.userProjectDir),
+                      progressDetail);
+                }
+
                 build::BuildTaskResult taskResult =
                     run_cached_graph_compile_task(
                         session.graph,
@@ -4031,8 +4153,18 @@ namespace vix::commands::BuildCommand
         const process::Options &opt,
         const fs::path &projectDir,
         const app::AppManifest &manifest,
-        NativeVixAppBuildSession &session)
+        NativeVixAppBuildSession &session,
+        WatchProgressLine *progress = nullptr,
+        const std::string &progressDetail = {})
     {
+      if (progress)
+      {
+        progress->update(
+            "Linking",
+            manifest.name.empty() ? std::string("vix.app") : manifest.name,
+            progressDetail);
+      }
+
       const std::vector<std::string> linkCommand =
           native_vix_app_link_command(
               session.objectPaths,
@@ -5491,6 +5623,13 @@ namespace vix::commands::BuildCommand
                 action,
                 false,
                 sourceOnlyChange ? std::string() : std::string("full refresh"));
+            const std::string finalSubject =
+                sourceOnlyChange
+                    ? compile_task_summary_subject(
+                          nativeSession.graph,
+                          sourceTaskIds,
+                          project.userProjectDir)
+                    : std::string();
             WatchCapturedRun run =
                 watch_run_capturing_stderr(
                     compactWatchOutput,
@@ -5502,7 +5641,8 @@ namespace vix::commands::BuildCommand
                             run_native_vix_app_tasks(
                                 buildOpt,
                                 nativeSession,
-                                sourceTaskIds);
+                                sourceTaskIds,
+                                &progress);
 
                         if (compileCode != 0)
                           return compileCode;
@@ -5511,7 +5651,8 @@ namespace vix::commands::BuildCommand
                             buildOpt,
                             project.userProjectDir,
                             activeManifest,
-                            nativeSession);
+                            nativeSession,
+                            &progress);
                       }
 
                       if (action == WatchDisplayAction::Reconfigured)
@@ -5550,7 +5691,9 @@ namespace vix::commands::BuildCommand
                           run_native_vix_app_tasks(
                               buildOpt,
                               nativeSession,
-                              {});
+                              {},
+                              &progress,
+                              "full refresh");
 
                       if (compileCode != 0)
                         return compileCode;
@@ -5559,7 +5702,9 @@ namespace vix::commands::BuildCommand
                           buildOpt,
                           project.userProjectDir,
                           activeManifest,
-                          nativeSession);
+                          nativeSession,
+                          &progress,
+                          "full refresh");
                     });
             lastCode = run.code;
             const auto ms =
@@ -5581,7 +5726,8 @@ namespace vix::commands::BuildCommand
                     action,
                     false,
                     ms,
-                    sourceOnlyChange ? std::string() : std::string("full refresh"));
+                    sourceOnlyChange ? std::string() : std::string("full refresh"),
+                    finalSubject);
               else
                 watch_print_failed(
                     display,
@@ -5812,6 +5958,9 @@ namespace vix::commands::BuildCommand
           batch,
           WatchDisplayAction::Rebuilt,
           false);
+      std::mutex observedCompileTasksMutex;
+      std::vector<std::string> observedCompileTaskIds;
+      std::set<std::string> observedCompileTaskSet;
 
       if (sessionOpt.explain && !sessionOpt.quiet)
       {
@@ -5845,6 +5994,31 @@ namespace vix::commands::BuildCommand
       executorDependencies.onEvent =
           [&](const build::BuildGraphExecutorEvent &event)
       {
+        if (event.kind == build::BuildGraphExecutorEventKind::CompilingTask &&
+            !event.taskId.empty())
+        {
+          {
+            std::lock_guard<std::mutex> lock(observedCompileTasksMutex);
+            if (observedCompileTaskSet.insert(event.taskId).second)
+              observedCompileTaskIds.push_back(event.taskId);
+          }
+
+          progress.update(
+              "Building",
+              compile_task_subject_for_id(
+                  currentGraph,
+                  event.taskId,
+                  plan_.userProjectDir));
+        }
+        else if (event.kind == build::BuildGraphExecutorEventKind::RunningNinja)
+        {
+          progress.update(
+              "Linking",
+              event.target.empty()
+                  ? build::default_build_target_name(sessionOpt, plan_)
+                  : event.target);
+        }
+
         build::render_graph_debug_event(
             event,
             sessionOpt.quiet,
@@ -5919,12 +6093,29 @@ namespace vix::commands::BuildCommand
 
       if (compactWatchOutput)
       {
+        std::vector<std::string> finalTaskIds;
+
+        {
+          std::lock_guard<std::mutex> lock(observedCompileTasksMutex);
+          finalTaskIds = observedCompileTaskIds;
+        }
+
+        const std::string finalSubject =
+            finalTaskIds.empty()
+                ? std::string()
+                : compile_task_summary_subject(
+                      currentGraph,
+                      finalTaskIds,
+                      plan_.userProjectDir);
+
         watch_print_completed(
             watchDisplay,
             batch,
             WatchDisplayAction::Rebuilt,
             false,
-            ms);
+            ms,
+            {},
+            finalSubject);
       }
       else if (!sessionOpt.quiet)
       {

@@ -224,6 +224,14 @@ add_test(
 )
 
 add_test(
+  NAME vix_cli_run_single_cpp_cache
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/RunSingleCppCacheCliTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
   NAME vix_cli_publish_preflight
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/PublishPreflightTest.sh

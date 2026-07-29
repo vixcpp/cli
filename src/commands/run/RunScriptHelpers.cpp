@@ -299,13 +299,29 @@ namespace vix::commands::RunCommand::detail
 
   std::optional<fs::path> find_vix_lib()
   {
+    std::vector<fs::path> prefixes;
+
+    const char *home = vix::utils::vix_getenv(
+#ifdef _WIN32
+        "USERPROFILE"
+#else
+        "HOME"
+#endif
+    );
+
+    if (home && *home)
+      prefixes.push_back(fs::path(home) / ".vix" / "lib");
+
+    prefixes.emplace_back("/usr/local/lib");
+    prefixes.emplace_back("/usr/lib");
+
     std::error_code ec;
 
-    for (const char *prefix : {"/usr/local/lib", "/usr/lib"})
+    for (const auto &prefix : prefixes)
     {
       for (const char *name : {"libvix.a", "libvix.so", "libvix.dylib"})
       {
-        const fs::path p = fs::path(prefix) / name;
+        const fs::path p = prefix / name;
         ec.clear();
         if (fs::exists(p, ec) && !ec)
           return p;
@@ -318,7 +334,22 @@ namespace vix::commands::RunCommand::detail
   std::vector<fs::path> find_vix_all_module_libs()
   {
     std::vector<fs::path> result;
+    std::vector<fs::path> prefixes;
     std::error_code ec;
+
+    const char *home = vix::utils::vix_getenv(
+#ifdef _WIN32
+        "USERPROFILE"
+#else
+        "HOME"
+#endif
+    );
+
+    if (home && *home)
+      prefixes.push_back(fs::path(home) / ".vix" / "lib");
+
+    prefixes.emplace_back("/usr/local/lib");
+    prefixes.emplace_back("/usr/lib");
 
     static const char *modules[] = {
         "libvix_core.a",
@@ -344,14 +375,14 @@ namespace vix::commands::RunCommand::detail
         "libvix_error.a",
         nullptr};
 
-    for (const char *prefix : {"/usr/local/lib", "/usr/lib"})
+    for (const auto &prefix : prefixes)
     {
       bool found = false;
       std::vector<fs::path> batch;
 
       for (int i = 0; modules[i] != nullptr; ++i)
       {
-        const fs::path p = fs::path(prefix) / modules[i];
+        const fs::path p = prefix / modules[i];
         ec.clear();
         if (fs::exists(p, ec) && !ec)
         {

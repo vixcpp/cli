@@ -1441,6 +1441,54 @@ namespace vix::commands::RunCommand::detail
       return ensure_script_executable_exists(state);
     }
 
+    const char *script_fallback_reason_name(ScriptFallbackReason reason) noexcept
+    {
+      switch (reason)
+      {
+      case ScriptFallbackReason::None:
+        return "none";
+      case ScriptFallbackReason::UsesCompiledDeps:
+        return "uses compiled dependencies";
+      case ScriptFallbackReason::UsesVixRuntime:
+        return "uses Vix runtime without direct installation";
+      case ScriptFallbackReason::UsesOrm:
+        return "uses ORM";
+      case ScriptFallbackReason::UsesDatabase:
+        return "uses database";
+      case ScriptFallbackReason::UsesMySql:
+        return "uses MySQL";
+      case ScriptFallbackReason::RequiresCMakeTargets:
+        return "requires CMake targets";
+      case ScriptFallbackReason::UnsupportedFlags:
+        return "unsupported compiler flags";
+      case ScriptFallbackReason::UnsupportedLayout:
+        return "unsupported layout";
+      case ScriptFallbackReason::Unknown:
+        return "unknown";
+      }
+
+      return "unknown";
+    }
+
+    bool trace_script_strategy_enabled(const Options &opt)
+    {
+      if (opt.verbose)
+        return true;
+
+      const char *env = vix::utils::vix_getenv("VIX_RUN_TRACE_CACHE");
+      return env && *env && std::string(env) != "0";
+    }
+
+    void print_cmake_fallback_trace(const Options &opt, const ScriptProbeResult &probe)
+    {
+      if (!trace_script_strategy_enabled(opt))
+        return;
+
+      std::cerr << "script strategy: cmake fallback\n";
+      std::cerr << "fallback reason: "
+                << script_fallback_reason_name(probe.fallbackReason) << "\n";
+    }
+
     int build_script_executable_internal(const Options &opt, fs::path &exePath)
     {
       Options o = opt;
@@ -1472,7 +1520,7 @@ namespace vix::commands::RunCommand::detail
 
         const DirectScriptCacheState cache = load_direct_script_cache_state(directPlan);
 
-        if (directPlan.shouldCompile)
+        if (cache.needsRebuild)
         {
           const LiveRunResult build = run_cmd_live_filtered_capture(
               directPlan.compileCmd,
@@ -1501,14 +1549,15 @@ namespace vix::commands::RunCommand::detail
             return build.exitCode != 0 ? build.exitCode : 1;
           }
 
-          // Do not rewrite legacy cache metadata here.
-          // The direct runner owns the cache metadata format.
+          if (!persist_direct_script_cache_metadata(directPlan))
+            std::cerr << "warning: unable to persist direct script cache metadata\n";
         }
 
         exePath = directPlan.binaryPath;
         return 0;
       }
 
+      print_cmake_fallback_trace(o, probe);
       const CMakeScriptPlan cmakePlan = make_cmake_script_plan(o, probe);
       ScriptProjectState state = make_state_from_cmake_plan(cmakePlan);
 
@@ -1647,6 +1696,7 @@ namespace vix::commands::RunCommand::detail
       return run_single_cpp_direct(o, directPlan);
     }
 
+    print_cmake_fallback_trace(o, probe);
     const CMakeScriptPlan cmakePlan = make_cmake_script_plan(o, probe);
     return run_single_cpp_cmake(o, cmakePlan);
   }

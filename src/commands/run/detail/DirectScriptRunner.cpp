@@ -25,6 +25,8 @@
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -57,6 +59,83 @@ namespace vix::commands::RunCommand::detail
 #else
       return "c++";
 #endif
+    }
+
+    std::string path_list_separator()
+    {
+#ifdef _WIN32
+      return ";";
+#else
+      return ":";
+#endif
+    }
+
+    fs::path canonical_or_absolute_path(const fs::path &path)
+    {
+      std::error_code ec;
+      fs::path resolved = fs::weakly_canonical(path, ec);
+      if (!ec)
+        return resolved.lexically_normal();
+
+      ec.clear();
+      resolved = fs::absolute(path, ec);
+      if (!ec)
+        return resolved.lexically_normal();
+
+      return path.lexically_normal();
+    }
+
+    std::string resolve_executable_path(const std::string &exe)
+    {
+      if (exe.empty())
+        return exe;
+
+      const fs::path exePath{exe};
+      if (exePath.is_absolute() || exe.find('/') != std::string::npos
+#ifdef _WIN32
+          || exe.find('\\') != std::string::npos
+#endif
+      )
+      {
+        return canonical_or_absolute_path(exePath).string();
+      }
+
+      const char *pathEnv = vix::utils::vix_getenv("PATH");
+      if (!pathEnv || !*pathEnv)
+        return exe;
+
+      const std::string paths{pathEnv};
+      const std::string sep = path_list_separator();
+      std::size_t start = 0;
+
+      while (start <= paths.size())
+      {
+        const std::size_t end = paths.find(sep, start);
+        const std::string entry = paths.substr(
+            start,
+            end == std::string::npos ? std::string::npos : end - start);
+
+        if (!entry.empty())
+        {
+          const fs::path candidate = fs::path(entry) / exe;
+          std::error_code ec;
+          if (fs::exists(candidate, ec) && !ec)
+            return canonical_or_absolute_path(candidate).string();
+
+#ifdef _WIN32
+          const fs::path exeCandidate = fs::path(entry) / (exe + ".exe");
+          ec.clear();
+          if (fs::exists(exeCandidate, ec) && !ec)
+            return canonical_or_absolute_path(exeCandidate).string();
+#endif
+        }
+
+        if (end == std::string::npos)
+          break;
+        start = end + sep.size();
+      }
+
+      return exe;
     }
 
     /**
@@ -164,6 +243,100 @@ namespace vix::commands::RunCommand::detail
     std::string file_content_hash_hex(const fs::path &p)
     {
       return hex_u64(fnv1a_64(read_file_or_empty(p)));
+    }
+
+    bool script_contains(const fs::path &p, std::string_view needle)
+    {
+      const std::string text = read_file_or_empty(p);
+      return text.find(needle) != std::string::npos;
+    }
+
+    std::optional<fs::path> find_installed_vix_module_lib(const std::string &name)
+    {
+      std::vector<fs::path> prefixes;
+      std::error_code ec;
+
+      const char *home = vix::utils::vix_getenv(
+#ifdef _WIN32
+          "USERPROFILE"
+#else
+          "HOME"
+#endif
+      );
+
+      if (home && *home)
+        prefixes.push_back(fs::path(home) / ".vix" / "lib");
+
+      prefixes.emplace_back("/usr/local/lib");
+      prefixes.emplace_back("/usr/lib");
+
+      for (const auto &prefix : prefixes)
+      {
+        const fs::path p = prefix / ("libvix_" + name + ".a");
+        ec.clear();
+        if (fs::exists(p, ec) && !ec)
+          return p;
+      }
+
+      return std::nullopt;
+    }
+
+    void append_module_once(std::vector<std::string> &modules, const std::string &name)
+    {
+      if (std::find(modules.begin(), modules.end(), name) == modules.end())
+        modules.push_back(name);
+    }
+
+    std::vector<fs::path> find_vix_direct_module_libs(const fs::path &scriptPath)
+    {
+      std::vector<std::string> modules;
+
+      append_module_once(modules, "io");
+      append_module_once(modules, "log");
+      append_module_once(modules, "utils");
+      append_module_once(modules, "error");
+
+      if (script_contains(scriptPath, "<vix/fs") ||
+          script_contains(scriptPath, "\"vix/fs"))
+      {
+        append_module_once(modules, "fs");
+        append_module_once(modules, "path");
+      }
+
+      if (script_contains(scriptPath, "<vix/path") ||
+          script_contains(scriptPath, "\"vix/path"))
+      {
+        append_module_once(modules, "path");
+      }
+
+      if (script_contains(scriptPath, "<vix/env") ||
+          script_contains(scriptPath, "\"vix/env"))
+      {
+        append_module_once(modules, "env");
+        append_module_once(modules, "path");
+      }
+
+      if (script_contains(scriptPath, "<vix/os") ||
+          script_contains(scriptPath, "\"vix/os"))
+      {
+        append_module_once(modules, "os");
+        append_module_once(modules, "path");
+      }
+
+      std::vector<fs::path> libs;
+      for (const auto &module : modules)
+      {
+        if (const auto lib = find_installed_vix_module_lib(module))
+          libs.push_back(*lib);
+      }
+
+      return libs;
+    }
+
+    void sort_unique(std::vector<std::string> &values)
+    {
+      std::sort(values.begin(), values.end());
+      values.erase(std::unique(values.begin(), values.end()), values.end());
     }
 
     /**
@@ -403,7 +576,7 @@ namespace vix::commands::RunCommand::detail
         const Options &opt)
     {
       const fs::path abs = fs::absolute(cppPath).lexically_normal();
-      const std::string compiler = choose_cxx_compiler();
+      const std::string compiler = resolve_executable_path(choose_cxx_compiler());
 
       DirectBuildFingerprint fp{};
       fp.formatVersion = "1";
@@ -430,7 +603,22 @@ namespace vix::commands::RunCommand::detail
       fp.linkOpts = probe.linkOpts;
 
       fp.depFingerprints = collect_dep_fingerprints(probe);
+      if (probe.usesVixRuntime)
+      {
+        for (const auto &lib : find_vix_direct_module_libs(abs))
+          fp.depFingerprints.push_back(path_fingerprint(lib));
+      }
       fp.headerFingerprints = collect_header_fingerprints(probe);
+
+      sort_unique(fp.includeDirs);
+      sort_unique(fp.systemIncludeDirs);
+      sort_unique(fp.defines);
+      sort_unique(fp.compileOpts);
+      sort_unique(fp.libDirs);
+      sort_unique(fp.libs);
+      sort_unique(fp.linkOpts);
+      sort_unique(fp.depFingerprints);
+      sort_unique(fp.headerFingerprints);
 
       return fp;
     }
@@ -454,7 +642,6 @@ namespace vix::commands::RunCommand::detail
 
       oss << "script_path=" << fp.scriptPath << "\n";
       oss << "script_content_hash=" << fp.scriptContentHash << "\n";
-      oss << "script_mtime_ns=" << fp.scriptMtimeNs << "\n";
 
       append_fingerprint_list(oss, "include_dirs", fp.includeDirs);
       append_fingerprint_list(oss, "system_include_dirs", fp.systemIncludeDirs);
@@ -512,36 +699,173 @@ namespace vix::commands::RunCommand::detail
     /**
      * @brief Return whether the direct cache metadata matches the current script content.
      */
-    bool direct_cache_is_valid(const DirectScriptPlan &plan, const DirectScriptCacheState &cache)
+    std::string meta_value(const std::string &meta, std::string_view key)
+    {
+      const std::string prefix = std::string(key) + "=";
+      const std::size_t start = meta.find(prefix);
+      if (start == std::string::npos)
+        return {};
+
+      const std::size_t valueStart = start + prefix.size();
+      const std::size_t end = meta.find('\n', valueStart);
+      return meta.substr(
+          valueStart,
+          end == std::string::npos ? std::string::npos : end - valueStart);
+    }
+
+    std::string fingerprint_section(const std::string &meta)
+    {
+      const std::string marker = "\n[fingerprint]\n";
+      const std::size_t pos = meta.find(marker);
+      if (pos == std::string::npos)
+        return {};
+
+      return meta.substr(pos + marker.size());
+    }
+
+    std::map<std::string, std::string> parse_key_value_lines(const std::string &text)
+    {
+      std::map<std::string, std::string> out;
+      std::istringstream stream{text};
+      std::string line;
+
+      while (std::getline(stream, line))
+      {
+        const std::size_t eq = line.find('=');
+        if (eq == std::string::npos)
+          continue;
+
+        out[line.substr(0, eq)] = line.substr(eq + 1);
+      }
+
+      return out;
+    }
+
+    std::string first_fingerprint_difference(
+        const std::string &cached,
+        const std::string &current)
+    {
+      const auto cachedMap = parse_key_value_lines(cached);
+      const auto currentMap = parse_key_value_lines(current);
+
+      for (const auto &[key, currentValue] : currentMap)
+      {
+        const auto it = cachedMap.find(key);
+        if (it == cachedMap.end())
+          return key + " added";
+        if (it->second != currentValue)
+          return key + " changed";
+      }
+
+      for (const auto &[key, cachedValue] : cachedMap)
+      {
+        (void)cachedValue;
+        if (currentMap.find(key) == currentMap.end())
+          return key + " removed";
+      }
+
+      return "fingerprint changed";
+    }
+
+    std::string direct_cache_rebuild_reason(
+        const DirectScriptPlan &plan,
+        const DirectScriptCacheState &cache)
     {
       if (!file_exists(plan.scriptPath))
-        return false;
+        return "source file missing";
 
       if (!file_exists(plan.binaryPath))
-        return false;
+        return "binary missing";
 
       if (!file_exists(cache.metaFile))
-        return false;
+        return "metadata missing";
 
       const std::string meta = text::read_text_file_or_empty(cache.metaFile);
       if (meta.empty())
-        return false;
+        return "metadata empty";
 
       const std::string wantKey = "cache_key=" + plan.cacheKey + "\n";
       if (meta.find(wantKey) == std::string::npos)
-        return false;
-
-      const std::string wantMtime =
-          "script_mtime_ns=" + std::to_string(file_mtime_ns_local(plan.scriptPath)) + "\n";
-      if (meta.find(wantMtime) == std::string::npos)
-        return false;
+        return "cache key changed";
 
       const std::string wantContentHash =
           "script_content_hash=" + file_content_hash_hex(plan.scriptPath) + "\n";
       if (meta.find(wantContentHash) == std::string::npos)
-        return false;
+        return "source content hash changed";
 
-      return true;
+      const std::string cachedFingerprint = fingerprint_section(meta);
+      const std::string currentFingerprint =
+          serialize_direct_build_fingerprint(plan.fingerprint);
+
+      if (cachedFingerprint.empty())
+        return "fingerprint metadata missing";
+
+      if (cachedFingerprint != currentFingerprint)
+        return first_fingerprint_difference(cachedFingerprint, currentFingerprint);
+
+      return {};
+    }
+
+    bool trace_direct_cache_enabled(const Options &opt)
+    {
+      if (opt.verbose)
+        return true;
+
+      const char *env = vix::utils::vix_getenv("VIX_RUN_TRACE_CACHE");
+      return env && *env && std::string(env) != "0";
+    }
+
+    std::string yes_no(bool value)
+    {
+      return value ? "yes" : "no";
+    }
+
+    void print_direct_cache_trace(
+        const Options &opt,
+        const DirectScriptPlan &plan,
+        const DirectScriptCacheState &cache)
+    {
+      if (!trace_direct_cache_enabled(opt))
+        return;
+
+      const bool binaryExists = file_exists(plan.binaryPath);
+      const bool metadataExists = file_exists(cache.metaFile);
+      std::string meta;
+      if (metadataExists)
+        meta = text::read_text_file_or_empty(cache.metaFile);
+
+      const bool keyMatch =
+          !meta.empty() && meta_value(meta, "cache_key") == plan.cacheKey;
+      const bool mtimeMatch =
+          !meta.empty() &&
+          meta_value(meta, "script_mtime_ns") ==
+              std::to_string(file_mtime_ns_local(plan.scriptPath));
+      const bool hashMatch =
+          !meta.empty() &&
+          meta_value(meta, "script_content_hash") ==
+              file_content_hash_hex(plan.scriptPath);
+      const bool fingerprintMatch =
+          !meta.empty() &&
+          fingerprint_section(meta) ==
+              serialize_direct_build_fingerprint(plan.fingerprint);
+
+      std::cerr << "script strategy: direct\n";
+      std::cerr << "cache key: " << plan.cacheKey << "\n";
+      std::cerr << "cache dir: " << plan.cacheDir.string() << "\n";
+      std::cerr << "binary exists: " << yes_no(binaryExists) << "\n";
+      std::cerr << "metadata exists: " << yes_no(metadataExists) << "\n";
+      std::cerr << "cache key match: " << yes_no(keyMatch) << "\n";
+      std::cerr << "source mtime match: " << yes_no(mtimeMatch) << "\n";
+      std::cerr << "source content hash match: " << yes_no(hashMatch) << "\n";
+      std::cerr << "fingerprint match: " << yes_no(fingerprintMatch) << "\n";
+      std::cerr << "direct PCH: ";
+      if (const auto pch = find_vix_pch())
+        std::cerr << pch->string() << "\n";
+      else
+        std::cerr << "unavailable\n";
+      std::cerr << "rebuild reason: "
+                << (cache.rebuildReason.empty() ? "cache hit" : cache.rebuildReason)
+                << "\n";
     }
 
     /**
@@ -551,7 +875,7 @@ namespace vix::commands::RunCommand::detail
     {
       std::ostringstream cmd;
 
-      cmd << choose_cxx_compiler();
+      cmd << process::quote(plan.fingerprint.compilerPath);
 
       append_quoted(cmd, plan.scriptPath.string());
       cmd << " -o";
@@ -588,7 +912,7 @@ namespace vix::commands::RunCommand::detail
         }
         else
         {
-          const auto libs = find_vix_all_module_libs();
+          const auto libs = find_vix_direct_module_libs(plan.scriptPath);
           if (!libs.empty())
           {
 #ifndef __APPLE__
@@ -602,7 +926,7 @@ namespace vix::commands::RunCommand::detail
           }
         }
 
-        cmd << " -lpthread -ldl";
+        cmd << " -lspdlog -lfmt -pthread -ldl";
 #ifdef __APPLE__
         cmd << " -framework CoreFoundation";
 #endif
@@ -714,10 +1038,12 @@ namespace vix::commands::RunCommand::detail
     out.stdoutLogPath = plan.cacheDir / "stdout.log";
     out.stderrLogPath = plan.cacheDir / "stderr.log";
     out.cacheKey = plan.cacheKey;
+    out.rebuildReason.clear();
     out.cacheHit = false;
     out.needsRebuild = true;
 
-    if (direct_cache_is_valid(plan, out))
+    out.rebuildReason = direct_cache_rebuild_reason(plan, out);
+    if (out.rebuildReason.empty())
     {
       out.cacheHit = true;
       out.needsRebuild = false;
@@ -749,13 +1075,23 @@ namespace vix::commands::RunCommand::detail
     plan.effectiveTimeoutSec = effective_timeout_sec(opt);
     plan.probe = probe;
 
-    const auto cache = load_direct_script_cache_state(plan);
-    plan.shouldCompile = cache.needsRebuild;
-
     plan.compileCmd = make_direct_compile_cmd(opt, plan);
     plan.runCmd = make_direct_run_cmd(opt, plan);
 
+    const auto cache = load_direct_script_cache_state(plan);
+    plan.shouldCompile = cache.needsRebuild;
+    print_direct_cache_trace(opt, plan, cache);
+
     return plan;
+  }
+
+  bool persist_direct_script_cache_metadata(const DirectScriptPlan &plan)
+  {
+    if (!file_exists(plan.binaryPath))
+      return false;
+
+    const std::string meta = make_direct_cache_meta(plan.scriptPath, plan);
+    return text::write_text_file(plan.cacheDir / "meta.txt", meta);
   }
 
   int run_single_cpp_direct(const Options &opt, const DirectScriptPlan &plan)
@@ -778,7 +1114,7 @@ namespace vix::commands::RunCommand::detail
 
     const auto cache = load_direct_script_cache_state(plan);
 
-    if (plan.shouldCompile)
+    if (cache.needsRebuild)
     {
       const LiveRunResult build = run_cmd_live_filtered_capture(
           plan.compileCmd,
@@ -813,8 +1149,8 @@ namespace vix::commands::RunCommand::detail
         return build.exitCode != 0 ? build.exitCode : 1;
       }
 
-      const std::string meta = make_direct_cache_meta(plan.scriptPath, plan);
-      text::write_text_file(cache.metaFile, meta);
+      if (!persist_direct_script_cache_metadata(plan))
+        std::cerr << "warning: unable to persist direct script cache metadata\n";
     }
 
     if (!plan.shouldRun)

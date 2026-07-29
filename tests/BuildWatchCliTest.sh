@@ -95,6 +95,12 @@ wait_for_output "Watching.*shop"
 wait_for_output "Finished.*initial build.* in "
 wait_for_output "Waiting.*for changes"
 
+if grep -q '^[[:space:]]' "$WATCH_OUT"; then
+  cat "$WATCH_OUT" >&2
+  echo "compact watch output has leading whitespace" >&2
+  exit 1
+fi
+
 reject_output "Compiling shop"
 reject_output "build \\["
 reject_output "Configured"
@@ -211,5 +217,58 @@ if [[ -s "$QUIET_OUT" ]]; then
   echo "quiet watch produced successful-output text" >&2
   exit 1
 fi
+
+NATIVE_PROJECT="$ROOT/native-shop"
+mkdir -p "$NATIVE_PROJECT/src" "$NATIVE_PROJECT/include"
+
+cat >"$NATIVE_PROJECT/vix.app" <<'APP'
+name = "native_shop"
+type = "executable"
+standard = "c++20"
+sources = ["src/main.cpp", "src/one.cpp", "src/two.cpp"]
+include_dirs = ["include"]
+APP
+
+cat >"$NATIVE_PROJECT/include/shop.hpp" <<'HPP'
+#pragma once
+int one();
+int two();
+HPP
+
+cat >"$NATIVE_PROJECT/src/main.cpp" <<'CPP'
+#include "shop.hpp"
+int main() { return one() + two(); }
+CPP
+cat >"$NATIVE_PROJECT/src/one.cpp" <<'CPP'
+int one() { return 1; }
+CPP
+cat >"$NATIVE_PROJECT/src/two.cpp" <<'CPP'
+int two() { return 2; }
+CPP
+
+NATIVE_OUT="$ROOT/native-watch.out"
+HOME="$HOME_DIR" CCACHE_DISABLE=1 stdbuf -oL -eL "$VIX_BIN" build --watch --launcher none --linker default --dir "$NATIVE_PROJECT" >"$NATIVE_OUT" 2>&1 &
+WATCH_PID=$!
+wait_for_output "Watching.*native_shop" "$NATIVE_OUT"
+wait_for_output "Waiting.*for changes" "$NATIVE_OUT"
+
+if grep -q '^[[:space:]]' "$NATIVE_OUT"; then
+  cat "$NATIVE_OUT" >&2
+  echo "native compact watch output has leading whitespace" >&2
+  exit 1
+fi
+
+cat >"$NATIVE_PROJECT/src/one.cpp" <<'CPP'
+int one() { return 3; }
+CPP
+
+wait_for_output "Change.*src/one.cpp" "$NATIVE_OUT"
+wait_for_output "Building.*incremental graph" "$NATIVE_OUT"
+wait_for_output "Finished.*rebuilt.*src/one.cpp.* in " "$NATIVE_OUT"
+reject_output "Configuring.*project graph" "$NATIVE_OUT"
+
+kill -INT "$WATCH_PID" 2>/dev/null || true
+wait "$WATCH_PID" || true
+WATCH_PID=""
 
 echo "BuildWatchCliTest passed"

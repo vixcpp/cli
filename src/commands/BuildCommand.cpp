@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -85,6 +86,7 @@ namespace vix::commands::BuildCommand
     static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
     static volatile std::sig_atomic_t g_watch_stop_requested = 0;
     static constexpr const char *WATCH_PRIMARY = "\033[97m";
+    static constexpr int WATCH_LABEL_WIDTH = 12;
 
     static void on_watch_signal(int)
     {
@@ -242,6 +244,23 @@ namespace vix::commands::BuildCommand
       out.flush();
     }
 
+    static std::string watch_label(
+        const char *color,
+        const std::string &label)
+    {
+      std::ostringstream out;
+
+      out << "  "
+          << color << BOLD
+          << std::setw(WATCH_LABEL_WIDTH)
+          << std::right
+          << label
+          << RESET
+          << " ";
+
+      return out.str();
+    }
+
     static const char *watch_duration_color(long long ms)
     {
       if (ms >= 10000)
@@ -262,8 +281,7 @@ namespace vix::commands::BuildCommand
 
       std::ostringstream line;
 
-      line << CYAN << BOLD << "Watch" << RESET
-           << " "
+      line << watch_label(CYAN, "Watching")
            << WATCH_PRIMARY << BOLD << target << RESET;
 
       watch_print_line(display, line.str());
@@ -275,9 +293,10 @@ namespace vix::commands::BuildCommand
     {
       std::ostringstream line;
 
-      line << "  "
-           << GRAY
-           << "watching for changes · Ctrl+C to stop"
+      line << watch_label(GRAY, "Waiting")
+           << GRAY << "for changes"
+           << " "
+           << "(Ctrl+C to stop)"
            << RESET;
 
       watch_print_line(display, line.str(), out);
@@ -289,8 +308,7 @@ namespace vix::commands::BuildCommand
       if (display.quiet)
         return;
 
-      std::cout << RESET << "\n"
-                << std::flush;
+      std::cout << RESET << std::flush;
     }
 
     static void watch_print_started(
@@ -312,30 +330,32 @@ namespace vix::commands::BuildCommand
               configurationChange,
               structuralChange);
 
-      const char *icon = "↻";
-      const char *iconColor = CYAN;
-      const char *verb = "rebuilding...";
+      const char *phaseColor = CYAN;
+      const char *phase = "Building";
+      const char *detail = "incremental graph";
 
       if (configurationChange)
       {
-        verb = "reconfiguring...";
+        phase = "Configuring";
+        detail = "project graph";
       }
       else if (structuralChange)
       {
-        icon = "✦";
-        iconColor = YELLOW;
+        phaseColor = YELLOW;
+        detail = "project structure";
       }
 
-      std::ostringstream line;
+      std::ostringstream changeLine;
+      changeLine << watch_label(MAGENTA, "Change")
+                 << WATCH_PRIMARY << subject << RESET;
 
-      line << "  "
-           << iconColor << icon << RESET
-           << " "
-           << WATCH_PRIMARY << BOLD << subject << RESET
-           << "  "
-           << iconColor << verb << RESET;
+      watch_print_line(display, changeLine.str());
 
-      watch_print_line(display, line.str());
+      std::ostringstream phaseLine;
+      phaseLine << watch_label(phaseColor, phase)
+                << detail;
+
+      watch_print_line(display, phaseLine.str());
     }
 
     static bool watch_is_ninja_progress_line(const std::string &line)
@@ -397,10 +417,8 @@ namespace vix::commands::BuildCommand
 
       std::ostringstream status;
 
-      status << "  "
-             << GREEN << "✔" << RESET
-             << " "
-             << GREEN << BOLD << "ready" << RESET
+      status << watch_label(GREEN, "Finished")
+             << "initial build"
              << GRAY << " in " << RESET
              << watch_duration_color(ms)
              << BOLD
@@ -409,7 +427,6 @@ namespace vix::commands::BuildCommand
 
       watch_print_line(display, status.str());
       watch_print_waiting(display);
-      watch_print_line(display, "");
     }
 
     static void watch_print_initial_failed(
@@ -424,9 +441,7 @@ namespace vix::commands::BuildCommand
 
       std::ostringstream status;
 
-      status << "  "
-             << RED << "✖" << RESET
-             << " "
+      status << watch_label(RED, "Error")
              << RED << BOLD << "initial build failed" << RESET;
 
       watch_print_line(display, status.str(), std::cerr);
@@ -436,8 +451,7 @@ namespace vix::commands::BuildCommand
 
       if (!display.quiet && !filtered.empty())
       {
-        std::cerr << "\n"
-                  << filtered;
+        std::cerr << filtered;
 
         if (filtered.back() != '\n')
           std::cerr << "\n";
@@ -446,7 +460,6 @@ namespace vix::commands::BuildCommand
       }
 
       watch_print_waiting(display, std::cerr);
-      watch_print_line(display, "", std::cerr);
     }
 
     static void watch_print_completed(
@@ -469,30 +482,26 @@ namespace vix::commands::BuildCommand
               configurationChange,
               structuralChange);
 
-      const char *icon = "✔";
-      const char *iconColor = GREEN;
-      const char *verb = "rebuilt in ";
+      const char *labelColor = GREEN;
+      const char *verb = "rebuilt";
 
       if (configurationChange)
       {
-        icon = "↻";
-        iconColor = CYAN;
-        verb = "reconfigured in ";
+        labelColor = CYAN;
+        verb = "reconfigured";
       }
       else if (structuralChange)
       {
-        icon = "✦";
-        iconColor = YELLOW;
+        labelColor = YELLOW;
       }
 
       std::ostringstream line;
 
-      line << "  "
-           << iconColor << icon << RESET
+      line << watch_label(labelColor, "Finished")
+           << verb
            << " "
            << WATCH_PRIMARY << BOLD << subject << RESET
-           << "  "
-           << GRAY << verb << RESET
+           << GRAY << " in " << RESET
            << watch_duration_color(ms)
            << BOLD
            << watch_format_duration(ms)
@@ -528,11 +537,9 @@ namespace vix::commands::BuildCommand
 
       std::ostringstream line;
 
-      line << "  "
-           << RED << "✖" << RESET
-           << " "
+      line << watch_label(RED, "Error")
            << WATCH_PRIMARY << BOLD << subject << RESET
-           << "  "
+           << " "
            << RED << BOLD << actionLabel << RESET;
 
       watch_print_line(display, line.str(), std::cerr);
@@ -542,8 +549,7 @@ namespace vix::commands::BuildCommand
 
       if (!display.quiet && !filtered.empty())
       {
-        std::cerr << "\n"
-                  << filtered;
+        std::cerr << filtered;
 
         if (filtered.back() != '\n')
           std::cerr << "\n";
@@ -552,7 +558,6 @@ namespace vix::commands::BuildCommand
       }
 
       watch_print_waiting(display, std::cerr);
-      watch_print_line(display, "", std::cerr);
     }
 
     template <typename Fn>

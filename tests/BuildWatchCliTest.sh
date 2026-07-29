@@ -91,8 +91,9 @@ reject_output() {
   fi
 }
 
-wait_for_output "^watching shop$"
-wait_for_output "^ready in "
+wait_for_output "Watching.*shop"
+wait_for_output "Finished.*initial build.* in "
+wait_for_output "Waiting.*for changes"
 
 reject_output "Compiling shop"
 reject_output "build \\["
@@ -100,12 +101,11 @@ reject_output "Configured"
 reject_output "Built ("
 reject_output "Done in"
 reject_output "Watching project files"
-reject_output "✔"
 reject_output "➜"
 
 printf 'ignored\n' >"$PROJECT/build-ninja/ignored.tmp"
 sleep 0.2
-if [[ "$(grep -c 'rebuilt in' "$WATCH_OUT" || true)" != "0" ]]; then
+if [[ "$(grep -c 'Finished.*rebuilt' "$WATCH_OUT" || true)" != "0" ]]; then
   cat "$WATCH_OUT" >&2
   echo "build-directory event produced rebuild output" >&2
   exit 1
@@ -116,9 +116,11 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return one() + two() + three() + 1; }
 CPP
 
-wait_for_output "^src/main.cpp rebuilt in "
+wait_for_output "Change.*src/main.cpp"
+wait_for_output "Building.*incremental graph"
+wait_for_output "Finished.*rebuilt.*src/main.cpp.* in "
 sleep 0.4
-if [[ "$(grep -c '^src/main.cpp rebuilt in ' "$WATCH_OUT" || true)" != "1" ]]; then
+if [[ "$(grep -c 'Finished.*rebuilt.*src/main.cpp.* in ' "$WATCH_OUT" || true)" != "1" ]]; then
   cat "$WATCH_OUT" >&2
   echo "expected one compact rebuild line for one source save" >&2
   exit 1
@@ -142,14 +144,17 @@ cat >"$PROJECT/src/three.cpp" <<'CPP'
 int three() { return 3; }
 CPP
 
-wait_for_output "^3 files rebuilt in "
+wait_for_output "Change.*3 files"
+wait_for_output "Finished.*rebuilt.*3 files.* in "
 
 cat >>"$PROJECT/CMakeLists.txt" <<'CMAKE'
 # watch reconfigure
 CMAKE
 
-wait_for_output "^CMakeLists.txt reconfigured in "
-if grep -A1 '^CMakeLists.txt reconfigured in ' "$WATCH_OUT" | grep -q 'rebuilt in'; then
+wait_for_output "Change.*CMakeLists.txt"
+wait_for_output "Configuring.*project graph"
+wait_for_output "Finished.*reconfigured.*CMakeLists.txt.* in "
+if grep -A1 'Finished.*reconfigured.*CMakeLists.txt.* in ' "$WATCH_OUT" | grep -q 'Finished.*rebuilt'; then
   cat "$WATCH_OUT" >&2
   echo "reconfigure iteration printed an extra rebuild line" >&2
   exit 1
@@ -159,7 +164,7 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return nope; }
 CPP
 
-wait_for_output "^src/main.cpp rebuild failed$"
+wait_for_output "Error.*src/main.cpp.*rebuild failed"
 wait_for_output "nope"
 reject_output "waiting for changes"
 reject_output "ninja: Entering directory"
@@ -169,7 +174,7 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return one() + two() + three(); }
 CPP
 
-wait_for_output "^src/main.cpp rebuilt in "
+wait_for_output "Finished.*rebuilt.*src/main.cpp.* in "
 
 kill -INT "$WATCH_PID" 2>/dev/null || true
 wait "$WATCH_PID" || code=$?

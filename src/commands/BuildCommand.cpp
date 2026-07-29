@@ -37,7 +37,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <map>
 #include <optional>
@@ -47,6 +46,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 #include <vix/cli/cmake/CMakeBuild.hpp>
 #include <vix/cli/cmake/GlobalPackages.hpp>
@@ -86,7 +91,6 @@ namespace vix::commands::BuildCommand
     static constexpr std::uint64_t LOCAL_FNV_OFFSET = 1469598103934665603ull;
     static volatile std::sig_atomic_t g_watch_stop_requested = 0;
     static constexpr const char *WATCH_PRIMARY = "\033[97m";
-    static constexpr int WATCH_LABEL_WIDTH = 12;
 
     static void on_watch_signal(int)
     {
@@ -250,10 +254,7 @@ namespace vix::commands::BuildCommand
     {
       std::ostringstream out;
 
-      out << "  "
-          << color << BOLD
-          << std::setw(WATCH_LABEL_WIDTH)
-          << std::right
+      out << color << BOLD
           << label
           << RESET
           << " ";
@@ -308,7 +309,18 @@ namespace vix::commands::BuildCommand
       if (display.quiet)
         return;
 
-      std::cout << RESET << std::flush;
+#ifdef _WIN32
+      const bool stdoutIsTty = ::_isatty(1) != 0;
+#else
+      const bool stdoutIsTty = ::isatty(STDOUT_FILENO) != 0;
+#endif
+
+      std::cout << RESET;
+
+      if (stdoutIsTty)
+        std::cout << "\n";
+
+      std::cout << std::flush;
     }
 
     static void watch_print_started(
@@ -3667,18 +3679,37 @@ namespace vix::commands::BuildCommand
       return command;
     }
 
-    static int run_native_vix_app_build(
+    struct NativeVixAppBuildSession
+    {
+      process::Plan plan;
+      build::BuildGraph graph;
+      std::vector<fs::path> objectPaths;
+      fs::path outputBinary;
+      std::map<std::string, std::string> sourceTaskIds;
+    };
+
+    static bool native_vix_app_is_source_path(const fs::path &path)
+    {
+      const std::string ext = path.extension().string();
+      return ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c";
+    }
+
+    static bool prepare_native_vix_app_build_session(
         const process::Options &opt,
         const fs::path &projectDir,
         const app::AppManifest &manifest,
-        const std::chrono::steady_clock::time_point &commandStart)
+        NativeVixAppBuildSession &session,
+        int &exitCode)
     {
+      exitCode = 0;
+
       const auto presetOpt = build::resolve_builtin_preset(opt.preset);
 
       if (!presetOpt)
       {
         error("Unknown preset: " + opt.preset);
-        return 2;
+        exitCode = 2;
+        return false;
       }
 
       process::Plan plan;
@@ -3701,7 +3732,8 @@ namespace vix::commands::BuildCommand
         if (!err.empty())
           hint(err);
 
-        return 1;
+        exitCode = 1;
+        return false;
       }
 
       const fs::path objectDir = plan.buildDir / "obj";
@@ -3713,7 +3745,8 @@ namespace vix::commands::BuildCommand
         if (!err.empty())
           hint(err);
 
-        return 1;
+        exitCode = 1;
+        return false;
       }
 
       const fs::path outputBinary =
@@ -3728,18 +3761,8 @@ namespace vix::commands::BuildCommand
         if (!err.empty())
           hint(err);
 
-        return 1;
-      }
-
-      if (!opt.quiet)
-        print_vix_build_header("Building", opt, plan);
-
-      build::ObjectCache objectCache(plan.buildDir);
-
-      if (!objectCache.ensure_layout())
-      {
-        error("Unable to initialize Vix object cache.");
-        return 1;
+        exitCode = 1;
+        return false;
       }
 
       build::BuildGraphConfig graphConfig;
@@ -3752,15 +3775,9 @@ namespace vix::commands::BuildCommand
 
       build::BuildGraph graph(graphConfig);
 
-      build::BuildSchedulerOptions schedulerOptions;
-      schedulerOptions.jobs = opt.jobs;
-      schedulerOptions.quiet = opt.quiet;
-      schedulerOptions.stopOnFirstFailure = true;
-
-      build::BuildScheduler scheduler(schedulerOptions);
-
       std::vector<fs::path> objectPaths;
       objectPaths.reserve(manifest.sources.size());
+      std::map<std::string, std::string> sourceTaskIds;
 
       for (const std::string &sourceString : manifest.sources)
       {
@@ -3771,7 +3788,8 @@ namespace vix::commands::BuildCommand
         if (!fs::exists(sourcePath))
         {
           error("Source file not found: " + sourcePath.string());
-          return 1;
+          exitCode = 1;
+          return false;
         }
 
         std::string objectName =
@@ -3818,7 +3836,49 @@ namespace vix::commands::BuildCommand
         graph.add_node(sourceNode);
         graph.add_node(objectNode);
         graph.add_task(task);
-        scheduler.add_task(task);
+        sourceTaskIds[sourcePath.lexically_normal().generic_string()] = task.id;
+      }
+
+      session.plan = std::move(plan);
+      session.graph = std::move(graph);
+      session.objectPaths = std::move(objectPaths);
+      session.outputBinary = outputBinary;
+      session.sourceTaskIds = std::move(sourceTaskIds);
+      return true;
+    }
+
+    static int run_native_vix_app_tasks(
+        const process::Options &opt,
+        NativeVixAppBuildSession &session,
+        const std::vector<std::string> &taskIds)
+    {
+      build::ObjectCache objectCache(session.plan.buildDir);
+
+      if (!objectCache.ensure_layout())
+      {
+        error("Unable to initialize Vix object cache.");
+        return 1;
+      }
+
+      build::BuildSchedulerOptions schedulerOptions;
+      schedulerOptions.jobs = opt.jobs;
+      schedulerOptions.quiet = opt.quiet;
+      schedulerOptions.stopOnFirstFailure = true;
+
+      build::BuildScheduler scheduler(schedulerOptions);
+
+      if (taskIds.empty())
+      {
+        scheduler.add_tasks(session.graph.compile_tasks());
+      }
+      else
+      {
+        for (const std::string &taskId : taskIds)
+        {
+          build::BuildTask *task = session.graph.find_task(taskId);
+          if (task)
+            scheduler.add_task(*task);
+        }
       }
 
       const build::BuildSchedulerResult result =
@@ -3827,7 +3887,7 @@ namespace vix::commands::BuildCommand
               {
                 build::BuildTaskResult taskResult =
                     run_cached_graph_compile_task(
-                        graph,
+                        session.graph,
                         objectCache,
                         task);
 
@@ -3848,12 +3908,21 @@ namespace vix::commands::BuildCommand
         return 1;
       }
 
+      return 0;
+    }
+
+    static int link_native_vix_app_build(
+        const process::Options &opt,
+        const fs::path &projectDir,
+        const app::AppManifest &manifest,
+        NativeVixAppBuildSession &session)
+    {
       const std::vector<std::string> linkCommand =
           native_vix_app_link_command(
-              objectPaths,
-              outputBinary,
+              session.objectPaths,
+              session.outputBinary,
               manifest,
-              plan);
+              session.plan);
 
       std::string linkOutput;
 
@@ -3876,7 +3945,7 @@ namespace vix::commands::BuildCommand
 #ifndef _WIN32
       std::error_code ec;
       fs::permissions(
-          outputBinary,
+          session.outputBinary,
           fs::perms::owner_exec |
               fs::perms::group_exec |
               fs::perms::others_exec,
@@ -3884,20 +3953,90 @@ namespace vix::commands::BuildCommand
           ec);
 #endif
 
-      write_last_binary(outputBinary);
+      write_last_binary(session.outputBinary);
 
       if (opt.exportBin || !opt.outPath.empty())
       {
         fs::path dest;
 
         if (opt.exportBin)
-          dest = projectDir / outputBinary.filename();
+          dest = projectDir / session.outputBinary.filename();
         else
           dest = fs::absolute(fs::path(opt.outPath));
 
-        if (!export_built_binary(outputBinary, dest, opt.quiet))
+        if (!export_built_binary(session.outputBinary, dest, opt.quiet))
           return 1;
       }
+
+      return 0;
+    }
+
+    static std::vector<std::string> native_vix_app_task_ids_for_batch(
+        const NativeVixAppBuildSession &session,
+        const vix::engine::watch::Batch &batch)
+    {
+      std::vector<std::string> taskIds;
+      std::set<std::string> seen;
+
+      for (const auto &event : batch.events)
+      {
+        if (!native_vix_app_is_source_path(event.path))
+          continue;
+
+        const std::string key =
+            event.path.lexically_normal().generic_string();
+        const auto it = session.sourceTaskIds.find(key);
+
+        if (it == session.sourceTaskIds.end())
+          continue;
+
+        if (seen.insert(it->second).second)
+          taskIds.push_back(it->second);
+      }
+
+      return taskIds;
+    }
+
+    static int run_native_vix_app_build(
+        const process::Options &opt,
+        const fs::path &projectDir,
+        const app::AppManifest &manifest,
+        const std::chrono::steady_clock::time_point &commandStart)
+    {
+      NativeVixAppBuildSession session;
+      int prepareExit = 0;
+
+      if (!prepare_native_vix_app_build_session(
+              opt,
+              projectDir,
+              manifest,
+              session,
+              prepareExit))
+      {
+        return prepareExit;
+      }
+
+      if (!opt.quiet)
+        print_vix_build_header("Building", opt, session.plan);
+
+      const int compileCode =
+          run_native_vix_app_tasks(
+              opt,
+              session,
+              {});
+
+      if (compileCode != 0)
+        return compileCode;
+
+      const int linkCode =
+          link_native_vix_app_build(
+              opt,
+              projectDir,
+              manifest,
+              session);
+
+      if (linkCode != 0)
+        return linkCode;
 
       if (!opt.quiet)
       {
@@ -5074,6 +5213,7 @@ namespace vix::commands::BuildCommand
         if (!opt_.warnings &&
             can_use_native_vix_app_build(opt_, loadResult.manifest))
         {
+          app::AppManifest activeManifest = loadResult.manifest;
           process::Options buildOpt = opt_;
           buildOpt.watch = false;
           if (compactWatchOutput)
@@ -5088,7 +5228,7 @@ namespace vix::commands::BuildCommand
                     return run_native_vix_app_build(
                         buildOpt,
                         project.userProjectDir,
-                        loadResult.manifest,
+                        activeManifest,
                         std::chrono::steady_clock::now());
                   });
           int lastCode = initialRun.code;
@@ -5096,6 +5236,18 @@ namespace vix::commands::BuildCommand
               std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - initialT0)
                   .count();
+
+          NativeVixAppBuildSession nativeSession;
+          int prepareExit = 0;
+          if (!prepare_native_vix_app_build_session(
+                  buildOpt,
+                  project.userProjectDir,
+                  activeManifest,
+                  nativeSession,
+                  prepareExit))
+          {
+            return prepareExit;
+          }
 
           vix::engine::watch::Options watchOptions;
           watchOptions.root = project.userProjectDir;
@@ -5105,6 +5257,17 @@ namespace vix::commands::BuildCommand
               native_vix_app_build_dir(project.userProjectDir, buildOpt));
           watchOptions.ignoredRoots.push_back(project.userProjectDir / ".git");
           watchOptions.ignoredRoots.push_back(project.userProjectDir / ".vix");
+
+          if (nativeSession.outputBinary.has_parent_path())
+          {
+            const fs::path outputParent =
+                nativeSession.outputBinary.parent_path().lexically_normal();
+            const fs::path projectRoot =
+                project.userProjectDir.lexically_normal();
+
+            if (outputParent != projectRoot)
+              watchOptions.ignoredRoots.push_back(outputParent);
+          }
 
           vix::engine::watch::FileWatcher watcher(watchOptions);
           const auto started = watcher.start();
@@ -5130,16 +5293,16 @@ namespace vix::commands::BuildCommand
             if (lastCode == 0)
               watch_print_ready(
                   display,
-                  loadResult.manifest.name.empty()
+                  activeManifest.name.empty()
                       ? std::string("vix.app")
-                      : loadResult.manifest.name,
+                      : activeManifest.name,
                   initialMs);
             else
               watch_print_initial_failed(
                   display,
-                  loadResult.manifest.name.empty()
+                  activeManifest.name.empty()
                       ? std::string("vix.app")
-                      : loadResult.manifest.name,
+                      : activeManifest.name,
                   initialRun.diagnostics);
           }
           else if (!buildOpt.quiet)
@@ -5177,6 +5340,26 @@ namespace vix::commands::BuildCommand
                     ? WatchDisplayAction::Reconfigured
                     : WatchDisplayAction::Rebuilt;
 
+            const std::vector<std::string> sourceTaskIds =
+                native_vix_app_task_ids_for_batch(nativeSession, *batchOpt);
+
+            bool sourceOnlyChange =
+                action == WatchDisplayAction::Rebuilt &&
+                !batchOpt->overflowed &&
+                !sourceTaskIds.empty();
+
+            if (sourceOnlyChange)
+            {
+              for (const auto &event : batchOpt->events)
+              {
+                if (!native_vix_app_is_source_path(event.path))
+                {
+                  sourceOnlyChange = false;
+                  break;
+                }
+              }
+            }
+
             if (compactWatchOutput)
             {
               watch_print_started(
@@ -5202,11 +5385,70 @@ namespace vix::commands::BuildCommand
                     compactWatchOutput,
                     [&]()
                     {
-                      return run_native_vix_app_build(
+                      if (sourceOnlyChange)
+                      {
+                        const int compileCode =
+                            run_native_vix_app_tasks(
+                                buildOpt,
+                                nativeSession,
+                                sourceTaskIds);
+
+                        if (compileCode != 0)
+                          return compileCode;
+
+                        return link_native_vix_app_build(
+                            buildOpt,
+                            project.userProjectDir,
+                            activeManifest,
+                            nativeSession);
+                      }
+
+                      if (action == WatchDisplayAction::Reconfigured)
+                      {
+                        const app::AppManifestLoadResult reloadResult =
+                            app::load_app_manifest(project.appManifestPath);
+
+                        if (!reloadResult.success())
+                        {
+                          error("Failed to load vix.app.");
+                          hint(reloadResult.error);
+                          return 1;
+                        }
+
+                        activeManifest = reloadResult.manifest;
+
+                        if (!can_use_native_vix_app_build(buildOpt, activeManifest))
+                        {
+                          BuildCommand fallback(buildOpt);
+                          return fallback.run();
+                        }
+                      }
+
+                      int refreshPrepareExit = 0;
+                      if (!prepare_native_vix_app_build_session(
+                              buildOpt,
+                              project.userProjectDir,
+                              activeManifest,
+                              nativeSession,
+                              refreshPrepareExit))
+                      {
+                        return refreshPrepareExit;
+                      }
+
+                      const int compileCode =
+                          run_native_vix_app_tasks(
+                              buildOpt,
+                              nativeSession,
+                              {});
+
+                      if (compileCode != 0)
+                        return compileCode;
+
+                      return link_native_vix_app_build(
                           buildOpt,
                           project.userProjectDir,
-                          loadResult.manifest,
-                          t0);
+                          activeManifest,
+                          nativeSession);
                     });
             lastCode = run.code;
             const auto ms =

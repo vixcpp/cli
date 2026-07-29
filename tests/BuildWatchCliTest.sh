@@ -91,6 +91,24 @@ reject_output() {
   fi
 }
 
+wait_for_count() {
+  local needle="$1"
+  local expected="$2"
+  local file="${3:-$WATCH_OUT}"
+  local deadline=$((SECONDS + 20))
+  while (( SECONDS < deadline )); do
+    local count
+    count="$(grep -c -- "$needle" "$file" || true)"
+    if (( count >= expected )); then
+      return 0
+    fi
+    sleep 0.05
+  done
+  cat "$file" >&2
+  echo "timed out waiting for $expected matches of '$needle'" >&2
+  exit 1
+}
+
 wait_for_output "Watching.*all"
 wait_for_output "Finished.*initial build.* in "
 wait_for_output "Waiting.*for changes"
@@ -131,6 +149,23 @@ if [[ "$(grep -c 'Finished.*src/main.cpp.* in ' "$WATCH_OUT" || true)" != "1" ]]
   echo "expected one compact rebuild line for one source save" >&2
   exit 1
 fi
+
+cat >"$PROJECT/src/main.cpp" <<'CPP'
+#include "shop.hpp"
+int main() { return one() + two() + three() + 1; }
+CPP
+sleep 0.5
+if [[ "$(grep -c 'Finished.*src/main.cpp.* in ' "$WATCH_OUT" || true)" != "1" ]]; then
+  cat "$WATCH_OUT" >&2
+  echo "same-content source save produced a rebuild" >&2
+  exit 1
+fi
+
+cat >"$PROJECT/src/main.cpp" <<'CPP'
+#include "shop.hpp"
+int main() { return one() + two() + three() + 2; }
+CPP
+wait_for_count "Finished.*src/main.cpp.* in " 2
 
 reject_output "^change  "
 reject_output "Change "

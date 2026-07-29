@@ -239,6 +239,247 @@ namespace vix::commands::BuildCommand
       return batch.overflowed;
     }
 
+    static bool watch_path_within(
+        const fs::path &path,
+        const fs::path &root)
+    {
+      const fs::path p = path.lexically_normal();
+      const fs::path r = root.lexically_normal();
+
+      auto pit = p.begin();
+      auto rit = r.begin();
+
+      for (; rit != r.end(); ++rit, ++pit)
+      {
+        if (pit == p.end() || *pit != *rit)
+          return false;
+      }
+
+      return true;
+    }
+
+    static bool watch_content_fingerprint_skip_path(
+        const fs::path &path,
+        const std::vector<fs::path> &ignoredRoots)
+    {
+      const fs::path normalized = path.lexically_normal();
+
+      for (const fs::path &root : ignoredRoots)
+      {
+        if (!root.empty() && watch_path_within(normalized, root))
+          return true;
+      }
+
+      for (const fs::path &part : normalized)
+      {
+        const std::string item = part.string();
+        if (item == ".git" ||
+            item == ".hg" ||
+            item == ".svn" ||
+            item == ".vix" ||
+            item == "node_modules" ||
+            item == ".cache" ||
+            item == ".idea" ||
+            item == ".vscode" ||
+            item == "CMakeFiles")
+        {
+          return true;
+        }
+      }
+
+      const std::string name = normalized.filename().string();
+      return name == "compile_commands.json" ||
+             name == "build.ninja" ||
+             name == "CMakeCache.txt" ||
+             name == "configure.log" ||
+             name == "build.log";
+    }
+
+    class WatchContentFingerprints
+    {
+    public:
+      WatchContentFingerprints(
+          fs::path root,
+          std::vector<fs::path> ignoredRoots)
+          : root_(std::move(root)),
+            ignoredRoots_(std::move(ignoredRoots))
+      {
+      }
+
+      void seed()
+      {
+        std::error_code ec;
+        root_ = fs::absolute(root_, ec).lexically_normal();
+        if (ec || root_.empty() || !fs::exists(root_, ec))
+          return;
+
+        if (fs::is_regular_file(root_, ec))
+        {
+          remember(root_);
+          return;
+        }
+
+        fs::recursive_directory_iterator it(
+            root_,
+            fs::directory_options::skip_permission_denied,
+            ec);
+        const fs::recursive_directory_iterator end;
+
+        while (!ec && it != end)
+        {
+          const fs::path current = it->path().lexically_normal();
+
+          if (watch_content_fingerprint_skip_path(current, ignoredRoots_))
+          {
+            if (it->is_directory(ec))
+              it.disable_recursion_pending();
+            ++it;
+            continue;
+          }
+
+          if (it->is_regular_file(ec))
+            remember(current);
+
+          ++it;
+        }
+      }
+
+      vix::engine::watch::Batch filter(
+          const vix::engine::watch::Batch &batch)
+      {
+        if (batch.empty() || batch.overflowed)
+          return batch;
+
+        vix::engine::watch::Batch filtered;
+        std::map<std::string, std::optional<std::string>> batchHashes;
+
+        for (const auto &event : batch.events)
+        {
+          if (event.directory ||
+              event.kind == vix::engine::watch::EventKind::Overflow)
+          {
+            filtered.events.push_back(event);
+            continue;
+          }
+
+          const fs::path path = event.path.lexically_normal();
+          const std::string key = path.generic_string();
+
+          if (event.kind == vix::engine::watch::EventKind::Removed)
+          {
+            hashes_.erase(key);
+            filtered.events.push_back(event);
+            continue;
+          }
+
+          if (event.kind == vix::engine::watch::EventKind::Added)
+          {
+            const std::optional<std::string> hash =
+                hash_from_cache(path, batchHashes);
+
+            if (!hash)
+            {
+              hashes_.erase(key);
+              filtered.events.push_back(event);
+              continue;
+            }
+
+            const auto previous = hashes_.find(key);
+            const bool unchanged =
+                previous != hashes_.end() && previous->second == *hash;
+
+            hashes_[key] = *hash;
+
+            if (unchanged)
+              continue;
+
+            filtered.events.push_back(event);
+            continue;
+          }
+
+          if (event.kind != vix::engine::watch::EventKind::Modified &&
+              event.kind != vix::engine::watch::EventKind::Renamed)
+          {
+            remember_from_cache(path, batchHashes);
+            filtered.events.push_back(event);
+            continue;
+          }
+
+          const std::optional<std::string> hash =
+              hash_from_cache(path, batchHashes);
+
+          if (!hash)
+          {
+            hashes_.erase(key);
+            filtered.events.push_back(event);
+            continue;
+          }
+
+          const auto previous = hashes_.find(key);
+          const bool unchanged =
+              previous != hashes_.end() && previous->second == *hash;
+
+          hashes_[key] = *hash;
+
+          if (event.kind == vix::engine::watch::EventKind::Renamed &&
+              !event.oldPath.empty())
+          {
+            hashes_.erase(event.oldPath.lexically_normal().generic_string());
+          }
+
+          if (unchanged)
+            continue;
+
+          filtered.events.push_back(event);
+        }
+
+        return filtered;
+      }
+
+    private:
+      void remember(const fs::path &path)
+      {
+        std::error_code ec;
+        if (!fs::is_regular_file(path, ec) || ec)
+          return;
+
+        const auto hash = util::read_file_hash_hex(path);
+        if (hash)
+          hashes_[path.lexically_normal().generic_string()] = *hash;
+      }
+
+      std::optional<std::string> hash_from_cache(
+          const fs::path &path,
+          std::map<std::string, std::optional<std::string>> &batchHashes)
+      {
+        const std::string key = path.lexically_normal().generic_string();
+        const auto cached = batchHashes.find(key);
+        if (cached != batchHashes.end())
+          return cached->second;
+
+        std::error_code ec;
+        std::optional<std::string> hash;
+        if (fs::is_regular_file(path, ec) && !ec)
+          hash = util::read_file_hash_hex(path);
+
+        batchHashes.emplace(key, hash);
+        return hash;
+      }
+
+      void remember_from_cache(
+          const fs::path &path,
+          std::map<std::string, std::optional<std::string>> &batchHashes)
+      {
+        const auto hash = hash_from_cache(path, batchHashes);
+        if (hash)
+          hashes_[path.lexically_normal().generic_string()] = *hash;
+      }
+
+      fs::path root_;
+      std::vector<fs::path> ignoredRoots_;
+      std::map<std::string, std::string> hashes_;
+    };
+
     static void watch_print_line(
         const WatchDisplayContext &display,
         const std::string &line,
@@ -5450,10 +5691,17 @@ namespace vix::commands::BuildCommand
               initialRun.diagnostics);
       }
 
+      WatchContentFingerprints contentFingerprints(root, watchOptions.ignoredRoots);
+      contentFingerprints.seed();
+
       while (!g_watch_stop_requested)
       {
         auto batchOpt = watcher.wait_for_batch(std::chrono::milliseconds(100));
         if (!batchOpt || batchOpt->empty())
+          continue;
+
+        *batchOpt = contentFingerprints.filter(*batchOpt);
+        if (batchOpt->empty())
           continue;
 
         bool relevant = batchOpt->overflowed;
@@ -5660,10 +5908,19 @@ namespace vix::commands::BuildCommand
                   initialRun.diagnostics);
           }
 
+          WatchContentFingerprints contentFingerprints(
+              project.userProjectDir,
+              watchOptions.ignoredRoots);
+          contentFingerprints.seed();
+
           while (!g_watch_stop_requested)
           {
             auto batchOpt = watcher.wait_for_batch(std::chrono::milliseconds(100));
             if (!batchOpt || batchOpt->empty())
+              continue;
+
+            *batchOpt = contentFingerprints.filter(*batchOpt);
+            if (batchOpt->empty())
               continue;
 
             bool relevant = batchOpt->overflowed;
@@ -5955,6 +6212,11 @@ namespace vix::commands::BuildCommand
       }
     }
 
+    WatchContentFingerprints contentFingerprints(
+        plan_.userProjectDir,
+        watchOptions.ignoredRoots);
+    contentFingerprints.seed();
+
     auto restore_signals =
         [&]()
     {
@@ -5980,6 +6242,8 @@ namespace vix::commands::BuildCommand
             next->events.begin(),
             next->events.end());
       }
+
+      drained = contentFingerprints.filter(drained);
 
       if (drained.empty())
         return std::nullopt;
@@ -6206,6 +6470,10 @@ namespace vix::commands::BuildCommand
       }
 
       if (!batchOpt || batchOpt->empty())
+        continue;
+
+      *batchOpt = contentFingerprints.filter(*batchOpt);
+      if (batchOpt->empty())
         continue;
 
       const auto &batch = *batchOpt;

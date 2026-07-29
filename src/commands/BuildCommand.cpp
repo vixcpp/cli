@@ -323,53 +323,6 @@ namespace vix::commands::BuildCommand
       std::cout << std::flush;
     }
 
-    static void watch_print_started(
-        const WatchDisplayContext &display,
-        const vix::engine::watch::Batch &batch,
-        WatchDisplayAction action,
-        bool structuralChange)
-    {
-      if (display.verbose)
-        return;
-
-      const bool configurationChange =
-          action == WatchDisplayAction::Reconfigured;
-
-      const std::string subject =
-          watch_change_subject(
-              batch,
-              display.projectDir,
-              configurationChange,
-              structuralChange);
-
-      const char *phaseColor = CYAN;
-      const char *phase = "Building";
-      const char *detail = "incremental graph";
-
-      if (configurationChange)
-      {
-        phase = "Configuring";
-        detail = "project graph";
-      }
-      else if (structuralChange)
-      {
-        phaseColor = YELLOW;
-        detail = "project structure";
-      }
-
-      std::ostringstream changeLine;
-      changeLine << watch_label(MAGENTA, "Change")
-                 << WATCH_PRIMARY << subject << RESET;
-
-      watch_print_line(display, changeLine.str());
-
-      std::ostringstream phaseLine;
-      phaseLine << watch_label(phaseColor, phase)
-                << detail;
-
-      watch_print_line(display, phaseLine.str());
-    }
-
     static bool watch_is_ninja_progress_line(const std::string &line)
     {
       if (line.empty() || line.front() != '[')
@@ -479,7 +432,8 @@ namespace vix::commands::BuildCommand
         const vix::engine::watch::Batch &batch,
         WatchDisplayAction action,
         bool structuralChange,
-        long long ms)
+        long long ms,
+        std::string detail = {})
     {
       if (display.verbose)
         return;
@@ -518,6 +472,9 @@ namespace vix::commands::BuildCommand
            << BOLD
            << watch_format_duration(ms)
            << RESET;
+
+      if (!detail.empty())
+        line << GRAY << " (" << detail << ")" << RESET;
 
       watch_print_line(display, line.str());
     }
@@ -5120,15 +5077,6 @@ namespace vix::commands::BuildCommand
         displayBatch.events.push_back(
             {vix::engine::watch::EventKind::Modified, source, {}, false});
 
-        if (compactWatchOutput)
-        {
-          watch_print_started(
-              display,
-              displayBatch,
-              WatchDisplayAction::Rebuilt,
-              false);
-        }
-
         if (!buildOpt.quiet && !compactWatchOutput)
           std::cout << "\nchange  " << source.filename().string() << "\n";
 
@@ -5360,15 +5308,6 @@ namespace vix::commands::BuildCommand
               }
             }
 
-            if (compactWatchOutput)
-            {
-              watch_print_started(
-                  display,
-                  *batchOpt,
-                  action,
-                  false);
-            }
-
             if (!buildOpt.quiet && !compactWatchOutput)
             {
               if (batchOpt->events.size() == 1)
@@ -5467,7 +5406,8 @@ namespace vix::commands::BuildCommand
                     *batchOpt,
                     action,
                     false,
-                    ms);
+                    ms,
+                    sourceOnlyChange ? std::string() : std::string("full refresh"));
               else
                 watch_print_failed(
                     display,
@@ -5692,15 +5632,6 @@ namespace vix::commands::BuildCommand
             const build::BuildGraphInvalidationResult &invalidation,
             const vix::engine::watch::Batch &batch) -> int
     {
-      if (compactWatchOutput)
-      {
-        watch_print_started(
-            watchDisplay,
-            batch,
-            WatchDisplayAction::Rebuilt,
-            false);
-      }
-
       const auto t0 = std::chrono::steady_clock::now();
 
       if (sessionOpt.explain && !sessionOpt.quiet)
@@ -5855,15 +5786,6 @@ namespace vix::commands::BuildCommand
                 ? WatchDisplayAction::Reconfigured
                 : WatchDisplayAction::Rebuilt;
 
-        if (compactWatchOutput)
-        {
-          watch_print_started(
-              watchDisplay,
-              batch,
-              action,
-              action == WatchDisplayAction::Rebuilt);
-        }
-
         const auto t0 = std::chrono::steady_clock::now();
         WatchCapturedRun run = run_full_refresh();
         lastCode = run.code;
@@ -5883,7 +5805,8 @@ namespace vix::commands::BuildCommand
                 batch,
                 action,
                 action == WatchDisplayAction::Rebuilt,
-                ms);
+                ms,
+                "full refresh");
           else
             watch_print_failed(
                 watchDisplay,
@@ -5926,15 +5849,6 @@ namespace vix::commands::BuildCommand
                 ? WatchDisplayAction::Reconfigured
                 : WatchDisplayAction::Rebuilt;
 
-        if (compactWatchOutput)
-        {
-          watch_print_started(
-              watchDisplay,
-              batch,
-              action,
-              action == WatchDisplayAction::Rebuilt);
-        }
-
         const auto t0 = std::chrono::steady_clock::now();
         WatchCapturedRun run = run_full_refresh();
         lastCode = run.code;
@@ -5954,7 +5868,8 @@ namespace vix::commands::BuildCommand
                 batch,
                 action,
                 action == WatchDisplayAction::Rebuilt,
-                ms);
+                ms,
+                "full refresh");
           else
             watch_print_failed(
                 watchDisplay,

@@ -108,6 +108,8 @@ reject_output "Built ("
 reject_output "Done in"
 reject_output "Watching project files"
 reject_output "➜"
+reject_output "^Change "
+reject_output "^Building incremental graph"
 
 printf 'ignored\n' >"$PROJECT/build-ninja/ignored.tmp"
 sleep 0.2
@@ -122,8 +124,6 @@ cat >"$PROJECT/src/main.cpp" <<'CPP'
 int main() { return one() + two() + three() + 1; }
 CPP
 
-wait_for_output "Change.*src/main.cpp"
-wait_for_output "Building.*incremental graph"
 wait_for_output "Finished.*rebuilt.*src/main.cpp.* in "
 sleep 0.4
 if [[ "$(grep -c 'Finished.*rebuilt.*src/main.cpp.* in ' "$WATCH_OUT" || true)" != "1" ]]; then
@@ -150,16 +150,13 @@ cat >"$PROJECT/src/three.cpp" <<'CPP'
 int three() { return 3; }
 CPP
 
-wait_for_output "Change.*3 files"
 wait_for_output "Finished.*rebuilt.*3 files.* in "
 
 cat >>"$PROJECT/CMakeLists.txt" <<'CMAKE'
 # watch reconfigure
 CMAKE
 
-wait_for_output "Change.*CMakeLists.txt"
-wait_for_output "Configuring.*project graph"
-wait_for_output "Finished.*reconfigured.*CMakeLists.txt.* in "
+wait_for_output "Finished.*reconfigured.*CMakeLists.txt.* in .*full refresh"
 if grep -A1 'Finished.*reconfigured.*CMakeLists.txt.* in ' "$WATCH_OUT" | grep -q 'Finished.*rebuilt'; then
   cat "$WATCH_OUT" >&2
   echo "reconfigure iteration printed an extra rebuild line" >&2
@@ -262,9 +259,9 @@ cat >"$NATIVE_PROJECT/src/one.cpp" <<'CPP'
 int one() { return 3; }
 CPP
 
-wait_for_output "Change.*src/one.cpp" "$NATIVE_OUT"
-wait_for_output "Building.*incremental graph" "$NATIVE_OUT"
 wait_for_output "Finished.*rebuilt.*src/one.cpp.* in " "$NATIVE_OUT"
+reject_output "^Change " "$NATIVE_OUT"
+reject_output "^Building incremental graph" "$NATIVE_OUT"
 reject_output "Configuring.*project graph" "$NATIVE_OUT"
 
 kill -INT "$WATCH_PID" 2>/dev/null || true

@@ -164,6 +164,8 @@ namespace vix::cli::process
 
     bool warningCheck{false};
 
+    bool managedSdk{false};
+
     /**
      * @brief Submit a Softadastra Cloud build report after the build completes.
      */

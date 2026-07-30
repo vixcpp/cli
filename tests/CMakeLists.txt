@@ -251,3 +251,11 @@ add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/SdkProfileCompositionTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
+
+add_test(
+  NAME vix_cli_native_cmake_discovery
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/BuildNativeCMakeDiscoveryTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)

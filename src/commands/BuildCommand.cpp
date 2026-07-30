@@ -113,6 +113,12 @@ namespace vix::commands::BuildCommand
       bool verbose{false};
     };
 
+    struct ResolvedBuildPlan
+    {
+      process::Plan plan;
+      std::string sdkResolutionError;
+    };
+
     enum class WatchDisplayAction
     {
       Rebuilt,
@@ -1102,6 +1108,7 @@ namespace vix::commands::BuildCommand
 
     static void resolve_sdk_for_plan(
         process::Plan &plan,
+        std::string &sdkResolutionError,
         const process::Options &opt);
 
     static std::optional<fs::path> resolve_main_executable(
@@ -1595,6 +1602,10 @@ namespace vix::commands::BuildCommand
         {
           o.warningCheck = true;
         }
+        else if (a == "--managed-sdk")
+        {
+          o.managedSdk = true;
+        }
         else if (a == "--page")
         {
           auto v = util::take_value(args, i);
@@ -2072,6 +2083,7 @@ namespace vix::commands::BuildCommand
         const std::optional<std::string> &launcher,
         const std::optional<std::string> &fastLinkerFlag,
         const fs::path &globalPackagesFile,
+        vix::engine::DependencyEnvironmentMode dependencyEnvironmentMode,
         const fs::path &sdkConfigDir)
     {
       vix::engine::CMakeConfigurationOptions engineOptions;
@@ -2083,6 +2095,7 @@ namespace vix::commands::BuildCommand
       engineOptions.warningCheck = opt.warningCheck;
       engineOptions.toolchainFile = toolchainFile;
       engineOptions.globalPackagesFile = globalPackagesFile;
+      engineOptions.dependencyEnvironmentMode = dependencyEnvironmentMode;
       engineOptions.sdkConfigDir = sdkConfigDir;
       engineOptions.launcher = launcher;
       engineOptions.fastLinkerFlag = fastLinkerFlag;
@@ -2200,7 +2213,7 @@ namespace vix::commands::BuildCommand
       return before == after;
     }
 
-    static std::optional<process::Plan> make_plan(
+    static std::optional<ResolvedBuildPlan> make_plan(
         const process::Options &opt,
         const fs::path &cwd)
     {
@@ -2295,7 +2308,8 @@ namespace vix::commands::BuildCommand
 
       const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
-      resolve_sdk_for_plan(plan, opt);
+      std::string sdkResolutionError;
+      resolve_sdk_for_plan(plan, sdkResolutionError, opt);
 
       std::string toolchainContent;
 
@@ -2312,11 +2326,14 @@ namespace vix::commands::BuildCommand
           plan.launcher,
           plan.fastLinkerFlag,
           globalPackagesFile,
+          plan.dependencyEnvironmentMode,
           plan.sdkConfigDir);
 
       plan.signature = build_configuration_signature(plan, opt, toolchainContent);
 
-      return plan;
+      return ResolvedBuildPlan{
+          std::move(plan),
+          std::move(sdkResolutionError)};
     }
     static vix::engine::ConfigureDecision
     evaluate_configure_decision(
@@ -2546,23 +2563,6 @@ namespace vix::commands::BuildCommand
           targets.insert(text.substr(pos, end - pos));
         pos = end;
       }
-    }
-
-    static bool is_vix_source_tree(const fs::path &projectDir)
-    {
-      const fs::path cmakeLists = projectDir / "CMakeLists.txt";
-      if (!util::file_exists(cmakeLists))
-        return false;
-
-      if (!util::file_exists(projectDir / "cmake" / "VixConfig.cmake.in"))
-        return false;
-
-      if (!util::file_exists(projectDir / "modules" / "cli" / "CMakeLists.txt"))
-        return false;
-
-      const std::string text = util::read_text_file_or_empty(cmakeLists);
-      return text.find("project(vix VERSION") != std::string::npos &&
-             text.find("Vix.cpp") != std::string::npos;
     }
 
     static bool sdk_debug_enabled()
@@ -2888,20 +2888,34 @@ namespace vix::commands::BuildCommand
 
     static void resolve_sdk_for_plan(
         process::Plan &plan,
+        std::string &sdkResolutionError,
         const process::Options &opt)
     {
       plan.sdkConfigDir.clear();
-      plan.sdkResolutionError.clear();
+      sdkResolutionError.clear();
+      plan.dependencyEnvironmentMode =
+          vix::engine::DependencyEnvironmentMode::Native;
 
-      if (is_vix_source_tree(plan.userProjectDir))
+      const char *managedSdkEnv = std::getenv("VIX_BUILD_MANAGED_SDK");
+      const bool envManagedSdk =
+          managedSdkEnv &&
+          *managedSdkEnv &&
+          std::string(managedSdkEnv) != "0" &&
+          std::string(managedSdkEnv) != "false" &&
+          std::string(managedSdkEnv) != "FALSE";
+
+      if (!opt.managedSdk && !envManagedSdk)
       {
         if (sdk_debug_enabled() && !opt.quiet)
         {
           hint("SDK resolution:");
-          hint("  route: Vix source tree");
+          hint("  route: native CMake discovery");
         }
         return;
       }
+
+      plan.dependencyEnvironmentMode =
+          vix::engine::DependencyEnvironmentMode::ManagedSdk;
 
       /*
        * Explicit CMake discovery always has priority.
@@ -2986,7 +3000,7 @@ namespace vix::commands::BuildCommand
       {
         if (!resolution.ok)
         {
-          plan.sdkResolutionError =
+          sdkResolutionError =
               sdk_resolution_error_message(
                   resolution);
           return;
@@ -4727,25 +4741,25 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        const auto planOpt =
+        const auto resolvedPlanOpt =
             measurePhase(
                 "resolve project",
                 [&]()
                 {
                   return make_plan(opt_, cwd);
                 });
-        if (!planOpt)
+        if (!resolvedPlanOpt)
         {
           error("Unable to determine the project directory (missing CMakeLists.txt?)");
           hint("Run from your project root, or pass: vix build --dir <path>");
           return 1;
         }
 
-        plan_ = *planOpt;
+        plan_ = resolvedPlanOpt->plan;
 
-        if (!plan_.sdkResolutionError.empty())
+        if (!resolvedPlanOpt->sdkResolutionError.empty())
         {
-          error(plan_.sdkResolutionError);
+          error(resolvedPlanOpt->sdkResolutionError);
           return 1;
         }
 
@@ -4839,6 +4853,7 @@ namespace vix::commands::BuildCommand
             plan_.launcher,
             plan_.fastLinkerFlag,
             globalPackagesFile,
+            plan_.dependencyEnvironmentMode,
             plan_.sdkConfigDir);
 
         if (!opt_.targetTriple.empty())
@@ -6810,6 +6825,8 @@ namespace vix::commands::BuildCommand
     out << "  --static                  Request static linking\n";
     out << "  --with-sqlite             Enable SQLite support\n";
     out << "  --with-mysql              Enable MySQL support\n\n";
+    out << "Managed SDK:\n";
+    out << "  --managed-sdk             Resolve Vix dependencies from installed managed SDK profiles\n\n";
 
     out << "Logs and output:\n";
     out << "  -q, --quiet               Minimal output\n";
@@ -6821,6 +6838,7 @@ namespace vix::commands::BuildCommand
     out << "  -- [cmake args...]        Pass extra arguments to CMake configure\n\n";
 
     out << "Environment variables:\n";
+    out << "  VIX_BUILD_MANAGED_SDK=1   Enable managed SDK mode for vix build\n";
     out << "  VIX_BUILD_HEARTBEAT=0     Disable configure/build heartbeat\n";
     out << "  VIX_BUILD_HEARTBEAT=1     Force heartbeat when no output is produced\n";
     out << "  VIX_GRAPH_EXECUTOR=0      Disable graph target executor\n";

@@ -78,7 +78,7 @@ composed_config() {
 run_build() {
   local home="$1"
   local project="$2"
-  CMAKE_PREFIX_PATH="$ROOT/ambient-prefix" HOME="$home" "$VIX_BIN" build --preset release --dir "$project" -- -DCMAKE_VERBOSE_MAKEFILE=OFF >/tmp/vix-sdk-compose-build.log 2>&1
+  CMAKE_PREFIX_PATH="$ROOT/ambient-prefix" HOME="$home" "$VIX_BIN" build --managed-sdk --preset release --dir "$project" -- -DCMAKE_VERBOSE_MAKEFILE=OFF >/tmp/vix-sdk-compose-build.log 2>&1
 }
 
 HOME_A="$ROOT/home-a"
@@ -189,7 +189,7 @@ mkdir -p "$HOME_MISSING"
 make_profile "$HOME_MISSING" data v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json SQLite::SQLite3 'vix::db|SQLite::SQLite3;vix::json' vix::orm vix::kv
 make_project "$ROOT/project-missing-web" vix::websocket
 set +e
-HOME="$HOME_MISSING" "$VIX_BIN" build --preset release --dir "$ROOT/project-missing-web" >"$ROOT/missing.log" 2>&1
+HOME="$HOME_MISSING" "$VIX_BIN" build --managed-sdk --preset release --dir "$ROOT/project-missing-web" >"$ROOT/missing.log" 2>&1
 status=$?
 set -e
 if [[ "$status" -eq 0 ]]; then
@@ -223,7 +223,7 @@ make_profile "$HOME_VERSION" data v2.7.3 vix::vix vix::core vix::cache vix::util
 make_profile "$HOME_VERSION" web v2.8.0 vix::vix vix::core vix::cache vix::utils vix::json 'vix::websocket|vix::core;vix::utils;vix::json'
 make_project "$ROOT/project-version" vix::db vix::websocket
 set +e
-HOME="$HOME_VERSION" "$VIX_BIN" build --preset release --dir "$ROOT/project-version" >"$ROOT/version.log" 2>&1
+HOME="$HOME_VERSION" "$VIX_BIN" build --managed-sdk --preset release --dir "$ROOT/project-version" >"$ROOT/version.log" 2>&1
 status=$?
 set -e
 if [[ "$status" -eq 0 ]]; then

@@ -60,6 +60,23 @@ namespace vix::cli::errors::build
       return log.find(needle) != std::string_view::npos;
     }
 
+    bool looks_like_symbol(std::string_view symbol)
+    {
+      if (symbol.empty())
+        return false;
+
+      if (symbol.find('\033') != std::string_view::npos)
+        return false;
+
+      if (starts_with(symbol, "hint:") || starts_with(symbol, "error:"))
+        return false;
+
+      if (symbol.find("hint:") != std::string_view::npos)
+        return false;
+
+      return true;
+    }
+
     // -------------------------------------------------------------------------
     // Regex extraction helper
     // -------------------------------------------------------------------------
@@ -1407,7 +1424,8 @@ namespace vix::cli::errors::build
             std::regex(R"re(duplicate symbol\s+[`']?_?([^\s'`\n]+)['`]?)re"));
 
       print_error_title("duplicate symbol");
-      if (!symbol.empty())
+      symbol = trim_copy(symbol);
+      if (looks_like_symbol(symbol))
         print_colored_field("symbol: ", RED, shorten_cpp_symbol(symbol));
       print_hint("move definitions from headers to source files, mark inline when "
                  "appropriate, or avoid linking the same object twice");

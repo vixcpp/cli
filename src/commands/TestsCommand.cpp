@@ -18,6 +18,7 @@
 
 #include <vix/cli/process/Process.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
+#include <vix/cli/errors/build/BuildErrorDetectors.hpp>
 
 #include <filesystem>
 #include <unordered_map>
@@ -1184,6 +1185,28 @@ namespace
            "_BUILD_TESTS";
   }
 
+  static void print_build_failure_details(
+      const vix::commands::TestsCommand::detail::Options &opt,
+      const std::string &output)
+  {
+    if (output.empty())
+      return;
+
+    if (opt.raw || tests_verbose_enabled(opt))
+    {
+      std::cout << "\n"
+                << output << "\n";
+      return;
+    }
+
+    std::cout << "\n";
+
+    if (vix::cli::errors::build::handleBuildErrors(output))
+      return;
+
+    hint("run `vix tests --raw` to inspect the full build output");
+  }
+
   static int build_project_tests(
       const vix::commands::TestsCommand::detail::Options &opt)
   {
@@ -1213,6 +1236,7 @@ namespace
         "all",
         display_preset_name(presetName),
         {});
+    std::cout << std::flush;
 
     const auto start = std::chrono::steady_clock::now();
     const TestExecResult result = run_in_dir_capture(opt.projectDir, argv);
@@ -1236,10 +1260,9 @@ namespace
         std::cout,
         "Failed to configure tests",
         ms);
+    std::cout << std::flush;
 
-    if (!result.output.empty())
-      std::cout << "\n"
-                << result.output << "\n";
+    print_build_failure_details(opt, result.output);
 
     return result.code == 0 ? 1 : result.code;
   }

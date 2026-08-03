@@ -560,7 +560,12 @@ namespace vix::cli::errors
       err.file = trim_copy(file);
       err.line = line;
       err.column = column > 0 ? column : 1;
-      err.message = severity + ": " + trim_copy(message);
+      /*
+       * CompilerError::message contains only the useful compiler
+       * message. The output layer owns labels such as "error:".
+       */
+      (void)severity;
+      err.message = trim_copy(message);
       err.raw = raw;
 
       const std::string includeContext =
@@ -608,8 +613,7 @@ namespace vix::cli::errors
         return true;
       }
 
-      std::string message =
-          pending.severity + ": " + pending.message;
+      std::string message = trim_copy(pending.message);
 
       const std::string macroName =
           extract_macro_name_from_note(noteMessage);

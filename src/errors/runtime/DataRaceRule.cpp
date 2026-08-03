@@ -3,7 +3,7 @@
  *  @file DataRaceRule.cpp
  *  @author Gaspard Kirira
  *
- *  Copyright 2025, Gaspard Kirira.  All rights reserved.
+ *  Copyright 2025, Gaspard Kirira. All rights reserved.
  *  https://github.com/vixcpp/vix
  *  Use of this source code is governed by a MIT license
  *  that can be found in the License file.
@@ -14,6 +14,8 @@
 #include <vix/cli/errors/runtime/IRuntimeErrorRule.hpp>
 #include <vix/cli/errors/runtime/RuntimeRuleUtils.hpp>
 
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <memory>
@@ -32,52 +34,135 @@ namespace vix::cli::errors::runtime
     {
       ReadWriteRace,
       WriteWriteRace,
-      AtomicRace,
-      MutexProtectedRace,
+      MixedAtomicAccess,
+      InconsistentLocking,
       ThreadSanitizerRace,
       GenericRace,
     };
 
-    DataRaceKind classify_data_race(const std::string &log)
+    std::string trim_copy(const std::string &value)
     {
-      const bool hasRead =
-          icontains(log, "Read of size") ||
-          icontains(log, "read of size");
+      std::size_t begin = 0;
 
-      const bool hasWrite =
-          icontains(log, "Write of size") ||
-          icontains(log, "write of size");
+      while (begin < value.size() &&
+             std::isspace(
+                 static_cast<unsigned char>(value[begin])) != 0)
+      {
+        ++begin;
+      }
 
-      const bool hasPreviousRead =
-          icontains(log, "Previous read of size") ||
-          icontains(log, "previous read of size");
+      std::size_t end = value.size();
 
-      const bool hasPreviousWrite =
-          icontains(log, "Previous write of size") ||
-          icontains(log, "previous write of size");
+      while (end > begin &&
+             std::isspace(
+                 static_cast<unsigned char>(value[end - 1])) != 0)
+      {
+        --end;
+      }
 
-      if (hasWrite && hasPreviousWrite)
+      return value.substr(begin, end - begin);
+    }
+
+    std::string lowercase_copy(std::string value)
+    {
+      for (char &character : value)
+      {
+        character = static_cast<char>(
+            std::tolower(
+                static_cast<unsigned char>(character)));
+      }
+
+      return value;
+    }
+
+    bool technical_details_enabled()
+    {
+      const char *level = std::getenv("VIX_LOG_LEVEL");
+
+      if (level == nullptr || *level == '\0')
+        return false;
+
+      const std::string value =
+          lowercase_copy(trim_copy(level));
+
+      return value == "debug" ||
+             value == "trace";
+    }
+
+    bool has_current_read(const std::string &log)
+    {
+      return icontains(log, "Read of size");
+    }
+
+    bool has_current_write(const std::string &log)
+    {
+      return icontains(log, "Write of size");
+    }
+
+    bool has_previous_read(const std::string &log)
+    {
+      return icontains(log, "Previous read of size");
+    }
+
+    bool has_previous_write(const std::string &log)
+    {
+      return icontains(log, "Previous write of size");
+    }
+
+    bool has_atomic_access(const std::string &log)
+    {
+      /*
+       * Do not classify a report as atomic merely because an
+       * unrelated stack frame contains std::atomic.
+       *
+       * These phrases describe an actual atomic access in a
+       * ThreadSanitizer report.
+       */
+      return icontains(log, "Atomic read of size") ||
+             icontains(log, "Atomic write of size") ||
+             icontains(log, "Previous atomic read of size") ||
+             icontains(log, "Previous atomic write of size");
+    }
+
+    bool has_lock_context(const std::string &log)
+    {
+      return icontains(log, "Mutexes:") ||
+             icontains(log, "pthread_mutex_lock") ||
+             icontains(log, "pthread_mutex_unlock") ||
+             icontains(log, "std::mutex::lock") ||
+             icontains(log, "std::mutex::unlock");
+    }
+
+    DataRaceKind classify_data_race(
+        const std::string &log)
+    {
+      if (has_atomic_access(log))
+        return DataRaceKind::MixedAtomicAccess;
+
+      const bool currentRead =
+          has_current_read(log);
+
+      const bool currentWrite =
+          has_current_write(log);
+
+      const bool previousRead =
+          has_previous_read(log);
+
+      const bool previousWrite =
+          has_previous_write(log);
+
+      if (currentWrite && previousWrite)
         return DataRaceKind::WriteWriteRace;
 
-      if ((hasRead && hasPreviousWrite) ||
-          (hasWrite && hasPreviousRead) ||
-          (hasRead && hasWrite))
+      if ((currentRead && previousWrite) ||
+          (currentWrite && previousRead) ||
+          (currentRead && currentWrite))
       {
         return DataRaceKind::ReadWriteRace;
       }
 
-      if (icontains(log, "atomic") ||
-          icontains(log, "std::atomic"))
-      {
-        return DataRaceKind::AtomicRace;
-      }
-
-      if (icontains(log, "mutex") ||
-          icontains(log, "pthread_mutex") ||
-          icontains(log, "lock"))
-      {
-        return DataRaceKind::MutexProtectedRace;
-      }
+      if (has_lock_context(log))
+        return DataRaceKind::InconsistentLocking;
 
       if (icontains(log, "ThreadSanitizer"))
         return DataRaceKind::ThreadSanitizerRace;
@@ -85,92 +170,174 @@ namespace vix::cli::errors::runtime
       return DataRaceKind::GenericRace;
     }
 
-    std::string choose_message(const std::string &log)
+    std::string choose_message(
+        const std::string &log)
     {
       switch (classify_data_race(log))
       {
       case DataRaceKind::ReadWriteRace:
-        return "data race between read and write";
+        return "data race between a read and a write";
 
       case DataRaceKind::WriteWriteRace:
         return "data race between concurrent writes";
 
-      case DataRaceKind::AtomicRace:
-        return "data race around atomic/shared state";
+      case DataRaceKind::MixedAtomicAccess:
+        return "mixed atomic and non-atomic access";
 
-      case DataRaceKind::MutexProtectedRace:
-        return "data race around mutex-protected state";
+      case DataRaceKind::InconsistentLocking:
+        return "shared state is not consistently locked";
 
       case DataRaceKind::ThreadSanitizerRace:
-        return "ThreadSanitizer detected a data race";
-
       case DataRaceKind::GenericRace:
       default:
-        return "data race";
+        return "data race detected";
       }
     }
 
-    std::string choose_hint(const std::string &log)
+    std::string choose_description(
+        const std::string &log)
     {
       switch (classify_data_race(log))
       {
       case DataRaceKind::ReadWriteRace:
-        return "protect every read and write of the shared value with the same mutex, or make the value atomic";
+        return "One thread read shared memory while another thread modified it without proper synchronization.";
 
       case DataRaceKind::WriteWriteRace:
-        return "two threads write the same memory concurrently; serialize writes with a mutex or redesign ownership";
+        return "Two threads modified the same memory at the same time without proper synchronization.";
 
-      case DataRaceKind::AtomicRace:
-        return "ensure all accesses to the shared value use std::atomic or are protected by the same lock";
+      case DataRaceKind::MixedAtomicAccess:
+        return "The same shared state appears to be accessed through incompatible atomic and non-atomic operations.";
 
-      case DataRaceKind::MutexProtectedRace:
-        return "verify that all code paths use the same mutex before touching the shared state";
+      case DataRaceKind::InconsistentLocking:
+        return "Some accesses to the shared state appear to bypass the mutex used by other code paths.";
 
       case DataRaceKind::ThreadSanitizerRace:
-        return "read the ThreadSanitizer report below; it usually shows both conflicting access locations";
+      case DataRaceKind::GenericRace:
+      default:
+        return "Multiple threads accessed the same memory concurrently, and at least one access modified it.";
+      }
+    }
 
+    std::string choose_hint(
+        const std::string &log)
+    {
+      switch (classify_data_race(log))
+      {
+      case DataRaceKind::ReadWriteRace:
+        return "protect every read and write with the same mutex, or use an atomic type when appropriate";
+
+      case DataRaceKind::WriteWriteRace:
+        return "serialize writes with one mutex or give the shared state a single owner";
+
+      case DataRaceKind::MixedAtomicAccess:
+        return "make every access to this value atomic or protect every access with the same mutex";
+
+      case DataRaceKind::InconsistentLocking:
+        return "ensure every code path locks the same mutex before accessing the shared state";
+
+      case DataRaceKind::ThreadSanitizerRace:
       case DataRaceKind::GenericRace:
       default:
         return "protect shared mutable state with std::mutex, std::scoped_lock, or std::atomic";
       }
     }
 
-    std::vector<std::string> source_patterns_for_data_race()
+    bool looks_like_data_race_log(
+        const std::string &log)
     {
-      return {
-          "std::thread",
-          "std::jthread",
-          "std::async",
-          "std::atomic",
-          "std::mutex",
-          "std::scoped_lock",
-          "std::lock_guard",
-          "std::unique_lock",
-          ".lock(",
-          ".unlock(",
-          ".store(",
-          ".load(",
-          "++",
-          "--",
-          "+=",
-          "-=",
-          "=",
-      };
+      const bool hasThreadSanitizer =
+          icontains(log, "ThreadSanitizer") ||
+          icontains(log, "WARNING: ThreadSanitizer");
+
+      const bool explicitlyReportsRace =
+          icontains(log, "data race");
+
+      /*
+       * "Read of size" and "Write of size" also appear in other
+       * sanitizer reports. They are considered data-race evidence
+       * only when ThreadSanitizer context is present.
+       */
+      const bool hasAccessReport =
+          has_current_read(log) ||
+          has_current_write(log) ||
+          has_previous_read(log) ||
+          has_previous_write(log) ||
+          has_atomic_access(log);
+
+      return explicitlyReportsRace ||
+             (hasThreadSanitizer && hasAccessReport);
     }
 
-    bool looks_like_data_race_log(const std::string &log)
+    void print_error(
+        const std::string &message,
+        const std::string &description)
     {
-      return icontains(log, "ThreadSanitizer") ||
-             icontains(log, "data race") ||
-             icontains(log, "WARNING: ThreadSanitizer") ||
-             icontains(log, "Read of size") ||
-             icontains(log, "Write of size") ||
-             icontains(log, "Previous read of size") ||
-             icontains(log, "Previous write of size");
+      std::cerr << RED
+                << "runtime error: "
+                << message
+                << RESET
+                << "\n";
+
+      if (!description.empty())
+      {
+        std::cerr << "  "
+                  << description
+                  << "\n";
+      }
+    }
+
+    void print_hints_and_location(
+        const std::string &hint,
+        const RuntimeLocation &location)
+    {
+      std::vector<std::string> hints;
+
+      if (!hint.empty())
+        hints.push_back(hint);
+
+      hints.push_back(
+          "run with VIX_LOG_LEVEL=debug to compare both conflicting access traces");
+
+      /*
+       * Do not fall back to "source: main.cpp".
+       *
+       * A data race normally has two conflicting locations.
+       * Without a real ThreadSanitizer frame, searching for
+       * operators such as "=", "++" or lock declarations would
+       * produce a misleading codeframe.
+       */
+      const std::string at =
+          location.valid()
+              ? make_at_text(
+                    location,
+                    std::filesystem::path{})
+              : std::string{};
+
+      std::cerr << "\n";
+
+      print_runtime_hints_and_at(
+          hints,
+          at);
+    }
+
+    void print_debug_log(
+        const std::string &log)
+    {
+      if (!technical_details_enabled())
+        return;
+
+      /*
+       * The complete ThreadSanitizer report is important because
+       * it normally contains both conflicting stack traces.
+       */
+      print_runtime_log_excerpt(
+          log,
+          24);
     }
   } // namespace
 
-  class DataRaceRule final : public IRuntimeErrorRule
+  class DataRaceRule final
+      : public IRuntimeErrorRule
   {
   public:
     bool match(
@@ -178,6 +345,7 @@ namespace vix::cli::errors::runtime
         const std::filesystem::path &sourceFile) const override
     {
       (void)sourceFile;
+
       return looks_like_data_race_log(log);
     }
 
@@ -185,50 +353,57 @@ namespace vix::cli::errors::runtime
         const std::string &log,
         const std::filesystem::path &sourceFile) const override
     {
-      const std::string message = choose_message(log);
+      const std::string message =
+          choose_message(log);
 
-      RuntimeLocation location =
-          find_best_runtime_location(log, sourceFile);
+      const std::string description =
+          choose_description(log);
 
-      if (!location.valid())
-      {
-        location =
-            find_best_runtime_location_or_source_hint(
-                log,
-                sourceFile,
-                source_patterns_for_data_race());
-      }
+      const std::string hint =
+          choose_hint(log);
 
-      std::cerr << RED
-                << "runtime error: "
-                << message
-                << RESET << "\n";
+      /*
+       * ThreadSanitizer normally provides the exact frame.
+       *
+       * Do not use a source-pattern fallback here: a data race
+       * cannot be located reliably by scanning for assignments,
+       * increments, thread declarations, or mutex declarations.
+       */
+      const RuntimeLocation location =
+          find_best_runtime_location(
+              log,
+              sourceFile);
+
+      print_error(
+          message,
+          description);
 
       if (location.valid())
       {
-        const auto err = make_runtime_location(
-            location.file,
-            location.line,
-            location.column,
-            message);
+        std::cerr << "\n";
 
-        print_runtime_codeframe(err);
+        const auto error =
+            make_runtime_location(
+                location.file,
+                location.line,
+                location.column,
+                message);
+
+        print_runtime_codeframe(error);
       }
 
-      print_runtime_hints_and_at(
-          {
-              choose_hint(log),
-              "do not ignore the runtime log: data races usually require comparing both conflicting stack traces",
-          },
-          make_at_text(location, sourceFile));
+      print_hints_and_location(
+          hint,
+          location);
 
-      print_runtime_log_excerpt(log, 24);
+      print_debug_log(log);
 
       return true;
     }
   };
 
-  std::unique_ptr<IRuntimeErrorRule> makeDataRaceRule()
+  std::unique_ptr<IRuntimeErrorRule>
+  makeDataRaceRule()
   {
     return std::make_unique<DataRaceRule>();
   }

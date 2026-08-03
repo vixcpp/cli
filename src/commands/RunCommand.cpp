@@ -21,6 +21,7 @@
 #include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/app/AppProjectResolver.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
+#include <vix/engine/SanitizerMode.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
 
@@ -752,7 +753,7 @@ namespace
 
       if (!log.empty())
       {
-        const fs::path diagnosticPath = *testExe;
+        const fs::path diagnosticPath{};
 
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
@@ -783,7 +784,8 @@ namespace
       const fs::path &exePath,
       const Options &opt,
       const std::string &failureContext,
-      int timeoutSec)
+      int timeoutSec,
+      bool instrumentedBinary = false)
   {
 #ifdef _WIN32
     std::string runCmd = "\"" + exePath.string() + "\"";
@@ -839,10 +841,12 @@ namespace
     if (replayEnabled)
       replayCapture.attach(&recorder);
 
-    const bool useSanRuntime = vix::commands::RunCommand::detail::want_any_sanitizer(
-        opt.enableSanitizers,
-        opt.enableUbsanOnly,
-        opt.enableThreadSanitizer);
+    const bool useSanRuntime =
+        instrumentedBinary ||
+        vix::commands::RunCommand::detail::want_any_sanitizer(
+            opt.enableSanitizers,
+            opt.enableUbsanOnly,
+            opt.enableThreadSanitizer);
 
     const LiveRunResult rr =
         vix::commands::RunCommand::detail::run_cmd_live_filtered_capture(
@@ -893,7 +897,10 @@ namespace
 
       if (!log.empty())
       {
-        const fs::path diagnosticPath = opt.singleCpp ? opt.cppFile : exePath;
+        const fs::path diagnosticPath =
+            opt.singleCpp
+                ? opt.cppFile
+                : fs::path{};
 
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
@@ -1254,38 +1261,145 @@ namespace
     return candidates[0];
   }
 
-  static std::optional<fs::path> read_last_binary()
+  struct LastBuildMetadata
   {
-    const fs::path metaFile = fs::current_path() / ".vix" / "meta.json";
+    fs::path binary;
+    vix::engine::SanitizerMode sanitizerMode{
+        vix::engine::SanitizerMode::None};
+  };
+
+  static std::optional<std::string> json_string_field(
+      const std::string &line,
+      std::string_view field)
+  {
+    const std::string key =
+        "\"" + std::string(field) + "\"";
+
+    const auto keyPos = line.find(key);
+    if (keyPos == std::string::npos)
+      return std::nullopt;
+
+    const auto colon =
+        line.find(':', keyPos + key.size());
+
+    if (colon == std::string::npos)
+      return std::nullopt;
+
+    const auto firstQuote =
+        line.find('"', colon + 1);
+
+    if (firstQuote == std::string::npos)
+      return std::nullopt;
+
+    const auto secondQuote =
+        line.find('"', firstQuote + 1);
+
+    if (secondQuote == std::string::npos)
+      return std::nullopt;
+
+    return line.substr(
+        firstQuote + 1,
+        secondQuote - firstQuote - 1);
+  }
+
+  static std::optional<LastBuildMetadata> read_last_build(
+      const fs::path &projectDir)
+  {
+    const fs::path metaFile =
+        projectDir / ".vix" / "meta.json";
 
     std::ifstream in(metaFile);
     if (!in)
       return std::nullopt;
 
+    LastBuildMetadata metadata;
+    std::string sanitizerName{"none"};
     std::string line;
+
     while (std::getline(in, line))
     {
-      const auto pos = line.find("\"last_binary\"");
-      if (pos == std::string::npos)
-        continue;
+      if (const auto value =
+              json_string_field(line, "last_binary"))
+      {
+        metadata.binary = *value;
+      }
 
-      const auto q1 = line.find('"', pos + 13);
-      if (q1 == std::string::npos)
-        continue;
-
-      const auto q2 = line.find('"', q1 + 1);
-      if (q2 == std::string::npos)
-        continue;
-
-      fs::path p = line.substr(q1 + 1, q2 - q1 - 1);
-
-      if (p.is_relative())
-        p = fs::current_path() / p;
-
-      return p;
+      if (const auto value =
+              json_string_field(line, "sanitizer"))
+      {
+        sanitizerName = *value;
+      }
     }
 
-    return std::nullopt;
+    if (metadata.binary.empty())
+      return std::nullopt;
+
+    if (metadata.binary.is_relative())
+    {
+      metadata.binary =
+          projectDir / metadata.binary;
+    }
+
+    metadata.binary =
+        metadata.binary.lexically_normal();
+
+    if (sanitizerName != "none")
+    {
+      const auto parsed =
+          vix::engine::parse_sanitizer_mode(
+              sanitizerName);
+
+      if (!parsed)
+        return std::nullopt;
+
+      metadata.sanitizerMode = *parsed;
+    }
+
+    return metadata;
+  }
+  static int run_last_built_project(
+      const fs::path &projectDir,
+      const Options &opt)
+  {
+    const auto lastBuild =
+        read_last_build(projectDir);
+
+    if (!lastBuild)
+    {
+      error("No successful build found for this project.");
+      hint("Run: vix build");
+      return 1;
+    }
+
+    std::error_code ec;
+
+    fs::path executable =
+        fs::absolute(lastBuild->binary, ec);
+
+    if (ec)
+      executable =
+          lastBuild->binary.lexically_normal();
+    else
+      executable = executable.lexically_normal();
+
+    if (!is_executable_file(executable))
+    {
+      error(
+          "Last built executable is missing or not executable.");
+
+      hint(executable.string());
+      hint("Run: vix build");
+      return 1;
+    }
+
+    return run_executable_direct(
+        executable,
+        opt,
+        "Execution failed",
+        vix::commands::RunCommand::detail::
+            effective_timeout_sec(opt),
+        vix::engine::sanitizer_enabled(
+            lastBuild->sanitizerMode));
   }
 
   static RunTarget resolve_target(const Options &opt)
@@ -1368,22 +1482,6 @@ namespace
           t.path = resolvedPath;
           return t;
         }
-      }
-    }
-
-    if (auto bin = read_last_binary())
-    {
-      std::error_code ec;
-
-      if (fs::exists(*bin, ec) && !ec)
-      {
-        t.kind = RunTargetKind::Binary;
-        t.path = fs::absolute(*bin, ec).lexically_normal();
-
-        if (ec)
-          t.path = bin->lexically_normal();
-
-        return t;
       }
     }
 
@@ -1612,10 +1710,9 @@ namespace vix::commands::RunCommand
 #endif
       }
 
-      if (!resolved.generated && has_presets(resolved.cmakeSourceDir))
-        return run_project_with_presets(resolved.cmakeSourceDir, opt, ui_enabled());
-
-      return run_resolved_project(resolved, opt, ui_enabled());
+      return run_last_built_project(
+          resolved.userProjectDir,
+          opt);
     }
 
     default:
@@ -1679,10 +1776,9 @@ namespace vix::commands::RunCommand
       print_vue_fullstack_banner();
     }
 
-    if (!resolved.generated && has_presets(resolved.cmakeSourceDir))
-      return run_project_with_presets(resolved.cmakeSourceDir, opt, showUi);
-
-    return run_resolved_project(resolved, opt, showUi);
+    return run_last_built_project(
+        resolved.userProjectDir,
+        opt);
   }
 
   int help()
@@ -1743,7 +1839,8 @@ namespace vix::commands::RunCommand
     out << "  --auto-deps                 Auto-add includes from .vix/deps/*/include\n";
     out << "  --auto-deps=local           Same as --auto-deps\n";
     out << "  --auto-deps=up              Search deps in parent folders too\n";
-    out << "  --san                       Enable ASan and UBSan\n";
+    out << "  --san                       Explicitly enable ASan and UBSan\n";
+    out << "  --no-san                    Disable default sanitizers\n";
     out << "  --ubsan                     Enable UBSan only\n";
     out << "  --tsan                      Enable ThreadSanitizer only\n";
     out << "  --with-sqlite               Enable SQLite support\n";

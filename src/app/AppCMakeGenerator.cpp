@@ -1150,6 +1150,111 @@ namespace vix::cli::app
           manifest.compileFeatures);
     }
 
+    static void emit_sanitizer_options(
+        std::ostringstream &out,
+        const std::string &targetName)
+    {
+      out << "# Sanitizer variant selected by vix build\n";
+
+      out << "if(DEFINED VIX_SANITIZER_MODE "
+          << "AND NOT VIX_SANITIZER_MODE STREQUAL \"\")\n";
+
+      /*
+       * Give the command-line cache entry a stable type while preserving
+       * the value selected by Vix.
+       */
+      out << "  set(VIX_SANITIZER_MODE "
+          << "\"${VIX_SANITIZER_MODE}\" "
+          << "CACHE STRING "
+          << "\"Vix sanitizer mode\" "
+          << "FORCE)\n\n";
+
+      out << "  if(NOT CMAKE_CXX_COMPILER_ID "
+          << "MATCHES \"GNU|Clang|AppleClang\")\n";
+
+      out << "    message(FATAL_ERROR "
+          << "\"VIX_SANITIZER_MODE requires GCC or Clang\")\n";
+      out << "  endif()\n\n";
+
+      out << "  set(_vix_sanitizer_compile_options\n";
+      out << "    -g3\n";
+      out << "    -fno-omit-frame-pointer\n";
+      out << "    -fno-optimize-sibling-calls\n";
+      out << "  )\n";
+
+      out << "  set(_vix_sanitizer_link_options)\n\n";
+
+      out << "  if(VIX_SANITIZER_MODE STREQUAL \"address\")\n";
+
+      out << "    list(APPEND _vix_sanitizer_compile_options\n";
+      out << "      -fsanitize=address\n";
+      out << "    )\n";
+
+      out << "    list(APPEND _vix_sanitizer_link_options\n";
+      out << "      -fsanitize=address\n";
+      out << "    )\n";
+
+      out << "  elseif(VIX_SANITIZER_MODE STREQUAL \"undefined\")\n";
+
+      out << "    list(APPEND _vix_sanitizer_compile_options\n";
+      out << "      -fsanitize=undefined\n";
+      out << "      -fno-sanitize-recover=all\n";
+      out << "    )\n";
+
+      out << "    list(APPEND _vix_sanitizer_link_options\n";
+      out << "      -fsanitize=undefined\n";
+      out << "    )\n";
+
+      out << "  elseif(VIX_SANITIZER_MODE "
+          << "STREQUAL \"address-undefined\")\n";
+
+      out << "    list(APPEND _vix_sanitizer_compile_options\n";
+      out << "      -fsanitize=address,undefined\n";
+      out << "      -fno-sanitize-recover=all\n";
+      out << "    )\n";
+
+      out << "    list(APPEND _vix_sanitizer_link_options\n";
+      out << "      -fsanitize=address,undefined\n";
+      out << "    )\n";
+
+      out << "  elseif(VIX_SANITIZER_MODE STREQUAL \"thread\")\n";
+
+      out << "    list(APPEND _vix_sanitizer_compile_options\n";
+      out << "      -fsanitize=thread\n";
+      out << "    )\n";
+
+      out << "    list(APPEND _vix_sanitizer_link_options\n";
+      out << "      -fsanitize=thread\n";
+      out << "    )\n";
+
+      out << "  else()\n";
+
+      out << "    message(FATAL_ERROR "
+          << "\"Unknown VIX_SANITIZER_MODE: "
+          << "${VIX_SANITIZER_MODE}\")\n";
+
+      out << "  endif()\n\n";
+
+      out << "  target_compile_options("
+          << targetName
+          << " PRIVATE\n";
+
+      out << "    ${_vix_sanitizer_compile_options}\n";
+      out << "  )\n\n";
+
+      out << "  target_link_options("
+          << targetName
+          << " PRIVATE\n";
+
+      out << "    ${_vix_sanitizer_link_options}\n";
+      out << "  )\n\n";
+
+      out << "  unset(_vix_sanitizer_compile_options)\n";
+      out << "  unset(_vix_sanitizer_link_options)\n";
+
+      out << "endif()\n\n";
+    }
+
     static void emit_links(
         std::ostringstream &out,
         const AppManifest &manifest,
@@ -1526,6 +1631,11 @@ namespace vix::cli::app
     emit_registry_deps_links(out, manifest, targetName);
     emit_git_deps_links(out, manifest, targetName);
     emit_modules_links(out, manifest, targetName);
+
+    emit_sanitizer_options(
+        out,
+        targetName);
+
     emit_output_dir(out, manifest, targetName);
     emit_resources(out, manifest, targetName, projectDir);
     emit_tests(out, manifest, targetName, projectDir);

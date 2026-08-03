@@ -26,10 +26,8 @@
 #include <sstream>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <fstream>
 #include <cstdlib>
 #include <cctype>
 
@@ -52,51 +50,6 @@ namespace
               << RESET
               << text
               << "\n";
-  }
-
-  std::vector<std::string> read_code_frame_lines(
-      const fs::path &file,
-      std::size_t line,
-      std::size_t contextLines,
-      std::size_t maxLineWidth)
-  {
-    std::vector<std::string> out;
-
-    if (file.empty() || line == 0)
-      return out;
-
-    std::ifstream in(file);
-    if (!in)
-      return out;
-
-    const std::size_t startLine =
-        line > contextLines ? line - contextLines : 1;
-
-    const std::size_t endLine = line + contextLines;
-
-    std::string current;
-    std::size_t currentLine = 0;
-
-    while (std::getline(in, current))
-    {
-      ++currentLine;
-
-      if (currentLine < startLine)
-        continue;
-
-      if (currentLine > endLine)
-        break;
-
-      if (maxLineWidth > 0 && current.size() > maxLineWidth)
-      {
-        current = current.substr(0, maxLineWidth);
-        current += "...";
-      }
-
-      out.push_back(current);
-    }
-
-    return out;
   }
 
   std::string hint_for_compiler_error(
@@ -126,9 +79,10 @@ namespace
       return "Declare the symbol before use, include the right header, or check the namespace.";
     }
 
-    if (message.find("was not declared in this scope") != std::string::npos)
+    if (message.find("has not been declared") != std::string::npos ||
+        message.find("was not declared in this scope") != std::string::npos)
     {
-      return "Declare the symbol before use, include the right header, or move the function definition above the call.";
+      return "Include the header that declares this name or check its namespace.";
     }
 
     if (message.find("does not name a type") != std::string::npos)
@@ -169,37 +123,6 @@ namespace
     }
 
     return {};
-  }
-
-  vix::cli::build::BuildDiagnostic diagnostic_from_compiler_error(
-      const vix::cli::errors::CompilerError &err,
-      const std::string &contextMessage)
-  {
-    vix::cli::build::BuildDiagnostic diagnostic;
-
-    diagnostic.title =
-        contextMessage.empty()
-            ? "Build failed"
-            : contextMessage;
-
-    diagnostic.error = err.message;
-    diagnostic.hint = hint_for_compiler_error(err);
-
-    diagnostic.location.file = err.file;
-    diagnostic.location.line =
-        err.line > 0 ? static_cast<std::size_t>(err.line) : 0;
-    diagnostic.location.column =
-        err.column > 0 ? static_cast<std::size_t>(err.column) : 0;
-
-    diagnostic.codeFrame.location = diagnostic.location;
-    diagnostic.codeFrame.lines =
-        read_code_frame_lines(
-            fs::path(err.file),
-            diagnostic.location.line,
-            2,
-            120);
-
-    return diagnostic;
   }
 
   bool handle_unrecognized_cli_option_as_script_runtime_args(
@@ -386,15 +309,6 @@ namespace vix::cli
     if (pipeline.tryHandle(errors, ctx))
       return true;
 
-    std::unordered_map<std::string, int> counts;
-    counts.reserve(errors.size());
-
-    for (const auto &err : errors)
-    {
-      const std::string key = err.file + "|" + err.message;
-      ++counts[key];
-    }
-
     std::vector<CompilerError> unique;
     unique.reserve(errors.size());
 
@@ -403,7 +317,14 @@ namespace vix::cli
 
     for (const auto &err : errors)
     {
-      const std::string key = err.file + "|" + err.message;
+      const std::string key =
+          err.file +
+          "|" +
+          std::to_string(err.line) +
+          "|" +
+          std::to_string(err.column) +
+          "|" +
+          err.message;
 
       if (seen.insert(key).second)
         unique.push_back(err);
@@ -414,70 +335,79 @@ namespace vix::cli
       std::cerr << RED
                 << "error: "
                 << RESET
-                << contextMessage
+                << (contextMessage.empty()
+                        ? "Build failed"
+                        : contextMessage)
                 << "\n";
 
-      print_hint("no unique compiler error was detected; inspect the raw compiler output");
-
-      if (!cleanedLog.empty())
-        std::cerr << cleanedLog << "\n";
+      print_hint(
+          "no compiler error could be extracted; "
+          "run with VIX_LOG_LEVEL=debug to inspect the full output");
 
       return false;
     }
 
-    std::cerr << RED
-              << "error: "
-              << RESET
-              << contextMessage
-              << "\n";
+    /*
+     * Show the first compiler error by default.
+     *
+     * Compiler errors frequently cascade: once the parser cannot
+     * understand one declaration, it may report several secondary
+     * errors. Showing the first error keeps the output focused for
+     * beginners.
+     */
+    const std::size_t maxToShow = 1;
 
     CodeFrameOptions codeFrameOptions;
-    codeFrameOptions.contextLines = 2;
+    codeFrameOptions.contextLines = 1;
     codeFrameOptions.maxLineWidth = 120;
     codeFrameOptions.tabWidth = 4;
+    codeFrameOptions.leadingBlankLine = true;
 
-    const std::size_t maxToShow =
-        std::min<std::size_t>(unique.size(), 3);
-
-    for (std::size_t i = 0; i < maxToShow; ++i)
+    for (std::size_t i = 0;
+         i < unique.size() && i < maxToShow;
+         ++i)
     {
-      const auto &err = unique[i];
+      const CompilerError &err = unique[i];
 
-      const vix::cli::build::BuildDiagnostic diagnostic =
-          ::diagnostic_from_compiler_error(
-              err,
-              contextMessage);
+      std::cerr << RED
+                << "error: "
+                << RESET
+                << err.message
+                << "\n";
 
-      vix::cli::build::print_build_diagnostic(
-          std::cerr,
-          diagnostic);
+      /*
+       * Use the shared codeframe contract directly.
+       *
+       * This avoids creating a second list of source lines with
+       * incorrect line-number assumptions.
+       */
+      printCodeFrame(
+          err,
+          ctx,
+          codeFrameOptions);
 
-      const std::string key = err.file + "|" + err.message;
-      const auto it = counts.find(key);
+      const std::string hint =
+          hint_for_compiler_error(err);
 
-      if (it != counts.end() && it->second > 1)
-      {
-        vix::cli::build::print_build_warning(
-            std::cerr,
-            std::to_string(it->second - 1) + " similar error(s) hidden");
-      }
+      if (!hint.empty())
+        print_hint(hint);
     }
 
-    if (unique.size() > maxToShow)
+    const std::size_t hiddenCount =
+        unique.size() > maxToShow
+            ? unique.size() - maxToShow
+            : 0;
+
+    if (hiddenCount > 0)
     {
       std::cerr << "\n"
                 << GRAY
-                << (unique.size() - maxToShow)
-                << " more distinct error(s) hidden. Run with --verbose for full output."
+                << hiddenCount
+                << " more compiler error"
+                << (hiddenCount == 1 ? "" : "s")
+                << " hidden. Run with --verbose to see them."
                 << RESET
                 << "\n";
-    }
-
-    if (!sourceFile.empty())
-    {
-      vix::cli::build::print_build_info(
-          std::cerr,
-          "at: " + sourceFile.string());
     }
 
     return true;

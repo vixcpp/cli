@@ -77,6 +77,7 @@
 #include <vix/engine/ConfigureDecision.hpp>
 #include <vix/engine/ExecutionPlanning.hpp>
 #include <vix/engine/Watch.hpp>
+#include <vix/engine/SanitizerMode.hpp>
 
 namespace fs = std::filesystem;
 using namespace vix::cli::style;
@@ -1106,6 +1107,13 @@ namespace vix::commands::BuildCommand
 
     static void write_last_binary(const fs::path &path);
 
+    static void write_project_build_metadata(
+        const fs::path &projectDir,
+        const fs::path &buildDir,
+        const fs::path &binary,
+        vix::engine::SanitizerMode sanitizerMode);
+    ;
+
     static void resolve_sdk_for_plan(
         process::Plan &plan,
         std::string &sdkResolutionError,
@@ -1528,7 +1536,11 @@ namespace vix::commands::BuildCommand
       if (!persist_project_artifact(artifact))
         return false;
 
-      write_last_binary(destination);
+      write_project_build_metadata(
+          plan.userProjectDir,
+          plan.buildDir,
+          destination,
+          opt.sanitizerMode);
 
       return true;
     }
@@ -1559,12 +1571,45 @@ namespace vix::commands::BuildCommand
       return artifact_cache::ArtifactCache::write_manifest(artifact);
     }
 
+    static bool select_sanitizer_mode(
+        process::Options &options,
+        std::optional<process::SanitizerMode> &selectedMode,
+        std::string &selectedArgument,
+        process::SanitizerMode requestedMode,
+        std::string_view requestedArgument,
+        int &exitCode)
+    {
+      if (selectedMode &&
+          *selectedMode != requestedMode)
+      {
+        error(
+            "Conflicting sanitizer options: " +
+            selectedArgument +
+            " and " +
+            std::string(requestedArgument));
+
+        hint("Choose exactly one sanitizer mode per build.");
+        hint("Recommended: vix build --sanitize");
+
+        exitCode = 2;
+        return false;
+      }
+
+      selectedMode = requestedMode;
+      selectedArgument = std::string(requestedArgument);
+      options.sanitizerMode = requestedMode;
+
+      return true;
+    }
+
     static process::Options parse_args_or_exit(
         const std::vector<std::string> &args,
         int &exitCode)
     {
       process::Options o;
       exitCode = 0;
+      std::optional<process::SanitizerMode> selectedSanitizerMode;
+      std::string selectedSanitizerArgument;
 
       for (std::size_t i = 0; i < args.size(); ++i)
       {
@@ -1601,6 +1646,105 @@ namespace vix::commands::BuildCommand
         else if (a == "--warning-check")
         {
           o.warningCheck = true;
+        }
+        else if (a == "--sanitize" ||
+                 a == "--san")
+        {
+          if (!select_sanitizer_mode(
+                  o,
+                  selectedSanitizerMode,
+                  selectedSanitizerArgument,
+                  process::SanitizerMode::AddressUndefined,
+                  a,
+                  exitCode))
+          {
+            return o;
+          }
+        }
+        else if (a == "--asan")
+        {
+          if (!select_sanitizer_mode(
+                  o,
+                  selectedSanitizerMode,
+                  selectedSanitizerArgument,
+                  process::SanitizerMode::Address,
+                  a,
+                  exitCode))
+          {
+            return o;
+          }
+        }
+        else if (a == "--ubsan")
+        {
+          if (!select_sanitizer_mode(
+                  o,
+                  selectedSanitizerMode,
+                  selectedSanitizerArgument,
+                  process::SanitizerMode::Undefined,
+                  a,
+                  exitCode))
+          {
+            return o;
+          }
+        }
+        else if (a == "--tsan")
+        {
+          if (!select_sanitizer_mode(
+                  o,
+                  selectedSanitizerMode,
+                  selectedSanitizerArgument,
+                  process::SanitizerMode::Thread,
+                  a,
+                  exitCode))
+          {
+            return o;
+          }
+        }
+        else if (a.rfind("--sanitize=", 0) == 0)
+        {
+          const std::string value =
+              a.substr(std::string("--sanitize=").size());
+
+          if (value.empty())
+          {
+            error("Missing value for --sanitize=<mode>");
+            hint(
+                "Valid modes: address, undefined, "
+                "address,undefined, thread");
+
+            exitCode = 2;
+            return o;
+          }
+
+          const auto parsed =
+              vix::engine::parse_sanitizer_mode(value);
+
+          if (!parsed)
+          {
+            error("Invalid sanitizer mode: " + value);
+
+            hint(
+                "Valid modes: address, undefined, "
+                "address,undefined, thread");
+
+            hint(
+                "Recommended: "
+                "vix build --sanitize");
+
+            exitCode = 2;
+            return o;
+          }
+
+          if (!select_sanitizer_mode(
+                  o,
+                  selectedSanitizerMode,
+                  selectedSanitizerArgument,
+                  *parsed,
+                  a,
+                  exitCode))
+          {
+            return o;
+          }
         }
         else if (a == "--managed-sdk")
         {
@@ -2038,41 +2182,28 @@ namespace vix::commands::BuildCommand
       return vix::engine::detect_fast_linker_flag(opt.linker);
     }
 
-    static void clean_local_build_dirs(
-        const fs::path &projectDir,
-        const std::string &targetTriple,
+    static void clean_local_build_dir(
+        const fs::path &buildDir,
         bool quiet)
     {
-      std::vector<fs::path> dirs = {
-          projectDir / "build-dev",
-          projectDir / "build-ninja",
-          projectDir / "build-release"};
+      if (!fs::exists(buildDir))
+        return;
 
-      if (!targetTriple.empty())
+      std::error_code ec;
+      fs::remove_all(buildDir, ec);
+
+      if (ec)
       {
-        dirs.push_back(projectDir / ("build-dev-" + targetTriple));
-        dirs.push_back(projectDir / ("build-ninja-" + targetTriple));
-        dirs.push_back(projectDir / ("build-release-" + targetTriple));
+        error(
+            "Failed to remove build directory: " +
+            buildDir.string());
+
+        hint(ec.message());
+        throw std::runtime_error("clean failed");
       }
 
-      for (const auto &dir : dirs)
-      {
-        if (!fs::exists(dir))
-          continue;
-
-        std::error_code ec;
-        fs::remove_all(dir, ec);
-
-        if (ec)
-        {
-          error("Failed to remove   build directory: " + dir.string());
-          hint(ec.message());
-          throw std::runtime_error("clean failed");
-        }
-
-        if (!quiet)
-          step("removed " + dir.string());
-      }
+      if (!quiet)
+        step("removed " + buildDir.string());
     }
 
     static std::vector<std::pair<std::string, std::string>>
@@ -2095,12 +2226,25 @@ namespace vix::commands::BuildCommand
       engineOptions.warningCheck = opt.warningCheck;
       engineOptions.toolchainFile = toolchainFile;
       engineOptions.globalPackagesFile = globalPackagesFile;
-      engineOptions.dependencyEnvironmentMode = dependencyEnvironmentMode;
+      engineOptions.dependencyEnvironmentMode =
+          dependencyEnvironmentMode;
       engineOptions.sdkConfigDir = sdkConfigDir;
       engineOptions.launcher = launcher;
       engineOptions.fastLinkerFlag = fastLinkerFlag;
 
-      return vix::engine::make_cmake_variables(engineOptions);
+      auto variables =
+          vix::engine::make_cmake_variables(engineOptions);
+
+      if (vix::engine::sanitizer_enabled(opt.sanitizerMode))
+      {
+        variables.emplace_back(
+            "VIX_SANITIZER_MODE",
+            std::string(
+                vix::engine::sanitizer_mode_name(
+                    opt.sanitizerMode)));
+      }
+
+      return variables;
     }
 
     static vix::engine::ConfigurationSignatureOptions
@@ -2280,6 +2424,7 @@ namespace vix::commands::BuildCommand
       layoutOptions.generatedFromVixApp = generatedFromVixApp;
       layoutOptions.preset = *presetOpt;
       layoutOptions.targetTriple = opt.targetTriple;
+      layoutOptions.sanitizerMode = opt.sanitizerMode;
 
       const vix::engine::ExecutionPlanLayoutResult layout =
           vix::engine::make_execution_plan_layout(layoutOptions);
@@ -2298,7 +2443,9 @@ namespace vix::commands::BuildCommand
       {
         try
         {
-          clean_local_build_dirs(userProjectDir, opt.targetTriple, opt.quiet);
+          clean_local_build_dir(
+              plan.buildDir,
+              opt.quiet);
         }
         catch (const std::exception &)
         {
@@ -2501,6 +2648,74 @@ namespace vix::commands::BuildCommand
       }
 
       return out;
+    }
+
+    static void write_project_build_metadata(
+        const fs::path &projectDir,
+        const fs::path &buildDir,
+        const fs::path &binary,
+        vix::engine::SanitizerMode sanitizerMode)
+    {
+      if (projectDir.empty() || binary.empty())
+        return;
+
+      const fs::path metaDir =
+          projectDir / ".vix";
+
+      const fs::path metaFile =
+          metaDir / "meta.json";
+
+      std::error_code ec;
+      fs::create_directories(metaDir, ec);
+
+      if (ec)
+        return;
+
+      fs::path absoluteBinary =
+          fs::absolute(binary, ec);
+
+      if (ec)
+      {
+        ec.clear();
+        absoluteBinary = binary;
+      }
+
+      absoluteBinary =
+          absoluteBinary.lexically_normal();
+
+      fs::path absoluteBuildDir =
+          fs::absolute(buildDir, ec);
+
+      if (ec)
+      {
+        ec.clear();
+        absoluteBuildDir = buildDir;
+      }
+
+      absoluteBuildDir =
+          absoluteBuildDir.lexically_normal();
+
+      std::ostringstream out;
+
+      out << "{\n";
+
+      out << "  \"last_binary\": \""
+          << json_escape_string(absoluteBinary.string())
+          << "\",\n";
+
+      out << "  \"build_dir\": \""
+          << json_escape_string(absoluteBuildDir.string())
+          << "\",\n";
+
+      out << "  \"sanitizer\": \""
+          << vix::engine::sanitizer_mode_name(sanitizerMode)
+          << "\"\n";
+
+      out << "}\n";
+
+      (void)write_if_different(
+          metaFile,
+          out.str());
     }
 
     static void write_last_binary(const fs::path &path)
@@ -4041,6 +4256,12 @@ namespace vix::commands::BuildCommand
       if (!graph.save(graphPath) && !opt.quiet)
         hint("Warning: unable to write Vix build graph");
 
+      write_project_build_metadata(
+          plan.userProjectDir,
+          plan.buildDir,
+          outputBinary,
+          opt.sanitizerMode);
+
       if (opt.exportBin)
       {
         const fs::path dest = plan.userProjectDir / outputBinary.filename();
@@ -4110,6 +4331,9 @@ namespace vix::commands::BuildCommand
         return false;
 
       if (opt.clean)
+        return false;
+
+      if (vix::engine::sanitizer_enabled(opt.sanitizerMode))
         return false;
 
       if (!opt.targetTriple.empty())
@@ -4573,7 +4797,11 @@ namespace vix::commands::BuildCommand
           ec);
 #endif
 
-      write_last_binary(session.outputBinary);
+      write_project_build_metadata(
+          projectDir,
+          session.plan.buildDir,
+          session.outputBinary,
+          opt.sanitizerMode);
 
       if (opt.exportBin || !opt.outPath.empty())
       {
@@ -5313,7 +5541,15 @@ namespace vix::commands::BuildCommand
                 plan_.defaultTargetName);
 
             if (exeOpt)
+            {
               lastBinary = exeOpt->string();
+
+              write_project_build_metadata(
+                  plan_.userProjectDir,
+                  plan_.buildDir,
+                  *exeOpt,
+                  opt_.sanitizerMode);
+            }
 
             const auto state =
                 artifact_cache::ArtifactCache::make_build_state(
@@ -5463,7 +5699,15 @@ namespace vix::commands::BuildCommand
               plan_.defaultTargetName);
 
           if (exeOpt)
+          {
             lastBinary = exeOpt->string();
+
+            write_project_build_metadata(
+                plan_.userProjectDir,
+                plan_.buildDir,
+                *exeOpt,
+                opt_.sanitizerMode);
+          }
 
           const auto state =
               artifact_cache::ArtifactCache::make_build_state(
@@ -6796,6 +7040,12 @@ namespace vix::commands::BuildCommand
     out << "  --explain                 Explain why files or targets rebuild\n";
     out << "  --warnings                Show warnings from the last build log\n";
     out << "  --warning-check           Build with strong compiler warnings enabled\n";
+    out << "  --sanitize                Build with AddressSanitizer and UndefinedBehaviorSanitizer\n";
+    out << "  --sanitize=<mode>         Sanitizer: address, undefined, address,undefined, thread\n";
+    out << "  --san                     Alias for --sanitize\n";
+    out << "  --asan                    Alias for --sanitize=address\n";
+    out << "  --ubsan                   Alias for --sanitize=undefined\n";
+    out << "  --tsan                    Alias for --sanitize=thread\n";
     out << "  --report                  Submit a Softadastra Cloud build report\n";
     out << "  --page <n>                Warning page to display with --warnings, default: 1\n";
     out << "  --limit <n>               Warnings per page with --warnings, default: 10\n";
@@ -6855,6 +7105,10 @@ namespace vix::commands::BuildCommand
     out << "  vix build --explain\n";
     out << "  vix build --warnings\n";
     out << "  vix build --warning-check --build-target all -v --clean\n";
+    out << "  vix build --sanitize\n";
+    out << "  vix build --sanitize=address\n";
+    out << "  vix build --sanitize=undefined\n";
+    out << "  vix build --sanitize=thread\n";
     out << "  vix build --warnings --page 2\n";
     out << "  vix build --warnings --limit 50\n";
     out << "  vix build --warnings --page 3 --limit 20\n";

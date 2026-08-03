@@ -134,6 +134,7 @@ namespace vix::commands::RunCommand::detail
     bool enableSanitizers = false;      // ASan + UBSan
     bool enableUbsanOnly = false;       // UBSan only
     bool enableThreadSanitizer = false; // TSan only
+    bool sanitizerSelectionExplicit = false;
 
     bool withSqlite = false;
     bool withMySql = false;

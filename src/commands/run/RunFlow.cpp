@@ -101,7 +101,8 @@ namespace vix::commands::RunCommand::detail
              v == "--watch" || v == "--reload" ||
              v == "--dev-mode" ||
              v == "--force-server" || v == "--force-script" ||
-             v == "--san" || v == "--ubsan" || v == "--tsan" ||
+             v == "--san" || v == "--no-san" ||
+             v == "--ubsan" || v == "--tsan" ||
              v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
              v == "--no-color" ||
              v == "--replay" ||
@@ -186,6 +187,19 @@ namespace vix::commands::RunCommand::detail
       {
         if (opt.autoDeps != AutoDepsMode::Up)
           opt.autoDeps = AutoDepsMode::Local;
+
+#ifndef _WIN32
+        /*
+         * A standalone C++ file is a development workflow.
+         * Enable ASan + UBSan unless the user selected a mode explicitly.
+         */
+        if (!opt.sanitizerSelectionExplicit)
+        {
+          opt.enableSanitizers = true;
+          opt.enableUbsanOnly = false;
+          opt.enableThreadSanitizer = false;
+        }
+#endif
       }
 
       normalize_clear_mode(opt);
@@ -584,21 +598,35 @@ namespace vix::commands::RunCommand::detail
       }
       else if (a == "--san")
       {
+        opt.sanitizerSelectionExplicit = true;
+
         opt.enableSanitizers = true;
+        opt.enableUbsanOnly = false;
+        opt.enableThreadSanitizer = false;
+      }
+      else if (a == "--no-san")
+      {
+        opt.sanitizerSelectionExplicit = true;
+
+        opt.enableSanitizers = false;
         opt.enableUbsanOnly = false;
         opt.enableThreadSanitizer = false;
       }
       else if (a == "--ubsan")
       {
-        opt.enableUbsanOnly = true;
+        opt.sanitizerSelectionExplicit = true;
+
         opt.enableSanitizers = false;
+        opt.enableUbsanOnly = true;
         opt.enableThreadSanitizer = false;
       }
       else if (a == "--tsan")
       {
-        opt.enableThreadSanitizer = true;
+        opt.sanitizerSelectionExplicit = true;
+
         opt.enableSanitizers = false;
         opt.enableUbsanOnly = false;
+        opt.enableThreadSanitizer = true;
       }
       else if (a == "--auto-deps")
       {

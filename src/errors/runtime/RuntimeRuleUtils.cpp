@@ -23,6 +23,12 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <array>
+#include <system_error>
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
 
 #include <vix/cli/Style.hpp>
 
@@ -32,6 +38,68 @@ namespace vix::cli::errors::runtime
 {
   namespace
   {
+    bool is_probably_text_file(
+        const std::filesystem::path &path)
+    {
+      if (path.empty())
+        return false;
+
+      std::error_code error;
+
+      if (!std::filesystem::is_regular_file(path, error) ||
+          error)
+      {
+        return false;
+      }
+
+      std::ifstream input(path, std::ios::binary);
+      if (!input)
+        return false;
+
+      std::array<char, 8192> sample{};
+
+      input.read(
+          sample.data(),
+          static_cast<std::streamsize>(sample.size()));
+
+      const std::size_t count =
+          static_cast<std::size_t>(input.gcount());
+
+      if (count == 0)
+        return true;
+
+      std::size_t suspiciousBytes = 0;
+
+      for (std::size_t i = 0; i < count; ++i)
+      {
+        const unsigned char byte =
+            static_cast<unsigned char>(sample[i]);
+
+        /*
+         * A NUL byte is a strong indication that this is an
+         * executable, object file or another binary format.
+         */
+        if (byte == 0)
+          return false;
+
+        /*
+         * Allow tabs, newlines and carriage returns. Count the
+         * remaining ASCII control characters as suspicious.
+         */
+        if (byte < 0x09 ||
+            (byte > 0x0D && byte < 0x20))
+        {
+          ++suspiciousBytes;
+        }
+      }
+
+      /*
+       * A normal source/configuration file should contain almost
+       * no unsupported control characters.
+       */
+      return suspiciousBytes * 100 <= count * 2;
+    }
+
     bool is_digit(char c) noexcept
     {
       return std::isdigit(static_cast<unsigned char>(c)) != 0;
@@ -151,6 +219,88 @@ namespace vix::cli::errors::runtime
 
       return parse_location_at(line, pathStart, filenameEnd);
     }
+
+    bool is_system_source_path(
+        const std::filesystem::path &path)
+    {
+      const std::string value =
+          path.lexically_normal().generic_string();
+
+      return value.rfind("/usr/include/", 0) == 0 ||
+             value.rfind("/usr/lib/", 0) == 0 ||
+             value.rfind("/usr/local/include/", 0) == 0 ||
+             value.rfind("/usr/local/lib/", 0) == 0 ||
+             value.rfind("/lib/", 0) == 0 ||
+             value.rfind("/lib64/", 0) == 0 ||
+             value.find("/libsanitizer/") != std::string::npos;
+    }
+
+    bool has_source_extension(
+        const std::filesystem::path &path)
+    {
+      std::string extension =
+          path.extension().string();
+
+      std::transform(
+          extension.begin(),
+          extension.end(),
+          extension.begin(),
+          [](unsigned char character)
+          {
+            return static_cast<char>(
+                std::tolower(character));
+          });
+
+      return extension == ".c" ||
+             extension == ".cc" ||
+             extension == ".cpp" ||
+             extension == ".cxx" ||
+             extension == ".h" ||
+             extension == ".hh" ||
+             extension == ".hpp" ||
+             extension == ".hxx" ||
+             extension == ".ipp" ||
+             extension == ".inl";
+    }
+
+    RuntimeLocation find_location_from_absolute_source(
+        const std::string &line)
+    {
+      std::size_t pathStart =
+          line.find('/');
+
+      while (pathStart != std::string::npos)
+      {
+        std::size_t pathEnd =
+            line.find(':', pathStart);
+
+        while (pathEnd != std::string::npos)
+        {
+          RuntimeLocation location =
+              parse_location_at(
+                  line,
+                  pathStart,
+                  pathEnd);
+
+          if (location.valid() &&
+              location.file.is_absolute() &&
+              has_source_extension(location.file) &&
+              !is_system_source_path(location.file) &&
+              is_probably_text_file(location.file))
+          {
+            return location;
+          }
+
+          pathEnd =
+              line.find(':', pathEnd + 1);
+        }
+
+        pathStart =
+            line.find('/', pathStart + 1);
+      }
+
+      return {};
+    }
   } // namespace
 
   bool icontains(const std::string &text, const std::string &needle)
@@ -202,6 +352,9 @@ namespace vix::cli::errors::runtime
   std::optional<std::vector<std::string>> read_file_lines(
       const std::filesystem::path &path)
   {
+    if (!is_probably_text_file(path))
+      return std::nullopt;
+
     std::ifstream ifs(path);
     if (!ifs)
       return std::nullopt;
@@ -219,21 +372,57 @@ namespace vix::cli::errors::runtime
       const std::string &log,
       const std::filesystem::path &sourceFile)
   {
+    /*
+     * A caller may provide a source file for standalone mode.
+     *
+     * Project mode normally provides no source file, so sanitizer
+     * frames must also be able to identify their own source path.
+     */
+    std::filesystem::path fallbackSource =
+        sourceFile;
+
+    if (!fallbackSource.empty() &&
+        !is_probably_text_file(fallbackSource))
+    {
+      fallbackSource.clear();
+    }
+
     std::istringstream input(log);
     std::string line;
 
     while (std::getline(input, line))
     {
+      /*
+       * Sanitizer stack frames begin with entries such as:
+       *
+       *   #1 ... /project/src/main.cpp:16
+       */
       if (line.find('#') == std::string::npos)
         continue;
 
       RuntimeLocation location =
-          find_location_from_exact_source(line, sourceFile);
+          find_location_from_exact_source(
+              line,
+              fallbackSource);
 
       if (location.valid())
         return location;
 
-      location = find_location_from_filename(line, sourceFile);
+      location =
+          find_location_from_filename(
+              line,
+              fallbackSource);
+
+      if (location.valid())
+        return location;
+
+      /*
+       * Project-mode runs do not have one predefined source file.
+       * Extract the first existing non-system source file directly
+       * from the sanitizer frame.
+       */
+      location =
+          find_location_from_absolute_source(line);
 
       if (location.valid())
         return location;
@@ -253,8 +442,12 @@ namespace vix::cli::errors::runtime
     if (location.valid())
       return location;
 
-    if (sourceFile.empty() || sourcePatterns.empty())
+    if (sourceFile.empty() ||
+        sourcePatterns.empty() ||
+        !is_probably_text_file(sourceFile))
+    {
       return {};
+    }
 
     const auto lines = read_file_lines(sourceFile);
     if (!lines)
@@ -270,7 +463,9 @@ namespace vix::cli::errors::runtime
         if (pattern.empty())
           continue;
 
-        const std::size_t pos = cleanLine.find(pattern);
+        const std::size_t pos =
+            cleanLine.find(pattern);
+
         if (pos == std::string::npos)
           continue;
 
@@ -290,11 +485,20 @@ namespace vix::cli::errors::runtime
       const RuntimeLocation &location,
       const std::filesystem::path &sourceFile)
   {
-    if (location.valid())
-      return location.file.string() + ":" + std::to_string(location.line);
+    if (location.valid() &&
+        is_probably_text_file(location.file))
+    {
+      return location.file.string() +
+             ":" +
+             std::to_string(location.line);
+    }
 
-    if (!sourceFile.empty())
-      return "source: " + sourceFile.filename().string();
+    if (!sourceFile.empty() &&
+        is_probably_text_file(sourceFile))
+    {
+      return "source: " +
+             sourceFile.filename().string();
+    }
 
     return {};
   }
@@ -316,7 +520,17 @@ namespace vix::cli::errors::runtime
   void print_runtime_codeframe(
       const vix::cli::errors::CompilerError &err)
   {
+    const std::filesystem::path file = err.file;
+
+    /*
+     * Last safety boundary: even if a rule accidentally returns
+     * an executable path, CodeFrame must never print it.
+     */
+    if (!is_probably_text_file(file))
+      return;
+
     ErrorContext ctx;
+
     CodeFrameOptions opt;
     opt.contextLines = 2;
     opt.maxLineWidth = 120;

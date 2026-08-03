@@ -1011,90 +1011,6 @@ namespace vix::cli::errors
       return true;
     }
 
-    bool handleRuntimeBufferOverflow(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool isHeap =
-          icontains(runtimeLog, "heap-buffer-overflow");
-
-      const bool isStack =
-          icontains(runtimeLog, "stack-buffer-overflow");
-
-      const bool isGlobal =
-          icontains(runtimeLog, "global-buffer-overflow");
-
-      const bool isStackOverflow =
-          icontains(runtimeLog, "stack-overflow") ||
-          icontains(runtimeLog, "stack overflow");
-
-      const bool isOutOfBounds =
-          icontains(runtimeLog, "out of bounds") ||
-          icontains(runtimeLog, "out-of-bounds") ||
-          icontains(runtimeLog, "index out of range");
-
-      const bool genericOverflow =
-          icontains(runtimeLog, "buffer-overflow") ||
-          icontains(runtimeLog, "buffer overflow") ||
-          icontains(runtimeLog, "heap overflow") ||
-          icontains(runtimeLog, "stack overflow") ||
-          (icontains(runtimeLog, "AddressSanitizer") &&
-           icontains(runtimeLog, "overflow"));
-
-      const bool hit =
-          isHeap || isStack || isGlobal ||
-          isStackOverflow || isOutOfBounds || genericOverflow;
-
-      if (!hit)
-        return false;
-
-      std::string title = "runtime error: buffer overflow";
-      std::string hint = "check indices, sizes, and buffer boundaries";
-
-      if (isHeap)
-      {
-        title = "runtime error: heap-buffer-overflow";
-        hint = "check heap buffer, vector, or string bounds";
-      }
-      else if (isStack)
-      {
-        title = "runtime error: stack-buffer-overflow";
-        hint = "check local array bounds or move large buffers to the heap";
-      }
-      else if (isGlobal)
-      {
-        title = "runtime error: global-buffer-overflow";
-        hint = "check global array bounds";
-      }
-      else if (isStackOverflow)
-      {
-        title = "runtime error: stack overflow";
-        hint = "reduce recursion depth or move large stack buffers to the heap";
-      }
-      else if (isOutOfBounds)
-      {
-        title = "runtime error: out-of-bounds access";
-        hint = "check indices, sizes, and signed/unsigned conversions";
-      }
-
-      print_header(title);
-
-      if (auto location = try_extract_first_user_frame(runtimeLog, sourceFile))
-      {
-        print_codeframe_then_bottom_default(*location, hint);
-      }
-      else
-      {
-        print_hint_at_bottom(
-            maybe_add_san_hint(hint, runtimeLog),
-            !sourceFile.empty() ? "source: " + sourceFile.filename().string() : "");
-
-        print_excerpt(runtimeLog);
-      }
-
-      return true;
-    }
-
     std::optional<std::string> extract_ubsan_kind(const std::string &log)
     {
       static const std::regex re(
@@ -1214,22 +1130,42 @@ namespace vix::cli::errors
       if (!hasUB)
         return false;
 
-      const auto kind = extract_ubsan_kind(runtimeLog);
+      /*
+       * Let BufferOverflowRule handle UBSan bounds errors.
+       */
+      if (icontains(runtimeLog, "out of bounds") ||
+          icontains(runtimeLog, "out-of-bounds") ||
+          icontains(runtimeLog, "index out of range"))
+      {
+        return false;
+      }
+
+      const auto kind =
+          extract_ubsan_kind(runtimeLog);
+
       const auto [title, hint] =
           kind ? ubsan_title_hint_from_kind(*kind)
                : ubsan_title_hint_from_kind("");
 
       print_header(title);
 
-      if (auto location = try_extract_first_user_frame(runtimeLog, sourceFile))
+      if (auto location =
+              try_extract_first_user_frame(
+                  runtimeLog,
+                  sourceFile))
       {
-        print_codeframe_then_bottom_default(*location, hint);
+        print_codeframe_then_bottom_default(
+            *location,
+            hint);
       }
       else
       {
         print_hint_at_bottom(
             maybe_add_san_hint(hint, runtimeLog),
-            !sourceFile.empty() ? "source: " + sourceFile.filename().string() : "");
+            !sourceFile.empty()
+                ? "source: " +
+                      sourceFile.filename().string()
+                : "");
 
         print_excerpt(runtimeLog);
       }
@@ -1677,9 +1613,6 @@ namespace vix::cli::errors
         return true;
 
       if (handleRuntimeStackUseAfterScope(log, sourceFile))
-        return true;
-
-      if (handleRuntimeBufferOverflow(log, sourceFile))
         return true;
 
       if (handleRuntimeAssertionFailed(log, sourceFile))

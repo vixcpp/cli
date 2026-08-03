@@ -22,6 +22,7 @@
 #include <vix/engine/BuildTools.hpp>
 #include <vix/engine/ExecutionPlan.hpp>
 #include <vix/engine/Preset.hpp>
+#include <vix/engine/SanitizerMode.hpp>
 
 namespace vix::cli::process
 {
@@ -29,6 +30,7 @@ namespace vix::cli::process
 
   using LinkerMode = vix::engine::LinkerMode;
   using LauncherMode = vix::engine::LauncherMode;
+  using SanitizerMode = vix::engine::SanitizerMode;
 
   /**
    * @brief Parsed options for the `vix build` command.
@@ -146,6 +148,18 @@ namespace vix::cli::process
      * @brief Extra arguments forwarded directly to CMake.
      */
     std::vector<std::string> cmakeArgs;
+
+    /**
+     * @brief Sanitizer instrumentation selected for this build.
+     *
+     * The default build remains uninstrumented.
+     */
+    SanitizerMode sanitizerMode = SanitizerMode::None;
+
+    /**
+     * @brief True when the sanitizer mode was explicitly selected.
+     */
+    bool sanitizerSelectionExplicit = false;
 
     bool withSqlite = false;
     bool withMySql = false;

@@ -387,7 +387,7 @@ jobs:
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
            -DVIX_CORE_WITH_OPENSSL=OFF \
-            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=AUTO \
             -DVIX_CORE_WITH_UI=OFF \
             -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
@@ -501,7 +501,7 @@ jobs:
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
             -DVIX_CORE_WITH_OPENSSL=OFF \
-            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=AUTO \
             -DVIX_CORE_WITH_UI=OFF \
             -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
@@ -605,7 +605,7 @@ jobs:
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
             -DVIX_CORE_WITH_OPENSSL=OFF \
-            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=AUTO \
             -DVIX_CORE_WITH_UI=OFF \
             -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
@@ -721,7 +721,7 @@ jobs:
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
             -DVIX_CORE_WITH_OPENSSL=OFF \
-            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=AUTO \
             -DVIX_CORE_WITH_UI=OFF \
             -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
@@ -817,7 +817,7 @@ jobs:
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
             -DVIX_CORE_WITH_OPENSSL=OFF \
-            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=AUTO \
             -DVIX_CORE_WITH_UI=OFF \
             -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
@@ -932,7 +932,7 @@ jobs:
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
             -DVIX_CORE_WITH_OPENSSL=OFF \
-            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=AUTO \
             -DVIX_CORE_WITH_UI=OFF \
             -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \

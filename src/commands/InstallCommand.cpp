@@ -1291,7 +1291,8 @@ namespace vix::commands
       dep.tag = v.at("tag").get<std::string>();
       dep.commit = v.at("commit").get<std::string>();
       dep.type = entry.value("type", "header-only");
-      if (v.contains("extensions") && v["extensions"].is_object()) dep.extensions = v["extensions"];
+      if (v.contains("extensions") && v["extensions"].is_object())
+        dep.extensions = v["extensions"];
       dep.checkout = store_checkout_path(dep.id, dep.commit);
 
       return dep;
@@ -1361,8 +1362,10 @@ namespace vix::commands
           item["files"] = make_files_json(files);
           item["executables"] = make_strings_json(executables);
           item["shims"] = make_strings_json(shims);
-          if (!dep.extensions.is_null()) item["extensions"] = dep.extensions;
-          else item.erase("extensions");
+          if (!dep.extensions.is_null())
+            item["extensions"] = dep.extensions;
+          else
+            item.erase("extensions");
           updated = true;
           break;
         }
@@ -1389,7 +1392,8 @@ namespace vix::commands
             {"executables", make_strings_json(executables)},
             {"shims", make_strings_json(shims)},
         };
-        if (!dep.extensions.is_null()) newItem["extensions"] = dep.extensions;
+        if (!dep.extensions.is_null())
+          newItem["extensions"] = dep.extensions;
         arr.push_back(std::move(newItem));
       }
 
@@ -2395,24 +2399,43 @@ namespace vix::commands
     static std::vector<fs::path> collect_regular_files(const fs::path &root)
     {
       std::vector<fs::path> files;
+
       std::error_code ec;
-      if (!fs::exists(root, ec))
+      if (!fs::exists(root, ec) || ec)
         return files;
 
-      for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
-           !ec && it != end;
-           it.increment(ec))
+      fs::recursive_directory_iterator it(
+          root,
+          fs::directory_options::skip_permission_denied,
+          ec);
+      const fs::recursive_directory_iterator end;
+
+      if (ec)
+        return files;
+
+      while (it != end)
       {
-        if (ec)
-          break;
-
         const fs::path p = it->path();
-        const auto st = fs::symlink_status(p, ec);
-        if (ec)
-          continue;
 
-        if (fs::is_regular_file(st) || fs::is_symlink(st))
-          files.push_back(fs::relative(p, root).lexically_normal());
+        std::error_code entryEc;
+        const auto status = fs::symlink_status(p, entryEc);
+
+        if (!entryEc &&
+            (fs::is_regular_file(status) || fs::is_symlink(status)))
+        {
+          std::error_code relativeEc;
+          const fs::path relative = fs::relative(p, root, relativeEc);
+
+          if (!relativeEc)
+            files.push_back(relative.lexically_normal());
+        }
+
+        it.increment(ec);
+        if (ec)
+        {
+          ec.clear();
+          break;
+        }
       }
 
       std::sort(files.begin(), files.end());
@@ -2427,17 +2450,36 @@ namespace vix::commands
       if (!fs::exists(bin, ec) || !fs::is_directory(bin, ec))
         return commands;
 
-      for (fs::directory_iterator it(bin, ec), end; !ec && it != end; it.increment(ec))
+      fs::directory_iterator it(bin, ec);
+      const fs::directory_iterator end;
+
+      if (ec)
+        return commands;
+
+      while (it != end)
       {
+        std::error_code entryEc;
+        const fs::file_status status = it->symlink_status(entryEc);
+
+        if (!entryEc &&
+            (fs::is_regular_file(status) || fs::is_symlink(status)) &&
+            is_executable_filename(it->path()))
+        {
+          const std::string cmd = executable_command_name(it->path());
+
+          if (!cmd.empty() &&
+              std::find(commands.begin(), commands.end(), cmd) == commands.end())
+          {
+            commands.push_back(cmd);
+          }
+        }
+
+        it.increment(ec);
         if (ec)
+        {
+          ec.clear();
           break;
-        if (!it->is_regular_file(ec) && !it->is_symlink(ec))
-          continue;
-        if (!is_executable_filename(it->path()))
-          continue;
-        const std::string cmd = executable_command_name(it->path());
-        if (!cmd.empty() && std::find(commands.begin(), commands.end(), cmd) == commands.end())
-          commands.push_back(cmd);
+        }
       }
 
       std::sort(commands.begin(), commands.end());

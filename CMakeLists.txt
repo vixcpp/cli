@@ -298,8 +298,14 @@ else()
     endif()
 
     if (EXISTS "${_VIX_WEBSOCKET_DIR}/CMakeLists.txt" AND NOT TARGET vix::websocket)
+      set(VIX_WEBSOCKET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
       set(VIX_WEBSOCKET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-      add_subdirectory("${_VIX_WEBSOCKET_DIR}" "${CMAKE_BINARY_DIR}/_vix_websocket")
+      set(VIX_WEBSOCKET_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+
+      add_subdirectory(
+        "${_VIX_WEBSOCKET_DIR}"
+        "${CMAKE_BINARY_DIR}/_vix_websocket"
+      )
     endif()
 
     if (EXISTS "${_VIX_P2P_DIR}/CMakeLists.txt" AND NOT TARGET vix::p2p)

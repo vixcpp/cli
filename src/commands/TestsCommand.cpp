@@ -86,7 +86,9 @@ namespace
 
 #ifndef _WIN32
     static constexpr char clearLine[] = "\r\033[2K";
-    (void)::write(STDOUT_FILENO, clearLine, sizeof(clearLine) - 1);
+    const ssize_t written =
+        ::write(STDOUT_FILENO, clearLine, sizeof(clearLine) - 1);
+    (void)written;
 #endif
   }
 

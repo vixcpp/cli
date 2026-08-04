@@ -166,7 +166,10 @@ namespace vix::commands::deploy::runner
         output::command(std::cout, logsCmd);
 
         if (!options.dryRun)
-          (void)std::system(logsCmd.c_str());
+        {
+          const int logsExitCode = std::system(logsCmd.c_str());
+          (void)logsExitCode;
+        }
       }
 
       return 1;

@@ -1,4 +1,4 @@
-name: CLI CI
+name: CLI Strict CI
 
 on:
   push:
@@ -8,10 +8,12 @@ on:
       - dev
       - release/**
     paths:
-      - ".github/workflows/cli-ci.yml"
+      - ".github/workflows/cli-strict-ci.yml"
       - "CMakeLists.txt"
+      - "cmake/**"
       - "include/**"
       - "src/**"
+      - "tests/**"
       - "main.cpp"
       - "docs/**"
       - "scripts/**"
@@ -29,10 +31,12 @@ on:
       - dev
       - release/**
     paths:
-      - ".github/workflows/cli-ci.yml"
+      - ".github/workflows/cli-strict-ci.yml"
       - "CMakeLists.txt"
+      - "cmake/**"
       - "include/**"
       - "src/**"
+      - "tests/**"
       - "main.cpp"
       - "docs/**"
       - "scripts/**"
@@ -48,21 +52,266 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: cli-strict-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   BUILD_JOBS: 2
   VIX_GIT_BRANCH: dev
+  VIX_DEPENDENCY_ARTIFACT: cli-sibling-dependencies
+  VIX_DEPENDENCY_ARCHIVE: vix-cli-dependencies.tar.gz
+  DEPS: >
+    build-essential
+    cmake
+    ninja-build
+    clang
+    llvm
+    lld
+    g++
+    cppcheck
+    clang-tidy
+    valgrind
+    pkg-config
+    git
+    curl
+    ca-certificates
+    libasio-dev
+    nlohmann-json3-dev
+    libspdlog-dev
+    libfmt-dev
+    libssl-dev
+    zlib1g-dev
+    sqlite3
+    libsqlite3-dev
 
 jobs:
+  prepare-dependencies:
+    name: Prepare sibling dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout CLI repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install preparation dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git \
+            ca-certificates \
+            libasio-dev
+
+          test -f /usr/include/asio.hpp
+
+      - name: Clone sibling repositories
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          MODULES=(
+            error
+            path
+            fs
+            io
+            log
+            env
+            os
+            process
+            utils
+            json
+            async
+            core
+            reply
+            template
+            net
+            requests
+            crypto
+            sync
+            cache
+            p2p
+            engine
+            note
+          )
+
+          clone_vix_module() {
+            local module="$1"
+            local destination="$GITHUB_WORKSPACE/../$module"
+            local repository="https://github.com/vixcpp/${module}.git"
+            local branch="${VIX_GIT_BRANCH}"
+
+            rm -rf "$destination"
+
+            if ! git ls-remote \
+              --exit-code \
+              --heads \
+              "$repository" \
+              "$branch" \
+              >/dev/null 2>&1
+            then
+              branch="main"
+            fi
+
+            if [ "$module" = "async" ]; then
+              git clone \
+                --depth 1 \
+                --branch "$branch" \
+                --recurse-submodules \
+                "$repository" \
+                "$destination"
+            else
+              git clone \
+                --depth 1 \
+                --branch "$branch" \
+                "$repository" \
+                "$destination"
+            fi
+          }
+
+          for module in "${MODULES[@]}"; do
+            clone_vix_module "$module"
+          done
+
+          git -C "$GITHUB_WORKSPACE/../async" \
+            submodule update \
+            --init \
+            --recursive \
+            --depth 1 \
+            || true
+
+      - name: Prepare module-local Asio headers
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          for module in async p2p; do
+            target="$GITHUB_WORKSPACE/../${module}/third_party/asio/include"
+
+            rm -rf "$target"
+            mkdir -p "$target"
+            cp -R /usr/include/asio* "$target/"
+
+            test -f "$target/asio.hpp"
+          done
+
+      - name: Verify mandatory CLI graph
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          REQUIRED_MODULES=(
+            error
+            path
+            fs
+            io
+            log
+            env
+            os
+            process
+            utils
+            json
+            async
+            core
+            reply
+            template
+            net
+            requests
+            crypto
+            sync
+            cache
+            p2p
+            engine
+            note
+          )
+
+          for module in "${REQUIRED_MODULES[@]}"; do
+            test -f "$GITHUB_WORKSPACE/../${module}/CMakeLists.txt"
+          done
+
+          test -f "$GITHUB_WORKSPACE/../async/third_party/asio/include/asio.hpp"
+          test -f "$GITHUB_WORKSPACE/../p2p/third_party/asio/include/asio.hpp"
+
+          test -d "$GITHUB_WORKSPACE/../engine/include"
+          test -d "$GITHUB_WORKSPACE/../process/include"
+          test -d "$GITHUB_WORKSPACE/../reply/include"
+          test -d "$GITHUB_WORKSPACE/../requests/include"
+          test -d "$GITHUB_WORKSPACE/../note/include"
+
+      - name: Create dependency archive
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          tar \
+            --exclude='*/.git' \
+            --exclude='*/build' \
+            --exclude='*/build-*' \
+            --exclude='*/build_*' \
+            -czf "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}" \
+            -C "$GITHUB_WORKSPACE/.." \
+            error \
+            path \
+            fs \
+            io \
+            log \
+            env \
+            os \
+            process \
+            utils \
+            json \
+            async \
+            core \
+            reply \
+            template \
+            net \
+            requests \
+            crypto \
+            sync \
+            cache \
+            p2p \
+            engine \
+            note
+
+          test -s "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}"
+          tar -tzf "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}" \
+            | grep -F 'engine/CMakeLists.txt'
+
+      - name: Upload dependency archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: ${{ env.VIX_DEPENDENCY_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
   build:
-    name: Build CLI (${{ matrix.compiler }})
-    runs-on: ubuntu-latest
+    name: Build (${{ matrix.compiler }} / ${{ matrix.build_type }})
+    needs: prepare-dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
 
     strategy:
       fail-fast: false
       matrix:
-        compiler:
-          - gcc
-          - clang
+        include:
+          - compiler: gcc
+            build_type: Debug
+
+          - compiler: gcc
+            build_type: Release
+
+          - compiler: clang
+            build_type: Debug
+
+          - compiler: clang
+            build_type: Release
 
     steps:
       - name: Checkout CLI repository
@@ -71,28 +320,41 @@ jobs:
           fetch-depth: 0
 
       - name: Install system dependencies
+        shell: bash
         run: |
+          set -euxo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            ninja-build \
-            clang \
-            g++ \
-            pkg-config \
-            git \
-            curl \
-            ca-certificates \
-            libasio-dev \
-            nlohmann-json3-dev \
-            libssl-dev \
-            zlib1g-dev \
-            libsqlite3-dev \
-            libspdlog-dev \
-            libfmt-dev
+          sudo apt-get install -y --no-install-recommends $DEPS
+
+          test -f /usr/include/asio.hpp
+
+      - name: Download sibling dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: .ci-dependencies
+
+      - name: Restore sibling dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          tar -xzf \
+            ".ci-dependencies/${VIX_DEPENDENCY_ARCHIVE}" \
+            -C "$GITHUB_WORKSPACE/.."
+
+          test -f ../engine/CMakeLists.txt
+          test -f ../process/CMakeLists.txt
+          test -f ../reply/CMakeLists.txt
+          test -f ../requests/CMakeLists.txt
+          test -f ../note/CMakeLists.txt
 
       - name: Select compiler
+        shell: bash
         run: |
+          set -euxo pipefail
+
           if [ "${{ matrix.compiler }}" = "clang" ]; then
             echo "CC=clang" >> "$GITHUB_ENV"
             echo "CXX=clang++" >> "$GITHUB_ENV"
@@ -101,119 +363,93 @@ jobs:
             echo "CXX=g++" >> "$GITHUB_ENV"
           fi
 
-      - name: Fetch sibling modules
-        run: |
-          set -euxo pipefail
-
-          rm -rf \
-            ../error \
-            ../path \
-            ../fs \
-            ../io \
-            ../env \
-            ../os \
-            ../process \
-            ../utils \
-            ../json \
-            ../async \
-            ../core \
-            ../reply \
-            ../template \
-            ../net \
-            ../requests \
-            ../crypto \
-            ../sync \
-            ../cache \
-            ../p2p \
-            ../agent \
-            ../note
-
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/path.git ../path
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/fs.git ../fs
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/io.git ../io
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/env.git ../env
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/os.git ../os
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/process.git ../process
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/reply.git ../reply || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/requests.git ../requests
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
-
-      - name: Prepare Asio for modules
-        run: |
-          set -euxo pipefail
-
-          test -f /usr/include/asio.hpp
-
-          for module in ../async ../p2p; do
-            if [ -d "$module" ]; then
-              mkdir -p "$module/third_party/asio"
-              rm -rf "$module/third_party/asio/include"
-              mkdir -p "$module/third_party/asio/include"
-              cp -r /usr/include/asio* "$module/third_party/asio/include/" || true
-              test -f "$module/third_party/asio/include/asio.hpp"
-            fi
-          done
-
-      - name: Verify sibling layout
-        run: |
-          set -euxo pipefail
-
-          test -f ../error/CMakeLists.txt
-          test -f ../path/CMakeLists.txt
-          test -f ../fs/CMakeLists.txt
-          test -f ../io/CMakeLists.txt
-          test -f ../env/CMakeLists.txt
-          test -f ../os/CMakeLists.txt
-          test -f ../process/CMakeLists.txt
-          test -f ../utils/CMakeLists.txt
-          test -f ../json/CMakeLists.txt
-          test -f ../async/CMakeLists.txt
-          test -f ../core/CMakeLists.txt
-          test -f ../net/CMakeLists.txt
-          test -f ../crypto/CMakeLists.txt
-          test -f ../note/CMakeLists.txt
-
       - name: Configure CLI
+        shell: bash
         run: |
+          set -euxo pipefail
+
           cmake -S . -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
+            -DVIX_ENGINE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
-            -DVIX_NOTE_INSTALL=OFF
+            -DVIX_NOTE_INSTALL=OFF \
+            -DVIX_PROCESS_BUILD_TESTS=OFF \
+            -DVIX_PROCESS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=OFF \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_CORE_WITH_OPENSSL=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_WITH_MYSQL=OFF \
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 
       - name: Build CLI
-        run: |
-          cmake --build build -j"${BUILD_JOBS}"
-
-      - name: Verify CLI binary
+        shell: bash
         run: |
           set -euxo pipefail
 
-          test -f build/vix
-          ./build/vix --version || ./build/vix version || true
-          ./build/vix --help >/tmp/vix-help.txt
-          head -n 40 /tmp/vix-help.txt
-          ./build/vix note --help >/tmp/vix-note-help.txt
-          head -n 80 /tmp/vix-note-help.txt
+          cmake --build build \
+            --target vix_cli \
+            -j"${BUILD_JOBS}" \
+            2>&1 \
+            | tee build.log
 
-  install-check:
-    name: Install CLI binary
-    runs-on: ubuntu-latest
+      - name: Reject CLI compiler warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CLI_ROOT="$(realpath "$GITHUB_WORKSPACE")"
+
+          WARNINGS="$(
+            grep -F "${CLI_ROOT}/" build.log \
+              | grep -E '/(include|src)/.*warning:|/main\.cpp:.*warning:' \
+              || true
+          )"
+
+          if [ -n "$WARNINGS" ]; then
+            echo "$WARNINGS"
+            echo "::error::CLI sources produced compiler warnings."
+            exit 1
+          fi
+
+          echo "No compiler warnings found in CLI sources."
+
+      - name: Verify CLI binary
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -x build/vix
+          ls -l build/vix
+          ./build/vix --version
+
+      - name: Upload build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-build-${{ matrix.compiler }}-${{ matrix.build_type }}-logs
+          path: |
+            build.log
+            build/CMakeCache.txt
+            build/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14
+
+  runtime-smoke:
+    name: Runtime smoke checks
+    needs: prepare-dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
 
     steps:
       - name: Checkout CLI repository
@@ -222,136 +458,510 @@ jobs:
           fetch-depth: 0
 
       - name: Install system dependencies
+        shell: bash
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            cmake \
-            ninja-build \
-            g++ \
-            pkg-config \
-            git \
-            curl \
-            ca-certificates \
-            libasio-dev \
-            nlohmann-json3-dev \
-            libssl-dev \
-            zlib1g-dev \
-            libsqlite3-dev \
-            libspdlog-dev \
-            libfmt-dev
+          sudo apt-get install -y --no-install-recommends $DEPS
 
-      - name: Fetch sibling modules
+      - name: Download sibling dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: .ci-dependencies
+
+      - name: Restore sibling dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -xzf ".ci-dependencies/${VIX_DEPENDENCY_ARCHIVE}" -C "$GITHUB_WORKSPACE/.."
+          test -f ../engine/CMakeLists.txt
+
+      - name: Configure runtime build
+        shell: bash
         run: |
           set -euxo pipefail
 
-          rm -rf \
-            ../error \
-            ../path \
-            ../fs \
-            ../io \
-            ../env \
-            ../os \
-            ../process \
-            ../utils \
-            ../json \
-            ../async \
-            ../core \
-            ../reply \
-            ../template \
-            ../net \
-            ../requests \
-            ../crypto \
-            ../sync \
-            ../cache \
-            ../p2p \
-            ../agent \
-            ../note
-
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/path.git ../path
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/fs.git ../fs
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/io.git ../io
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/env.git ../env
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/os.git ../os
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/process.git ../process
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/utils.git ../utils
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/reply.git ../reply || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/requests.git ../requests
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/p2p.git ../p2p || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
-
-      - name: Prepare Asio for modules
-        run: |
-          set -euxo pipefail
-
-          test -f /usr/include/asio.hpp
-
-          for module in ../async ../p2p; do
-            if [ -d "$module" ]; then
-              mkdir -p "$module/third_party/asio"
-              rm -rf "$module/third_party/asio/include"
-              mkdir -p "$module/third_party/asio/include"
-              cp -r /usr/include/asio* "$module/third_party/asio/include/" || true
-              test -f "$module/third_party/asio/include/asio.hpp"
-            fi
-          done
-
-      - name: Verify sibling layout
-        run: |
-          set -euxo pipefail
-
-          test -f ../error/CMakeLists.txt
-          test -f ../path/CMakeLists.txt
-          test -f ../fs/CMakeLists.txt
-          test -f ../io/CMakeLists.txt
-          test -f ../env/CMakeLists.txt
-          test -f ../os/CMakeLists.txt
-          test -f ../process/CMakeLists.txt
-          test -f ../utils/CMakeLists.txt
-          test -f ../json/CMakeLists.txt
-          test -f ../async/CMakeLists.txt
-          test -f ../core/CMakeLists.txt
-          test -f ../net/CMakeLists.txt
-          test -f ../crypto/CMakeLists.txt
-          test -f ../note/CMakeLists.txt
-
-      - name: Configure installable CLI
-        run: |
-          cmake -S . -B build-install -G Ninja \
+          cmake -S . -B build-runtime -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
+            -DVIX_ENGINE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \
-            -DCMAKE_INSTALL_PREFIX="${PWD}/.ci-install"
+            -DVIX_PROCESS_BUILD_TESTS=OFF \
+            -DVIX_PROCESS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=OFF \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_CORE_WITH_OPENSSL=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_WITH_MYSQL=OFF \
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 
-      - name: Build installable CLI
+      - name: Build runtime CLI
+        shell: bash
         run: |
-          cmake --build build-install -j"${BUILD_JOBS}"
+          set -euxo pipefail
+          cmake --build build-runtime --target vix_cli -j"${BUILD_JOBS}"
+          test -x build-runtime/vix
 
-      - name: Install CLI
-        run: |
-          cmake --install build-install
-
-      - name: Verify installed CLI
+      - name: Run CLI smoke checks
+        shell: bash
         run: |
           set -euxo pipefail
 
-          find .ci-install -maxdepth 6 -type f | sort
-          test -f .ci-install/bin/vix
-          .ci-install/bin/vix --version || .ci-install/bin/vix version || true
-          .ci-install/bin/vix --help >/tmp/vix-installed-help.txt
-          head -n 40 /tmp/vix-installed-help.txt
-          .ci-install/bin/vix note --help >/tmp/vix-installed-note-help.txt
-          head -n 80 /tmp/vix-installed-note-help.txt
+          timeout 20s ./build-runtime/vix --version \
+            | tee vix-version.log
+
+          timeout 20s ./build-runtime/vix --help \
+            | tee vix-help.log
+
+          timeout 20s ./build-runtime/vix note --help \
+            | tee vix-note-help.log
+
+          grep -qi "vix" vix-help.log
+          grep -qi "note" vix-note-help.log
+
+      - name: Upload runtime diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-runtime-smoke-logs
+          path: |
+            vix-*.log
+            build-runtime/CMakeCache.txt
+            build-runtime/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14
+
+  static-analysis:
+    name: Static analysis
+    needs: prepare-dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout CLI repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+
+      - name: Download sibling dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: .ci-dependencies
+
+      - name: Restore sibling dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -xzf ".ci-dependencies/${VIX_DEPENDENCY_ARCHIVE}" -C "$GITHUB_WORKSPACE/.."
+          test -f ../engine/CMakeLists.txt
+
+      - name: Select Clang
+        shell: bash
+        run: |
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+
+      - name: Configure analysis build
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-analysis -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_BUILD_TESTS=OFF \
+            -DVIX_CLI_ENABLE_DESKTOP=OFF \
+            -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF \
+            -DVIX_NOTE_INSTALL=OFF \
+            -DVIX_PROCESS_BUILD_TESTS=OFF \
+            -DVIX_PROCESS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=OFF \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_CORE_WITH_OPENSSL=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_WITH_MYSQL=OFF \
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF
+
+      - name: Build analysis target
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build-analysis --target vix_cli -j"${BUILD_JOBS}"
+
+      - name: Run clang-tidy on CLI sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -d '' CLI_SOURCES < <(
+            find src \
+              -type f \
+              -name '*.cpp' \
+              -print0
+          )
+
+          if [ "${#CLI_SOURCES[@]}" -eq 0 ]; then
+            echo "::error::No CLI source files found."
+            exit 1
+          fi
+
+          clang-tidy \
+            -p build-analysis \
+            "${CLI_SOURCES[@]}"
+
+      - name: Run cppcheck on CLI code
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cppcheck \
+            --enable=warning,performance,portability \
+            --std=c++20 \
+            --inconclusive \
+            --error-exitcode=2 \
+            --suppress=missingIncludeSystem \
+            --suppress=syntaxError \
+            --inline-suppr \
+            include/ \
+            src/
+
+      - name: Upload analysis diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-static-analysis-logs
+          path: |
+            build-analysis/compile_commands.json
+            build-analysis/CMakeCache.txt
+            build-analysis/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14
+
+  valgrind:
+    name: Valgrind checks
+    needs: prepare-dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout CLI repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+
+      - name: Download sibling dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: .ci-dependencies
+
+      - name: Restore sibling dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -xzf ".ci-dependencies/${VIX_DEPENDENCY_ARCHIVE}" -C "$GITHUB_WORKSPACE/.."
+          test -f ../engine/CMakeLists.txt
+
+      - name: Configure Valgrind build
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-valgrind -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_BUILD_TESTS=OFF \
+            -DVIX_CLI_ENABLE_DESKTOP=OFF \
+            -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF \
+            -DVIX_NOTE_INSTALL=OFF \
+            -DVIX_PROCESS_BUILD_TESTS=OFF \
+            -DVIX_PROCESS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=OFF \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_CORE_WITH_OPENSSL=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_WITH_MYSQL=OFF \
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF
+
+      - name: Build Valgrind target
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build-valgrind --target vix_cli -j"${BUILD_JOBS}"
+          test -x build-valgrind/vix
+
+      - name: Run Valgrind on CLI help
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          timeout 60s \
+            valgrind \
+              --leak-check=full \
+              --show-leak-kinds=definite,indirect \
+              --errors-for-leak-kinds=definite,indirect \
+              --track-origins=yes \
+              --error-exitcode=99 \
+              ./build-valgrind/vix --help \
+              2>&1 \
+              | tee valgrind.log
+
+      - name: Upload Valgrind diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-valgrind-logs
+          path: |
+            valgrind.log
+            build-valgrind/CMakeCache.txt
+            build-valgrind/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 14
+
+  standalone-install:
+    name: Standalone install check
+    needs: prepare-dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout CLI repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+
+      - name: Download sibling dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: .ci-dependencies
+
+      - name: Restore sibling dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -xzf ".ci-dependencies/${VIX_DEPENDENCY_ARCHIVE}" -C "$GITHUB_WORKSPACE/.."
+          test -f ../engine/CMakeLists.txt
+
+      - name: Configure installable CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-install -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVIX_ENABLE_LTO=OFF \
+            -DVIX_CLI_BUILD_TESTS=OFF \
+            -DVIX_CLI_ENABLE_DESKTOP=OFF \
+            -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF \
+            -DVIX_NOTE_INSTALL=OFF \
+            -DVIX_PROCESS_BUILD_TESTS=OFF \
+            -DVIX_PROCESS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=OFF \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_CORE_WITH_OPENSSL=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_WITH_MYSQL=OFF \
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/.ci-install"
+
+      - name: Build installable CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build-install --target vix_cli -j"${BUILD_JOBS}"
+
+      - name: Install CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --install build-install
+
+      - name: Verify installed CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          find .ci-install -maxdepth 8 -type f | sort
+          test -x .ci-install/bin/vix
+
+          .ci-install/bin/vix --version
+          .ci-install/bin/vix --help > installed-help.log
+          grep -qi "vix" installed-help.log
+
+      - name: Upload installation diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-install-logs
+          path: |
+            installed-help.log
+            build-install/CMakeCache.txt
+            build-install/CMakeFiles/CMakeConfigureLog.yaml
+            .ci-install/**
+          if-no-files-found: warn
+          retention-days: 14
+
+  configuration-coverage:
+    name: Configuration (${{ matrix.name }})
+    needs: prepare-dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: debug
+            build_type: Debug
+            lto: "OFF"
+
+          - name: release
+            build_type: Release
+            lto: "OFF"
+
+          - name: release-lto
+            build_type: Release
+            lto: "ON"
+
+    steps:
+      - name: Checkout CLI repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $DEPS
+
+      - name: Download sibling dependencies
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
+          path: .ci-dependencies
+
+      - name: Restore sibling dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          tar -xzf ".ci-dependencies/${VIX_DEPENDENCY_ARCHIVE}" -C "$GITHUB_WORKSPACE/.."
+          test -f ../engine/CMakeLists.txt
+
+      - name: Configure CLI variant
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cmake -S . -B build-config -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DVIX_ENABLE_LTO=${{ matrix.lto }} \
+            -DVIX_CLI_BUILD_TESTS=OFF \
+            -DVIX_CLI_ENABLE_DESKTOP=OFF \
+            -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_TESTS=OFF \
+            -DVIX_NOTE_BUILD_EXAMPLES=OFF \
+            -DVIX_NOTE_INSTALL=OFF \
+            -DVIX_PROCESS_BUILD_TESTS=OFF \
+            -DVIX_PROCESS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_BUILD_TESTS=OFF \
+            -DVIX_REQUESTS_BUILD_EXAMPLES=OFF \
+            -DVIX_REQUESTS_INSTALL=OFF \
+            -DVIX_CRYPTO_BUILD_TESTS=OFF \
+            -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
+            -DVIX_P2P_BUILD_TESTS=OFF \
+            -DVIX_CORE_WITH_OPENSSL=OFF \
+            -DVIX_CORE_WITH_TEMPLATE=OFF \
+            -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_WITH_MYSQL=OFF \
+            -DVIX_ENABLE_HTTP_COMPRESSION=OFF
+
+      - name: Build CLI variant
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cmake --build build-config --target vix_cli -j"${BUILD_JOBS}"
+          test -x build-config/vix
+          ./build-config/vix --version
+
+  summary:
+    name: CLI Strict CI Summary
+    needs:
+      - prepare-dependencies
+      - build
+      - runtime-smoke
+      - static-analysis
+      - valgrind
+      - standalone-install
+      - configuration-coverage
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Print summary
+        shell: bash
+        run: |
+          echo "CLI strict CI completed successfully."
+          echo "- Mandatory sibling graph, including vix::engine"
+          echo "- GCC and Clang Debug/Release builds"
+          echo "- Compiler warning enforcement on CLI sources"
+          echo "- Runtime command smoke checks"
+          echo "- clang-tidy and cppcheck"
+          echo "- Valgrind definite/indirect leak checks"
+          echo "- Standalone binary installation"
+          echo "- Debug, Release, and Release LTO coverage"

@@ -202,6 +202,7 @@ jobs:
             ../agent \
             ../websocket \
             ../db \
+            ../engine \
             ../note
 
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/error.git ../error
@@ -226,6 +227,7 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/agent.git ../agent || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/websocket.git ../websocket || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/db.git ../db || true
+          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/engine.git ../engine
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
 
       - name: Fetch sibling modules (Windows)
@@ -249,6 +251,7 @@ jobs:
             "reply",
             "template",
             "net",
+            "requests",
             "crypto",
             "sync",
             "cache",
@@ -256,6 +259,7 @@ jobs:
             "agent",
             "websocket",
             "db",
+            "engine",
             "note"
           )
 
@@ -288,6 +292,7 @@ jobs:
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/agent.git ..\agent
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/websocket.git ..\websocket
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/db.git ..\db
+          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/engine.git ..\engine
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/note.git ..\note
 
       - name: Prepare Asio for modules (Windows)
@@ -384,8 +389,11 @@ jobs:
           test -f ../json/CMakeLists.txt
           test -f ../async/CMakeLists.txt
           test -f ../core/CMakeLists.txt
+          test -f ../reply/CMakeLists.txt
           test -f ../net/CMakeLists.txt
+          test -f ../requests/CMakeLists.txt
           test -f ../crypto/CMakeLists.txt
+          test -f ../engine/CMakeLists.txt
           test -f ../note/CMakeLists.txt
 
       - name: Verify sibling layout (Windows)
@@ -404,8 +412,11 @@ jobs:
             "..\json\CMakeLists.txt",
             "..\async\CMakeLists.txt",
             "..\core\CMakeLists.txt",
+            "..\reply\CMakeLists.txt",
             "..\net\CMakeLists.txt",
+            "..\requests\CMakeLists.txt",
             "..\crypto\CMakeLists.txt",
+            "..\engine\CMakeLists.txt",
             "..\note\CMakeLists.txt"
           )
 
@@ -428,6 +439,8 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
             -DVIX_ENABLE_LTO=OFF
             -DVIX_CLI_ENABLE_DESKTOP=OFF
+            -DVIX_CORE_WITH_UI=OFF
+            -DVIX_ENGINE_BUILD_TESTS=OFF
             -DVIX_DB_USE_MYSQL=OFF
             -DVIX_CORE_WITH_MYSQL=OFF
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
@@ -458,6 +471,8 @@ jobs:
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON `
             -DVIX_ENABLE_LTO=OFF `
             -DVIX_CLI_ENABLE_DESKTOP=OFF `
+            -DVIX_CORE_WITH_UI=OFF `
+            -DVIX_ENGINE_BUILD_TESTS=OFF `
             -DVIX_DB_USE_MYSQL=OFF `
             -DVIX_CORE_WITH_MYSQL=OFF `
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF `

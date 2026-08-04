@@ -972,7 +972,7 @@ namespace vix::commands::RunCommand::detail
     if (has("build-ninja"))
       return "build-ninja";
 
-    return runs[0];
+    return runs.empty() ? std::string("run-ninja") : runs.front();
   }
 
   bool has_cmake_cache(const fs::path &buildDir)

@@ -35,7 +35,7 @@ namespace vix::commands::db::migrator
       return cfg.engine == DbEngine::SQLite;
     }
 
-    bool validate_migration_inputs(const DbConfig &cfg)
+    [[maybe_unused]] bool validate_migration_inputs(const DbConfig &cfg)
     {
       if (!is_sqlite(cfg))
       {
@@ -81,7 +81,7 @@ namespace vix::commands::db::migrator
       return true;
     }
 
-    void print_migration_summary(const DbConfig &cfg)
+    [[maybe_unused]] void print_migration_summary(const DbConfig &cfg)
     {
       output::step(std::cout, "Database Migrations");
 
@@ -96,6 +96,7 @@ namespace vix::commands::db::migrator
       const DbOptions &options)
   {
     (void)options;
+    (void)cfg;
 
 #ifndef VIX_CLI_HAS_DB
     output::error(

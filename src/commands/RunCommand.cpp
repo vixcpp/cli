@@ -927,7 +927,7 @@ namespace
 #endif
   }
 
-  int run_resolved_project(
+  [[maybe_unused]] int run_resolved_project(
       const app::AppProjectResolveResult &resolved,
       const Options &opt,
       bool showUi)
@@ -1167,7 +1167,7 @@ namespace
     return 0;
   }
 
-  int run_project_with_presets(
+  [[maybe_unused]] int run_project_with_presets(
       const fs::path &projectDir,
       const Options &opt,
       bool showUi)

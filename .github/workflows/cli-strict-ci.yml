@@ -136,6 +136,8 @@ jobs:
             sync
             cache
             p2p
+            time
+            agent
             engine
             note
           )
@@ -205,7 +207,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          REQUIRED_MODULES=(
+           REQUIRED_MODULES=(
             error
             path
             fs
@@ -226,6 +228,8 @@ jobs:
             sync
             cache
             p2p
+            time
+            agent
             engine
             note
           )
@@ -238,6 +242,9 @@ jobs:
           test -f "$GITHUB_WORKSPACE/../p2p/third_party/asio/include/asio.hpp"
 
           test -d "$GITHUB_WORKSPACE/../engine/include"
+          test -d "$GITHUB_WORKSPACE/../time/include"
+          test -d "$GITHUB_WORKSPACE/../agent/include"
+          test -f "$GITHUB_WORKSPACE/../agent/include/vix/ai/agent/AgentRuntime.hpp"
           test -d "$GITHUB_WORKSPACE/../process/include"
           test -d "$GITHUB_WORKSPACE/../reply/include"
           test -d "$GITHUB_WORKSPACE/../requests/include"
@@ -275,12 +282,20 @@ jobs:
             sync \
             cache \
             p2p \
+            time \
+            agent \
             engine \
             note
 
           test -s "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}"
           tar -tzf "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}" \
             | grep -F 'engine/CMakeLists.txt'
+
+          tar -tzf "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}" \
+            | grep -F 'agent/include/vix/ai/agent/AgentRuntime.hpp'
+
+          tar -tzf "$GITHUB_WORKSPACE/${VIX_DEPENDENCY_ARCHIVE}" \
+            | grep -F 'time/CMakeLists.txt'
 
       - name: Upload dependency archive
         uses: actions/upload-artifact@v4
@@ -375,6 +390,9 @@ jobs:
             -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_EXAMPLES=OFF \
+            -DVIX_AI_AGENT_ENABLE_INSTALL=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \
@@ -489,6 +507,9 @@ jobs:
             -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_EXAMPLES=OFF \
+            -DVIX_AI_AGENT_ENABLE_INSTALL=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \
@@ -593,6 +614,9 @@ jobs:
             -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_EXAMPLES=OFF \
+            -DVIX_AI_AGENT_ENABLE_INSTALL=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \
@@ -709,6 +733,9 @@ jobs:
             -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_EXAMPLES=OFF \
+            -DVIX_AI_AGENT_ENABLE_INSTALL=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \
@@ -805,6 +832,9 @@ jobs:
             -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_EXAMPLES=OFF \
+            -DVIX_AI_AGENT_ENABLE_INSTALL=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \
@@ -920,6 +950,9 @@ jobs:
             -DVIX_CLI_BUILD_TESTS=OFF \
             -DVIX_CLI_ENABLE_DESKTOP=OFF \
             -DVIX_ENGINE_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_TESTS=OFF \
+            -DVIX_AI_AGENT_BUILD_EXAMPLES=OFF \
+            -DVIX_AI_AGENT_ENABLE_INSTALL=OFF \
             -DVIX_NOTE_BUILD_TESTS=OFF \
             -DVIX_NOTE_BUILD_EXAMPLES=OFF \
             -DVIX_NOTE_INSTALL=OFF \

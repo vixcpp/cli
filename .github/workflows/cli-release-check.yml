@@ -440,6 +440,7 @@ jobs:
             -DVIX_ENABLE_LTO=OFF
             -DVIX_CLI_ENABLE_DESKTOP=OFF
             -DVIX_CORE_WITH_UI=OFF
+            -DVIX_CORE_ENABLE_INSTALL=OFF
             -DVIX_ENGINE_BUILD_TESTS=OFF
             -DVIX_DB_USE_MYSQL=OFF
             -DVIX_CORE_WITH_MYSQL=OFF
@@ -472,6 +473,7 @@ jobs:
             -DVIX_ENABLE_LTO=OFF `
             -DVIX_CLI_ENABLE_DESKTOP=OFF `
             -DVIX_CORE_WITH_UI=OFF `
+            -DVIX_CORE_ENABLE_INSTALL=OFF `
             -DVIX_ENGINE_BUILD_TESTS=OFF `
             -DVIX_DB_USE_MYSQL=OFF `
             -DVIX_CORE_WITH_MYSQL=OFF `
@@ -481,7 +483,6 @@ jobs:
             -DVIX_NOTE_INSTALL=OFF `
             -DVCPKG_TARGET_TRIPLET=x64-windows `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
-
       - name: Build CLI
         shell: bash
         if: runner.os != 'Windows'

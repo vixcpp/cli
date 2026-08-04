@@ -386,9 +386,10 @@ jobs:
             -DVIX_CRYPTO_BUILD_TESTS=OFF \
             -DVIX_CRYPTO_BUILD_EXAMPLES=OFF \
             -DVIX_P2P_BUILD_TESTS=OFF \
-            -DVIX_CORE_WITH_OPENSSL=OFF \
+           -DVIX_CORE_WITH_OPENSSL=OFF \
             -DVIX_CORE_WITH_TEMPLATE=OFF \
             -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 
@@ -502,6 +503,7 @@ jobs:
             -DVIX_CORE_WITH_OPENSSL=OFF \
             -DVIX_CORE_WITH_TEMPLATE=OFF \
             -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 
@@ -605,6 +607,7 @@ jobs:
             -DVIX_CORE_WITH_OPENSSL=OFF \
             -DVIX_CORE_WITH_TEMPLATE=OFF \
             -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 
@@ -720,6 +723,7 @@ jobs:
             -DVIX_CORE_WITH_OPENSSL=OFF \
             -DVIX_CORE_WITH_TEMPLATE=OFF \
             -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 
@@ -815,6 +819,7 @@ jobs:
             -DVIX_CORE_WITH_OPENSSL=OFF \
             -DVIX_CORE_WITH_TEMPLATE=OFF \
             -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF \
             -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/.ci-install"
@@ -929,6 +934,7 @@ jobs:
             -DVIX_CORE_WITH_OPENSSL=OFF \
             -DVIX_CORE_WITH_TEMPLATE=OFF \
             -DVIX_CORE_WITH_UI=OFF \
+            -DVIX_CORE_ENABLE_INSTALL=OFF \
             -DVIX_CORE_WITH_MYSQL=OFF \
             -DVIX_ENABLE_HTTP_COMPRESSION=OFF
 

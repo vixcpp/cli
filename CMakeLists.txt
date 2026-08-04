@@ -249,7 +249,12 @@ else()
     endif()
 
     if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND NOT TARGET vix::core)
-      add_subdirectory("${_VIX_CORE_DIR}" "${CMAKE_BINARY_DIR}/_vix_core")
+      set(VIX_CORE_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+
+      add_subdirectory(
+        "${_VIX_CORE_DIR}"
+        "${CMAKE_BINARY_DIR}/_vix_core"
+      )
     endif()
 
     if (EXISTS "${_VIX_NET_DIR}/CMakeLists.txt" AND NOT TARGET vix::net)

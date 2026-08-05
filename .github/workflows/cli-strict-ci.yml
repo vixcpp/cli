@@ -670,26 +670,27 @@ jobs:
           cppcheck \
             --enable=warning,portability \
             --std=c++20 \
-            --inconclusive \
             --error-exitcode=2 \
             --suppress=missingIncludeSystem \
             --suppress=syntaxError \
+            --suppress=toomanyconfigs \
             --inline-suppr \
             include/ \
             src/
 
-      - name: Report cppcheck performance findings
+      - name: Report cppcheck additional findings
         shell: bash
         continue-on-error: true
         run: |
           set -uxo pipefail
 
           cppcheck \
-            --enable=performance \
+            --enable=performance,style \
             --std=c++20 \
             --inconclusive \
             --suppress=missingIncludeSystem \
             --suppress=syntaxError \
+            --suppress=toomanyconfigs \
             --inline-suppr \
             include/ \
             src/

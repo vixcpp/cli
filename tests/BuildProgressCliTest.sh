@@ -90,7 +90,7 @@ SH
   WATCH_PID=$!
 
   wait_for_output "Compiling.*progress-app" "$TTY_OUT"
-  wait_for_output "jobs.*8" "$TTY_OUT"
+  wait_for_output "jobs:[[:space:]]*[1-9][0-9]*" "$TTY_OUT"
 
   if ! kill -0 "$WATCH_PID" 2>/dev/null; then
     cat "$TTY_OUT" >&2

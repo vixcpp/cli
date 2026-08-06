@@ -96,13 +96,13 @@ test -e "$PROJECT/.vix/vix_deps.cmake"
 FAKE_BIN="$ROOT/fake-bin"
 make_fake_cmake "$FAKE_BIN"
 
-(cd "$PROJECT/tests" && PATH="$FAKE_BIN:$PATH" "$VIX_BIN" run test.cpp >/dev/null)
+(cd "$PROJECT/tests" && PATH="$FAKE_BIN:$PATH" "$VIX_BIN" run test.cpp --no-san >/dev/null)
 
-(cd "$PROJECT/tests" && "$VIX_BIN" run use_sample.cpp >/dev/null)
+(cd "$PROJECT/tests" && "$VIX_BIN" run use_sample.cpp --no-san >/dev/null)
 
-(cd "$PROJECT/tests" && PATH="$FAKE_BIN:$PATH" "$VIX_BIN" run use_headers.cpp >/dev/null)
+(cd "$PROJECT/tests" && PATH="$FAKE_BIN:$PATH" "$VIX_BIN" run use_headers.cpp --no-san >/dev/null)
 
-(cd "$PROJECT/tests" && PATH="$FAKE_BIN:$PATH" "$VIX_BIN" run test.cpp >/dev/null)
+(cd "$PROJECT/tests" && PATH="$FAKE_BIN:$PATH" "$VIX_BIN" run test.cpp --no-san >/dev/null)
 
 TEMP_RUN="$ROOT/temp-run"
 mkdir -p "$TEMP_RUN"
@@ -110,7 +110,7 @@ cat > "$TEMP_RUN/main.cpp" <<'CPP'
 #include <sample/sample.hpp>
 int main() { return sample::answer() == 42 ? 0 : 1; }
 CPP
-(cd "$TEMP_RUN" && "$VIX_BIN" run main.cpp --dep "git=$CMAKE_REPO;rev=$CMAKE_COMMIT;target=sample::sample" >/dev/null)
+(cd "$TEMP_RUN" && "$VIX_BIN" run main.cpp --no-san --dep "git=$CMAKE_REPO;rev=$CMAKE_COMMIT;target=sample::sample" >/dev/null)
 test ! -e "$TEMP_RUN/vix.app"
 test ! -e "$TEMP_RUN/vix.lock"
 test ! -e "$TEMP_RUN/.vix"

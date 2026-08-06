@@ -70,19 +70,36 @@ namespace vix::commands::RunCommand::detail
 #endif
     }
 
-    fs::path canonical_or_absolute_path(const fs::path &path)
+    fs::path absolute_path_preserving_filename(const fs::path &path)
     {
       std::error_code ec;
-      fs::path resolved = fs::weakly_canonical(path, ec);
-      if (!ec)
-        return resolved.lexically_normal();
+
+      const fs::path absolute =
+          fs::absolute(path, ec);
+
+      if (ec)
+        return path.lexically_normal();
+
+      const fs::path parent =
+          absolute.parent_path();
+
+      if (parent.empty())
+        return absolute.lexically_normal();
 
       ec.clear();
-      resolved = fs::absolute(path, ec);
-      if (!ec)
-        return resolved.lexically_normal();
 
-      return path.lexically_normal();
+      const fs::path resolvedParent =
+          fs::weakly_canonical(parent, ec);
+
+      if (!ec)
+      {
+        return (
+                   resolvedParent /
+                   absolute.filename())
+            .lexically_normal();
+      }
+
+      return absolute.lexically_normal();
     }
 
     std::string resolve_executable_path(const std::string &exe)
@@ -97,7 +114,7 @@ namespace vix::commands::RunCommand::detail
 #endif
       )
       {
-        return canonical_or_absolute_path(exePath).string();
+        return absolute_path_preserving_filename(exePath).string();
       }
 
       const char *pathEnv = vix::utils::vix_getenv("PATH");
@@ -120,13 +137,13 @@ namespace vix::commands::RunCommand::detail
           const fs::path candidate = fs::path(entry) / exe;
           std::error_code ec;
           if (fs::exists(candidate, ec) && !ec)
-            return canonical_or_absolute_path(candidate).string();
+            return absolute_path_preserving_filename(candidate).string();
 
 #ifdef _WIN32
           const fs::path exeCandidate = fs::path(entry) / (exe + ".exe");
           ec.clear();
           if (fs::exists(exeCandidate, ec) && !ec)
-            return canonical_or_absolute_path(exeCandidate).string();
+            return absolute_path_preserving_filename(exeCandidate).string();
 #endif
         }
 

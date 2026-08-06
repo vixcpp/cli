@@ -155,7 +155,7 @@ run_vix_fail() {
 }
 
 OUT1="$ROOT/run-1.out"
-run_vix "$OUT1" run main.cpp
+run_vix "$OUT1" run main.cpp --no-san
 require_output "script strategy: direct" "$OUT1"
 reject_output "script strategy: cmake fallback" "$OUT1"
 test "$(compiler_calls)" = "1"
@@ -163,7 +163,7 @@ KEY1="$(cache_key_from "$OUT1")"
 test -n "$KEY1"
 
 OUT2="$ROOT/run-2.out"
-run_vix "$OUT2" run main.cpp
+run_vix "$OUT2" run main.cpp --no-san
 require_output "script strategy: direct" "$OUT2"
 require_output "rebuild reason: cache hit" "$OUT2"
 test "$(compiler_calls)" = "1"
@@ -172,7 +172,7 @@ test "$(cache_key_from "$OUT2")" = "$KEY1"
 sleep 1
 touch "$PROJECT/main.cpp"
 OUT3="$ROOT/run-touch.out"
-run_vix "$OUT3" run main.cpp
+run_vix "$OUT3" run main.cpp --no-san
 require_output "script strategy: direct" "$OUT3"
 require_output "source content hash match: yes" "$OUT3"
 require_output "fingerprint match: yes" "$OUT3"
@@ -182,7 +182,7 @@ test "$(cache_key_from "$OUT3")" = "$KEY1"
 
 printf '\n// changed content\n' >>"$PROJECT/main.cpp"
 OUT4="$ROOT/run-changed.out"
-run_vix "$OUT4" run main.cpp
+run_vix "$OUT4" run main.cpp --no-san
 require_output "script strategy: direct" "$OUT4"
 test "$(compiler_calls)" = "2"
 KEY2="$(cache_key_from "$OUT4")"
@@ -197,7 +197,7 @@ test "$(compiler_calls)" = "2"
 test "$(cache_key_from "$OUT5")" = "$KEY2"
 
 OUT6="$ROOT/run-option.out"
-run_vix "$OUT6" run main.cpp -- -DALT_CACHE_OPTION=1
+run_vix "$OUT6" run main.cpp --no-san -- -DALT_CACHE_OPTION=1
 require_output "script strategy: direct" "$OUT6"
 test "$(compiler_calls)" = "3"
 KEY3="$(cache_key_from "$OUT6")"
@@ -211,7 +211,7 @@ int main() { return 0; }
 CPP
 
 OUT7="$ROOT/run-broken.out"
-if run_vix_fail "$OUT7" run broken.cpp; then
+if run_vix_fail "$OUT7" run broken.cpp --no-san; then
   cat "$OUT7" >&2
   echo "broken source unexpectedly compiled" >&2
   exit 1
@@ -226,7 +226,7 @@ if [[ -e "$BROKEN_CACHE_DIR/meta.txt" ]]; then
 fi
 
 OUT8="$ROOT/run-broken-again.out"
-if run_vix_fail "$OUT8" run broken.cpp; then
+if run_vix_fail "$OUT8" run broken.cpp --no-san; then
   cat "$OUT8" >&2
   echo "broken source unexpectedly compiled on second run" >&2
   exit 1

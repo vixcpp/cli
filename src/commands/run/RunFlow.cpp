@@ -187,21 +187,7 @@ namespace vix::commands::RunCommand::detail
       {
         if (opt.autoDeps != AutoDepsMode::Up)
           opt.autoDeps = AutoDepsMode::Local;
-
-#ifndef _WIN32
-        /*
-         * A standalone C++ file is a development workflow.
-         * Enable ASan + UBSan unless the user selected a mode explicitly.
-         */
-        if (!opt.sanitizerSelectionExplicit)
-        {
-          opt.enableSanitizers = true;
-          opt.enableUbsanOnly = false;
-          opt.enableThreadSanitizer = false;
-        }
-#endif
       }
-
       normalize_clear_mode(opt);
     }
 

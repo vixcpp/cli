@@ -24,6 +24,7 @@
 #include <string_view>
 #include <system_error>
 #include <vector>
+#include <functional>
 
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
@@ -402,6 +403,9 @@ namespace vix::commands::RunCommand::detail
     bool handled = false;
   };
 
+  using LiveOutputObserver =
+      std::function<void(std::string_view)>;
+
   /**
    * @brief Result of a captured live process execution.
    */
@@ -568,7 +572,9 @@ namespace vix::commands::RunCommand::detail
       int timeoutSec = 0,
       bool useSan = false,
       bool captureOnly = false,
-      vix::commands::replay::ReplayCapture *replayCapture = nullptr);
+      vix::commands::replay::ReplayCapture *replayCapture = nullptr,
+      LiveOutputObserver outputObserver = {});
+
   /**
    * @brief Run a command and capture its output plus exit code.
    */

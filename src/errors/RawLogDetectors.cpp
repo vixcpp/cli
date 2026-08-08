@@ -1305,11 +1305,227 @@ namespace vix::cli::errors
       return true;
     }
 
+    std::string trim_linker_text(std::string text)
+    {
+      while (!text.empty() &&
+             std::isspace(
+                 static_cast<unsigned char>(text.front())) != 0)
+      {
+        text.erase(text.begin());
+      }
+
+      while (!text.empty() &&
+             std::isspace(
+                 static_cast<unsigned char>(text.back())) != 0)
+      {
+        text.pop_back();
+      }
+
+      return text;
+    }
+
+    std::string strip_linker_quotes(std::string text)
+    {
+      text = trim_linker_text(std::move(text));
+
+      if (!text.empty() &&
+          (text.front() == '`' ||
+           text.front() == '\'' ||
+           text.front() == '"'))
+      {
+        text.erase(text.begin());
+      }
+
+      while (!text.empty() &&
+             (text.back() == '\'' ||
+              text.back() == '`' ||
+              text.back() == '"' ||
+              text.back() == ':'))
+      {
+        text.pop_back();
+      }
+
+      return trim_linker_text(std::move(text));
+    }
+
+    std::optional<std::string>
+    try_extract_undefined_symbol(
+        const std::string &buildLog)
+    {
+      static constexpr std::string_view markers[] = {
+          "undefined reference to",
+          "undefined symbol:",
+      };
+
+      std::istringstream input(buildLog);
+      std::string line;
+
+      while (std::getline(input, line))
+      {
+        for (const std::string_view marker : markers)
+        {
+          const std::size_t pos =
+              line.find(marker);
+
+          if (pos == std::string::npos)
+            continue;
+
+          std::string symbol =
+              line.substr(pos + marker.size());
+
+          symbol =
+              strip_linker_quotes(
+                  std::move(symbol));
+
+          if (!symbol.empty())
+            return symbol;
+        }
+      }
+
+      return std::nullopt;
+    }
+
+    std::string linker_symbol_search_name(
+        const std::string &symbol)
+    {
+      std::string name = symbol;
+
+      /*
+       * vtable/typeinfo diagnostics do not map reliably to one
+       * explicit source expression.
+       */
+      if (name.rfind("vtable for ", 0) == 0 ||
+          name.rfind("typeinfo for ", 0) == 0 ||
+          name.rfind("typeinfo name for ", 0) == 0)
+      {
+        return {};
+      }
+
+      const std::size_t signature =
+          name.find('(');
+
+      if (signature != std::string::npos)
+        name.resize(signature);
+
+      name = trim_linker_text(
+          std::move(name));
+
+      const std::size_t namespacePos =
+          name.rfind("::");
+
+      if (namespacePos != std::string::npos)
+        name = name.substr(namespacePos + 2);
+
+      return trim_linker_text(
+          std::move(name));
+    }
+
+    std::optional<CompilerError>
+    try_find_linker_symbol_location(
+        const std::filesystem::path &sourceFile,
+        const std::string &symbol)
+    {
+      if (sourceFile.empty())
+        return std::nullopt;
+
+      const std::string needle =
+          linker_symbol_search_name(symbol);
+
+      if (needle.empty())
+        return std::nullopt;
+
+      const auto lines =
+          read_file_lines(sourceFile);
+
+      if (!lines)
+        return std::nullopt;
+
+      std::optional<CompilerError> best;
+
+      /*
+       * Keep the last occurrence.
+       *
+       * In a small standalone script this usually prefers the call
+       * over an earlier forward declaration:
+       *
+       *   int calculate_result(int);
+       *   ...
+       *   calculate_result(42);
+       */
+      for (std::size_t i = 0;
+           i < lines->size();
+           ++i)
+      {
+        const std::size_t pos =
+            (*lines)[i].find(needle);
+
+        if (pos == std::string::npos)
+          continue;
+
+        CompilerError location;
+        location.file = sourceFile.string();
+        location.line =
+            static_cast<int>(i + 1);
+        location.column =
+            static_cast<int>(pos + 1);
+        location.message =
+            "symbol used here";
+
+        best = std::move(location);
+      }
+
+      return best;
+    }
+
+    bool linker_technical_details_enabled()
+    {
+      const char *level =
+          std::getenv("VIX_LOG_LEVEL");
+
+      if (level == nullptr || *level == '\0')
+        return false;
+
+      std::string value =
+          trim_linker_text(level);
+
+      for (char &character : value)
+      {
+        character =
+            static_cast<char>(
+                std::tolower(
+                    static_cast<unsigned char>(
+                        character)));
+      }
+
+      return value == "debug" ||
+             value == "trace";
+    }
+
+    void print_linker_debug_details(
+        const std::string &buildLog)
+    {
+      if (!linker_technical_details_enabled())
+        return;
+
+      std::cerr << "\n"
+                << GRAY
+                << "technical details:"
+                << RESET
+                << "\n";
+
+      print_excerpt(
+          buildLog,
+          20);
+    }
+
     bool handleLinkerErrors(
         const std::string &buildLog,
         const std::filesystem::path &sourceFile)
     {
-      bool hasUndefinedReference = false;
+      const std::optional<std::string> symbol =
+          try_extract_undefined_symbol(
+              buildLog);
+
       bool hasLinkerFailure = false;
 
       std::istringstream input(buildLog);
@@ -1317,30 +1533,94 @@ namespace vix::cli::errors
 
       while (std::getline(input, line))
       {
-        if (!hasUndefinedReference &&
-            line.find("undefined reference to") != std::string::npos)
-        {
-          hasUndefinedReference = true;
-        }
-
         if (line.find("ld returned") != std::string::npos ||
             line.find("collect2: error: ld returned") != std::string::npos ||
-            line.find("clang: error: linker command failed") != std::string::npos)
+            line.find("clang: error: linker command failed") != std::string::npos ||
+            line.find("ld.lld: error:") != std::string::npos ||
+            line.find("mold: error:") != std::string::npos)
         {
           hasLinkerFailure = true;
         }
       }
 
-      if (!hasUndefinedReference && !hasLinkerFailure)
+      if (!symbol && !hasLinkerFailure)
         return false;
 
-      print_header("link error: undefined reference");
+      if (symbol)
+      {
+        const bool looksLikeFunction =
+            symbol->find('(') != std::string::npos;
+
+        print_header(
+            looksLikeFunction
+                ? "link error: function has no implementation"
+                : "link error: missing definition");
+
+        if (looksLikeFunction)
+        {
+          std::cerr
+              << "  The function `"
+              << *symbol
+              << "` is used by the program, but the linker could not find its function body.\n";
+        }
+        else
+        {
+          std::cerr
+              << "  The symbol `"
+              << *symbol
+              << "` is used by the program, but the linker could not find its compiled definition.\n";
+        }
+
+        const std::string hint =
+            looksLikeFunction
+                ? "add the function definition, or link the .cpp file or library that contains it"
+                : "add the missing definition, or link the .cpp file or library that provides this symbol";
+
+        const auto location =
+            try_find_linker_symbol_location(
+                sourceFile,
+                *symbol);
+
+        if (location)
+        {
+          print_codeframe_then_bottom_default(
+              *location,
+              hint);
+        }
+        else
+        {
+          std::cerr << "\n";
+
+          print_hint_at_bottom(
+              hint,
+              "");
+        }
+
+        print_linker_debug_details(
+            buildLog);
+
+        return true;
+      }
+
+      /*
+       * We know the linker failed but could not extract a useful
+       * unresolved symbol. Keep this case understandable without
+       * pretending we know more than the linker told us.
+       */
+      print_header(
+          "link error: linking failed");
+
+      std::cerr
+          << "  Compilation succeeded, but the final executable could not be created.\n";
+
+      std::cerr << "\n";
 
       print_hint_at_bottom(
-          "a symbol is declared but not linked; check missing .cpp files or libraries",
-          !sourceFile.empty() ? "source: " + sourceFile.filename().string() : "");
+          "check that every required .cpp file and library is included in the build",
+          "");
 
-      print_excerpt(buildLog);
+      print_linker_debug_details(
+          buildLog);
 
       return true;
     }

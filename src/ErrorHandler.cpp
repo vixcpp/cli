@@ -181,12 +181,33 @@ namespace
   std::size_t find_first_error_anchor(std::string_view log)
   {
     static constexpr std::string_view anchors[] = {
+        // Build-system failures
         "FAILED:",
         "ninja: build stopped:",
-        "fatal error:",
-        "error:",
         "CMake Error",
         "make: ***",
+
+        // Linker failures.
+        //
+        // These must be recognized before the log is trimmed. Otherwise a
+        // GNU/Clang linker failure may be trimmed starting at the final
+        // "collect2" or "clang: error" line, losing the actual missing symbols.
+        "undefined reference to",
+        "undefined symbol:",
+        "Undefined symbols for architecture",
+        "multiple definition of",
+        "duplicate symbol:",
+
+        // Linker frontends / drivers
+        "ld: error:",
+        "ld.lld: error:",
+        "mold: error:",
+        "collect2: error: ld returned",
+        "clang: error: linker command failed",
+
+        // Compiler failures
+        "fatal error:",
+        "error:",
     };
 
     std::size_t best = std::string_view::npos;
@@ -220,7 +241,6 @@ namespace
 
     return best;
   }
-
   std::string trim_build_preamble(const std::string &log)
   {
     const std::string_view view(log);
@@ -250,9 +270,13 @@ namespace vix::cli
       if (handle_unrecognized_cli_option_as_script_runtime_args(cleanedLog))
         return true;
 
-      if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
-        return true;
-
+      /*
+       * Linker and sanitizer diagnostics need the raw build log so they can
+       * preserve the useful symbol/report details.
+       *
+       * Run them before the generic build-error detectors, which may recognize
+       * the same failure category but intentionally summarize it.
+       */
       if (RawLogDetectors::handleLinkerOrSanitizer(
               cleanedLog,
               sourceFile,
@@ -260,6 +284,9 @@ namespace vix::cli
       {
         return true;
       }
+
+      if (vix::cli::errors::build::handleBuildErrors(cleanedLog))
+        return true;
 
       vix::cli::build::print_build_error(
           std::cerr,

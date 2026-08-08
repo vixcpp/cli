@@ -250,7 +250,8 @@ namespace vix::cli::build
       const fs::path &logPath,
       bool quiet,
       bool cmakeVerbose,
-      bool progressOnly)
+      bool progressOnly,
+      BuildOutputObserver outputObserver)
   {
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
@@ -636,7 +637,18 @@ namespace vix::cli::build
         r.producedOutput = true;
         lastOutputTs = std::chrono::steady_clock::now();
 
-        write_all_fd(logfd, buf.data(), static_cast<std::size_t>(n));
+        write_all_fd(
+            logfd,
+            buf.data(),
+            static_cast<std::size_t>(n));
+
+        if (outputObserver)
+        {
+          outputObserver(
+              std::string_view(
+                  buf.data(),
+                  static_cast<std::size_t>(n)));
+        }
 
         if (!gotFirstLine)
         {
@@ -844,7 +856,8 @@ namespace vix::cli::build
       const fs::path &logPath,
       bool quiet,
       bool cmakeVerbose,
-      bool progressOnly)
+      bool progressOnly,
+      BuildOutputObserver outputObserver)
   {
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
@@ -866,12 +879,51 @@ namespace vix::cli::build
       oss << "\"" << argv[i] << "\"";
     }
 
-    const std::string full = oss.str() + " > \"" + logPath.string() + "\" 2>&1";
-    const int raw = std::system(full.c_str());
-    r.exitCode = process::normalize_exit_code(raw);
+    const std::string full =
+        oss.str() +
+        " > \"" +
+        logPath.string() +
+        "\" 2>&1";
 
-    if (!quiet)
-      std::cerr << util::read_text_file_or_empty(logPath);
+    const int raw =
+        std::system(
+            full.c_str());
+
+    r.exitCode =
+        process::normalize_exit_code(
+            raw);
+
+    const std::string captured =
+        util::read_text_file_or_empty(
+            logPath);
+
+    r.producedOutput =
+        !captured.empty();
+
+    const auto newline =
+        captured.find('\n');
+
+    r.capturedFirstLine =
+        util::trim(
+            newline == std::string::npos
+                ? captured
+                : captured.substr(
+                      0,
+                      newline));
+
+    if (outputObserver &&
+        !captured.empty())
+    {
+      outputObserver(
+          captured);
+    }
+
+    if (!quiet &&
+        !captured.empty())
+    {
+      std::cerr
+          << captured;
+    }
 
     return r;
   }

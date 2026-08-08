@@ -101,7 +101,8 @@ namespace vix::commands::RunCommand::detail
       int timeoutSec,
       bool useSan,
       bool captureOnly,
-      vix::commands::replay::ReplayCapture *replayCapture)
+      vix::commands::replay::ReplayCapture *replayCapture,
+      LiveOutputObserver outputObserver)
   {
     (void)spinnerLabel;
     (void)passthroughRuntime;
@@ -162,14 +163,33 @@ namespace vix::commands::RunCommand::detail
     DWORD n = 0;
     while (true)
     {
-      const BOOL ok = ReadFile(outRead, buffer, (DWORD)sizeof(buffer), &n, nullptr);
+      const BOOL ok =
+          ReadFile(
+              outRead,
+              buffer,
+              (DWORD)sizeof(buffer),
+              &n,
+              nullptr);
+
       if (!ok || n == 0)
         break;
 
-      result.stdoutText.append(buffer, buffer + n);
+      const std::string_view chunk(
+          buffer,
+          static_cast<std::size_t>(n));
 
-      if (replayCapture && n > 0)
-        replayCapture->capture_stdout_noexcept(std::string(buffer, buffer + n));
+      result.stdoutText.append(
+          chunk.data(),
+          chunk.size());
+
+      if (outputObserver)
+        outputObserver(chunk);
+
+      if (replayCapture)
+      {
+        replayCapture->capture_stdout_noexcept(
+            std::string(chunk));
+      }
     }
 
     CloseHandle(outRead);
@@ -1307,7 +1327,8 @@ namespace vix::commands::RunCommand::detail
       int timeoutSec,
       bool useSan,
       bool captureOnly,
-      vix::commands::replay::ReplayCapture *replayCapture)
+      vix::commands::replay::ReplayCapture *replayCapture,
+      LiveOutputObserver outputObserver)
   {
     RuntimeSignalGuard signalGuard;
     LiveRunResult result;
@@ -1614,6 +1635,9 @@ namespace vix::commands::RunCommand::detail
               }
 
               result.stdoutText += chunk;
+
+              if (outputObserver)
+                outputObserver(chunk);
 
               if (replayCapture)
                 replayCapture->capture_stdout_noexcept(chunk);

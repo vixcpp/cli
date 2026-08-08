@@ -21,6 +21,7 @@
 #include <vix/cli/build/ObjectCache.hpp>
 #include <vix/cli/build/BuildGraphExecutor.hpp>
 #include <vix/cli/build/BuildGraphExecutorAdapter.hpp>
+#include <vix/cli/build/BuildLiveProcess.hpp>
 #include <vix/cli/build/BuildTaskProcessExecutor.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/build/BuildContext.hpp>
@@ -4125,7 +4126,8 @@ namespace vix::commands::BuildCommand
         const process::Plan &plan,
         const artifact_cache::Artifact &projectArtifact,
         const std::vector<artifact_cache::ProjectInput> &projectInputs,
-        bool verboseMode)
+        bool verboseMode,
+        build::BuildLiveProcess *liveBuild)
     {
       {
         std::string err;
@@ -4182,21 +4184,54 @@ namespace vix::commands::BuildCommand
         schedulerOptions.quiet = opt.quiet;
         schedulerOptions.stopOnFirstFailure = true;
 
-        build::BuildScheduler scheduler(schedulerOptions);
-        scheduler.add_tasks(dirtyTasks);
+        build::BuildScheduler scheduler(
+            schedulerOptions);
+
+        scheduler.add_tasks(
+            dirtyTasks);
+
+        std::atomic<std::size_t> startedCompileTasks{0};
+
+        const std::size_t totalCompileTasks =
+            dirtyTasks.size();
 
         const build::BuildSchedulerResult result =
             scheduler.run(
                 [&](build::BuildTask &task)
                 {
+                  const std::size_t currentCompileTask =
+                      startedCompileTasks.fetch_add(
+                          1,
+                          std::memory_order_relaxed) +
+                      1;
+
+                  if (liveBuild)
+                  {
+                    liveBuild->compile_progress(
+                        currentCompileTask,
+                        totalCompileTasks,
+                        compile_task_source_subject(
+                            graph,
+                            task,
+                            plan.userProjectDir),
+                        build::default_build_target_name(
+                            opt,
+                            plan));
+                  }
+
                   build::BuildTaskResult taskResult =
                       run_cached_graph_compile_task(
                           graph,
                           objectCache,
                           task);
 
-                  if (!opt.quiet && !taskResult.output.empty())
-                    std::cout << taskResult.output;
+                  if (!opt.quiet &&
+                      !liveBuild &&
+                      !taskResult.output.empty())
+                  {
+                    std::cout
+                        << taskResult.output;
+                  }
 
                   return taskResult;
                 });
@@ -4213,6 +4248,14 @@ namespace vix::commands::BuildCommand
         }
       }
 
+      if (liveBuild)
+      {
+        liveBuild->link_started(
+            build::default_build_target_name(
+                opt,
+                plan));
+      }
+
       const int linkCode =
           run_graph_link(
               graph,
@@ -4220,6 +4263,14 @@ namespace vix::commands::BuildCommand
               plan,
               outputBinary);
 
+      if (linkCode == 0 &&
+          liveBuild)
+      {
+        liveBuild->link_finished(
+            build::default_build_target_name(
+                opt,
+                plan));
+      }
       if (linkCode != 0)
       {
         return linkCode;
@@ -4670,7 +4721,8 @@ namespace vix::commands::BuildCommand
         NativeVixAppBuildSession &session,
         const std::vector<std::string> &taskIds,
         WatchProgressLine *progress = nullptr,
-        const std::string &progressDetail = {})
+        const std::string &progressDetail = {},
+        build::BuildLiveProcess *liveBuild = nullptr)
     {
       build::ObjectCache objectCache(session.plan.buildDir);
 
@@ -4685,35 +4737,76 @@ namespace vix::commands::BuildCommand
       schedulerOptions.quiet = opt.quiet;
       schedulerOptions.stopOnFirstFailure = true;
 
-      build::BuildScheduler scheduler(schedulerOptions);
+      build::BuildScheduler scheduler(
+          schedulerOptions);
+
+      std::size_t totalCompileTasks = 0;
 
       if (taskIds.empty())
       {
-        scheduler.add_tasks(session.graph.compile_tasks());
+        const auto compileTasks =
+            session.graph.compile_tasks();
+
+        totalCompileTasks =
+            compileTasks.size();
+
+        scheduler.add_tasks(
+            compileTasks);
       }
       else
       {
         for (const std::string &taskId : taskIds)
         {
-          build::BuildTask *task = session.graph.find_task(taskId);
-          if (task)
-            scheduler.add_task(*task);
+          build::BuildTask *task =
+              session.graph.find_task(
+                  taskId);
+
+          if (!task)
+            continue;
+
+          scheduler.add_task(
+              *task);
+
+          ++totalCompileTasks;
         }
       }
+
+      std::atomic<std::size_t>
+          startedCompileTasks{0};
 
       const build::BuildSchedulerResult result =
           scheduler.run(
               [&](build::BuildTask &task)
               {
+                const std::string sourceSubject =
+                    compile_task_source_subject(
+                        session.graph,
+                        task,
+                        session.plan.userProjectDir);
+
                 if (progress)
                 {
                   progress->update(
                       "Building",
-                      compile_task_source_subject(
-                          session.graph,
-                          task,
-                          session.plan.userProjectDir),
+                      sourceSubject,
                       progressDetail);
+                }
+
+                if (liveBuild)
+                {
+                  const std::size_t currentCompileTask =
+                      startedCompileTasks.fetch_add(
+                          1,
+                          std::memory_order_relaxed) +
+                      1;
+
+                  liveBuild->compile_progress(
+                      currentCompileTask,
+                      totalCompileTasks,
+                      sourceSubject,
+                      build::default_build_target_name(
+                          opt,
+                          session.plan));
                 }
 
                 build::BuildTaskResult taskResult =
@@ -4722,8 +4815,13 @@ namespace vix::commands::BuildCommand
                         objectCache,
                         task);
 
-                if (!opt.quiet && !taskResult.output.empty())
-                  std::cout << taskResult.output;
+                if (!opt.quiet &&
+                    !liveBuild &&
+                    !taskResult.output.empty())
+                {
+                  std::cout
+                      << taskResult.output;
+                }
 
                 return taskResult;
               });
@@ -4733,10 +4831,18 @@ namespace vix::commands::BuildCommand
         if (progress)
           progress->stop();
 
+        if (liveBuild)
+        {
+          liveBuild->finish(1);
+        }
+
         for (const auto &taskResult : result.results)
         {
           if (!taskResult.output.empty())
-            std::cerr << taskResult.output;
+          {
+            std::cerr
+                << taskResult.output;
+          }
         }
 
         return 1;
@@ -4751,14 +4857,26 @@ namespace vix::commands::BuildCommand
         const app::AppManifest &manifest,
         NativeVixAppBuildSession &session,
         WatchProgressLine *progress = nullptr,
-        const std::string &progressDetail = {})
+        const std::string &progressDetail = {},
+        build::BuildLiveProcess *liveBuild = nullptr)
     {
+      const std::string linkTarget =
+          manifest.name.empty()
+              ? std::string("vix.app")
+              : manifest.name;
+
       if (progress)
       {
         progress->update(
             "Linking",
-            manifest.name.empty() ? std::string("vix.app") : manifest.name,
+            linkTarget,
             progressDetail);
+      }
+
+      if (liveBuild)
+      {
+        liveBuild->link_started(
+            linkTarget);
       }
 
       const std::vector<std::string> linkCommand =
@@ -4778,12 +4896,33 @@ namespace vix::commands::BuildCommand
 
       if (linkResult.exitCode != 0)
       {
-        error("Native vix.app link failed.");
+        const int exitCode =
+            linkResult.exitCode == 0
+                ? 1
+                : linkResult.exitCode;
+
+        if (liveBuild)
+        {
+          liveBuild->finish(
+              exitCode);
+        }
+
+        error(
+            "Native vix.app link failed.");
 
         if (!linkOutput.empty())
-          std::cerr << linkOutput;
+        {
+          std::cerr
+              << linkOutput;
+        }
 
-        return linkResult.exitCode == 0 ? 1 : linkResult.exitCode;
+        return exitCode;
+      }
+
+      if (liveBuild)
+      {
+        liveBuild->link_finished(
+            linkTarget);
       }
 
 #ifndef _WIN32
@@ -4849,7 +4988,8 @@ namespace vix::commands::BuildCommand
         const process::Options &opt,
         const fs::path &projectDir,
         const app::AppManifest &manifest,
-        const std::chrono::steady_clock::time_point &commandStart)
+        const std::chrono::steady_clock::time_point &commandStart,
+        bool livePresentation = true)
     {
       NativeVixAppBuildSession session;
       int prepareExit = 0;
@@ -4864,18 +5004,53 @@ namespace vix::commands::BuildCommand
         return prepareExit;
       }
 
-      if (!opt.quiet)
-        print_vix_build_header("Building", opt, session.plan);
+      std::optional<build::BuildLiveProcess>
+          liveBuild;
+
+      if (livePresentation &&
+          !opt.quiet)
+      {
+        liveBuild.emplace(
+            std::cout);
+
+        liveBuild->begin(
+            build::default_build_target_name(
+                opt,
+                session.plan));
+      }
+      else if (!opt.quiet)
+      {
+        /*
+         * Keep the existing presentation for watch mode, which owns its
+         * independent WatchProgressLine lifecycle.
+         */
+        print_vix_build_header(
+            "Building",
+            opt,
+            session.plan);
+      }
 
       const int compileCode =
           run_native_vix_app_tasks(
               opt,
               session,
               {},
-              nullptr);
+              nullptr,
+              {},
+              liveBuild
+                  ? &*liveBuild
+                  : nullptr);
 
       if (compileCode != 0)
+      {
+        if (liveBuild)
+        {
+          liveBuild->finish(
+              compileCode);
+        }
+
         return compileCode;
+      }
 
       const int linkCode =
           link_native_vix_app_build(
@@ -4883,20 +5058,40 @@ namespace vix::commands::BuildCommand
               projectDir,
               manifest,
               session,
-              nullptr);
+              nullptr,
+              {},
+              liveBuild
+                  ? &*liveBuild
+                  : nullptr);
 
       if (linkCode != 0)
-        return linkCode;
+      {
+        if (liveBuild)
+        {
+          liveBuild->finish(
+              linkCode);
+        }
 
-      if (!opt.quiet)
+        return linkCode;
+      }
+
+      if (liveBuild)
+      {
+        liveBuild->finish(0);
+      }
+      else if (!opt.quiet)
       {
         const auto ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - commandStart)
                 .count();
 
-        print_vix_build_success("Native vix.app");
-        print_vix_build_success_timed("Done", ms);
+        print_vix_build_success(
+            "Native vix.app");
+
+        print_vix_build_success_timed(
+            "Done",
+            ms);
       }
 
       return 0;
@@ -5001,7 +5196,17 @@ namespace vix::commands::BuildCommand
         const fs::path globalPackagesFile =
             plan_.buildDir / "vix-global-packages.cmake";
 
-        const bool verboseMode = opt_.verbose || opt_.cmakeVerbose;
+        const bool debugMode =
+            debug_build_details_enabled();
+
+        const bool verboseMode =
+            opt_.verbose ||
+            opt_.cmakeVerbose ||
+            debugMode;
+
+        const bool rawBuildOutput =
+            opt_.cmakeVerbose ||
+            debugMode;
         const bool defer = (!opt_.quiet && verboseMode);
         DeferredConsole out(defer);
         bool buildHeaderPrinted = false;
@@ -5285,8 +5490,18 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        bool configuredThisRun = false;
-        long long totalMs = 0;
+        std::optional<build::BuildLiveProcess> liveBuild;
+
+        if (!opt_.quiet)
+        {
+          liveBuild.emplace(
+              std::cout);
+
+          liveBuild->begin(
+              build::default_build_target_name(
+                  opt_,
+                  plan_));
+        }
 
         const vix::engine::ConfigureDecision configureDecision =
             measurePhase(
@@ -5298,7 +5513,8 @@ namespace vix::commands::BuildCommand
 
         if (configureDecision.needs_configure())
         {
-          configuredThisRun = true;
+          if (liveBuild)
+            liveBuild->begin_configure();
 
           if (verboseMode && !opt_.quiet)
           {
@@ -5323,20 +5539,33 @@ namespace vix::commands::BuildCommand
           const auto t0 = std::chrono::steady_clock::now();
           const auto argv = build::cmake_configure_argv(plan_, opt_);
 
-          const process::ExecResult r = build::run_process_live_to_log(
-              argv,
-              {},
-              plan_.configureLog,
-              (opt_.quiet || !verboseMode),
-              opt_.cmakeVerbose,
-              false);
+          const process::ExecResult r =
+              build::run_process_live_to_log(
+                  argv,
+                  {},
+                  plan_.configureLog,
+                  (opt_.quiet || !verboseMode),
+                  opt_.cmakeVerbose,
+                  false,
+                  liveBuild
+                      ? liveBuild->observer()
+                      : build::BuildOutputObserver{});
 
           if (r.exitCode != 0)
           {
             out.discard();
 
+            const int exitCode =
+                (r.exitCode == 0)
+                    ? 2
+                    : r.exitCode;
+
+            if (liveBuild)
+              liveBuild->finish(exitCode);
+
             const std::string log =
-                util::read_text_file_or_empty(plan_.configureLog);
+                util::read_text_file_or_empty(
+                    plan_.configureLog);
 
             const bool handled =
                 vix::cli::ErrorHandler::printBuildErrors(
@@ -5358,7 +5587,7 @@ namespace vix::commands::BuildCommand
               print_debug_command_if_enabled(r);
             }
 
-            return (r.exitCode == 0) ? 2 : r.exitCode;
+            return exitCode;
           }
 
           if (opt_.useCache)
@@ -5376,8 +5605,6 @@ namespace vix::commands::BuildCommand
               std::chrono::duration_cast<std::chrono::milliseconds>(
                   std::chrono::steady_clock::now() - t0)
                   .count();
-
-          totalMs += ms;
 
           if (!opt_.quiet && verboseMode)
           {
@@ -5452,12 +5679,12 @@ namespace vix::commands::BuildCommand
             hint("Warning: unable to write Vix build state");
           }
 
-          if (!opt_.quiet)
+          if (liveBuild)
           {
-            if (!buildHeaderPrinted)
-              print_vix_build_header("Restoring", opt_, plan_);
-            print_vix_build_success("Artifact cache hit");
-            print_vix_build_success("Done");
+            print_vix_build_success(
+                "Artifact cache hit");
+
+            liveBuild->finish(0);
           }
 
           return 0;
@@ -5498,11 +5725,30 @@ namespace vix::commands::BuildCommand
           {
             return build::execute_graph_ninja_target(
                 request,
-                !opt_.cmakeVerbose);
+                !rawBuildOutput,
+                liveBuild
+                    ? liveBuild->observer()
+                    : build::BuildOutputObserver{});
           };
+
           executorDependencies.onEvent =
               [&](const build::BuildGraphExecutorEvent &event)
           {
+            if (liveBuild &&
+                event.kind ==
+                    build::BuildGraphExecutorEventKind::CompilingTask &&
+                !event.taskId.empty())
+            {
+              liveBuild->compile_progress(
+                  event.current,
+                  event.total,
+                  compile_task_subject_for_id(
+                      graph,
+                      event.taskId,
+                      plan_.userProjectDir),
+                  event.target);
+            }
+
             build::render_graph_debug_event(
                 event,
                 opt_.quiet,
@@ -5573,31 +5819,16 @@ namespace vix::commands::BuildCommand
             if (!graph.save(graphPath) && !opt_.quiet)
               hint("Warning: unable to write Vix build graph");
 
+            if (liveBuild)
+              liveBuild->finish(0);
+
             if (!opt_.quiet)
             {
-              build_print_phase_timings(phaseTimings);
-              if (!buildHeaderPrinted)
-                print_vix_build_header("Building", opt_, plan_);
+              build_print_phase_timings(
+                  phaseTimings);
 
-              print_graph_warnings_modern(graphResult.output);
-
-              if (configuredThisRun)
-                print_vix_build_success("Configured");
-
-              print_vix_build_success("Graph target: " + graphResult.target);
-
-              if (graphResult.dirtyCompileTasks == 0)
-              {
-                print_vix_build_success("Up to date");
-              }
-              else
-              {
-                print_vix_build_success(
-                    "Compiled " + std::to_string(graphResult.dirtyCompileTasks) +
-                    " dirty files");
-              }
-
-              print_vix_build_success("Done");
+              print_graph_warnings_modern(
+                  graphResult.output);
             }
 
             return 0;
@@ -5621,22 +5852,46 @@ namespace vix::commands::BuildCommand
                         plan_,
                         projectArtifact,
                         projectInputs,
-                        verboseMode);
+                        verboseMode,
+                        liveBuild
+                            ? &*liveBuild
+                            : nullptr);
                   });
 
-          if (opt_.explain && !opt_.quiet)
-            build_print_phase_timings(phaseTimings);
+          if (opt_.explain &&
+              !opt_.quiet)
+          {
+            build_print_phase_timings(
+                phaseTimings);
+          }
+
+          if (liveBuild)
+          {
+            liveBuild->finish(
+                graphBuildCode);
+          }
 
           return graphBuildCode;
         }
 
         {
-          const auto t0 = std::chrono::steady_clock::now();
-          const auto argv = build::cmake_build_argv(plan_, opt_);
+          const auto argv =
+              build::cmake_build_argv(
+                  plan_,
+                  opt_);
           const auto env = build::ninja_env(opt_, plan_);
 
-          const bool showRawBuildOutput = opt_.cmakeVerbose;
-          const bool progressOnly = !showRawBuildOutput && watch_stdout_is_tty();
+          const bool showRawBuildOutput =
+              rawBuildOutput;
+
+          const bool progressOnly =
+              !showRawBuildOutput &&
+              watch_stdout_is_tty();
+
+          const bool legacyBuildQuiet =
+              opt_.quiet ||
+              (liveBuild &&
+               !showRawBuildOutput);
 
           const process::ExecResult r =
               measurePhase(
@@ -5647,25 +5902,32 @@ namespace vix::commands::BuildCommand
                         argv,
                         env,
                         plan_.buildLog,
-                        opt_.quiet,
+                        legacyBuildQuiet,
                         opt_.cmakeVerbose,
-                        progressOnly);
+                        progressOnly,
+                        liveBuild
+                            ? liveBuild->observer()
+                            : build::BuildOutputObserver{});
                   });
-
-          const auto ms =
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - t0)
-                  .count();
-
-          totalMs += ms;
 
           if (r.exitCode != 0)
           {
             out.discard();
 
-            const std::string log =
-                util::read_text_file_or_empty(plan_.buildLog);
+            const int exitCode =
+                (r.exitCode == 0)
+                    ? 3
+                    : r.exitCode;
 
+            if (liveBuild)
+            {
+              liveBuild->finish(
+                  exitCode);
+            }
+
+            const std::string log =
+                util::read_text_file_or_empty(
+                    plan_.buildLog);
             const bool handled =
                 vix::cli::ErrorHandler::printBuildErrors(
                     log,
@@ -5679,7 +5941,12 @@ namespace vix::commands::BuildCommand
 
               print_debug_command_if_enabled(r);
             }
-            return (r.exitCode == 0) ? 3 : r.exitCode;
+            return exitCode;
+          }
+
+          if (liveBuild)
+          {
+            liveBuild->finish(0);
           }
 
           if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
@@ -5737,67 +6004,14 @@ namespace vix::commands::BuildCommand
           if (!opt_.quiet)
             print_compiler_warnings_summary(buildLog);
 
-          const std::size_t builtTargets =
-              count_built_targets_from_log(buildLog);
-
           if (!opt_.quiet)
           {
-            build_print_phase_timings(phaseTimings);
+            build_print_phase_timings(
+                phaseTimings);
+
             if (verboseMode)
             {
               out.flush_to_stdout();
-
-              if (!buildHeaderPrinted)
-              {
-                build::print_build_header_full(
-                    std::cout,
-                    build::default_build_target_name(opt_, plan_),
-                    display_build_profile(plan_),
-                    plan_.launcher,
-                    plan_.fastLinkerFlag,
-                    opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
-              }
-
-              const std::string profile =
-                  (plan_.preset.buildType == "Release")
-                      ? "release [optimized]"
-                      : "dev [unoptimized + debuginfo]";
-
-              build::print_build_done(
-                  std::cout,
-                  profile,
-                  util::format_seconds(ms));
-            }
-            else
-            {
-              if (!buildHeaderPrinted)
-              {
-                build::print_build_header_full(
-                    std::cout,
-                    build::default_build_target_name(opt_, plan_),
-                    display_build_profile(plan_),
-                    std::nullopt,
-                    std::nullopt,
-                    0);
-              }
-
-              if (configuredThisRun)
-                build::print_build_success(std::cout, "Configured");
-
-              if (builtTargets > 0)
-              {
-                build::print_build_success(
-                    std::cout,
-                    "Built (" + std::to_string(builtTargets) + " targets)");
-              }
-              else
-              {
-                build::print_build_success(std::cout, "Built");
-              }
-
-              build::print_build_success(
-                  std::cout,
-                  "Done in " + util::format_seconds(totalMs));
             }
           }
         }
@@ -6195,7 +6409,8 @@ namespace vix::commands::BuildCommand
                         buildOpt,
                         project.userProjectDir,
                         activeManifest,
-                        std::chrono::steady_clock::now());
+                        std::chrono::steady_clock::now(),
+                        false);
                   });
           int lastCode = initialRun.code;
           const auto initialMs =

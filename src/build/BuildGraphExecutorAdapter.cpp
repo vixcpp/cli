@@ -23,6 +23,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <utility>
 
 #include <vix/cli/cmake/CMakeBuild.hpp>
 
@@ -59,7 +60,8 @@ namespace vix::cli::build
 
   BuildGraphExecutorNinjaResult execute_graph_ninja_target(
       const BuildGraphExecutorNinjaRequest &request,
-      bool quiet)
+      bool quiet,
+      BuildOutputObserver outputObserver)
   {
     BuildGraphExecutorNinjaResult result;
 
@@ -70,7 +72,8 @@ namespace vix::cli::build
             request.buildDir / "build.log",
             quiet,
             /*cmakeVerbose=*/false,
-            /*progressOnly=*/false);
+            /*progressOnly=*/false,
+            std::move(outputObserver));
 
     result.started = true;
     result.exitCode = execResult.exitCode;
@@ -80,11 +83,16 @@ namespace vix::cli::build
     if (execResult.exitCode != 0 && quiet)
     {
       result.output =
-          read_text_file_or_empty(request.buildDir / "build.log");
+          read_text_file_or_empty(
+              request.buildDir /
+              "build.log");
     }
-    else if (execResult.producedOutput && !execResult.capturedFirstLine.empty())
+    else if (execResult.producedOutput &&
+             !execResult.capturedFirstLine.empty())
     {
-      result.output = execResult.capturedFirstLine + "\n";
+      result.output =
+          execResult.capturedFirstLine +
+          "\n";
     }
 
     return result;

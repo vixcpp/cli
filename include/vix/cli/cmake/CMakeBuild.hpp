@@ -14,6 +14,7 @@
 #define VIX_CLI_CMAKE_BUILD_HPP
 
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -25,6 +26,8 @@ namespace vix::cli::build
 {
   namespace fs = std::filesystem;
   namespace process = vix::cli::process;
+  using BuildOutputObserver =
+      std::function<void(std::string_view)>;
 
   bool is_cmake_configure_summary_line(std::string_view line);
   bool is_configure_cmd(const std::vector<std::string> &argv);
@@ -56,7 +59,8 @@ namespace vix::cli::build
       const fs::path &logPath,
       bool quiet,
       bool cmakeVerbose,
-      bool progressOnly);
+      bool progressOnly,
+      BuildOutputObserver outputObserver = {});
 
   bool ninja_is_up_to_date(const process::Options &opt, const process::Plan &plan);
 

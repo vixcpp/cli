@@ -751,6 +751,21 @@ namespace vix::commands::RunCommand::detail
   fs::path get_scripts_root(bool localCache);
 
   /**
+   * @brief Compute the deterministic CMake target name used for a script.
+   *
+   * The CMake target name is intentionally different from the executable
+   * output name. It includes a hash of the absolute script path so different
+   * scripts with the same file name cannot collide inside generated projects.
+   *
+   * @param exeName Executable output name.
+   * @param cppPath Absolute or relative path to the script source file.
+   * @return Deterministic CMake target name.
+   */
+  std::string make_script_cmake_target_name(
+      const std::string &exeName,
+      const fs::path &cppPath);
+
+  /**
    * @brief Generate the CMakeLists.txt content used by script fallback mode.
    */
   std::string make_script_cmakelists(
@@ -926,18 +941,56 @@ namespace vix::commands::RunCommand::detail
   // ===========================================================================
 
   /**
-   * @brief Return the file modification time in nanoseconds, or 0 on failure.
+   * @brief Return the file modification time as Unix nanoseconds.
+   *
+   * std::filesystem::file_time_type may use a clock whose epoch differs from
+   * std::chrono::system_clock. Converting file_time_type::time_since_epoch()
+   * directly to an unsigned Unix timestamp is therefore not portable and can
+   * yield negative values for perfectly valid files.
+   *
+   * This helper translates the filesystem clock to system_clock before
+   * producing a nanosecond timestamp.
+   *
+   * @param p File whose modification time should be queried.
+   * @param ec Receives any filesystem error.
+   * @return Modification time in Unix nanoseconds, or 0 on failure.
    */
-  inline std::uint64_t file_mtime_ns(const fs::path &p, std::error_code &ec)
+  inline std::uint64_t file_mtime_ns(
+      const fs::path &p,
+      std::error_code &ec)
   {
     ec.clear();
-    const auto ft = fs::last_write_time(p, ec);
+
+    const auto fileTime =
+        fs::last_write_time(
+            p,
+            ec);
+
     if (ec)
       return 0;
 
     using namespace std::chrono;
-    const auto ns = duration_cast<nanoseconds>(ft.time_since_epoch()).count();
-    return (ns < 0) ? 0ull : static_cast<std::uint64_t>(ns);
+
+    const auto fileNow =
+        fs::file_time_type::clock::now();
+
+    const auto systemNow =
+        system_clock::now();
+
+    const auto systemTime =
+        systemNow +
+        duration_cast<system_clock::duration>(
+            fileTime - fileNow);
+
+    const auto ns =
+        duration_cast<nanoseconds>(
+            systemTime.time_since_epoch())
+            .count();
+
+    if (ns <= 0)
+      return 0;
+
+    return static_cast<std::uint64_t>(ns);
   }
 
   /**
@@ -1208,7 +1261,7 @@ namespace vix::commands::RunCommand::detail
 
         std::error_code ec;
         if (!fs::exists(dep, ec) || ec)
-          continue;
+          return std::nullopt;
 
         const auto t = file_mtime_ns(dep, ec);
         if (!ec && t > maxNs)
@@ -1232,38 +1285,29 @@ namespace vix::commands::RunCommand::detail
     if (!fs::exists(exePath, ec) || ec)
       return true;
 
-    const auto depfiles = list_depfiles_for_target(buildDir, targetName);
+    const auto depfiles =
+        list_depfiles_for_target(
+            buildDir,
+            targetName);
+
     if (depfiles.empty())
       return true;
 
-    const fs::path stampFile =
-        buildDir / (".vix-rebuild-cache-" + targetName + ".txt");
+    const std::uint64_t exeMtime =
+        file_mtime_ns(
+            exePath,
+            ec);
 
-    const std::uint64_t exeMtime = file_mtime_ns(exePath, ec);
     if (ec || exeMtime == 0)
       return true;
 
-    const std::uint64_t fpNow = depfiles_fingerprint_fast(depfiles);
+    const auto maxDep =
+        compute_max_dep_mtime_ns(
+            buildDir,
+            depfiles);
 
-    if (auto st = load_rebuild_cache_stamp(stampFile))
-    {
-      if (st->depfiles_fingerprint == fpNow)
-      {
-        if (exeMtime >= st->max_dep_mtime_ns)
-          return false;
-      }
-    }
-
-    auto maxDep = compute_max_dep_mtime_ns(buildDir, depfiles);
     if (!maxDep)
       return true;
-
-    RebuildCacheStamp out{};
-    out.exe_mtime_ns = exeMtime;
-    out.depfiles_fingerprint = fpNow;
-    out.max_dep_mtime_ns = *maxDep;
-
-    save_rebuild_cache_stamp(stampFile, out);
 
     return exeMtime < *maxDep;
   }

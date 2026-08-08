@@ -740,6 +740,105 @@ namespace vix::commands::RunCommand::detail
       return meta.substr(pos + marker.size());
     }
 
+    std::string make_direct_failure_meta(
+        const DirectScriptPlan &plan,
+        int exitCode)
+    {
+      std::ostringstream oss;
+
+      oss << "status=failed\n";
+      oss << "exit_code=" << exitCode << "\n";
+      oss << make_direct_cache_meta(
+          plan.scriptPath,
+          plan);
+
+      return oss.str();
+    }
+
+    int cached_failure_exit_code(
+        const std::string &meta)
+    {
+      const std::string value =
+          meta_value(meta, "exit_code");
+
+      if (value.empty())
+        return 1;
+
+      char *end = nullptr;
+
+      const long parsed =
+          std::strtol(
+              value.c_str(),
+              &end,
+              10);
+
+      if (end == value.c_str() ||
+          end == nullptr ||
+          *end != '\0' ||
+          parsed <= 0 ||
+          parsed > 255)
+      {
+        return 1;
+      }
+
+      return static_cast<int>(parsed);
+    }
+
+    bool load_direct_failure_cache(
+        const DirectScriptPlan &plan,
+        DirectScriptCacheState &cache)
+    {
+      if (!file_exists(cache.failureMetaFile))
+        return false;
+
+      if (!file_exists(cache.stdoutLogPath) ||
+          !file_exists(cache.stderrLogPath))
+      {
+        return false;
+      }
+
+      const std::string meta =
+          text::read_text_file_or_empty(
+              cache.failureMetaFile);
+
+      if (meta.empty())
+        return false;
+
+      if (meta_value(meta, "status") != "failed")
+        return false;
+
+      if (meta_value(meta, "cache_key") !=
+          plan.cacheKey)
+      {
+        return false;
+      }
+
+      if (meta_value(meta, "script_content_hash") !=
+          plan.fingerprint.scriptContentHash)
+      {
+        return false;
+      }
+
+      const std::string cachedFingerprint =
+          fingerprint_section(meta);
+
+      const std::string currentFingerprint =
+          serialize_direct_build_fingerprint(
+              plan.fingerprint);
+
+      if (cachedFingerprint.empty() ||
+          cachedFingerprint != currentFingerprint)
+      {
+        return false;
+      }
+
+      cache.cachedFailure = true;
+      cache.cachedFailureExitCode =
+          cached_failure_exit_code(meta);
+
+      return true;
+    }
+
     std::map<std::string, std::string> parse_key_value_lines(const std::string &text)
     {
       std::map<std::string, std::string> out;
@@ -845,11 +944,25 @@ namespace vix::commands::RunCommand::detail
       if (!trace_direct_cache_enabled(opt))
         return;
 
-      const bool binaryExists = file_exists(plan.binaryPath);
-      const bool metadataExists = file_exists(cache.metaFile);
+      const bool binaryExists =
+          file_exists(plan.binaryPath);
+
+      const fs::path activeMetaFile =
+          cache.cachedFailure
+              ? cache.failureMetaFile
+              : cache.metaFile;
+
+      const bool metadataExists =
+          file_exists(activeMetaFile);
+
       std::string meta;
+
       if (metadataExists)
-        meta = text::read_text_file_or_empty(cache.metaFile);
+      {
+        meta =
+            text::read_text_file_or_empty(
+                activeMetaFile);
+      }
 
       const bool keyMatch =
           !meta.empty() && meta_value(meta, "cache_key") == plan.cacheKey;
@@ -870,7 +983,8 @@ namespace vix::commands::RunCommand::detail
       std::cerr << "cache key: " << plan.cacheKey << "\n";
       std::cerr << "cache dir: " << plan.cacheDir.string() << "\n";
       std::cerr << "binary exists: " << yes_no(binaryExists) << "\n";
-      std::cerr << "metadata exists: " << yes_no(metadataExists) << "\n";
+      std::cerr << (cache.cachedFailure ? "failure metadata exists: " : "metadata exists: ") << yes_no(metadataExists) << "\n";
+      std::cerr << "cached failure: " << yes_no(cache.cachedFailure) << "\n";
       std::cerr << "cache key match: " << yes_no(keyMatch) << "\n";
       std::cerr << "source mtime match: " << yes_no(mtimeMatch) << "\n";
       std::cerr << "source content hash match: " << yes_no(hashMatch) << "\n";
@@ -1046,20 +1160,55 @@ namespace vix::commands::RunCommand::detail
     return direct_build_fingerprint_cache_key(fp);
   }
 
-  DirectScriptCacheState load_direct_script_cache_state(const DirectScriptPlan &plan)
+  DirectScriptCacheState load_direct_script_cache_state(
+      const DirectScriptPlan &plan)
   {
     DirectScriptCacheState out{};
+
     out.rootDir = plan.cacheDir;
     out.binaryPath = plan.binaryPath;
     out.metaFile = plan.cacheDir / "meta.txt";
-    out.stdoutLogPath = plan.cacheDir / "stdout.log";
-    out.stderrLogPath = plan.cacheDir / "stderr.log";
+    out.failureMetaFile =
+        plan.cacheDir / "failure.meta";
+
+    out.stdoutLogPath =
+        plan.cacheDir / "stdout.log";
+
+    out.stderrLogPath =
+        plan.cacheDir / "stderr.log";
+
     out.cacheKey = plan.cacheKey;
+
     out.rebuildReason.clear();
+    out.cachedFailureExitCode = 0;
     out.cacheHit = false;
+    out.cachedFailure = false;
     out.needsRebuild = true;
 
-    out.rebuildReason = direct_cache_rebuild_reason(plan, out);
+    /*
+     * A deterministic failed build is also a valid cache result.
+     *
+     * Check it before requiring the binary: failed compilations and
+     * link steps intentionally have no executable.
+     */
+    if (load_direct_failure_cache(
+            plan,
+            out))
+    {
+      out.cacheHit = true;
+      out.cachedFailure = true;
+      out.needsRebuild = false;
+      out.rebuildReason =
+          "cached compile failure";
+
+      return out;
+    }
+
+    out.rebuildReason =
+        direct_cache_rebuild_reason(
+            plan,
+            out);
+
     if (out.rebuildReason.empty())
     {
       out.cacheHit = true;
@@ -1102,15 +1251,129 @@ namespace vix::commands::RunCommand::detail
     return plan;
   }
 
-  bool persist_direct_script_cache_metadata(const DirectScriptPlan &plan)
+  bool persist_direct_script_cache_metadata(
+      const DirectScriptPlan &plan)
   {
     if (!file_exists(plan.binaryPath))
       return false;
 
-    const std::string meta = make_direct_cache_meta(plan.scriptPath, plan);
-    return text::write_text_file(plan.cacheDir / "meta.txt", meta);
+    /*
+     * A successful compilation supersedes a previous negative cache.
+     */
+    std::error_code ec;
+
+    fs::remove(
+        plan.cacheDir / "failure.meta",
+        ec);
+
+    ec.clear();
+
+    fs::remove(
+        plan.cacheDir / "stdout.log",
+        ec);
+
+    ec.clear();
+
+    fs::remove(
+        plan.cacheDir / "stderr.log",
+        ec);
+
+    const std::string meta =
+        make_direct_cache_meta(
+            plan.scriptPath,
+            plan);
+
+    return text::write_text_file(
+        plan.cacheDir / "meta.txt",
+        meta);
   }
 
+  bool persist_direct_script_failure_cache(
+      const DirectScriptPlan &plan,
+      int exitCode,
+      const std::string &stdoutText,
+      const std::string &stderrText)
+  {
+    std::error_code ec;
+
+    /*
+     * Never leave an old successful artifact beside a failed state.
+     */
+    fs::remove(
+        plan.binaryPath,
+        ec);
+
+    ec.clear();
+
+    fs::remove(
+        plan.cacheDir / "meta.txt",
+        ec);
+
+    ec.clear();
+
+    /*
+     * Write the diagnostic payload first and the marker last.
+     *
+     * This prevents an interrupted write from creating a valid-looking
+     * negative cache without its diagnostic output.
+     */
+    if (!text::write_text_file(
+            plan.cacheDir / "stdout.log",
+            stdoutText))
+    {
+      return false;
+    }
+
+    if (!text::write_text_file(
+            plan.cacheDir / "stderr.log",
+            stderrText))
+    {
+      return false;
+    }
+
+    const std::string failureMeta =
+        make_direct_failure_meta(
+            plan,
+            exitCode != 0 ? exitCode : 1);
+
+    return text::write_text_file(
+        plan.cacheDir / "failure.meta",
+        failureMeta);
+  }
+
+  int replay_direct_script_cached_failure(
+      const DirectScriptPlan &plan,
+      const DirectScriptCacheState &cache)
+  {
+    const std::string stdoutText =
+        text::read_text_file_or_empty(
+            cache.stdoutLogPath);
+
+    const std::string stderrText =
+        text::read_text_file_or_empty(
+            cache.stderrLogPath);
+
+    const std::string compileLog =
+        stdoutText + stderrText;
+
+    bool handled = false;
+
+    if (!compileLog.empty())
+    {
+      handled =
+          vix::cli::ErrorHandler::printBuildErrors(
+              compileLog,
+              plan.scriptPath,
+              "Script compile failed");
+    }
+
+    if (!handled)
+      error("Script compile failed.");
+
+    return cache.cachedFailureExitCode != 0
+               ? cache.cachedFailureExitCode
+               : 1;
+  }
   int run_single_cpp_direct(const Options &opt, const DirectScriptPlan &plan)
   {
     std::error_code ec;
@@ -1129,7 +1392,15 @@ namespace vix::commands::RunCommand::detail
         opt.enableThreadSanitizer);
 #endif
 
-    const auto cache = load_direct_script_cache_state(plan);
+    const auto cache =
+        load_direct_script_cache_state(plan);
+
+    if (cache.cachedFailure)
+    {
+      return replay_direct_script_cached_failure(
+          plan,
+          cache);
+    }
 
     if (cache.needsRebuild)
     {
@@ -1146,24 +1417,38 @@ namespace vix::commands::RunCommand::detail
 
       if (build.exitCode != 0)
       {
+        if (!persist_direct_script_failure_cache(
+                plan,
+                build.exitCode,
+                build.stdoutText,
+                build.stderrText))
+        {
+          std::cerr
+              << "warning: unable to persist direct script failure cache\n";
+        }
+
         bool handled = false;
 
-        if (!build.stdoutText.empty() || !build.stderrText.empty())
+        if (!build.stdoutText.empty() ||
+            !build.stderrText.empty())
         {
-          const std::string compileLog = build.stdoutText + build.stderrText;
+          const std::string compileLog =
+              build.stdoutText +
+              build.stderrText;
 
-          handled = vix::cli::ErrorHandler::printBuildErrors(
-              compileLog,
-              plan.scriptPath,
-              "Script compile failed");
+          handled =
+              vix::cli::ErrorHandler::printBuildErrors(
+                  compileLog,
+                  plan.scriptPath,
+                  "Script compile failed");
         }
 
         if (!handled)
-        {
           error("Script compile failed.");
-        }
 
-        return build.exitCode != 0 ? build.exitCode : 1;
+        return build.exitCode != 0
+                   ? build.exitCode
+                   : 1;
       }
 
       if (!persist_direct_script_cache_metadata(plan))

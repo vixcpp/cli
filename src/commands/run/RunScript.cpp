@@ -1520,6 +1520,13 @@ namespace vix::commands::RunCommand::detail
 
         const DirectScriptCacheState cache = load_direct_script_cache_state(directPlan);
 
+        if (cache.cachedFailure)
+        {
+          return replay_direct_script_cached_failure(
+              directPlan,
+              cache);
+        }
+
         if (cache.needsRebuild)
         {
           const LiveRunResult build = run_cmd_live_filtered_capture(
@@ -1532,6 +1539,16 @@ namespace vix::commands::RunCommand::detail
 
           if (build.exitCode != 0)
           {
+            if (!persist_direct_script_failure_cache(
+                    directPlan,
+                    build.exitCode,
+                    build.stdoutText,
+                    build.stderrText))
+            {
+              std::cerr
+                  << "warning: unable to persist direct script failure cache\n";
+            }
+
             bool handled = false;
 
             if (!build.stdoutText.empty() || !build.stderrText.empty())

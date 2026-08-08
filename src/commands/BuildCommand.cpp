@@ -1230,34 +1230,6 @@ namespace vix::commands::BuildCommand
       return true;
     }
 
-    static std::size_t count_built_targets_from_log(const std::string &log)
-    {
-      std::size_t count = 0;
-      std::istringstream iss(log);
-      std::string line;
-
-      while (std::getline(iss, line))
-      {
-        line = util::trim(line);
-
-        if (line.empty())
-          continue;
-
-        if (line.find(" Linking CXX executable ") != std::string::npos ||
-            line.find(" Linking C executable ") != std::string::npos ||
-            line.find(" Linking CXX static library ") != std::string::npos ||
-            line.find(" Linking C static library ") != std::string::npos ||
-            line.find(" Linking CXX shared library ") != std::string::npos ||
-            line.find(" Linking C shared library ") != std::string::npos ||
-            line.find(" Built target ") != std::string::npos)
-        {
-          ++count;
-        }
-      }
-
-      return count;
-    }
-
     static std::string sanitize_cache_component(std::string s)
     {
       for (char &c : s)
@@ -5492,7 +5464,8 @@ namespace vix::commands::BuildCommand
 
         std::optional<build::BuildLiveProcess> liveBuild;
 
-        if (!opt_.quiet)
+        if (!opt_.quiet &&
+            !verboseMode)
         {
           liveBuild.emplace(
               std::cout);
@@ -5502,6 +5475,8 @@ namespace vix::commands::BuildCommand
                   opt_,
                   plan_));
         }
+
+        bool configuredThisRun = false;
 
         const vix::engine::ConfigureDecision configureDecision =
             measurePhase(
@@ -5829,6 +5804,44 @@ namespace vix::commands::BuildCommand
 
               print_graph_warnings_modern(
                   graphResult.output);
+
+              /*
+               * LiveBuild owns the compact presentation for the normal mode.
+               * Verbose modes keep the historical detailed Vix build presentation.
+               */
+              if (!liveBuild)
+              {
+                if (!buildHeaderPrinted)
+                  print_vix_build_header(
+                      "Building",
+                      opt_,
+                      plan_);
+
+                if (configuredThisRun)
+                  print_vix_build_success(
+                      "Configured");
+
+                print_vix_build_success(
+                    "Graph target: " +
+                    graphResult.target);
+
+                if (graphResult.dirtyCompileTasks == 0)
+                {
+                  print_vix_build_success(
+                      "Up to date");
+                }
+                else
+                {
+                  print_vix_build_success(
+                      "Compiled " +
+                      std::to_string(
+                          graphResult.dirtyCompileTasks) +
+                      " dirty files");
+                }
+
+                print_vix_build_success(
+                    "Done");
+              }
             }
 
             return 0;
@@ -5875,6 +5888,9 @@ namespace vix::commands::BuildCommand
         }
 
         {
+          const auto t0 =
+              std::chrono::steady_clock::now();
+
           const auto argv =
               build::cmake_build_argv(
                   plan_,
@@ -5909,6 +5925,11 @@ namespace vix::commands::BuildCommand
                             ? liveBuild->observer()
                             : build::BuildOutputObserver{});
                   });
+
+          const auto ms =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  std::chrono::steady_clock::now() - t0)
+                  .count();
 
           if (r.exitCode != 0)
           {
@@ -6012,6 +6033,34 @@ namespace vix::commands::BuildCommand
             if (verboseMode)
             {
               out.flush_to_stdout();
+
+              if (!liveBuild)
+              {
+                if (!buildHeaderPrinted)
+                {
+                  build::print_build_header_full(
+                      std::cout,
+                      build::default_build_target_name(
+                          opt_,
+                          plan_),
+                      display_build_profile(plan_),
+                      plan_.launcher,
+                      plan_.fastLinkerFlag,
+                      opt_.jobs <= 0
+                          ? build::default_jobs()
+                          : opt_.jobs);
+                }
+
+                const std::string profile =
+                    (plan_.preset.buildType == "Release")
+                        ? "release [optimized]"
+                        : "dev [unoptimized + debuginfo]";
+
+                build::print_build_done(
+                    std::cout,
+                    profile,
+                    util::format_seconds(ms));
+              }
             }
           }
         }

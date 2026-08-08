@@ -1259,6 +1259,15 @@ namespace vix::commands::RunCommand::detail
 
   } // namespace
 
+  std::string make_script_cmake_target_name(
+      const std::string &exeName,
+      const fs::path &cppPath)
+  {
+    return make_unique_script_target_name(
+        exeName,
+        cppPath);
+  }
+
   fs::path get_scripts_root(bool localCache)
   {
     if (localCache)
@@ -1281,7 +1290,7 @@ namespace vix::commands::RunCommand::detail
     std::string s;
     s.reserve(32000);
 
-    const std::string targetName = make_unique_script_target_name(exeName, cppPath);
+    const std::string targetName = make_script_cmake_target_name(exeName, cppPath);
     const std::string projectName = make_unique_project_name(exeName, cppPath);
     const std::string outputName = exeName;
 

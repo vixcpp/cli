@@ -72,6 +72,7 @@ namespace vix::commands::RunCommand::detail
     {
       fs::path script;
       std::string exeName;
+      std::string targetName;
       fs::path scriptsRoot;
       fs::path projectDir;
       fs::path cmakeLists;
@@ -93,6 +94,7 @@ namespace vix::commands::RunCommand::detail
       ScriptProjectState state;
       state.script = plan.scriptPath;
       state.exeName = plan.exeName;
+      state.targetName = plan.targetName;
       state.scriptsRoot = plan.scriptsRoot;
       state.projectDir = plan.projectDir;
       state.cmakeLists = plan.cmakeListsPath;
@@ -1009,14 +1011,18 @@ namespace vix::commands::RunCommand::detail
       (void)state;
       return false;
 #else
+      (void)opt;
+
       if (state.needConfigure)
         return false;
 
-      if (needs_rebuild_from_depfiles_cached(state.exePath, state.buildDir, state.exeName))
+      if (needs_rebuild_from_depfiles_cached(
+              state.exePath,
+              state.buildDir,
+              state.targetName))
+      {
         return false;
-
-      if (!opt.quiet)
-        hint("Up to date (skip build).");
+      }
 
       return true;
 #endif
@@ -1029,14 +1035,17 @@ namespace vix::commands::RunCommand::detail
 
       std::ostringstream oss;
       oss << "cd " << quote(state.projectDir.string())
-          << " && cmake --build build-ninja --target " << state.exeName;
+          << " && cmake --build build-ninja --target "
+          << state.targetName;
 
 #ifdef _WIN32
       if (opt.jobs > 0)
         oss << " -- /m:" << opt.jobs;
 #else
+      oss << " -- -d keepdepfile";
+
       if (opt.jobs > 0)
-        oss << " -- -j " << opt.jobs;
+        oss << " -j " << opt.jobs;
 #endif
 
       oss << " >" << quote(state.buildLogPath.string()) << " 2>&1";
@@ -1646,9 +1655,15 @@ namespace vix::commands::RunCommand::detail
     plan.signatureFile = plan.projectDir / ".vix-config.sig";
     plan.configureLogPath = plan.projectDir / "configure.log";
     plan.buildLogPath = plan.projectDir / "build.log";
-    plan.targetName = plan.exeName;
 
-    plan.useVixRuntime = probe.usesVixRuntime || script_uses_vix(plan.scriptPath);
+    plan.targetName =
+        make_script_cmake_target_name(
+            plan.exeName,
+            plan.scriptPath);
+
+    plan.useVixRuntime =
+        probe.usesVixRuntime ||
+        script_uses_vix(plan.scriptPath);
 
     plan.exePath = plan.buildDir / plan.exeName;
 #ifdef _WIN32

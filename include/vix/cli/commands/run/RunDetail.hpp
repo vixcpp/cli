@@ -293,12 +293,17 @@ namespace vix::commands::RunCommand::detail
     fs::path rootDir;
     fs::path binaryPath;
     fs::path metaFile;
+    fs::path failureMetaFile;
     fs::path stdoutLogPath;
     fs::path stderrLogPath;
 
     std::string cacheKey;
     std::string rebuildReason;
+
+    int cachedFailureExitCode = 0;
+
     bool cacheHit = false;
+    bool cachedFailure = false;
     bool needsRebuild = true;
   };
 
@@ -719,6 +724,16 @@ namespace vix::commands::RunCommand::detail
    * @brief Persist positive direct script cache metadata after a successful compile.
    */
   bool persist_direct_script_cache_metadata(const DirectScriptPlan &plan);
+
+  bool persist_direct_script_failure_cache(
+      const DirectScriptPlan &plan,
+      int exitCode,
+      const std::string &stdoutText,
+      const std::string &stderrText);
+
+  int replay_direct_script_cached_failure(
+      const DirectScriptPlan &plan,
+      const DirectScriptCacheState &cache);
 
   // ===========================================================================
   // Script mode execution

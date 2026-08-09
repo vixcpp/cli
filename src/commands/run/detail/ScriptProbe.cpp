@@ -919,23 +919,6 @@ namespace vix::commands::RunCommand::detail
       return out;
     }
 
-    /*
-     * Direct compilation does not yet have a reliable representation of
-     * Vix's transitive runtime link graph.
-     *
-     * Keep plain standalone C++ on the fast Direct path, but route scripts
-     * using Vix through the generated CMake project where exported Vix
-     * targets provide the complete link graph.
-     */
-    if (out.features.usesVix)
-    {
-      out.strategy = ScriptExecutionStrategy::CMakeFallback;
-      out.fallbackReason = ScriptFallbackReason::UsesVixRuntime;
-      out.canUseDirectCompile = false;
-      out.shouldUseCMakeFallback = true;
-      return out;
-    }
-
     const bool allowDirect =
         !unsupportedFlags &&
         (!out.usesCompiledDeps || onlyVixIncludesAdded) &&

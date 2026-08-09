@@ -89,6 +89,15 @@ namespace vix::cli::process
      */
     bool verbose = false;
 
+    /** Enables structured internal Vix build diagnostics. */
+    bool debug = false;
+
+    /** Optional focused internal diagnostic scope. */
+    std::string debugLogScope;
+
+    /** Optional captured log scope to display instead of building. */
+    std::string logScope;
+
     /**
      * @brief Explains why Vix rebuilds files or targets.
      */
@@ -138,6 +147,16 @@ namespace vix::cli::process
      * @brief Enables raw CMake verbose configure output.
      */
     bool cmakeVerbose = false;
+
+    /** Graph executor policy: auto, on, or off. */
+    std::string graphExecutor = "auto";
+    bool graphExecutorExplicit = false;
+
+    /** Lists detected target toolchains and exits. */
+    bool listTargets = false;
+
+    /** Explicit heartbeat control; unset keeps the legacy/default behavior. */
+    std::optional<bool> heartbeat;
 
     /**
      * @brief Builds only a specific CMake target when provided.

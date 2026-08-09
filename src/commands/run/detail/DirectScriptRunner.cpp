@@ -39,6 +39,9 @@
 
 namespace vix::commands::RunCommand::detail
 {
+#ifndef VIX_CLI_VERSION
+#define VIX_CLI_VERSION "dev"
+#endif
   namespace process = vix::cli::commands::helpers;
   namespace text = vix::cli::commands::helpers;
 
@@ -390,10 +393,7 @@ namespace vix::commands::RunCommand::detail
      */
     std::string vix_version_string()
     {
-      if (const char *v = vix::utils::vix_getenv("VIX_VERSION"); v && *v)
-        return std::string(v);
-
-      return "unknown";
+      return VIX_CLI_VERSION;
     }
 
     /**
@@ -432,21 +432,20 @@ namespace vix::commands::RunCommand::detail
       return s;
     }
 
-    bool direct_compiler_queries_enabled()
+    bool direct_compiler_queries_enabled(const Options &opt)
     {
-      const char *env = vix::utils::vix_getenv("VIX_RUN_STRICT_COMPILER_FINGERPRINT");
-      return env && *env && std::string(env) != "0";
+      return opt.compilerFingerprint == "strict";
     }
 
     /**
      * @brief Return the compiler version used by direct script mode.
      */
-    std::string compiler_version_string(const std::string &compiler)
+    std::string compiler_version_string(const std::string &compiler, const Options &opt)
     {
 #ifdef _WIN32
       return "unknown";
 #else
-      if (!direct_compiler_queries_enabled())
+      if (!direct_compiler_queries_enabled(opt))
         return "fast";
       return compiler_query(compiler, "-dumpfullversion -dumpversion");
 #endif
@@ -455,12 +454,12 @@ namespace vix::commands::RunCommand::detail
     /**
      * @brief Return the compiler target triple used by direct script mode.
      */
-    std::string compiler_target_triple(const std::string &compiler)
+    std::string compiler_target_triple(const std::string &compiler, const Options &opt)
     {
 #ifdef _WIN32
       return "windows";
 #else
-      if (!direct_compiler_queries_enabled())
+      if (!direct_compiler_queries_enabled(opt))
         return "native";
       return compiler_query(compiler, "-dumpmachine");
 #endif
@@ -600,8 +599,8 @@ namespace vix::commands::RunCommand::detail
       fp.vixVersion = vix_version_string();
 
       fp.compilerPath = compiler;
-      fp.compilerVersion = compiler_version_string(compiler);
-      fp.targetTriple = compiler_target_triple(compiler);
+      fp.compilerVersion = compiler_version_string(compiler, opt);
+      fp.targetTriple = compiler_target_triple(compiler, opt);
 
       fp.cppStandard = detect_cpp_standard(probe);
       fp.buildMode = direct_build_mode_string(opt);
@@ -927,8 +926,7 @@ namespace vix::commands::RunCommand::detail
       if (opt.verbose)
         return true;
 
-      const char *env = vix::utils::vix_getenv("VIX_RUN_TRACE_CACHE");
-      return env && *env && std::string(env) != "0";
+      return opt.traceCache;
     }
 
     std::string yes_no(bool value)
@@ -1126,11 +1124,7 @@ namespace vix::commands::RunCommand::detail
 
     bool direct_replay_enabled(const Options &opt)
     {
-      if (opt.watch)
-        return true;
-
-      const char *env = vix::utils::vix_getenv("VIX_RUN_REPLAY");
-      return env && *env && std::string(env) != "0";
+      return opt.watch || opt.replay;
     }
 
   } // namespace

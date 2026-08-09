@@ -1169,8 +1169,15 @@ namespace vix::commands::BuildCommand
       return util::write_text_file_atomic(path, content);
     }
 
-    static bool graph_executor_enabled()
+    static bool graph_executor_enabled(const process::Options &opt)
     {
+      if (opt.graphExecutor == "on")
+        return true;
+      if (opt.graphExecutor == "off")
+        return false;
+      if (opt.graphExecutorExplicit)
+        return true;
+
       const char *value = std::getenv("VIX_GRAPH_EXECUTOR");
 
       if (!value || !*value)
@@ -1197,7 +1204,7 @@ namespace vix::commands::BuildCommand
         const std::size_t importedCompileCommands,
         const std::size_t importedNinjaTasks)
     {
-      if (!graph_executor_enabled())
+      if (!graph_executor_enabled(opt))
         return false;
 
       if (!opt.useCache)
@@ -1604,6 +1611,76 @@ namespace vix::commands::BuildCommand
         {
           o.verbose = true;
         }
+        else if (a == "--debug")
+        {
+          o.debug = true;
+        }
+        else if (a == "--debug-log" || a == "--log")
+        {
+          auto v = util::take_value(args, i);
+          if (!v)
+          {
+            error("Missing value for " + a);
+            exitCode = 2;
+            return o;
+          }
+          const std::string value(*v);
+          const bool debugLog = a == "--debug-log";
+          const bool valid = debugLog
+                                 ? (value == "cache" || value == "graph" || value == "configure" || value == "process" || value == "toolchain" || value == "all")
+                                 : (value == "build" || value == "configure" || value == "all");
+          if (!valid)
+          {
+            error("Invalid value for " + a + ": " + value);
+            hint(debugLog ? "Valid values: cache, graph, configure, process, toolchain, all"
+                          : "Valid values: build, configure, all");
+            exitCode = 2;
+            return o;
+          }
+          if (debugLog)
+            o.debugLogScope = value;
+          else
+            o.logScope = value;
+        }
+        else if (a == "--heartbeat")
+        {
+          o.heartbeat = true;
+        }
+        else if (a == "--no-heartbeat")
+        {
+          o.heartbeat = false;
+        }
+        else if (a == "--graph-executor")
+        {
+          auto v = util::take_value(args, i);
+          if (!v)
+          {
+            error("Missing value for --graph-executor");
+            exitCode = 2;
+            return o;
+          }
+          o.graphExecutor = std::string(*v);
+          o.graphExecutorExplicit = true;
+          if (o.graphExecutor != "auto" && o.graphExecutor != "on" && o.graphExecutor != "off")
+          {
+            error("Invalid value for --graph-executor: " + o.graphExecutor);
+            hint("Valid values: auto, on, off");
+            exitCode = 2;
+            return o;
+          }
+        }
+        else if (a.rfind("--graph-executor=", 0) == 0)
+        {
+          o.graphExecutor = a.substr(std::string("--graph-executor=").size());
+          o.graphExecutorExplicit = true;
+          if (o.graphExecutor != "auto" && o.graphExecutor != "on" && o.graphExecutor != "off")
+          {
+            error("Invalid value for --graph-executor: " + o.graphExecutor);
+            hint("Valid values: auto, on, off");
+            exitCode = 2;
+            return o;
+          }
+        }
         else if (a == "--explain")
         {
           o.explain = true;
@@ -1879,6 +1956,8 @@ namespace vix::commands::BuildCommand
             return o;
           }
           o.targetTriple = std::string(*v);
+          if (o.targetTriple == "native")
+            o.targetTriple.clear();
         }
         else if (a.rfind("--target=", 0) == 0)
         {
@@ -1889,6 +1968,8 @@ namespace vix::commands::BuildCommand
             exitCode = 2;
             return o;
           }
+          if (o.targetTriple == "native")
+            o.targetTriple.clear();
         }
         else if (a == "--build-target")
         {
@@ -1913,19 +1994,7 @@ namespace vix::commands::BuildCommand
         }
         else if (a == "--targets")
         {
-          const auto targets = build::detect_available_targets();
-
-          info("Detected build targets:");
-          for (const auto &t : targets)
-          {
-            if (t == "x86_64-linux-gnu")
-              step(t + " (native)");
-            else
-              step(t + " (cross)");
-          }
-
-          exitCode = -1;
-          return o;
+          o.listTargets = true;
         }
         else if (a == "--cmake-verbose")
         {
@@ -2753,8 +2822,10 @@ namespace vix::commands::BuildCommand
       }
     }
 
-    static bool sdk_debug_enabled()
+    static bool sdk_debug_enabled(const process::Options &opt)
     {
+      if (opt.debug || !opt.debugLogScope.empty())
+        return true;
       const char *level = std::getenv("VIX_LOG_LEVEL");
       if (!level)
         return false;
@@ -3094,7 +3165,7 @@ namespace vix::commands::BuildCommand
 
       if (!opt.managedSdk && !envManagedSdk)
       {
-        if (sdk_debug_enabled() && !opt.quiet)
+        if (sdk_debug_enabled(opt) && !opt.quiet)
         {
           hint("SDK resolution:");
           hint("  route: native CMake discovery");
@@ -3113,7 +3184,7 @@ namespace vix::commands::BuildCommand
        */
       if (has_explicit_vix_discovery_override(opt))
       {
-        if (sdk_debug_enabled() && !opt.quiet)
+        if (sdk_debug_enabled(opt) && !opt.quiet)
         {
           hint("SDK resolution:");
           hint("  route: explicit CMake discovery override");
@@ -3137,7 +3208,7 @@ namespace vix::commands::BuildCommand
               plan.userProjectDir,
               modules))
       {
-        if (sdk_debug_enabled() && !opt.quiet)
+        if (sdk_debug_enabled(opt) && !opt.quiet)
         {
           hint("SDK resolution:");
           hint("  route: local deps/vix source modules");
@@ -3163,7 +3234,7 @@ namespace vix::commands::BuildCommand
           vix::cli::sdk::resolve_profiles_for_modules(
               modules);
 
-      if (sdk_debug_enabled() && !opt.quiet)
+      if (sdk_debug_enabled(opt) && !opt.quiet)
       {
         hint("SDK resolution:");
         hint("  route: managed profile candidate");
@@ -3512,8 +3583,10 @@ namespace vix::commands::BuildCommand
       return result;
     }
 
-    static bool debug_build_details_enabled()
+    static bool debug_build_details_enabled(const process::Options &opt)
     {
+      if (opt.debug || !opt.debugLogScope.empty())
+        return true;
       const char *level = std::getenv("VIX_LOG_LEVEL");
 
       if (!level || !*level)
@@ -3528,9 +3601,10 @@ namespace vix::commands::BuildCommand
     }
 
     static void print_debug_command_if_enabled(
+        const process::Options &opt,
         const process::ExecResult &result)
     {
-      if (!debug_build_details_enabled())
+      if (!debug_build_details_enabled(opt))
         return;
 
       if (result.displayCommand.empty())
@@ -4250,7 +4324,7 @@ namespace vix::commands::BuildCommand
 
       if (!store_project_target_artifact(projectArtifact, opt, plan) &&
           !opt.quiet &&
-          debug_build_details_enabled())
+          debug_build_details_enabled(opt))
       {
         build::print_build_info(
             std::cout,
@@ -5121,7 +5195,7 @@ namespace vix::commands::BuildCommand
               return 1;
             }
 
-            if (!opt_.warnings &&
+            if (!opt_.warnings && opt_.logScope.empty() &&
                 can_use_native_vix_app_build(opt_, loadResult.manifest))
             {
               return run_native_vix_app_build(
@@ -5131,7 +5205,7 @@ namespace vix::commands::BuildCommand
                   commandStart);
             }
 
-            if (debug_build_details_enabled() && !opt_.quiet)
+            if (debug_build_details_enabled(opt_) && !opt_.quiet)
               hint("Native vix.app fallback: generated CMake path");
           }
         }
@@ -5165,21 +5239,47 @@ namespace vix::commands::BuildCommand
               plan_);
         }
 
+        if (!opt_.logScope.empty())
+        {
+          const auto print_log = [](const fs::path &path, const std::string &label) -> bool
+          {
+            const std::string text = util::read_text_file_or_empty(path);
+            if (text.empty())
+              return false;
+            std::cout << label << " log\n\n"
+                      << text;
+            if (text.back() != '\n')
+              std::cout << '\n';
+            return true;
+          };
+
+          bool found = false;
+          if (opt_.logScope == "configure" || opt_.logScope == "all")
+            found = print_log(plan_.configureLog, "Configure") || found;
+          if (opt_.logScope == "build" || opt_.logScope == "all")
+            found = print_log(plan_.buildLog, "Build") || found;
+          if (!found)
+          {
+            error("No previous build log found.");
+            hint("Run `vix build` first.");
+            return 1;
+          }
+          return 0;
+        }
+
         const fs::path globalPackagesFile =
             plan_.buildDir / "vix-global-packages.cmake";
 
         const bool debugMode =
-            debug_build_details_enabled();
+            debug_build_details_enabled(opt_);
 
         const bool verboseMode =
             opt_.verbose ||
-            opt_.cmakeVerbose ||
             debugMode;
 
         const bool rawBuildOutput =
-            opt_.cmakeVerbose ||
-            debugMode;
-        const bool defer = (!opt_.quiet && verboseMode);
+            opt_.cmakeVerbose;
+        const bool defer = false;
         DeferredConsole out(defer);
         bool buildHeaderPrinted = false;
         auto printBuildHeaderEarly =
@@ -5302,6 +5402,9 @@ namespace vix::commands::BuildCommand
 
         printBuildHeaderEarly();
 
+        if (!opt_.targetTriple.empty() && !opt_.quiet)
+          step("target: " + opt_.targetTriple + " (cross)");
+
         artifact_cache::Artifact projectArtifact =
             make_project_artifact(plan_, opt_, tc);
 
@@ -5333,7 +5436,7 @@ namespace vix::commands::BuildCommand
                          cmake_globs_still_current(plan_.buildDir);
                 });
 
-        if (previousState && !canFastNoopCheck && debug_build_details_enabled() && !opt_.quiet)
+        if (previousState && !canFastNoopCheck && debug_build_details_enabled(opt_) && !opt_.quiet)
         {
           if (previousState->signature != plan_.signature)
             step("fast no-op miss: signature changed");
@@ -5400,7 +5503,7 @@ namespace vix::commands::BuildCommand
                 projectArtifact.compiler,
                 projectInputs);
 
-        if (buildStateHit && debug_build_details_enabled() && !opt_.quiet)
+        if (buildStateHit && debug_build_details_enabled(opt_) && !opt_.quiet)
         {
           step("build state: hit -> " +
                artifact_cache::ArtifactCache::build_state_path(plan_.buildDir).string());
@@ -5427,7 +5530,7 @@ namespace vix::commands::BuildCommand
           return 0;
         }
 
-        if (debug_build_details_enabled() && !opt_.quiet)
+        if (debug_build_details_enabled(opt_) && !opt_.quiet)
         {
           if (artifact_cache::ArtifactCache::exists(projectArtifact))
             step("artifact cache: hit -> " + projectArtifact.root.string());
@@ -5465,7 +5568,7 @@ namespace vix::commands::BuildCommand
         std::optional<build::BuildLiveProcess> liveBuild;
 
         if (!opt_.quiet &&
-            !verboseMode)
+            !opt_.cmakeVerbose)
         {
           liveBuild.emplace(
               std::cout);
@@ -5496,7 +5599,7 @@ namespace vix::commands::BuildCommand
             out.print("Configuring " + build::default_build_target_name(opt_, plan_) +
                       " (" + display_build_profile(plan_) + ")\n");
 
-            if (debug_build_details_enabled())
+            if (debug_build_details_enabled(opt_))
             {
               if (plan_.launcher)
                 out.print("  • compiler cache: " + *plan_.launcher + "\n");
@@ -5519,12 +5622,13 @@ namespace vix::commands::BuildCommand
                   argv,
                   {},
                   plan_.configureLog,
-                  (opt_.quiet || !verboseMode),
+                  (opt_.quiet || !opt_.cmakeVerbose),
                   opt_.cmakeVerbose,
                   false,
                   liveBuild
                       ? liveBuild->observer()
-                      : build::BuildOutputObserver{});
+                      : build::BuildOutputObserver{},
+                  opt_.heartbeat);
 
           if (r.exitCode != 0)
           {
@@ -5557,9 +5661,9 @@ namespace vix::commands::BuildCommand
             if (!opt_.quiet)
             {
               if (!handled)
-                hint("run with VIX_LOG_LEVEL=debug to inspect the configure command");
+                hint("run `vix build --log configure` for the captured configure output");
 
-              print_debug_command_if_enabled(r);
+              print_debug_command_if_enabled(opt_, r);
             }
 
             return exitCode;
@@ -5589,7 +5693,7 @@ namespace vix::commands::BuildCommand
         }
         else
         {
-          if (debug_build_details_enabled() && !opt_.quiet)
+          if (debug_build_details_enabled(opt_) && !opt_.quiet)
           {
             out.print("  Using existing configuration (cache-friendly).\n");
             out.print("    • " + plan_.buildDir.string() + "\n\n");
@@ -5616,7 +5720,7 @@ namespace vix::commands::BuildCommand
         const fs::path graphPath =
             build::BuildGraph::default_graph_path(plan_.buildDir);
 
-        if (debug_build_details_enabled() && !opt_.quiet)
+        if (debug_build_details_enabled(opt_) && !opt_.quiet)
         {
           step("build graph: " +
                std::to_string(scan.sources) + " sources, " +
@@ -5746,7 +5850,7 @@ namespace vix::commands::BuildCommand
           {
             if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
                 !opt_.quiet &&
-                debug_build_details_enabled())
+                debug_build_details_enabled(opt_))
             {
               build::print_build_info(
                   std::cout,
@@ -5847,11 +5951,11 @@ namespace vix::commands::BuildCommand
             return 0;
           }
 
-          if (debug_build_details_enabled() && !opt_.quiet)
+          if (debug_build_details_enabled(opt_) && !opt_.quiet)
             hint("Graph target executor fallback: " + graphResult.output);
         }
 
-        if (graph_executor_enabled() && can_use_graph_build(opt_, plan_, scan))
+        if (graph_executor_enabled(opt_) && can_use_graph_build(opt_, plan_, scan))
         {
           const int graphBuildCode =
               measurePhase(
@@ -5923,7 +6027,8 @@ namespace vix::commands::BuildCommand
                         progressOnly,
                         liveBuild
                             ? liveBuild->observer()
-                            : build::BuildOutputObserver{});
+                            : build::BuildOutputObserver{},
+                        opt_.heartbeat);
                   });
 
           const auto ms =
@@ -5958,9 +6063,9 @@ namespace vix::commands::BuildCommand
             if (!opt_.quiet)
             {
               if (!handled)
-                hint("run with VIX_LOG_LEVEL=debug to inspect the build command");
+                hint("run `vix build --log build` for the captured build output");
 
-              print_debug_command_if_enabled(r);
+              print_debug_command_if_enabled(opt_, r);
             }
             return exitCode;
           }
@@ -5972,7 +6077,7 @@ namespace vix::commands::BuildCommand
 
           if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
               !opt_.quiet &&
-              debug_build_details_enabled())
+              debug_build_details_enabled(opt_))
           {
             build::print_build_info(
                 std::cout,
@@ -6137,6 +6242,35 @@ namespace vix::commands::BuildCommand
       return help();
     if (parseExit != 0)
       return parseExit;
+
+    if (opt.listTargets)
+    {
+      const std::vector<std::string> known = {
+          "aarch64-linux-gnu",
+          "arm-linux-gnueabihf",
+          "riscv64-linux-gnu",
+          "x86_64-windows-gnu",
+          "aarch64-windows-gnu"};
+
+      info("Available targets");
+      step("native");
+      if (opt.verbose)
+        step("  status: native");
+
+      for (const std::string &target : known)
+      {
+        const std::string compiler = target + "-g++";
+        const bool available = util::executable_on_path(compiler);
+        step(target + (available ? "  available" : "  unavailable"));
+        if (opt.verbose)
+        {
+          step("  status: " + std::string(available ? "available" : "unavailable"));
+          step("  compiler: " + compiler + (available ? "" : " (not found)"));
+        }
+      }
+      step("Use: vix build --target <target>");
+      return 0;
+    }
 
     if (!build::resolve_builtin_preset(opt.preset))
     {
@@ -7270,22 +7404,6 @@ namespace vix::commands::BuildCommand
     out << "  Configure and build a C++ project with Vix.\n";
     out << "  Works with CMake projects, vix.app projects, and single C++ files.\n\n";
 
-    out << "Core features:\n";
-    out << "  • Embedded build presets\n";
-    out << "  • Fast no-op detection\n";
-    out << "  • Target-aware builds\n";
-    out << "  • Artifact cache\n";
-    out << "  • Object cache\n";
-    out << "  • Graph-based incremental builds when safe\n";
-    out << "  • Auto ccache/sccache launcher\n";
-    out << "  • Auto mold/lld linker\n";
-    out << "  • Human-readable compiler errors and warnings\n\n";
-
-    out << "Presets:\n";
-    out << "  dev        Debug build in build-dev\n";
-    out << "  dev-ninja  Debug build in build-ninja\n";
-    out << "  release    Release build in build-release\n\n";
-
     out << "Project:\n";
     out << "  [source.cpp]              Build one C++ source file directly\n";
     out << "  -d, --dir <path>          Project directory\n";
@@ -7328,12 +7446,13 @@ namespace vix::commands::BuildCommand
     out << "  --linker <mode>           Linker mode: auto, default, mold, lld\n";
     out << "  --linker=<mode>           Same as --linker <mode>\n\n";
 
-    out << "Cross-compilation:\n";
-    out << "  --target <triple>         Cross-compilation target triple\n";
+    out << "Platform:\n";
+    out << "  --target <triple>         Build for a target platform\n";
+    out << "  --target native           Build for the current platform (default)\n";
     out << "  --target=<triple>         Same as --target <triple>\n";
-    out << "  --sysroot <path>          Sysroot for the cross toolchain\n";
+    out << "  --sysroot <path>          Sysroot for the target toolchain (mainly cross builds)\n";
     out << "  --sysroot=<path>          Same as --sysroot <path>\n";
-    out << "  --targets                 List detected cross toolchains on PATH\n\n";
+    out << "  --targets                 List detected targets and toolchains\n\n";
 
     out << "Linking and dependencies:\n";
     out << "  --static                  Request static linking\n";
@@ -7342,22 +7461,22 @@ namespace vix::commands::BuildCommand
     out << "Managed SDK:\n";
     out << "  --managed-sdk             Resolve Vix dependencies from installed managed SDK profiles\n\n";
 
-    out << "Logs and output:\n";
+    out << "Diagnostics:\n";
+    out << "  -v, --verbose             Show additional useful build information\n";
+    out << "  --debug                   Show internal Vix build diagnostics\n";
+    out << "  --debug-log <scope>       Debug cache, graph, configure, process, toolchain, or all\n";
+    out << "  --log <scope>             Show captured log: build, configure, or all\n";
+    out << "  --cmake-verbose           Stream raw CMake, Ninja and compiler output\n";
     out << "  -q, --quiet               Minimal output\n";
-    out << "  -v, --verbose             Show detailed build information\n";
-    out << "  --cmake-verbose           Show raw CMake and Ninja output\n";
     out << "  -h, --help                Show this help\n\n";
+
+    out << "Advanced:\n";
+    out << "  --graph-executor <mode>   Graph executor: auto, on, off\n";
+    out << "  --heartbeat               Show progress heartbeat when a build is silent\n";
+    out << "  --no-heartbeat            Disable the progress heartbeat\n\n";
 
     out << "CMake passthrough:\n";
     out << "  -- [cmake args...]        Pass extra arguments to CMake configure\n\n";
-
-    out << "Environment variables:\n";
-    out << "  VIX_BUILD_MANAGED_SDK=1   Enable managed SDK mode for vix build\n";
-    out << "  VIX_BUILD_HEARTBEAT=0     Disable configure/build heartbeat\n";
-    out << "  VIX_BUILD_HEARTBEAT=1     Force heartbeat when no output is produced\n";
-    out << "  VIX_GRAPH_EXECUTOR=0      Disable graph target executor\n";
-    out << "  VIX_LOG_LEVEL=debug       Show deeper diagnostic output\n";
-    out << "  VIX_LOG_LEVEL=trace       Show trace-level diagnostic output\n\n";
 
     out << "Examples:\n";
     out << "  vix build\n";
@@ -7389,6 +7508,7 @@ namespace vix::commands::BuildCommand
     out << "  vix build --with-mysql\n";
     out << "  vix build --preset release --static\n";
     out << "  vix build --target aarch64-linux-gnu\n";
+    out << "  vix build --target native\n";
     out << "  vix build --target=aarch64-linux-gnu\n";
     out << "  vix build --sysroot /opt/sysroot\n";
     out << "  vix build --targets\n";
@@ -7401,15 +7521,9 @@ namespace vix::commands::BuildCommand
     out << "  vix build main.cpp --with-sqlite --out app\n";
     out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
     out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
-    out << "  VIX_GRAPH_EXECUTOR=0 vix build --build-target vix\n\n";
-
-    out << "Logs:\n";
-    out << "  build-dev/configure.log\n";
-    out << "  build-dev/build.log\n";
-    out << "  build-ninja/configure.log\n";
-    out << "  build-ninja/build.log\n";
-    out << "  build-release/configure.log\n";
-    out << "  build-release/build.log\n\n";
+    out << "  vix build --debug\n";
+    out << "  vix build --log build\n";
+    out << "  vix build --target aarch64-linux-gnu --sysroot /opt/sysroots/aarch64\n\n";
 
     return 0;
   }

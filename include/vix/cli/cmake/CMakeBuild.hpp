@@ -60,7 +60,8 @@ namespace vix::cli::build
       bool quiet,
       bool cmakeVerbose,
       bool progressOnly,
-      BuildOutputObserver outputObserver = {});
+      BuildOutputObserver outputObserver = {},
+      std::optional<bool> heartbeat = std::nullopt);
 
   bool ninja_is_up_to_date(const process::Options &opt, const process::Plan &plan);
 

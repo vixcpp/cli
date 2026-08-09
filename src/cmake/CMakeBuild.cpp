@@ -251,7 +251,8 @@ namespace vix::cli::build
       bool quiet,
       bool cmakeVerbose,
       bool progressOnly,
-      BuildOutputObserver outputObserver)
+      BuildOutputObserver outputObserver,
+      std::optional<bool> heartbeat)
   {
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
@@ -264,6 +265,9 @@ namespace vix::cli::build
     {
       if (quiet)
         return false;
+
+      if (heartbeat.has_value())
+        return *heartbeat;
 
       /*
        * Configure can stay silent for a long time when CMake FetchContent
@@ -857,13 +861,15 @@ namespace vix::cli::build
       bool quiet,
       bool cmakeVerbose,
       bool progressOnly,
-      BuildOutputObserver outputObserver)
+      BuildOutputObserver outputObserver,
+      std::optional<bool> heartbeat)
   {
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
 
     (void)cmakeVerbose;
     (void)progressOnly;
+    (void)heartbeat;
 
     for (const auto &kv : extraEnv)
     {

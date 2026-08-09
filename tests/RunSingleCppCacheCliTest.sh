@@ -130,8 +130,7 @@ run_vix() {
       PATH="$FAKE_BIN:$PATH" \
       CXX="$FAKE_BIN/c++" \
       VIX_FAKE_CXX_CALLS="$CALLS_FILE" \
-      VIX_RUN_TRACE_CACHE=1 \
-      "$VIX_BIN" "$@"
+      "$VIX_BIN" "$@" --trace-cache
   ) >"$out" 2>&1
 }
 
@@ -146,8 +145,7 @@ run_vix_fail() {
       PATH="$FAKE_BIN:$PATH" \
       CXX="$FAKE_BIN/c++" \
       VIX_FAKE_CXX_CALLS="$CALLS_FILE" \
-      VIX_RUN_TRACE_CACHE=1 \
-      "$VIX_BIN" "$@"
+      "$VIX_BIN" "$@" --trace-cache
   ) >"$out" 2>&1
   local status=$?
   set -e

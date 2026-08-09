@@ -172,6 +172,19 @@ namespace vix::commands::RunCommand::detail
       }
     }
 
+    void normalize_compiler_fingerprint(Options &opt)
+    {
+      opt.compilerFingerprint = lower_copy(opt.compilerFingerprint);
+      if (opt.compilerFingerprint != "fast" &&
+          opt.compilerFingerprint != "strict")
+      {
+        error("Invalid value for --compiler-fingerprint: " + opt.compilerFingerprint);
+        hint("Valid values: fast, strict");
+        opt.parseFailed = true;
+        opt.parseExitCode = 2;
+      }
+    }
+
     void finalize_parse_options(Options &opt, const std::vector<std::string> &args)
     {
       if (auto d = pick_dir_opt_local(args))
@@ -188,7 +201,9 @@ namespace vix::commands::RunCommand::detail
         if (opt.autoDeps != AutoDepsMode::Up)
           opt.autoDeps = AutoDepsMode::Local;
       }
+
       normalize_clear_mode(opt);
+      normalize_compiler_fingerprint(opt);
     }
 
     void handle_positional_argument(Options &opt, const std::string &arg)
@@ -503,6 +518,40 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--no-color")
       {
         opt.noColor = true;
+      }
+      else if (a == "--ui")
+      {
+        opt.ui = true;
+      }
+      else if (a == "--no-ui")
+      {
+        opt.ui = false;
+      }
+      else if (a == "--env-hint")
+      {
+        opt.envHint = true;
+      }
+      else if (a == "--no-env-hint")
+      {
+        opt.envHint = false;
+      }
+      else if (a == "--trace-cache")
+      {
+        opt.traceCache = true;
+      }
+      else if (a == "--no-trace-cache")
+      {
+        opt.traceCache = false;
+      }
+      else if (a == "--compiler-fingerprint")
+      {
+        opt.compilerFingerprint = take_value(args, i, "--compiler-fingerprint", opt);
+        if (opt.parseFailed)
+          return opt;
+      }
+      else if (a.rfind("--compiler-fingerprint=", 0) == 0)
+      {
+        opt.compilerFingerprint = take_eq_value(a, "--compiler-fingerprint=");
       }
       else if (a == "--watch" || a == "--reload")
       {

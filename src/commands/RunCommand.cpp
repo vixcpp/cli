@@ -225,7 +225,7 @@ namespace
     return s;
   }
 
-  static void warn_if_env_file_missing(const fs::path &projectDir)
+  static void warn_if_env_file_missing(const fs::path &projectDir, const Options &opt)
   {
     std::error_code ec;
 
@@ -237,9 +237,7 @@ namespace
     if (!fs::exists(envExample, ec) || ec)
       return;
 
-    const char *showEnvHint = std::getenv("VIX_SHOW_ENV_HINT");
-
-    if (!showEnvHint || std::string(showEnvHint) != "1")
+    if (!opt.envHint)
       return;
 
     hint(".env not found.");
@@ -596,20 +594,6 @@ namespace
       return candidates.front();
 
     return std::nullopt;
-  }
-
-  bool ui_enabled()
-  {
-    const char *v = vix::utils::vix_getenv("VIX_RUN_UI");
-    if (!v || !*v)
-      return false;
-    if (std::strcmp(v, "0") == 0)
-      return false;
-    if (std::strcmp(v, "false") == 0)
-      return false;
-    if (std::strcmp(v, "no") == 0)
-      return false;
-    return true;
   }
 
   void ensure_mode_env_for_run(const Options &opt)
@@ -1602,7 +1586,7 @@ namespace vix::commands::RunCommand
   int run(const std::vector<std::string> &args)
   {
     Options opt = parse(args);
-    const bool showUi = ui_enabled();
+    const bool showUi = opt.ui;
 
     if (opt.parseFailed)
       return opt.parseExitCode;
@@ -1694,7 +1678,7 @@ namespace vix::commands::RunCommand
         return 1;
       }
 
-      warn_if_env_file_missing(resolved.userProjectDir);
+      warn_if_env_file_missing(resolved.userProjectDir, opt);
 
       if (!opt.devMode && !opt.watch && project_has_vue_frontend(resolved.userProjectDir))
       {
@@ -1750,7 +1734,7 @@ namespace vix::commands::RunCommand
       step(projectDir.string());
     }
 
-    warn_if_env_file_missing(projectDir);
+    warn_if_env_file_missing(projectDir, opt);
 
     if (!opt.singleCpp && opt.watch)
     {
@@ -1833,6 +1817,16 @@ namespace vix::commands::RunCommand
     out << "  --force-server              Treat the program as a long-running server\n";
     out << "  --force-script              Treat the program as a short-lived script\n\n";
 
+    out << "Run behavior:\n";
+    out << "  --ui                        Enable interactive run progress UI\n";
+    out << "  --no-ui                     Disable interactive run progress UI\n";
+    out << "  --env-hint                  Show .env hint when .env.example exists\n";
+    out << "  --no-env-hint               Disable the .env hint\n";
+    out << "  --trace-cache               Trace script cache strategy and decisions\n";
+    out << "  --no-trace-cache            Disable script cache tracing\n";
+    out << "  --compiler-fingerprint <fast|strict>\n";
+    out << "                             Select direct-script compiler cache fingerprinting\n\n";
+
     out << "Script mode:\n";
     out << "  --dep <git-url>             Temporary Git dependency for single-file run\n";
     out << "  --save                      Save --dep entries into vix.app\n";
@@ -1911,9 +1905,7 @@ namespace vix::commands::RunCommand
     out << "  VIX_LOG_LEVEL               trace, debug, info, warn, error, critical, off\n";
     out << "  VIX_LOG_FORMAT              kv, json, json-pretty\n";
     out << "  VIX_COLOR                   auto, always, never\n";
-    out << "  VIX_STDOUT_MODE             line\n";
-    out << "  VIX_CLI_CLEAR               auto, always, never\n";
-    out << "  VIX_SHOW_ENV_HINT=1         Show .env hint when .env.example exists\n\n";
+    out << "\n";
 
     return 0;
   }

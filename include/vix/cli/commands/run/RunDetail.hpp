@@ -124,6 +124,10 @@ namespace vix::commands::RunCommand::detail
     std::string logColor; // auto|always|never
     bool noColor = false;
     std::string clearMode = "auto";
+    bool ui = false;
+    bool envHint = false;
+    bool traceCache = false;
+    std::string compilerFingerprint = "fast";
 
     // Behavior switches
     bool watch = false;

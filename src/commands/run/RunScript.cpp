@@ -1484,8 +1484,7 @@ namespace vix::commands::RunCommand::detail
       if (opt.verbose)
         return true;
 
-      const char *env = vix::utils::vix_getenv("VIX_RUN_TRACE_CACHE");
-      return env && *env && std::string(env) != "0";
+      return opt.traceCache;
     }
 
     void print_cmake_fallback_trace(const Options &opt, const ScriptProbeResult &probe)

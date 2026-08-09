@@ -71,6 +71,8 @@ if grep -q $'\r' "$OUT"; then
   exit 1
 fi
 require_output "Compiling.*progress-app" "$OUT"
+require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$OUT"
+reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$OUT"
 reject_output "^Building progress-app [0-9]" "$OUT"
 
 if command -v script >/dev/null 2>&1; then
@@ -85,11 +87,28 @@ exec "$REAL_CXX" "\$@"
 SH
   chmod +x "$ROOT/bin/c++"
 
+  NORMAL_TTY_OUT="$ROOT/tty-normal-build.out"
+  script -q -f "$NORMAL_TTY_OUT" -c "env HOME='$HOME_DIR' CCACHE_DISABLE=1 PATH='$ROOT/bin:$PATH' '$VIX_BIN' build --launcher none --linker default --dir '$PROJECT'" >/dev/null 2>&1 &
+  WATCH_PID=$!
+
+  wait_for_output "Compiling.*progress-app" "$NORMAL_TTY_OUT"
+  wait "$WATCH_PID"
+  WATCH_PID=""
+
+  require_output "build .*\\[============================\\].*done" "$NORMAL_TTY_OUT"
+  require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$NORMAL_TTY_OUT"
+  reject_output "launcher:\|linker:\|jobs:" "$NORMAL_TTY_OUT"
+  reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$NORMAL_TTY_OUT"
+
+  rm -rf "$PROJECT/build-ninja"
+
   TTY_OUT="$ROOT/tty-build.out"
-  script -q -f "$TTY_OUT" -c "env HOME='$HOME_DIR' CCACHE_DISABLE=1 PATH='$ROOT/bin:$PATH' '$VIX_BIN' build --verbose --launcher none --linker default --dir '$PROJECT'" >/dev/null 2>&1 &
+  script -q -f "$TTY_OUT" -c "env HOME='$HOME_DIR' CCACHE_DISABLE=1 PATH='$ROOT/bin:$PATH' '$VIX_BIN' build --verbose --dir '$PROJECT'" >/dev/null 2>&1 &
   WATCH_PID=$!
 
   wait_for_output "Compiling.*progress-app" "$TTY_OUT"
+  wait_for_output "launcher:" "$TTY_OUT"
+  wait_for_output "linker:" "$TTY_OUT"
   wait_for_output "jobs:" "$TTY_OUT"
 
   if ! kill -0 "$WATCH_PID" 2>/dev/null; then
@@ -102,7 +121,9 @@ SH
   WATCH_PID=""
 
   require_output "build .*\\[" "$TTY_OUT"
-  require_output "Finished\\|Done" "$TTY_OUT"
+  require_output "build .*\[============================\].*done" "$TTY_OUT"
+  require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$TTY_OUT"
+  reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$TTY_OUT"
   reject_output "^Building progress-app [0-9]" "$TTY_OUT"
 
   WATCH_OUT="$ROOT/tty-watch.out"

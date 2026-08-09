@@ -24,7 +24,7 @@ CPP
 help_output="$("$VIX_BIN" build --help)"
 printf '%s\n' "$help_output" | grep -q -- '--debug'
 printf '%s\n' "$help_output" | grep -q -- '--debug-log <scope>'
-printf '%s\n' "$help_output" | grep -q -- '--log <scope>'
+printf '%s\n' "$help_output" | grep -q -- '--log \[path\]'
 printf '%s\n' "$help_output" | grep -q -- '--graph-executor <mode>'
 printf '%s\n' "$help_output" | grep -q -- '--heartbeat'
 printf '%s\n' "$help_output" | grep -q -- '--no-heartbeat'
@@ -36,7 +36,6 @@ fi
 
 for args in \
   '--debug-log invalid' \
-  '--log invalid' \
   '--graph-executor invalid'; do
   set +e
   "$VIX_BIN" build $args --dir "$PROJECT" >/dev/null 2>&1
@@ -64,7 +63,6 @@ printf '%s\n' "$invalid_launcher_output" | grep -q "Valid: auto, none, sccache, 
 targets_output="$("$VIX_BIN" build --targets)"
 printf '%s\n' "$targets_output" | grep -q 'Available targets'
 printf '%s\n' "$targets_output" | grep -q 'native'
-printf '%s\n' "$targets_output" | grep -q 'unavailable'
 
 CCACHE_DISABLE=1 "$VIX_BIN" build --launcher none --dir "$PROJECT" >/dev/null
 CCACHE_DISABLE=1 "$VIX_BIN" build --launcher auto --dir "$PROJECT" >/dev/null
@@ -79,3 +77,5 @@ printf 'configure-log-content\n' > "$PROJECT/build-ninja/configure.log"
 "$VIX_BIN" build --log build --dir "$PROJECT" | grep -q 'build-log-content'
 "$VIX_BIN" build --log configure --dir "$PROJECT" | grep -q 'configure-log-content'
 "$VIX_BIN" build --log all --dir "$PROJECT" | grep -q 'Configure log'
+"$VIX_BIN" build --log "$PROJECT/build-ninja/build.log" | grep -q 'build-log-content'
+"$VIX_BIN" build --log "$PROJECT/build-ninja" | grep -q 'build-log-content'

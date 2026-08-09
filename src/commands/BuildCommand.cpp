@@ -1615,7 +1615,7 @@ namespace vix::commands::BuildCommand
         {
           o.debug = true;
         }
-        else if (a == "--debug-log" || a == "--log")
+        else if (a == "--debug-log")
         {
           auto v = util::take_value(args, i);
           if (!v)
@@ -1625,22 +1625,27 @@ namespace vix::commands::BuildCommand
             return o;
           }
           const std::string value(*v);
-          const bool debugLog = a == "--debug-log";
-          const bool valid = debugLog
-                                 ? (value == "cache" || value == "graph" || value == "configure" || value == "process" || value == "toolchain" || value == "all")
-                                 : (value == "build" || value == "configure" || value == "all");
+          const bool valid = value == "cache" || value == "graph" || value == "configure" || value == "process" || value == "toolchain" || value == "all";
           if (!valid)
           {
             error("Invalid value for " + a + ": " + value);
-            hint(debugLog ? "Valid values: cache, graph, configure, process, toolchain, all"
-                          : "Valid values: build, configure, all");
+            hint("Valid values: cache, graph, configure, process, toolchain, all");
             exitCode = 2;
             return o;
           }
-          if (debugLog)
-            o.debugLogScope = value;
-          else
-            o.logScope = value;
+          o.debugLogScope = value;
+        }
+        else if (a == "--log")
+        {
+          o.showLog = true;
+          if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != '-')
+          {
+            const std::string value = args[++i];
+            if (value == "build" || value == "configure" || value == "all")
+              o.logScope = value;
+            else
+              o.logPath = value;
+          }
         }
         else if (a == "--heartbeat")
         {
@@ -5195,7 +5200,7 @@ namespace vix::commands::BuildCommand
               return 1;
             }
 
-            if (!opt_.warnings && opt_.logScope.empty() &&
+            if (!opt_.warnings && !opt_.showLog &&
                 can_use_native_vix_app_build(opt_, loadResult.manifest))
             {
               return run_native_vix_app_build(
@@ -5239,7 +5244,7 @@ namespace vix::commands::BuildCommand
               plan_);
         }
 
-        if (!opt_.logScope.empty())
+        if (opt_.showLog)
         {
           const auto print_log = [](const fs::path &path, const std::string &label) -> bool
           {
@@ -5254,9 +5259,44 @@ namespace vix::commands::BuildCommand
           };
 
           bool found = false;
-          if (opt_.logScope == "configure" || opt_.logScope == "all")
+          if (!opt_.logPath.empty())
+          {
+            const fs::path requested = opt_.logPath;
+            std::error_code ec;
+            if (!fs::exists(requested, ec) || ec)
+            {
+              error("Build log path not found: " + requested.string());
+              return 1;
+            }
+            if (fs::is_regular_file(requested, ec))
+              found = print_log(requested, "Build");
+            else if (fs::is_directory(requested, ec))
+            {
+              fs::path newest;
+              fs::file_time_type newestTime{};
+              for (const auto &entry : fs::directory_iterator(requested, ec))
+              {
+                if (ec || !entry.is_regular_file(ec) || entry.path().extension() != ".log")
+                  continue;
+                const auto time = entry.last_write_time(ec);
+                if (!ec && (newest.empty() || time > newestTime))
+                {
+                  newest = entry.path();
+                  newestTime = time;
+                }
+              }
+              if (!newest.empty())
+                found = print_log(newest, "Build");
+              if (!found)
+              {
+                error("No build logs found in " + requested.string());
+                return 1;
+              }
+            }
+          }
+          else if (opt_.logScope == "configure" || opt_.logScope == "all")
             found = print_log(plan_.configureLog, "Configure") || found;
-          if (opt_.logScope == "build" || opt_.logScope == "all")
+          if (opt_.logScope.empty() || opt_.logScope == "build" || opt_.logScope == "all")
             found = print_log(plan_.buildLog, "Build") || found;
           if (!found)
           {
@@ -5565,19 +5605,14 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        /*
+         * CMake/Ninja already owns the established Vix build presentation in
+         * run_process_live_to_log(): it converts Ninja's [n/total] status
+         * into the live build bar and freezes it as "build ... done".  The
+         * event facade remains available to the graph paths below, but it
+         * must not replace that presentation for the regular CMake build.
+         */
         std::optional<build::BuildLiveProcess> liveBuild;
-
-        if (!opt_.quiet &&
-            !opt_.cmakeVerbose)
-        {
-          liveBuild.emplace(
-              std::cout);
-
-          liveBuild->begin(
-              build::default_build_target_name(
-                  opt_,
-                  plan_));
-        }
 
         bool configuredThisRun = false;
 
@@ -6135,37 +6170,36 @@ namespace vix::commands::BuildCommand
             build_print_phase_timings(
                 phaseTimings);
 
-            if (verboseMode)
+            if (!rawBuildOutput)
             {
               out.flush_to_stdout();
 
-              if (!liveBuild)
+              if (!buildHeaderPrinted)
               {
-                if (!buildHeaderPrinted)
-                {
-                  build::print_build_header_full(
-                      std::cout,
-                      build::default_build_target_name(
-                          opt_,
-                          plan_),
-                      display_build_profile(plan_),
-                      plan_.launcher,
-                      plan_.fastLinkerFlag,
-                      opt_.jobs <= 0
-                          ? build::default_jobs()
-                          : opt_.jobs);
-                }
-
-                const std::string profile =
-                    (plan_.preset.buildType == "Release")
-                        ? "release [optimized]"
-                        : "dev [unoptimized + debuginfo]";
-
-                build::print_build_done(
+                build::print_build_header_full(
                     std::cout,
-                    profile,
-                    util::format_seconds(ms));
+                    build::default_build_target_name(
+                        opt_,
+                        plan_),
+                    display_build_profile(plan_),
+                    verboseMode ? plan_.launcher : std::nullopt,
+                    verboseMode ? plan_.fastLinkerFlag : std::nullopt,
+                    verboseMode
+                        ? (opt_.jobs <= 0
+                               ? build::default_jobs()
+                               : opt_.jobs)
+                        : 0);
               }
+
+              const std::string profile =
+                  (plan_.preset.buildType == "Release")
+                      ? "release [optimized]"
+                      : "dev [unoptimized + debuginfo]";
+
+              build::print_build_done(
+                  std::cout,
+                  profile,
+                  util::format_seconds(ms));
             }
           }
         }
@@ -6245,27 +6279,43 @@ namespace vix::commands::BuildCommand
 
     if (opt.listTargets)
     {
-      const std::vector<std::string> known = {
-          "aarch64-linux-gnu",
-          "arm-linux-gnueabihf",
-          "riscv64-linux-gnu",
-          "x86_64-windows-gnu",
-          "aarch64-windows-gnu"};
+      std::map<std::string, std::string> detected;
+      if (const char *pathEnv = std::getenv("PATH"); pathEnv && *pathEnv)
+      {
+#ifdef _WIN32
+        const char separator = ';';
+#else
+        const char separator = ':';
+#endif
+        std::istringstream paths(pathEnv);
+        std::string directory;
+        while (std::getline(paths, directory, separator))
+        {
+          std::error_code ec;
+          for (const auto &entry : fs::directory_iterator(directory, ec))
+          {
+            if (ec || !entry.is_regular_file(ec))
+              continue;
+            const std::string name = entry.path().filename().string();
+            const std::string suffix = "-g++";
+            if (name.size() > suffix.size() && name.rfind(suffix) == name.size() - suffix.size())
+              detected.emplace(name.substr(0, name.size() - suffix.size()), name);
+          }
+        }
+      }
 
       info("Available targets");
       step("native");
       if (opt.verbose)
         step("  status: native");
 
-      for (const std::string &target : known)
+      for (const auto &[target, compiler] : detected)
       {
-        const std::string compiler = target + "-g++";
-        const bool available = util::executable_on_path(compiler);
-        step(target + (available ? "  available" : "  unavailable"));
+        step(target + "  available");
         if (opt.verbose)
         {
-          step("  status: " + std::string(available ? "available" : "unavailable"));
-          step("  compiler: " + compiler + (available ? "" : " (not found)"));
+          step("  status: available");
+          step("  compiler: " + compiler);
         }
       }
       step("Use: vix build --target <target>");
@@ -7465,7 +7515,7 @@ namespace vix::commands::BuildCommand
     out << "  -v, --verbose             Show additional useful build information\n";
     out << "  --debug                   Show internal Vix build diagnostics\n";
     out << "  --debug-log <scope>       Debug cache, graph, configure, process, toolchain, or all\n";
-    out << "  --log <scope>             Show captured log: build, configure, or all\n";
+    out << "  --log [path]              Show the current build log or a log file/directory\n";
     out << "  --cmake-verbose           Stream raw CMake, Ninja and compiler output\n";
     out << "  -q, --quiet               Minimal output\n";
     out << "  -h, --help                Show this help\n\n";
@@ -7522,7 +7572,9 @@ namespace vix::commands::BuildCommand
     out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
     out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
     out << "  vix build --debug\n";
-    out << "  vix build --log build\n";
+    out << "  vix build --log\n";
+    out << "  vix build --log ./build/\n";
+    out << "  vix build --log build-ninja/build.log\n";
     out << "  vix build --target aarch64-linux-gnu --sysroot /opt/sysroots/aarch64\n\n";
 
     return 0;

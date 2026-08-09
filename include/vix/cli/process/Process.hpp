@@ -97,6 +97,8 @@ namespace vix::cli::process
 
     /** Optional captured log scope to display instead of building. */
     std::string logScope;
+    bool showLog = false;
+    std::string logPath;
 
     /**
      * @brief Explains why Vix rebuilds files or targets.

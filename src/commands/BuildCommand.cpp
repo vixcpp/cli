@@ -5605,19 +5605,14 @@ namespace vix::commands::BuildCommand
           }
         }
 
+        /*
+         * CMake/Ninja already owns the established Vix build presentation in
+         * run_process_live_to_log(): it converts Ninja's [n/total] status
+         * into the live build bar and freezes it as "build ... done".  The
+         * event facade remains available to the graph paths below, but it
+         * must not replace that presentation for the regular CMake build.
+         */
         std::optional<build::BuildLiveProcess> liveBuild;
-
-        if (!opt_.quiet &&
-            !opt_.cmakeVerbose)
-        {
-          liveBuild.emplace(
-              std::cout);
-
-          liveBuild->begin(
-              build::default_build_target_name(
-                  opt_,
-                  plan_));
-        }
 
         bool configuredThisRun = false;
 
@@ -6175,37 +6170,36 @@ namespace vix::commands::BuildCommand
             build_print_phase_timings(
                 phaseTimings);
 
-            if (verboseMode)
+            if (!rawBuildOutput)
             {
               out.flush_to_stdout();
 
-              if (!liveBuild)
+              if (!buildHeaderPrinted)
               {
-                if (!buildHeaderPrinted)
-                {
-                  build::print_build_header_full(
-                      std::cout,
-                      build::default_build_target_name(
-                          opt_,
-                          plan_),
-                      display_build_profile(plan_),
-                      plan_.launcher,
-                      plan_.fastLinkerFlag,
-                      opt_.jobs <= 0
-                          ? build::default_jobs()
-                          : opt_.jobs);
-                }
-
-                const std::string profile =
-                    (plan_.preset.buildType == "Release")
-                        ? "release [optimized]"
-                        : "dev [unoptimized + debuginfo]";
-
-                build::print_build_done(
+                build::print_build_header_full(
                     std::cout,
-                    profile,
-                    util::format_seconds(ms));
+                    build::default_build_target_name(
+                        opt_,
+                        plan_),
+                    display_build_profile(plan_),
+                    verboseMode ? plan_.launcher : std::nullopt,
+                    verboseMode ? plan_.fastLinkerFlag : std::nullopt,
+                    verboseMode
+                        ? (opt_.jobs <= 0
+                               ? build::default_jobs()
+                               : opt_.jobs)
+                        : 0);
               }
+
+              const std::string profile =
+                  (plan_.preset.buildType == "Release")
+                      ? "release [optimized]"
+                      : "dev [unoptimized + debuginfo]";
+
+              build::print_build_done(
+                  std::cout,
+                  profile,
+                  util::format_seconds(ms));
             }
           }
         }

@@ -941,19 +941,22 @@ namespace vix::commands::RunCommand::detail
   // ===========================================================================
 
   /**
-   * @brief Return the file modification time as Unix nanoseconds.
+   * @brief Return a stable, order-preserving file modification timestamp.
    *
-   * std::filesystem::file_time_type may use a clock whose epoch differs from
-   * std::chrono::system_clock. Converting file_time_type::time_since_epoch()
-   * directly to an unsigned Unix timestamp is therefore not portable and can
-   * yield negative values for perfectly valid files.
+   * std::filesystem::file_time_type may use an implementation-defined epoch,
+   * so its timestamp must not be interpreted directly as a Unix timestamp.
    *
-   * This helper translates the filesystem clock to system_clock before
-   * producing a nanosecond timestamp.
+   * For cache fingerprints we need the value to be stable across repeated
+   * reads of the same file. For timestamp comparisons we also need the encoded
+   * unsigned value to preserve the ordering of the underlying signed
+   * filesystem-clock timestamp.
+   *
+   * Flipping the sign bit maps the signed nanosecond representation into an
+   * unsigned value while preserving chronological ordering.
    *
    * @param p File whose modification time should be queried.
    * @param ec Receives any filesystem error.
-   * @return Modification time in Unix nanoseconds, or 0 on failure.
+   * @return Stable encoded modification timestamp, or 0 on failure.
    */
   inline std::uint64_t file_mtime_ns(
       const fs::path &p,
@@ -971,26 +974,16 @@ namespace vix::commands::RunCommand::detail
 
     using namespace std::chrono;
 
-    const auto fileNow =
-        fs::file_time_type::clock::now();
-
-    const auto systemNow =
-        system_clock::now();
-
-    const auto systemTime =
-        systemNow +
-        duration_cast<system_clock::duration>(
-            fileTime - fileNow);
-
     const auto ns =
         duration_cast<nanoseconds>(
-            systemTime.time_since_epoch())
+            fileTime.time_since_epoch())
             .count();
 
-    if (ns <= 0)
-      return 0;
+    const auto signedNs =
+        static_cast<std::int64_t>(ns);
 
-    return static_cast<std::uint64_t>(ns);
+    return static_cast<std::uint64_t>(signedNs) ^
+           (std::uint64_t{1} << 63);
   }
 
   /**

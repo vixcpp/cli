@@ -1186,20 +1186,23 @@ namespace vix::commands::RunCommand::detail
     out.needsRebuild = true;
 
     /*
-     * A deterministic failed build is also a valid cache result.
+     * A previous compilation failure may keep its diagnostic payload,
+     * but it must never suppress a future compilation attempt.
      *
-     * Check it before requiring the binary: failed compilations and
-     * link steps intentionally have no executable.
+     * Source files, generated headers, compiler state, or external
+     * dependencies may have changed independently of the cached failure,
+     * so failed builds are informational only and are not cache hits.
      */
     if (load_direct_failure_cache(
             plan,
             out))
     {
-      out.cacheHit = true;
-      out.cachedFailure = true;
-      out.needsRebuild = false;
+      out.cacheHit = false;
+      out.cachedFailure = false;
+      out.needsRebuild = true;
+      out.cachedFailureExitCode = 0;
       out.rebuildReason =
-          "cached compile failure";
+          "previous compile failure";
 
       return out;
     }

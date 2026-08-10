@@ -1012,19 +1012,14 @@ namespace vix::commands::RunCommand::detail
       return false;
 #else
       (void)opt;
+      (void)state;
 
-      if (state.needConfigure)
-        return false;
-
-      if (needs_rebuild_from_depfiles_cached(
-              state.exePath,
-              state.buildDir,
-              state.targetName))
-      {
-        return false;
-      }
-
-      return true;
+      // A generated fallback project may contain compiled targets and
+      // transitive libraries.  The depfile of the final executable only
+      // describes its own translation unit; using it to skip the whole build
+      // can therefore run an old executable after a library source changes.
+      // Let Ninja perform its inexpensive, graph-complete up-to-date check.
+      return false;
 #endif
     }
 

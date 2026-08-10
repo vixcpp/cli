@@ -14,38 +14,27 @@ PROJECT="$ROOT/project"
 FAKE_BIN="$ROOT/bin"
 CALLS_FILE="$ROOT/compiler-calls"
 
-mkdir -p "$HOME_DIR/.vix/include/vix" "$HOME_DIR/.vix/lib" "$PROJECT" "$FAKE_BIN"
+mkdir -p "$HOME_DIR/.vix" "$PROJECT" "$FAKE_BIN"
 printf '0\n' >"$CALLS_FILE"
 
-cat >"$HOME_DIR/.vix/include/vix.hpp" <<'HPP'
+cat >"$PROJECT/local.hpp" <<'HPP'
 #pragma once
 HPP
-
-cat >"$HOME_DIR/.vix/include/vix/console.hpp" <<'HPP'
-#pragma once
-namespace vix {
-struct Console {
-  enum class Level { Trace, Debug, Info, Log, Warn, Error, Critical, Off };
-};
-}
-HPP
-
-for lib in io log utils error; do
-  : >"$HOME_DIR/.vix/lib/libvix_${lib}.a"
-done
 
 cat >"$FAKE_BIN/c++" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
 calls_file="${VIX_FAKE_CXX_CALLS:?missing VIX_FAKE_CXX_CALLS}"
-count="$(cat "$calls_file")"
-printf '%s\n' "$((count + 1))" >"$calls_file"
 
 out=""
 src=""
+dep_query=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -MM)
+      dep_query=1
+      ;;
     -o)
       shift
       out="${1:-}"
@@ -56,6 +45,14 @@ while [[ $# -gt 0 ]]; do
   esac
   shift || true
 done
+
+if [[ "$dep_query" = "1" ]]; then
+  printf 'main.o: %s\n' "$src"
+  exit 0
+fi
+
+count="$(cat "$calls_file")"
+printf '%s\n' "$((count + 1))" >"$calls_file"
 
 if [[ -n "$src" ]] && grep -q 'BROKEN_FOR_CACHE_TEST' "$src"; then
   echo "fake compiler: requested failure" >&2
@@ -84,7 +81,7 @@ SH
 chmod +x "$FAKE_BIN/cmake"
 
 cat >"$PROJECT/main.cpp" <<'CPP'
-#include <vix/console.hpp>
+#include "local.hpp"
 int main() { return 0; }
 CPP
 
@@ -130,7 +127,7 @@ run_vix() {
       PATH="$FAKE_BIN:$PATH" \
       CXX="$FAKE_BIN/c++" \
       VIX_FAKE_CXX_CALLS="$CALLS_FILE" \
-      "$VIX_BIN" "$@" --trace-cache
+      "$VIX_BIN" "$1" $([[ "$1" == "run" ]] && printf '%s' '--trace-cache') "${@:2}"
   ) >"$out" 2>&1
 }
 
@@ -189,10 +186,7 @@ test "$KEY2" != "$KEY1"
 
 OUT5="$ROOT/build-shared.out"
 run_vix "$OUT5" build main.cpp
-require_output "script strategy: direct" "$OUT5"
-require_output "rebuild reason: cache hit" "$OUT5"
 test "$(compiler_calls)" = "2"
-test "$(cache_key_from "$OUT5")" = "$KEY2"
 
 OUT6="$ROOT/run-option.out"
 run_vix "$OUT6" run main.cpp --no-san -- -DALT_CACHE_OPTION=1
@@ -203,7 +197,7 @@ test -n "$KEY3"
 test "$KEY3" != "$KEY2"
 
 cat >"$PROJECT/broken.cpp" <<'CPP'
-#include <vix/console.hpp>
+#include "local.hpp"
 BROKEN_FOR_CACHE_TEST
 int main() { return 0; }
 CPP

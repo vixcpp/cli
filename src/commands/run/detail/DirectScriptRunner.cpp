@@ -530,6 +530,57 @@ namespace vix::commands::RunCommand::detail
       return oss.str();
     }
 
+    std::string header_content_fingerprint(const fs::path &p)
+    {
+      std::error_code ec;
+      const fs::path abs = fs::absolute(p, ec).lexically_normal();
+      return abs.string() + "|content=" + file_content_hash_hex(abs);
+    }
+
+    std::vector<std::string> collect_direct_header_fingerprints(
+        const fs::path &cppPath,
+        const ScriptProbeResult &probe,
+        const std::string &compiler)
+    {
+      std::ostringstream cmd;
+      cmd << process::quote(compiler) << " -MM";
+      cmd << " -std=" << detect_cpp_standard(probe);
+
+      for (const auto &inc : probe.includeDirs)
+        cmd << " -I" << process::quote(inc);
+      for (const auto &inc : probe.systemIncludeDirs)
+        cmd << " -isystem " << process::quote(inc);
+      for (const auto &def : probe.defines)
+        cmd << " -D" << def;
+      for (const auto &compileOpt : probe.compileOpts)
+        append_quoted(cmd, compileOpt);
+
+      cmd << " " << process::quote(cppPath.string());
+
+      int exitCode = 0;
+      const std::string depfile = run_and_capture_with_code(cmd.str(), exitCode);
+      if (exitCode != 0)
+        return {};
+
+      std::vector<fs::path> paths;
+      depfile_parse_paths(depfile, paths);
+
+      std::vector<std::string> out;
+      const fs::path source = fs::absolute(cppPath).lexically_normal();
+      for (const fs::path &path : paths)
+      {
+        std::error_code ec;
+        const fs::path absolute = fs::absolute(path, ec).lexically_normal();
+        if (ec || absolute == source || !fs::is_regular_file(absolute, ec) || ec)
+          continue;
+        out.push_back(header_content_fingerprint(absolute));
+      }
+
+      std::sort(out.begin(), out.end());
+      out.erase(std::unique(out.begin(), out.end()), out.end());
+      return out;
+    }
+
     /**
      * @brief Collect fingerprints for known dependency paths.
      */
@@ -574,7 +625,7 @@ namespace vix::commands::RunCommand::detail
               ext == ".hxx" ||
               ext == ".ipp")
           {
-            out.push_back(path_fingerprint(it->path()));
+            out.push_back(header_content_fingerprint(it->path()));
           }
         }
       }
@@ -624,7 +675,15 @@ namespace vix::commands::RunCommand::detail
         for (const auto &lib : find_vix_direct_module_libs(abs))
           fp.depFingerprints.push_back(path_fingerprint(lib));
       }
-      fp.headerFingerprints = collect_header_fingerprints(probe);
+      fp.headerFingerprints = collect_direct_header_fingerprints(
+          abs,
+          probe,
+          compiler);
+      const auto dependencyHeaders = collect_header_fingerprints(probe);
+      fp.headerFingerprints.insert(
+          fp.headerFingerprints.end(),
+          dependencyHeaders.begin(),
+          dependencyHeaders.end());
 
       sort_unique(fp.includeDirs);
       sort_unique(fp.systemIncludeDirs);

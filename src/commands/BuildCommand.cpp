@@ -5272,21 +5272,29 @@ namespace vix::commands::BuildCommand
               found = print_log(requested, "Build");
             else if (fs::is_directory(requested, ec))
             {
-              fs::path newest;
-              fs::file_time_type newestTime{};
-              for (const auto &entry : fs::directory_iterator(requested, ec))
+              const fs::path canonicalBuildLog = requested / "build.log";
+              if (fs::is_regular_file(canonicalBuildLog, ec) && !ec)
               {
-                if (ec || !entry.is_regular_file(ec) || entry.path().extension() != ".log")
-                  continue;
-                const auto time = entry.last_write_time(ec);
-                if (!ec && (newest.empty() || time > newestTime))
-                {
-                  newest = entry.path();
-                  newestTime = time;
-                }
+                found = print_log(canonicalBuildLog, "Build");
               }
-              if (!newest.empty())
-                found = print_log(newest, "Build");
+              else
+              {
+                fs::path newest;
+                fs::file_time_type newestTime{};
+                for (const auto &entry : fs::directory_iterator(requested, ec))
+                {
+                  if (ec || !entry.is_regular_file(ec) || entry.path().extension() != ".log")
+                    continue;
+                  const auto time = entry.last_write_time(ec);
+                  if (!ec && (newest.empty() || time > newestTime))
+                  {
+                    newest = entry.path();
+                    newestTime = time;
+                  }
+                }
+                if (!newest.empty())
+                  found = print_log(newest, "Build");
+              }
               if (!found)
               {
                 error("No build logs found in " + requested.string());
@@ -5503,6 +5511,7 @@ namespace vix::commands::BuildCommand
         }
 
         if (canFastNoopCheck &&
+            !graph_executor_enabled(opt_) &&
             !opt_.explain &&
             !opt_.exportBin &&
             opt_.outPath.empty())
@@ -5550,6 +5559,7 @@ namespace vix::commands::BuildCommand
         }
 
         if (buildStateHit &&
+            !graph_executor_enabled(opt_) &&
             !opt_.explain &&
             !opt_.exportBin &&
             opt_.outPath.empty())
@@ -5765,7 +5775,8 @@ namespace vix::commands::BuildCommand
                std::to_string(importedNinjaTasks) + " ninja tasks");
         }
 
-        if (can_use_target_artifact_cache(opt_) &&
+        if (!graph_executor_enabled(opt_) &&
+            can_use_target_artifact_cache(opt_) &&
             restore_project_target_artifact(projectArtifact, opt_, plan_))
         {
           if (!graph.save(graphPath) && !opt_.quiet)

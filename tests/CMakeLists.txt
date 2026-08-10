@@ -259,3 +259,28 @@ add_test(
     ${CMAKE_CURRENT_SOURCE_DIR}/BuildNativeCMakeDiscoveryTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
+
+# Contract tests deliberately consume the built CLI, so help text, parser and
+# observable execution stay tied together. The App test is a real regression
+# contract when an installed SDK include directory is supplied.
+add_test(NAME vix_cli_public_option_coverage
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/PublicOptionCoverageTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_capability_coverage
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/CapabilityCoverageGateTest.sh)
+add_test(NAME vix_cli_run_core_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCoreContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_run_cache_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCacheContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_build_core_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildCoreContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_build_passthrough_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildPassthroughContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_build_execution_paths_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_run_vix_app_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunVixAppContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_run_execution_paths_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_run_compiled_dependency_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCompiledDependencyContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+set_tests_properties(vix_cli_run_vix_app_contract vix_cli_run_cache_contract vix_cli_build_passthrough_contract PROPERTIES LABELS "contract;known-regression")

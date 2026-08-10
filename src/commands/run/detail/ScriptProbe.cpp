@@ -921,6 +921,7 @@ namespace vix::commands::RunCommand::detail
 
     const bool allowDirect =
         !unsupportedFlags &&
+        !out.features.usesVix &&
         (!out.usesCompiledDeps || onlyVixIncludesAdded) &&
         (!out.requiresCMakeTargets || vixInstalledLocally);
 

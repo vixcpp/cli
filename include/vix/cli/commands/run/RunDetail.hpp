@@ -389,6 +389,7 @@ namespace vix::commands::RunCommand::detail
     std::string exeName;
     std::string targetName;
     std::string configSignature;
+    std::vector<fs::path> dependencyRoots;
 
     bool useVixRuntime = false;
     bool shouldConfigure = true;

@@ -79,8 +79,10 @@ namespace vix::commands::RunCommand::detail
       fs::path buildDir;
       fs::path exePath;
       fs::path sigFile;
+      fs::path graphFingerprintFile;
       fs::path configureLogPath;
       fs::path buildLogPath;
+      std::vector<fs::path> dependencyRoots;
 
       bool useVixRuntime = false;
       bool needConfigure = true;
@@ -101,13 +103,168 @@ namespace vix::commands::RunCommand::detail
       state.buildDir = plan.buildDir;
       state.exePath = plan.exePath;
       state.sigFile = plan.signatureFile;
+      state.graphFingerprintFile = plan.projectDir / ".vix-build.graph";
       state.configureLogPath = plan.configureLogPath;
       state.buildLogPath = plan.buildLogPath;
+      state.dependencyRoots = plan.dependencyRoots;
       state.useVixRuntime = plan.useVixRuntime;
       state.needConfigure = plan.shouldConfigure;
       state.skipBuild = !plan.shouldBuild;
       state.configSignature = plan.configSignature;
       return state;
+    }
+
+    std::string cmake_graph_path_fingerprint(const fs::path &path)
+    {
+      std::error_code ec;
+      const fs::path absolute = fs::absolute(path, ec).lexically_normal();
+      if (ec || !fs::is_regular_file(absolute, ec) || ec)
+        return {};
+
+      const auto size = fs::file_size(absolute, ec);
+      if (ec)
+        return {};
+      const auto mtime = fs::last_write_time(absolute, ec);
+      if (ec)
+        return {};
+      return absolute.string() + "|" + std::to_string(size) + "|" +
+             std::to_string(mtime.time_since_epoch().count());
+    }
+
+    std::string cmake_graph_content_fingerprint(const fs::path &path)
+    {
+      const std::string identity = cmake_graph_path_fingerprint(path);
+      if (identity.empty())
+        return {};
+      return identity + "|content=" +
+             std::to_string(std::hash<std::string>{}(text::read_text_file_or_empty(path)));
+    }
+
+    void append_cmake_depfile_inputs(
+        const fs::path &depfile,
+        std::vector<std::string> &inputs)
+    {
+      std::string depContents = text::read_text_file_or_empty(depfile);
+      for (std::size_t pos = 0; (pos = depContents.find("\\\\\n", pos)) != std::string::npos;)
+        depContents.replace(pos, 2, " ");
+      const auto colon = depContents.find(':');
+      if (colon == std::string::npos)
+        return;
+      std::istringstream stream(depContents.substr(colon + 1));
+      std::string token;
+      while (stream >> token)
+      {
+        if (const std::string fp = cmake_graph_path_fingerprint(token); !fp.empty())
+          inputs.push_back(std::move(fp));
+      }
+    }
+
+    std::string make_cmake_graph_fingerprint(const ScriptProjectState &state)
+    {
+      std::vector<std::string> inputs;
+      inputs.reserve(256);
+      for (const fs::path &path : {state.script, state.cmakeLists, state.buildDir / "build.ninja", state.buildDir / "CMakeCache.txt"})
+      {
+        if (const std::string fp = cmake_graph_path_fingerprint(path); !fp.empty())
+          inputs.push_back(std::move(fp));
+      }
+
+      std::error_code ec;
+      const fs::path cmakeFiles = state.buildDir / "CMakeFiles";
+      if (fs::exists(cmakeFiles, ec) && !ec)
+      {
+        for (fs::recursive_directory_iterator it(cmakeFiles, ec), end; !ec && it != end; it.increment(ec))
+        {
+          if (!it->is_regular_file(ec) || it->path().extension() != ".d")
+            continue;
+          append_cmake_depfile_inputs(it->path(), inputs);
+        }
+      }
+
+      // Dependency roots originate from manifest/registry metadata collected by
+      // ScriptProbe. Restrict the scan to build inputs, never the caller's
+      // whole repository.
+      std::vector<fs::path> dependencyRoots = state.dependencyRoots;
+      dependencyRoots.push_back(state.script.parent_path() / ".vix" / "deps");
+      for (const auto &root : dependencyRoots)
+      {
+        if (!fs::exists(root, ec) || ec)
+        {
+          ec.clear();
+          continue;
+        }
+        for (fs::recursive_directory_iterator it(
+                 root, fs::directory_options::skip_permission_denied, ec),
+             end;
+             !ec && it != end;
+             it.increment(ec))
+        {
+          if (it->is_directory(ec) && it->path().filename() == ".git")
+          {
+            it.disable_recursion_pending();
+            continue;
+          }
+          if (!it->is_regular_file(ec))
+            continue;
+          const std::string name = it->path().filename().string();
+          const std::string ext = it->path().extension().string();
+          if (name == "CMakeLists.txt" || name == "vix.lock" || name == "vix_deps.cmake" ||
+              ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" ||
+              ext == ".h" || ext == ".hpp" || ext == ".hh" || ext == ".hxx" || ext == ".ipp")
+          {
+            if (const std::string fp = cmake_graph_content_fingerprint(it->path()); !fp.empty())
+              inputs.push_back(std::move(fp));
+          }
+        }
+        ec.clear();
+      }
+
+      // Imported libraries are explicit order-only inputs of Ninja link edges.
+      // Fingerprint these artifacts without asking Ninja to re-evaluate the graph.
+      const std::string ninja = text::read_text_file_or_empty(state.buildDir / "build.ninja");
+      std::istringstream ninjaLines(ninja);
+      std::string line;
+      while (std::getline(ninjaLines, line))
+      {
+        const auto pipe = line.find(" | ");
+        if (pipe == std::string::npos)
+          continue;
+        std::istringstream paths(line.substr(pipe + 3));
+        std::string path;
+        while (paths >> path)
+        {
+          if (const std::string fp = cmake_graph_path_fingerprint(path); !fp.empty())
+            inputs.push_back(std::move(fp));
+        }
+      }
+
+      // A CONFIG package can change usage requirements without changing the
+      // application source. CMakeCache records the resolved package directories.
+      std::istringstream cacheLines(text::read_text_file_or_empty(state.buildDir / "CMakeCache.txt"));
+      while (std::getline(cacheLines, line))
+      {
+        const auto marker = line.find(":PATH=");
+        if (marker == std::string::npos || line.rfind("_DIR", marker) != marker - 4)
+          continue;
+        const fs::path packageDir = line.substr(marker + 6);
+        for (fs::directory_iterator it(packageDir, ec), end; !ec && it != end; it.increment(ec))
+        {
+          if (it->is_regular_file(ec) && it->path().extension() == ".cmake")
+          {
+            if (const std::string fp = cmake_graph_path_fingerprint(it->path()); !fp.empty())
+              inputs.push_back(std::move(fp));
+          }
+        }
+        ec.clear();
+      }
+
+      std::sort(inputs.begin(), inputs.end());
+      inputs.erase(std::unique(inputs.begin(), inputs.end()), inputs.end());
+      std::ostringstream result;
+      result << "config=" << state.configSignature << '\n';
+      for (const auto &input : inputs)
+        result << input << '\n';
+      return result.str();
     }
 
     bool project_has_registry_lock_dependencies(const fs::path &projectDir)
@@ -1012,13 +1169,16 @@ namespace vix::commands::RunCommand::detail
       return false;
 #else
       (void)opt;
-      (void)state;
+      if (state.needConfigure || !fs::exists(state.exePath))
+        return false;
 
-      // A generated fallback project may contain compiled targets and
-      // transitive libraries.  The depfile of the final executable only
-      // describes its own translation unit; using it to skip the whole build
-      // can therefore run an old executable after a library source changes.
-      // Let Ninja perform its inexpensive, graph-complete up-to-date check.
+      // The stored graph includes depfiles for every compiled target and the
+      // imported link artifacts, rather than only the final executable's TU.
+      const std::string previous = text::read_text_file_or_empty(state.graphFingerprintFile);
+      const bool hit = !previous.empty() && previous == make_cmake_graph_fingerprint(state);
+      if (opt.traceCache)
+        std::cerr << "cmake graph cache: miss (graph validation pending)\n";
+      (void)hit;
       return false;
 #endif
     }
@@ -1050,7 +1210,11 @@ namespace vix::commands::RunCommand::detail
       code = normalize_exit_code(code);
 
       if (code == 0)
+      {
+        (void)text::write_text_file(state.graphFingerprintFile,
+                                    make_cmake_graph_fingerprint(state));
         return 0;
+      }
 
       std::ifstream ifs(state.buildLogPath);
       std::string logContent;
@@ -1370,6 +1534,7 @@ namespace vix::commands::RunCommand::detail
           opt.withSqlite,
           opt.withMySql);
 
+      if (text::read_text_file_or_empty(state.cmakeLists) != cmakeText)
       {
         std::ofstream out(state.cmakeLists, std::ios::trunc);
         if (!out)
@@ -1672,6 +1837,13 @@ namespace vix::commands::RunCommand::detail
         opt.scriptFlags,
         opt.withSqlite,
         opt.withMySql);
+    plan.dependencyRoots = probe.compiledDepPaths;
+    // ScriptCMake can discover manifest dependencies independently of the
+    // include probe. Include that metadata-owned root in the graph snapshot.
+    const fs::path manifestDeps = plan.scriptPath.parent_path() / ".vix" / "deps";
+    std::error_code depsEc;
+    if (fs::exists(manifestDeps, depsEc) && !depsEc)
+      plan.dependencyRoots.push_back(manifestDeps);
 
     plan.shouldConfigure = true;
     plan.shouldBuild = true;

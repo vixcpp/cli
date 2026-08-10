@@ -73,6 +73,10 @@ out="$(cd "$PROJECT" && "$VIX_BIN" run main.cpp --no-san --trace-cache 2>&1 | tr
 grep -Fq 'script strategy: cmake fallback' <<<"$out" || fail "compiled dependency did not use CMake fallback"
 grep -Fxq '42' <<<"$out" || fail "compiled transitive dependency did not link/run"
 
+out="$(cd "$PROJECT" && "$VIX_BIN" run main.cpp --no-san --trace-cache 2>&1 | tr -d '\r')"
+grep -Fq 'cmake graph cache: hit' <<<"$out" || fail "unchanged compiled dependency did not use graph cache"
+grep -Fxq '42' <<<"$out" || fail "warm compiled dependency did not run cached executable"
+
 # Change compiled implementation in the installed fixture. A reused executable
 # would still print 42, so this proves real dependency rebuild propagation.
 cat >"$PROJECT/.vix/deps/b/src/b.cpp" <<'CPP'
@@ -80,6 +84,7 @@ cat >"$PROJECT/.vix/deps/b/src/b.cpp" <<'CPP'
 int b_value() { return 50; }
 CPP
 out="$(cd "$PROJECT" && "$VIX_BIN" run main.cpp --no-san --trace-cache 2>&1 | tr -d '\r')"
+grep -Fq 'cmake graph cache: miss' <<<"$out" || fail "changed compiled dependency did not invalidate graph cache: $out"
 grep -Fxq '52' <<<"$out" || fail "changed compiled dependency reused stale executable"
 
 # A requested but absent library is a distinct linkage failure from a missing

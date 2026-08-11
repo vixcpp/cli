@@ -40,6 +40,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -2099,6 +2100,7 @@ namespace vix::commands::RunCommand::detail
     hint("Watching: " + script.string());
 
 #ifdef _WIN32
+    std::error_code ec;
     auto lastWrite = fs::last_write_time(script, ec);
     if (ec)
     {

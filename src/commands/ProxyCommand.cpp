@@ -25,6 +25,7 @@ namespace vix::commands
 {
   namespace
   {
+#ifdef __linux__
     int nginx_help()
     {
       std::cout
@@ -74,11 +75,13 @@ namespace vix::commands
 
       return 1;
     }
+#endif
   }
 
   int ProxyCommand::run(const std::vector<std::string> &args)
   {
 #ifndef __linux__
+    (void)args;
     proxy::nginx_output::error(
         std::cerr,
         "vix proxy is currently supported on Linux only.");

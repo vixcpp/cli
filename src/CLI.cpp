@@ -238,16 +238,16 @@ namespace vix
       }
     }
 
-    void apply_log_level_from_flag(Logger &logger, const std::string &value)
+    bool apply_log_level_from_flag(Logger &logger, const std::string &value)
     {
       if (auto lvl = parse_log_level(value))
       {
         logger.setLevel(*lvl);
+        return true;
       }
-      else
-      {
-        print_invalid_log_level_error("--log-level", value);
-      }
+
+      print_invalid_log_level_error("--log-level", value);
+      return false;
     }
 
   } // namespace
@@ -374,6 +374,8 @@ namespace vix
     };
     VerbosityMode verbosity = VerbosityMode::Default;
     std::optional<std::string> logLevelFlag;
+    bool globalHelp = false;
+    bool globalVersion = false;
     int index = 1;
 
     while (index < argc)
@@ -381,10 +383,18 @@ namespace vix
       std::string arg = argv[index];
 
       if (arg == "-h" || arg == "--help")
-        return help({});
+      {
+        globalHelp = true;
+        ++index;
+        break;
+      }
 
       if (arg == "-v" || arg == "--version")
-        return version({});
+      {
+        globalVersion = true;
+        ++index;
+        break;
+      }
 
       if (arg == "--verbose")
       {
@@ -441,8 +451,14 @@ namespace vix
       break;
     }
 
-    if (logLevelFlag.has_value())
-      apply_log_level_from_flag(logger, *logLevelFlag);
+    if (logLevelFlag.has_value() && !apply_log_level_from_flag(logger, *logLevelFlag))
+      return 1;
+
+    if (globalHelp)
+      return help({});
+
+    if (globalVersion)
+      return version({});
 
     if (index >= argc)
       return dispatcher.run("repl", {});

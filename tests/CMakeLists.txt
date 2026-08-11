@@ -267,6 +267,14 @@ add_test(NAME vix_cli_public_option_coverage
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/PublicOptionCoverageTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_capability_coverage
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/CapabilityCoverageGateTest.sh)
+add_test(NAME vix_cli_command_coverage
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/CommandCoverageGateTest.sh)
+add_test(NAME vix_cli_global_option_coverage
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/GlobalOptionCoverageGateTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_global_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/GlobalCliContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_all_contracts
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/AllCliContractsTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_core_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCoreContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_cache_contract

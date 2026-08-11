@@ -29,6 +29,7 @@ namespace vix::commands::logs::runner
 {
   namespace
   {
+#ifdef __linux__
     std::string shell_quote(const std::string &value)
     {
       std::string out = "'";
@@ -50,8 +51,6 @@ namespace vix::commands::logs::runner
       output::command(std::cout, cmd);
       return std::system(cmd.c_str()) == 0;
     }
-
-#ifdef __linux__
 
     std::string grep_errors_command()
     {

@@ -21,6 +21,7 @@ namespace vix::commands::production::validator
 {
   namespace
   {
+#ifdef __linux__
     bool run_cmd(const std::string &cmd)
     {
       output::command(std::cout, cmd);
@@ -42,6 +43,7 @@ namespace vix::commands::production::validator
       output::error(std::cerr, label + " failed");
       return false;
     }
+#endif
   }
 
   int validate()

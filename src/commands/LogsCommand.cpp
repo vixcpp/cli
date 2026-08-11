@@ -25,6 +25,7 @@ namespace vix::commands
 {
   namespace
   {
+#ifdef __linux__
     bool consume_flag(
         std::vector<std::string> &args,
         const std::string &flag)
@@ -175,11 +176,13 @@ namespace vix::commands
 
       return options;
     }
+#endif
   }
 
   int LogsCommand::run(const std::vector<std::string> &argsIn)
   {
 #ifndef __linux__
+    (void)argsIn;
     logs::output::error(
         std::cerr,
         "vix logs is currently supported on Linux only.");

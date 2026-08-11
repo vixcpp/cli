@@ -39,6 +39,7 @@ namespace vix::commands
 {
   namespace
   {
+#ifdef __linux__
     std::string trim_copy(std::string s)
     {
       while (!s.empty() &&
@@ -73,8 +74,6 @@ namespace vix::commands
 
       return s;
     }
-
-#ifdef __linux__
 
     struct HealthResult
     {
@@ -806,6 +805,7 @@ namespace vix::commands
   int ServiceCommand::run(const std::vector<std::string> &args)
   {
 #ifndef __linux__
+    (void)args;
     vix::cli::util::err_line(
         std::cerr,
         "vix service is currently supported on Linux/systemd only.");

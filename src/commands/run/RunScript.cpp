@@ -128,7 +128,9 @@ namespace vix::commands::RunCommand::detail
       if (ec)
         return {};
       return absolute.string() + "|" + std::to_string(size) + "|" +
-             std::to_string(mtime.time_since_epoch().count());
+             // libc++ on macOS may represent file-clock ticks with an extended
+             // integer type, for which std::to_string has no unambiguous overload.
+             std::to_string(static_cast<long long>(mtime.time_since_epoch().count()));
     }
 
     std::string cmake_graph_content_fingerprint(const fs::path &path)

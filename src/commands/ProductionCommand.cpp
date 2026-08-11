@@ -23,6 +23,7 @@ namespace vix::commands
   int ProductionCommand::run(const std::vector<std::string> &args)
   {
 #ifndef __linux__
+    (void)args;
     production::output::error(
         std::cerr,
         "vix production is currently supported on Linux only.");

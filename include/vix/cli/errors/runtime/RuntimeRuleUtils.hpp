@@ -36,6 +36,8 @@ namespace vix::cli::errors::runtime
 
   bool icontains(const std::string &text, const std::string &needle);
 
+  bool runtime_technical_details_enabled();
+
   std::string strip_line_comment(const std::string &line);
 
   std::optional<std::vector<std::string>> read_file_lines(

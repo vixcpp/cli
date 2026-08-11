@@ -66,11 +66,11 @@ namespace vix::cli::errors
     // Coroutines family (always late, very specific signals)
     templateRules_.push_back(vix::cli::errors::template_rules::makeCoroutineReturnTypeRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeMissingCoReturnRule());
-    templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidAwaitableRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoMemberAwaitReadyRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoMemberAwaitSuspendRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeNoMemberAwaitResumeRule());
     templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidPromiseTypeRule());
+    templateRules_.push_back(vix::cli::errors::template_rules::makeInvalidAwaitableRule());
 
     // Beginner / syntax / common mistakes
     rules_.push_back(makeCoutNotDeclaredRule());

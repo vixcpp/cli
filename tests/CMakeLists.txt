@@ -49,11 +49,18 @@ file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
 )
 
+file(GLOB VIX_COMPILER_DIAGNOSTIC_RULE_SOURCES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/rules/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/template/*.cpp"
+)
+
 add_executable(vix_cli_runtime_diagnostics_tests
   RuntimeDiagnosticsTests.cpp
   ../src/errors/RawLogDetectors.cpp
+  ../src/errors/ErrorPipeline.cpp
   ../src/errors/CodeFrame.cpp
   ${VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES}
+  ${VIX_COMPILER_DIAGNOSTIC_RULE_SOURCES}
 )
 
 target_include_directories(vix_cli_runtime_diagnostics_tests PRIVATE

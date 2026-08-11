@@ -74,6 +74,13 @@ namespace vix::cli::errors::template_rules
     {
       const std::string &message = err.message;
 
+      /*
+       * std::unique_ptr copy failures belong to the dedicated compiler rule,
+       * which explains ownership transfer rather than a generic deletion.
+       */
+      if (icontains(message, "unique_ptr"))
+        return false;
+
       if (icontains(message, "use of deleted function"))
         return true;
 

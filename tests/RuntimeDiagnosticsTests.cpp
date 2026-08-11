@@ -1,8 +1,10 @@
 #include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/cli/errors/ErrorContext.hpp>
+#include <vix/cli/errors/ErrorPipeline.hpp>
 
 #include <filesystem>
 #include <fstream>
-#include <functional>
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +28,31 @@ namespace
 
     if (!handled)
       throw std::runtime_error("runtime log was not handled");
+
+    return captured.str();
+  }
+
+  std::string diagnose_compiler(
+      const std::string &message,
+      const std::filesystem::path &source)
+  {
+    vix::cli::errors::CompilerError error;
+    error.file = source.string();
+    error.line = 1;
+    error.column = 1;
+    error.message = message;
+
+    vix::cli::errors::ErrorContext context;
+    context.sourceFile = source;
+
+    vix::cli::errors::ErrorPipeline pipeline;
+    std::ostringstream captured;
+    auto *const previous = std::cerr.rdbuf(captured.rdbuf());
+    const bool handled = pipeline.tryHandle({error}, context);
+    std::cerr.rdbuf(previous);
+
+    if (!handled)
+      throw std::runtime_error("compiler diagnostic was not handled");
 
     return captured.str();
   }
@@ -68,6 +95,25 @@ int main()
                     "invalid free");
     expect_contains(diagnose("ERROR: AddressSanitizer: heap-use-after-free\n"),
                     "use-after-free");
+
+    const std::string useAfterFreeCollision = diagnose(
+        "ERROR: AddressSanitizer: heap-use-after-free\n"
+        "SEGV on unknown address\n"
+        "==123==ABORTING\n");
+    expect_contains(useAfterFreeCollision, "use-after-free");
+    expect_not_contains(useAfterFreeCollision, "segmentation fault");
+    expect_not_contains(useAfterFreeCollision, "application stopped");
+
+    const std::string uninitialized = diagnose(
+        "WARNING: MemorySanitizer: use-of-uninitialized-value\n");
+    expect_contains(uninitialized, "uninitialized memory read");
+    expect_not_contains(uninitialized, "log:");
+
+    setenv("VIX_LOG_LEVEL", "debug", 1);
+    const std::string debugUninitialized = diagnose(
+        "WARNING: MemorySanitizer: use-of-uninitialized-value\n");
+    unsetenv("VIX_LOG_LEVEL");
+    expect_contains(debugUninitialized, "log:");
     expect_contains(diagnose("Segmentation fault (core dumped)\n"),
                     "segmentation fault");
     expect_contains(diagnose("Aborted (core dumped)\n"),
@@ -91,10 +137,26 @@ int main()
 
     const std::string sanitizer = diagnose(
         "ERROR: AddressSanitizer: heap-buffer-overflow\n"
-        "    #1 0x123 in main " + source.string() + ":2:7\n",
+        "    #1 0x123 in main " +
+            source.string() + ":2:7\n",
         {});
     expect_contains(sanitizer, source.string() + ":2");
     expect_not_contains(sanitizer, "at: source:");
+
+    const std::string uniquePtr = diagnose_compiler(
+        "use of deleted function 'std::unique_ptr<int>::unique_ptr(const std::unique_ptr<int>&)'",
+        source);
+    expect_contains(uniquePtr, "std::unique_ptr cannot be copied");
+
+    const std::string substitution = diagnose_compiler(
+        "template argument deduction/substitution failed",
+        source);
+    expect_contains(substitution, "template substitution failed");
+
+    const std::string awaitReady = diagnose_compiler(
+        "no member named 'await_ready' in 'Task'",
+        source);
+    expect_contains(awaitReady, "missing await_ready");
 
     std::error_code error;
     std::filesystem::remove(source, error);

@@ -76,8 +76,7 @@ namespace vix::cli::errors::template_rules
               icontains(message, "invalid")) ||
              icontains(message, "type/value mismatch at argument") ||
              icontains(message, "expected a type, got") ||
-             icontains(message, "expected a constant of type") ||
-             icontains(message, "template argument deduction/substitution failed");
+             icontains(message, "expected a constant of type");
     }
 
     bool handle(

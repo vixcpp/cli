@@ -69,8 +69,7 @@ namespace vix::cli::errors::template_rules
 
     bool mentions_move_only_type(const std::string &message)
     {
-      return icontains(message, "unique_ptr") ||
-             icontains(message, "std::thread") ||
+      return icontains(message, "std::thread") ||
              icontains(message, "std::jthread") ||
              icontains(message, "std::promise") ||
              icontains(message, "std::future") ||
@@ -91,6 +90,14 @@ namespace vix::cli::errors::template_rules
     bool match(const vix::cli::errors::CompilerError &err) const override
     {
       const std::string &message = err.message;
+
+      /*
+       * std::unique_ptr has a dedicated compiler rule with a more
+       * actionable ownership fix. Keep this generic move-only rule from
+       * stealing that diagnostic before the regular compiler-rule family.
+       */
+      if (icontains(message, "unique_ptr"))
+        return false;
 
       // Most reliable: deleted-function diagnostic mentioning a move-only type
       // and copy semantics.

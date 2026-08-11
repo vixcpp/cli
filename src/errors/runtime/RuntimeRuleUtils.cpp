@@ -16,6 +16,7 @@
 #include <vix/cli/errors/ErrorContext.hpp>
 
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -340,6 +341,27 @@ namespace vix::cli::errors::runtime
     return false;
   }
 
+  bool runtime_technical_details_enabled()
+  {
+    const char *level = std::getenv("VIX_LOG_LEVEL");
+
+    if (level == nullptr || *level == '\0')
+      return false;
+
+    std::string value(level);
+
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](unsigned char character)
+        {
+          return static_cast<char>(std::tolower(character));
+        });
+
+    return value == "debug" || value == "trace";
+  }
+
   std::string strip_line_comment(const std::string &line)
   {
     const std::size_t pos = line.find("//");
@@ -560,7 +582,8 @@ namespace vix::cli::errors::runtime
       const std::string &log,
       std::size_t maxLines)
   {
-    if (log.empty() || maxLines == 0)
+    if (!runtime_technical_details_enabled() ||
+        log.empty() || maxLines == 0)
       return;
 
     std::istringstream input(log);

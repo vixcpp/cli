@@ -483,7 +483,7 @@ namespace vix::cli::errors::runtime
 
   std::string make_at_text(
       const RuntimeLocation &location,
-      const std::filesystem::path &sourceFile)
+      [[maybe_unused]] const std::filesystem::path &sourceFile)
   {
     if (location.valid() &&
         is_probably_text_file(location.file))
@@ -491,13 +491,6 @@ namespace vix::cli::errors::runtime
       return location.file.string() +
              ":" +
              std::to_string(location.line);
-    }
-
-    if (!sourceFile.empty() &&
-        is_probably_text_file(sourceFile))
-    {
-      return "source: " +
-             sourceFile.filename().string();
     }
 
     return {};

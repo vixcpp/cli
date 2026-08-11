@@ -30,6 +30,7 @@ namespace vix::cli::errors::runtime
   {
     enum class InvalidFreeKind
     {
+      AllocDeallocMismatch,
       AsanBadFree,
       LibcInvalidPointer,
       LibcMunmapInvalid,
@@ -38,6 +39,16 @@ namespace vix::cli::errors::runtime
 
     InvalidFreeKind classify_issue(const std::string &log)
     {
+      if (icontains(log, "alloc-dealloc-mismatch") ||
+          icontains(log, "new-delete-type-mismatch") ||
+          (icontains(log, "mismatch") &&
+           ((icontains(log, "new[]") && icontains(log, "delete")) ||
+            (icontains(log, "malloc") && icontains(log, "delete")) ||
+            (icontains(log, "operator new") && icontains(log, "free")))))
+      {
+        return InvalidFreeKind::AllocDeallocMismatch;
+      }
+
       if (icontains(log, "AddressSanitizer") &&
           (icontains(log, "bad-free") ||
            icontains(log, "attempting free") ||
@@ -57,7 +68,9 @@ namespace vix::cli::errors::runtime
 
     std::string choose_message(const std::string &log)
     {
-      (void)log;
+      if (classify_issue(log) == InvalidFreeKind::AllocDeallocMismatch)
+        return "alloc/dealloc mismatch";
+
       return "invalid free";
     }
 
@@ -65,6 +78,9 @@ namespace vix::cli::errors::runtime
     {
       switch (classify_issue(log))
       {
+      case InvalidFreeKind::AllocDeallocMismatch:
+        return "free memory with its matching API: new/delete, new[]/delete[], or malloc/free";
+
       case InvalidFreeKind::AsanBadFree:
       case InvalidFreeKind::LibcInvalidPointer:
       case InvalidFreeKind::LibcMunmapInvalid:
@@ -90,6 +106,12 @@ namespace vix::cli::errors::runtime
 
     bool looks_like_invalid_free_log(const std::string &log)
     {
+      if (icontains(log, "alloc-dealloc-mismatch") ||
+          icontains(log, "new-delete-type-mismatch"))
+      {
+        return true;
+      }
+
       if (icontains(log, "free(): invalid pointer") ||
           icontains(log, "munmap_chunk(): invalid pointer") ||
           icontains(log, "bad-free"))

@@ -63,6 +63,7 @@ namespace vix::cli::errors::runtime
         const std::filesystem::path &sourceFile) const override
     {
       (void)log;
+      (void)sourceFile;
 
       std::cerr << RED
                 << "runtime error: required resource not found"
@@ -73,7 +74,7 @@ namespace vix::cli::errors::runtime
               "check the path used to load the resource",
               "ensure the file exists relative to the working directory or configured asset root",
           },
-          !sourceFile.empty() ? "source: " + sourceFile.filename().string() : "");
+          "");
 
       return true;
     }

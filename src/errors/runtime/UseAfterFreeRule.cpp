@@ -41,6 +41,15 @@ namespace vix::cli::errors::runtime
       if (icontains(log, "heap-use-after-free"))
         return UseAfterFreeKind::HeapUseAfterFree;
 
+      if (icontains(log, "use-after-return"))
+        return UseAfterFreeKind::DanglingPointer;
+
+      if (icontains(log, "stack-use-after-scope") ||
+          icontains(log, "use-after-scope"))
+      {
+        return UseAfterFreeKind::DanglingPointer;
+      }
+
       if (icontains(log, ".clear(") ||
           icontains(log, ".erase(") ||
           icontains(log, "container"))
@@ -91,7 +100,10 @@ namespace vix::cli::errors::runtime
     bool looks_like_use_after_free_log(const std::string &log)
     {
       if (icontains(log, "heap-use-after-free") ||
-          icontains(log, "use-after-free"))
+          icontains(log, "use-after-free") ||
+          icontains(log, "use-after-return") ||
+          icontains(log, "stack-use-after-scope") ||
+          icontains(log, "use-after-scope"))
       {
         return true;
       }

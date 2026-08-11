@@ -45,7 +45,29 @@ add_test(
   COMMAND vix_cli_cmake_build_errors_tests
 )
 
+file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
+)
 
+add_executable(vix_cli_runtime_diagnostics_tests
+  RuntimeDiagnosticsTests.cpp
+  ../src/errors/RawLogDetectors.cpp
+  ../src/errors/CodeFrame.cpp
+  ${VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES}
+)
+
+target_include_directories(vix_cli_runtime_diagnostics_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_runtime_diagnostics_tests PRIVATE vix_warnings)
+endif()
+
+add_test(
+  NAME vix_cli_runtime_diagnostics_tests
+  COMMAND vix_cli_runtime_diagnostics_tests
+)
 
 add_executable(vix_cli_package_hash_tests
   PackageHashTests.cpp

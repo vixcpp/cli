@@ -92,6 +92,38 @@ external service/toolchain and is not relabelled as a passing behavior.
 | build   | `--graph-executor`       | BuildCore                         | A/C   | PASS        |
 | build   | `--heartbeat`            | BuildCore                         | B     | PASS        |
 | build   | `--no-heartbeat`         | BuildCore                         | B     | PASS        |
+| dev     | `--dir`                  | DevProjectContractTest            | C     | PASS        |
+| dev     | `--preset`               | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--run-preset`           | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--jobs`                 | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--clean`                | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--replay`               | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--cwd`                  | DevProjectContractTest            | C     | PASS        |
+| dev     | `--env`                  | DevProjectContractTest            | C     | PASS        |
+| dev     | `--args`                 | DevProjectContractTest            | C     | PASS        |
+| dev     | `--run`                  | Dev single-C++ matrix             | C     | UNCOVERED   |
+| dev     | `--watch`                | DevProjectContractTest            | C     | PASS        |
+| dev     | `--reload`               | DevProjectContractTest            | C     | UNCOVERED   |
+| dev     | `--force-server`         | Dev single-C++ matrix             | C     | UNCOVERED   |
+| dev     | `--force-script`         | Dev single-C++ matrix             | C     | UNCOVERED   |
+| dev     | `--auto-deps`            | Dev single-C++ matrix             | C     | UNCOVERED   |
+| dev     | `--san`                  | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--ubsan`                | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--tsan`                 | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--with-sqlite`          | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--with-mysql`           | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--local-cache`          | Dev single-C++ matrix             | C     | UNCOVERED   |
+| dev     | `--docs`                 | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--no-docs`              | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--clear`                | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--no-clear`             | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--log-level`            | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--verbose`              | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--quiet`                | DevProjectContractTest            | C     | PASS        |
+| dev     | `--log-format`           | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--log-color`            | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--no-color`             | Dev option matrix                 | C     | UNCOVERED   |
+| dev     | `--help`                 | DevOptionCoverageTest             | A     | PASS        |
 
 ## Parser-only public aliases and undocumented parser surface
 

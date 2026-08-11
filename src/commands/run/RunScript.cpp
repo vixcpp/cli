@@ -41,6 +41,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -61,6 +62,37 @@ namespace vix::commands::RunCommand::detail
 
   namespace
   {
+#ifndef _WIN32
+    volatile sig_atomic_t g_single_cpp_watch_interrupted = 0;
+
+    void on_single_cpp_watch_signal(int)
+    {
+      g_single_cpp_watch_interrupted = 1;
+    }
+
+    struct SingleCppWatchSignalGuard
+    {
+      struct sigaction previous {};
+      bool installed = false;
+
+      SingleCppWatchSignalGuard()
+      {
+        g_single_cpp_watch_interrupted = 0;
+        struct sigaction action {};
+        action.sa_handler = on_single_cpp_watch_signal;
+        sigemptyset(&action.sa_mask);
+        action.sa_flags = 0;
+        installed = ::sigaction(SIGINT, &action, &previous) == 0;
+      }
+
+      ~SingleCppWatchSignalGuard()
+      {
+        if (installed)
+          ::sigaction(SIGINT, &previous, nullptr);
+      }
+    };
+#endif
+
     void print_double_dash_warning_if_needed(const Options &opt);
     bool ensure_script_exists(const fs::path &script);
     std::vector<std::string> extract_script_include_prefixes_for_autodeps(const fs::path &cppPath);
@@ -159,6 +191,40 @@ namespace vix::commands::RunCommand::detail
         if (const std::string fp = cmake_graph_path_fingerprint(token); !fp.empty())
           inputs.push_back(std::move(fp));
       }
+    }
+
+    void append_cmake_depfile_paths(
+        const fs::path &depfile,
+        std::vector<fs::path> &paths)
+    {
+      std::string contents = text::read_text_file_or_empty(depfile);
+      for (std::size_t pos = 0; (pos = contents.find("\\\\\n", pos)) != std::string::npos;)
+        contents.replace(pos, 2, " ");
+      const auto colon = contents.find(':');
+      if (colon == std::string::npos)
+        return;
+      std::istringstream stream(contents.substr(colon + 1));
+      std::string token;
+      while (stream >> token)
+        paths.emplace_back(token);
+    }
+
+    std::vector<fs::path> cmake_script_watch_inputs(const ScriptProjectState &state)
+    {
+      std::vector<fs::path> paths = {state.script, state.cmakeLists};
+      std::error_code ec;
+      const fs::path cmakeFiles = state.buildDir / "CMakeFiles";
+      if (fs::exists(cmakeFiles, ec) && !ec)
+      {
+        for (fs::recursive_directory_iterator it(cmakeFiles, ec), end;
+             !ec && it != end;
+             it.increment(ec))
+        {
+          if (it->is_regular_file(ec) && it->path().extension() == ".d")
+            append_cmake_depfile_paths(it->path(), paths);
+        }
+      }
+      return paths;
     }
 
     std::string make_cmake_graph_fingerprint(const ScriptProjectState &state)
@@ -1659,7 +1725,10 @@ namespace vix::commands::RunCommand::detail
                 << script_fallback_reason_name(probe.fallbackReason) << "\n";
     }
 
-    int build_script_executable_internal(const Options &opt, fs::path &exePath)
+    int build_script_executable_internal(
+        const Options &opt,
+        fs::path &exePath,
+        std::vector<fs::path> *watchInputs)
     {
       Options o = opt;
 
@@ -1672,6 +1741,20 @@ namespace vix::commands::RunCommand::detail
       if (script_can_use_direct_compile(probe))
       {
         const DirectScriptPlan directPlan = make_direct_script_plan(o, probe);
+
+        if (watchInputs)
+        {
+          watchInputs->clear();
+          watchInputs->push_back(directPlan.scriptPath);
+          auto append_fingerprint_path = [&](const std::string &fingerprint)
+          {
+            const std::size_t separator = fingerprint.find('|');
+            if (separator != std::string::npos)
+              watchInputs->emplace_back(fingerprint.substr(0, separator));
+          };
+          for (const std::string &fingerprint : directPlan.fingerprint.headerFingerprints)
+            append_fingerprint_path(fingerprint);
+        }
 
         std::error_code ec;
         fs::create_directories(directPlan.cacheDir, ec);
@@ -1709,6 +1792,9 @@ namespace vix::commands::RunCommand::detail
 
           if (build.exitCode != 0)
           {
+            if (build.exitCode == 130)
+              return 130;
+
             if (!persist_direct_script_failure_cache(
                     directPlan,
                     build.exitCode,
@@ -1758,6 +1844,9 @@ namespace vix::commands::RunCommand::detail
       }
 
       const int code = configure_and_build_script(o, state);
+
+      if (code == 0 && watchInputs)
+        *watchInputs = cmake_script_watch_inputs(state);
       if (code != 0)
         return code;
 
@@ -1901,9 +1990,12 @@ namespace vix::commands::RunCommand::detail
     return run_single_cpp_cmake(o, cmakePlan);
   }
 
-  int build_script_executable(const Options &opt, std::filesystem::path &exePath)
+  int build_script_executable(
+      const Options &opt,
+      std::filesystem::path &exePath,
+      std::vector<std::filesystem::path> *watchInputs)
   {
-    return build_script_executable_internal(opt, exePath);
+    return build_script_executable_internal(opt, exePath, watchInputs);
   }
 
   int run_single_cpp_watch(const Options &opt)
@@ -1922,13 +2014,66 @@ namespace vix::commands::RunCommand::detail
       return 1;
     }
 
-    std::error_code ec{};
-    auto lastWrite = fs::last_write_time(script, ec);
-    if (ec)
+    struct WatchState { bool exists; fs::file_time_type write; std::uintmax_t size; };
+    std::unordered_map<std::string, WatchState> watched;
+    auto refresh_watched_inputs = [&](const std::vector<fs::path> &inputs)
     {
-      error("Unable to read last_write_time for: " + script.string());
-      return 1;
-    }
+      watched.clear();
+      for (const fs::path &input : inputs)
+      {
+        std::error_code inputEc;
+        const fs::path path = fs::absolute(input, inputEc).lexically_normal();
+        if (inputEc)
+          continue;
+        const bool exists = fs::is_regular_file(path, inputEc) && !inputEc;
+        const auto write = exists ? fs::last_write_time(path, inputEc) : fs::file_time_type{};
+        const auto size = exists && !inputEc ? fs::file_size(path, inputEc) : 0;
+        watched.emplace(path.generic_string(), WatchState{exists && !inputEc, write, size});
+      }
+    };
+    // A watch event is consumed at the point at which it is accepted, not at
+    // the end of the subsequent build.  Otherwise the old child can be slow
+    // to exit and repeatedly observe the same filesystem state.
+    auto accept_watched_change = [&]()
+    {
+      std::vector<fs::path> inputs;
+      inputs.reserve(watched.size());
+      for (const auto &[key, _] : watched)
+        inputs.emplace_back(key);
+      refresh_watched_inputs(inputs);
+    };
+    // Keep the accepted-generation baseline for inputs which remain in the
+    // dependency graph.  A write made while the compiler is running must
+    // therefore remain visible after a successful build.  Newly discovered
+    // dependencies have no earlier generation to compare with and start at
+    // their current state.
+    auto update_watched_inputs_after_build = [&](const std::vector<fs::path> &inputs)
+    {
+      const auto previous = watched;
+      refresh_watched_inputs(inputs);
+      for (auto &[key, snapshot] : watched)
+      {
+        const auto it = previous.find(key);
+        if (it != previous.end())
+          snapshot = it->second;
+      }
+    };
+    auto watched_inputs_changed = [&]()
+    {
+      for (const auto &[key, before] : watched)
+      {
+        std::error_code inputEc;
+        const fs::path path(key);
+        const bool exists = fs::is_regular_file(path, inputEc) && !inputEc;
+        const auto write = exists ? fs::last_write_time(path, inputEc) : fs::file_time_type{};
+        const auto size = exists && !inputEc ? fs::file_size(path, inputEc) : 0;
+        if (before.exists != (exists && !inputEc) ||
+            (exists && !inputEc && (before.write != write || before.size != size)))
+          return true;
+      }
+      return false;
+    };
+    refresh_watched_inputs({script});
 
     const bool usesVixRuntime = script_uses_vix(script);
     const bool hasForceServer = opt.forceServerLike;
@@ -1954,6 +2099,12 @@ namespace vix::commands::RunCommand::detail
     hint("Watching: " + script.string());
 
 #ifdef _WIN32
+    auto lastWrite = fs::last_write_time(script, ec);
+    if (ec)
+    {
+      error("Unable to read last_write_time for: " + script.string());
+      return 1;
+    }
     while (true)
     {
       const auto start = std::chrono::steady_clock::now();
@@ -2004,12 +2155,21 @@ namespace vix::commands::RunCommand::detail
 
     return 0;
 #else
+    SingleCppWatchSignalGuard signalGuard;
     while (true)
     {
+      if (g_single_cpp_watch_interrupted)
+        return 0;
+
       fs::path exePath;
-      int buildCode = build_script_executable(opt, exePath);
+      std::vector<fs::path> buildInputs;
+      int buildCode = build_script_executable(opt, exePath, &buildInputs);
+      if (buildCode == 130)
+        return 0;
       if (buildCode != 0)
       {
+        if (!buildInputs.empty())
+          update_watched_inputs_after_build(buildInputs);
         watch_spinner_stop();
 
         const std::string label = kind_label(dynamicServerLike);
@@ -2020,20 +2180,29 @@ namespace vix::commands::RunCommand::detail
         {
           std::this_thread::sleep_for(500ms);
 
-          auto nowWrite = fs::last_write_time(script, ec);
-          if (ec)
-          {
-            error("Error reading last_write_time during watch loop.");
-            return 1;
-          }
+          if (g_single_cpp_watch_interrupted)
+            return 0;
 
-          if (nowWrite != lastWrite)
+          if (watched_inputs_changed())
           {
-            lastWrite = nowWrite;
+            accept_watched_change();
             print_watch_restart_banner(script, "Rebuilding script...");
             break;
           }
         }
+        continue;
+      }
+
+      if (!buildInputs.empty())
+        update_watched_inputs_after_build(buildInputs);
+
+      // Do not run an executable produced from a superseded input snapshot.
+      // This is a distinct later generation, not the event that started this
+      // build, because that event was consumed before stopping the child.
+      if (watched_inputs_changed())
+      {
+        accept_watched_change();
+        print_watch_restart_banner(script, "Rebuilding script...");
         continue;
       }
 
@@ -2154,10 +2323,21 @@ namespace vix::commands::RunCommand::detail
 
         drain_fd_live_local(outputPipe[0], runtimeLog);
 
-        auto nowWrite = fs::last_write_time(script, ec);
-        if (!ec && nowWrite != lastWrite)
+        if (g_single_cpp_watch_interrupted)
         {
-          lastWrite = nowWrite;
+          (void)::kill(pid, SIGINT);
+          int status = 0;
+          while (::waitpid(pid, &status, 0) < 0 && errno == EINTR)
+          {
+          }
+          drain_fd_live_local(outputPipe[0], runtimeLog);
+          ::close(outputPipe[0]);
+          return 0;
+        }
+
+        if (watched_inputs_changed())
+        {
+          accept_watched_change();
           print_watch_restart_banner(script, "Rebuilding script...");
           needRestart = true;
 
@@ -2238,16 +2418,12 @@ namespace vix::commands::RunCommand::detail
           {
             std::this_thread::sleep_for(500ms);
 
-            auto now2 = fs::last_write_time(script, ec);
-            if (ec)
-            {
-              error("Error reading last_write_time during post-exit watch.");
-              return exitCode;
-            }
+            if (g_single_cpp_watch_interrupted)
+              return 0;
 
-            if (now2 != lastWrite)
+            if (watched_inputs_changed())
             {
-              lastWrite = now2;
+              accept_watched_change();
               print_watch_restart_banner(script, "Rebuilding script...");
               break;
             }

@@ -148,7 +148,8 @@ namespace vix::commands::RunCommand::dev
            ext == ".hh" ||
            ext == ".hxx" ||
            ext == ".h" ||
-           ext == ".ipp";
+           ext == ".ipp" ||
+           ext == ".inl";
   }
 
   bool DevChangeClassifier::is_config_file(const fs::path &path) const

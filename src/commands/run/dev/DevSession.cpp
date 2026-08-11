@@ -907,6 +907,12 @@ namespace vix::commands::RunCommand::dev
     if (!options_.quiet)
       print_dev_started(static_cast<int>(pid));
 
+    // Do not make the first observable child output wait for a complete file
+    // polling period. File indexing remains at pollInterval; this short,
+    // one-off drain only removes startup/restart output latency.
+    co_await ctx.timers().sleep_for(std::chrono::milliseconds(10), ct);
+    drain_fd_live(outputPipe[0], runtimeLog);
+
     while (!ct.is_cancelled())
     {
       co_await sleep_poll_interval(ctx, ct);

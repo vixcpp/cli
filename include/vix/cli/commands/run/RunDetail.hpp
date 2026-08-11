@@ -794,7 +794,10 @@ namespace vix::commands::RunCommand::detail
    *
    * This uses the same script engine as `vix run`, but stops after build.
    */
-  int build_script_executable(const Options &opt, fs::path &exePath);
+  int build_script_executable(
+      const Options &opt,
+      fs::path &exePath,
+      std::vector<fs::path> *watchInputs = nullptr);
 
   /**
    * @brief Execute a single C++ file with the fast direct-compile engine.

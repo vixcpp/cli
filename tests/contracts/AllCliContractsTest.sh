@@ -13,11 +13,15 @@ run PublicOptionCoverageTest.sh
 run CapabilityCoverageGateTest.sh
 run CommandCoverageGateTest.sh
 run GlobalOptionCoverageGateTest.sh
+run dev/DevOptionCoverageTest.sh
 run run/RunCoreContractTest.sh
 run run/RunCacheContractTest.sh
 run run/RunVixAppContractTest.sh
 run run/RunExecutionPathsContractTest.sh
 run run/RunCompiledDependencyContractTest.sh
+run dev/DevProjectContractTest.sh
+run dev/DevSingleCppContractTest.sh
+run dev/DevSingleCppSignalContractTest.sh
 run build/BuildCoreContractTest.sh
 run build/BuildPassthroughContractTest.sh
 run build/BuildExecutionPathsContractTest.sh

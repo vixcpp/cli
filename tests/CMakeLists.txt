@@ -291,4 +291,12 @@ add_test(NAME vix_cli_run_execution_paths_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_compiled_dependency_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCompiledDependencyContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_dev_option_coverage
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevOptionCoverageTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_dev_project_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevProjectContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_dev_single_cpp_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevSingleCppContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_dev_single_cpp_signal_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevSingleCppSignalContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 set_tests_properties(vix_cli_run_vix_app_contract vix_cli_run_cache_contract vix_cli_build_passthrough_contract PROPERTIES LABELS "contract;known-regression")

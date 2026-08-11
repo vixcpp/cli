@@ -84,8 +84,19 @@ namespace vix::cli::errors::runtime
     std::optional<int> try_extract_port(
         const std::string &log)
     {
+      /*
+       * Prefer an explicit "port <number>" marker.
+       *
+       * Do not accept a bare ':' before the number here.
+       * A pattern such as ':8081' also matches timestamps:
+       *
+       *   13:10:49
+       *      ^^^
+       *
+       * and would incorrectly report port 10.
+       */
       static const std::regex re(
-          R"((?:port|:)[ \t]*([0-9]{2,5}))",
+          R"(\bport[ \t]*[:=]?[ \t]*([0-9]{1,5})\b)",
           std::regex::icase);
 
       std::smatch match;

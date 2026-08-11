@@ -620,62 +620,6 @@ namespace vix::cli::errors
       return std::nullopt;
     }
 
-    bool handleRuntimePortAlreadyInUse(
-        const std::string &runtimeLog,
-        const std::filesystem::path &sourceFile)
-    {
-      const bool hit =
-          icontains(runtimeLog, "address already in use") ||
-          icontains(runtimeLog, "eaddrinuse") ||
-          (icontains(runtimeLog, "bind") &&
-           icontains(runtimeLog, "already in use"));
-
-      if (!hit)
-        return false;
-
-      std::string port;
-
-      {
-        static const std::regex re1(R"(:([0-9]{2,5}))");
-        std::smatch match;
-
-        if (std::regex_search(runtimeLog, match, re1))
-          port = match[1].str();
-
-        if (port.empty())
-        {
-          static const std::regex re2(
-              R"(port[^0-9]*([0-9]{2,5}))",
-              std::regex::icase);
-
-          if (std::regex_search(runtimeLog, match, re2))
-            port = match[1].str();
-        }
-      }
-
-      print_header("runtime error: address already in use");
-
-      const std::string hint =
-          port.empty()
-              ? "this port is already in use; stop the other process or change the port"
-              : "port " + port + " is already in use; stop the other process or change the port";
-
-      if (auto location = try_extract_first_user_frame(runtimeLog, sourceFile))
-      {
-        print_codeframe_then_bottom_default(*location, hint);
-      }
-      else
-      {
-        print_hint_at_bottom(
-            hint,
-            !sourceFile.empty() ? "source: " + sourceFile.filename().string() : "");
-
-        print_excerpt(runtimeLog);
-      }
-
-      return true;
-    }
-
     bool handleRuntimeAssertionFailed(
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile)
@@ -1871,9 +1815,6 @@ namespace vix::cli::errors
         const std::string &log,
         const std::filesystem::path &sourceFile)
     {
-      if (handleRuntimePortAlreadyInUse(log, sourceFile))
-        return true;
-
       if (handleUBSanRuntimeError(log, sourceFile))
         return true;
 

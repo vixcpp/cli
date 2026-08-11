@@ -23,4 +23,5 @@ check_help() {
 }
 check_help run
 check_help build
+check_help dev
 echo "PublicOptionCoverageTest passed"

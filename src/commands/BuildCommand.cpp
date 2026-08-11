@@ -5476,9 +5476,7 @@ namespace vix::commands::BuildCommand
                          previousState->target == projectArtifact.target &&
                          previousState->compiler == projectArtifact.compiler &&
                          !previousState->lastBinary.empty() &&
-                         !previousState->artifactRoot.empty() &&
                          util::file_exists(previousState->lastBinary) &&
-                         util::dir_exists(previousState->artifactRoot) &&
                          previous_project_inputs_still_current(
                              plan_.userProjectDir,
                              previousState->inputs) &&
@@ -5503,8 +5501,6 @@ namespace vix::commands::BuildCommand
             step("fast no-op miss: compiler changed");
           else if (previousState->lastBinary.empty() || !util::file_exists(previousState->lastBinary))
             step("fast no-op miss: last binary missing");
-          else if (previousState->artifactRoot.empty() || !util::dir_exists(previousState->artifactRoot))
-            step("fast no-op miss: artifact root missing");
           else if (const std::string changedInput = first_changed_project_input(plan_.userProjectDir, previousState->inputs); !changedInput.empty())
             step("fast no-op miss: project input changed: " + changedInput);
           else if (!cmake_globs_still_current(plan_.buildDir))
@@ -5512,7 +5508,7 @@ namespace vix::commands::BuildCommand
         }
 
         if (canFastNoopCheck &&
-            !graph_executor_enabled(opt_) &&
+            opt_.fast &&
             !opt_.explain &&
             !opt_.exportBin &&
             opt_.outPath.empty())
@@ -5560,7 +5556,7 @@ namespace vix::commands::BuildCommand
         }
 
         if (buildStateHit &&
-            !graph_executor_enabled(opt_) &&
+            opt_.fast &&
             !opt_.explain &&
             !opt_.exportBin &&
             opt_.outPath.empty())

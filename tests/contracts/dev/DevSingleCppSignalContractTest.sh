@@ -15,7 +15,13 @@ write_running_source() {
 start() { HOME="$ROOT/home" "$VIX_BIN" dev "$ROOT/main.cpp" --quiet > "$ROOT/dev.log" 2>&1 & PID=$!; }
 wait_for() { local text=$1; for _ in $(seq 1 300); do grep -q "$text" "$ROOT/dev.log" && return; sleep .1; done; cat "$ROOT/dev.log" >&2; fail "missing $text"; }
 assert_stopped() { for _ in $(seq 1 100); do kill -0 "$PID" 2>/dev/null || break; sleep .1; done; ! kill -0 "$PID" 2>/dev/null || fail 'dev did not stop after one SIGINT'; [[ -z "$CHILD" ]] || ! kill -0 "$CHILD" 2>/dev/null || fail 'runtime child remained after dev exit'; PID=""; CHILD=""; }
-interrupt() { kill -INT "$PID"; assert_stopped; ! grep -q 'Fix the errors, save the file' "$ROOT/dev.log" || fail 'SIGINT was reported as a build failure'; }
+interrupt() {
+  local hints_before
+  hints_before=$(grep -c 'Fix the errors, save the file' "$ROOT/dev.log" || true)
+  kill -INT "$PID"
+  assert_stopped
+  [[ $(grep -c 'Fix the errors, save the file' "$ROOT/dev.log" || true) -eq "$hints_before" ]] || fail 'SIGINT was reported as a build failure'
+}
 
 mkdir -p "$ROOT/home"
 # Initial build: interrupt before it can start a child.

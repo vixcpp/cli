@@ -263,7 +263,10 @@ namespace vix::commands::RunCommand::detail
           continue;
         }
         for (fs::recursive_directory_iterator it(
-                 root, fs::directory_options::skip_permission_denied, ec),
+                 root,
+                 fs::directory_options::skip_permission_denied |
+                     fs::directory_options::follow_directory_symlink,
+                 ec),
              end;
              !ec && it != end;
              it.increment(ec))
@@ -1246,9 +1249,8 @@ namespace vix::commands::RunCommand::detail
       const std::string previous = text::read_text_file_or_empty(state.graphFingerprintFile);
       const bool hit = !previous.empty() && previous == make_cmake_graph_fingerprint(state);
       if (opt.traceCache)
-        std::cerr << "cmake graph cache: miss (graph validation pending)\n";
-      (void)hit;
-      return false;
+        std::cerr << "cmake graph cache: " << (hit ? "hit" : "miss") << "\n";
+      return hit;
 #endif
     }
 
@@ -2170,13 +2172,18 @@ namespace vix::commands::RunCommand::detail
         return 0;
       if (buildCode != 0)
       {
-        if (!buildInputs.empty())
-          update_watched_inputs_after_build(buildInputs);
+        // Keep the last successful dependency set while a rebuild fails.
+        // A failed direct-compile probe may omit a just-deleted header; replacing
+        // the set with that partial probe would make recreating the header
+        // invisible and prevent automatic recovery.
         watch_spinner_stop();
 
         const std::string label = kind_label(dynamicServerLike);
         error("Last " + label + " build failed (exit code " + std::to_string(buildCode) + ").");
         hint("Fix the errors, save the file, and Vix will rebuild automatically.");
+        // Dev keeps running after a compile error; make the recovery guidance
+        // observable immediately when stdout is redirected by an IDE or test.
+        std::cout << std::flush;
 
         for (;;)
         {

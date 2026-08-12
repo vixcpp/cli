@@ -16,13 +16,13 @@
 #include <chrono>
 #include <cstdlib>
 #include <sstream>
-#include <thread>
 
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Strings.hpp>
 
 #include <vix/engine/Process.hpp>
+#include <vix/engine/BuildParallelism.hpp>
 #include <vix/utils/Env.hpp>
 
 #ifndef _WIN32
@@ -124,12 +124,7 @@ namespace vix::cli::build
 
   int default_jobs()
   {
-    unsigned int hc = std::thread::hardware_concurrency();
-    if (hc == 0)
-      return 4;
-    if (hc > 64)
-      hc = 64;
-    return static_cast<int>(hc);
+    return vix::engine::default_build_jobs();
   }
 
   std::vector<std::string> cmake_configure_argv(

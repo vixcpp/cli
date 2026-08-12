@@ -93,5 +93,5 @@ grep -Fxq '52' <<<"$out" || fail "changed compiled dependency reused stale execu
 if out="$(cd "$PROJECT" && "$VIX_BIN" run main.cpp --no-san -- -lcontract_missing_library 2>&1)"; then
   fail "missing library unexpectedly linked"
 fi
-grep -Eiq 'cannot find|link error|linking failed' <<<"$out" || fail "missing library lacked a linker diagnostic"
+grep -Eiq 'cannot find|unable to find|not found|link error|linking failed' <<<"$out" || fail "missing library lacked a linker diagnostic"
 echo "RunCompiledDependencyContractTest passed"

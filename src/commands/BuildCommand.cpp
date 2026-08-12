@@ -5339,11 +5339,13 @@ namespace vix::commands::BuildCommand
 
           if (verboseMode)
           {
+            const std::optional<std::string> effectiveLauncher =
+                plan_.launcher ? plan_.launcher : std::optional<std::string>{"none"};
             build::print_build_header_full(
                 std::cout,
                 build::default_build_target_name(opt_, plan_),
                 display_build_profile(plan_),
-                plan_.launcher,
+                effectiveLauncher,
                 plan_.fastLinkerFlag,
                 opt_.jobs <= 0 ? build::default_jobs() : opt_.jobs);
           }
@@ -6184,13 +6186,15 @@ namespace vix::commands::BuildCommand
 
               if (!buildHeaderPrinted)
               {
+                const std::optional<std::string> effectiveLauncher =
+                    plan_.launcher ? plan_.launcher : std::optional<std::string>{"none"};
                 build::print_build_header_full(
                     std::cout,
                     build::default_build_target_name(
                         opt_,
                         plan_),
                     display_build_profile(plan_),
-                    verboseMode ? plan_.launcher : std::nullopt,
+                    verboseMode ? effectiveLauncher : std::nullopt,
                     verboseMode ? plan_.fastLinkerFlag : std::nullopt,
                     verboseMode
                         ? (opt_.jobs <= 0

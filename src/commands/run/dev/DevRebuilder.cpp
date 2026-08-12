@@ -56,7 +56,8 @@ namespace vix::commands::RunCommand::dev
 
     std::string make_vix_dev_build_command(
         const DevRebuilderOptions &options,
-        bool fast)
+        bool fast,
+        bool cleanBeforeBuild = false)
     {
       const detail::Options &opt = options.runOptions;
 
@@ -76,6 +77,12 @@ namespace vix::commands::RunCommand::dev
 
       if (fast)
         oss << " --fast";
+
+      // A source edit can share the previous timestamp on coarse filesystems.
+      // Clean only after a watcher-confirmed change so the next build cannot
+      // reuse an executable whose dependency scan missed that edit.
+      if (cleanBeforeBuild)
+        oss << " --clean";
 
       if (opt.jobs > 0)
         oss << " -j " << opt.jobs;
@@ -118,12 +125,13 @@ namespace vix::commands::RunCommand::dev
     return run_configure_command();
   }
 
-  DevRebuilderResult DevRebuilder::rebuild() const
+  DevRebuilderResult DevRebuilder::rebuild(bool cleanBeforeBuild) const
   {
     DevRebuilderResult result;
     result.built = true;
 
-    std::string buildCmd = make_vix_dev_build_command(options_, true);
+    std::string buildCmd =
+        make_vix_dev_build_command(options_, true, cleanBeforeBuild);
 
 #ifndef _WIN32
     std::vector<std::string> argv = {

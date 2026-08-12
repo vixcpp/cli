@@ -35,6 +35,7 @@ namespace vix::commands::RunCommand::dev
     fs::path path{};
     fs::file_time_type mtime{};
     std::uintmax_t size{0};
+    std::uint64_t contentHash{0};
     DevChangeKind kind{DevChangeKind::Ignore};
   };
 

@@ -17,11 +17,38 @@
 #include <vix/cli/commands/run/dev/DevFileIndex.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <fstream>
 #include <system_error>
 #include <utility>
 
 namespace vix::commands::RunCommand::dev
 {
+  namespace
+  {
+    std::uint64_t file_content_hash(const fs::path &path)
+    {
+      std::ifstream input(path, std::ios::binary);
+      if (!input)
+        return 0;
+
+      // FNV-1a is sufficient here: this is a change detector, not a
+      // security boundary.  It also covers same-size writes on filesystems
+      // whose modification-time resolution is one second.
+      std::uint64_t hash = 1469598103934665603ULL;
+      char buffer[4096];
+      while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0)
+      {
+        for (std::streamsize i = 0; i < input.gcount(); ++i)
+        {
+          hash ^= static_cast<unsigned char>(buffer[i]);
+          hash *= 1099511628211ULL;
+        }
+      }
+      return hash;
+    }
+  } // namespace
+
   bool DevIndexedChange::valid() const
   {
     return kind != DevChangeKind::Ignore && !path.empty();
@@ -59,7 +86,7 @@ namespace vix::commands::RunCommand::dev
 
     auto next = scan_project();
 
-    for (const auto &[key, nextFile] : next)
+    for (auto &[key, nextFile] : next)
     {
       const auto oldIt = files_.find(key);
 
@@ -73,8 +100,24 @@ namespace vix::commands::RunCommand::dev
 
       const DevIndexedFile &oldFile = oldIt->second;
 
-      if (oldFile.mtime != nextFile.mtime || oldFile.size != nextFile.size)
+      const bool contentChanged = oldFile.contentHash != nextFile.contentHash;
+      if (oldFile.mtime != nextFile.mtime || oldFile.size != nextFile.size ||
+          contentChanged)
       {
+        // Ninja uses timestamps to decide whether an included header requires
+        // recompilation. A same-size write within a coarse timestamp tick can
+        // therefore be detected by us but still be ignored by Ninja. Advance
+        // the timestamp in that exact case so the rebuild observes the edit.
+        if (contentChanged && oldFile.mtime == nextFile.mtime &&
+            oldFile.size == nextFile.size)
+        {
+          std::error_code touchEc;
+          const fs::file_time_type refreshed =
+              fs::file_time_type::clock::now() + std::chrono::seconds(2);
+          fs::last_write_time(nextFile.path, refreshed, touchEc);
+          if (!touchEc)
+            nextFile.mtime = refreshed;
+        }
         changes.push_back(DevIndexedChange{
             nextFile.path,
             nextFile.kind});
@@ -224,6 +267,7 @@ namespace vix::commands::RunCommand::dev
         path.lexically_normal(),
         mtime,
         size,
+        file_content_hash(path),
         kind};
   }
 

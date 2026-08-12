@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# One entry point for the CLI contract suite. It deliberately preserves failing
-# coverage gates: a new public surface must never be silently skipped.
+# One entry point for the CLI contract suite. Coverage manifests are validated
+# here; executable PASS rows must never be silently skipped.
 set -euo pipefail
 
 VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"

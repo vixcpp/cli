@@ -246,7 +246,7 @@ namespace vix::commands::RunCommand::dev
             return rebuilder_.reconfigure_and_rebuild();
           }
 
-          return rebuilder_.rebuild();
+          return rebuilder_.rebuild(kind != DevChangeKind::Ignore);
         },
         std::move(ct));
   }

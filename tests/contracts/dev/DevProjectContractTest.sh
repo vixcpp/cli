@@ -25,6 +25,9 @@ for i in $(seq 1 80); do grep -q 'READY one pid=[0-9]* arg=persisted env=kept cw
 grep -q 'READY one pid=[0-9]* arg=persisted env=kept cwd=.*/runtime' "$LOG" || { sed -n '1,200p' "$LOG" >&2; fail 'initial child did not receive args/env/cwd'; }
 [[ $(wc -l < "$COUNT") -eq 1 ]] || fail 'initial build did not use exactly one controlled vix subprocess'
 
+# Keep the fixture portable to filesystems with one-second mtimes: Ninja must
+# also observe the header as newer than its dependent object file.
+sleep 1.1
 printf '%s\n' '#pragma once' '#define DEV_MESSAGE "two"' > "$PROJECT/message.inl"
 for i in $(seq 1 100); do grep -q 'READY two pid=[0-9]* arg=persisted env=kept cwd=.*/runtime' "$LOG" && break; sleep 0.1; done
 grep -q 'READY two pid=[0-9]* arg=persisted env=kept cwd=.*/runtime' "$LOG" || { sed -n '1,240p' "$LOG" >&2; fail '.inl change did not rebuild and restart'; }

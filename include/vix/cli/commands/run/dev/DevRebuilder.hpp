@@ -57,7 +57,7 @@ namespace vix::commands::RunCommand::dev
     const DevRebuilderOptions &options() const;
 
     DevRebuilderResult ensure_configured() const;
-    DevRebuilderResult rebuild() const;
+    DevRebuilderResult rebuild(bool cleanBeforeBuild = false) const;
     DevRebuilderResult reconfigure_and_rebuild() const;
 
   private:

@@ -19,7 +19,7 @@ while IFS='|' read -r _ command capability variant test status _; do
   test="${test# }"; test="${test% }"
   test="${test%% (*}"
   [[ -n "$test" ]] || { echo "PASS capability has no contract" >&2; exit 1; }
-  if ! rg -Fq -- "$test" "$ROOT/tests/CMakeLists.txt"; then
+  if ! grep -Fq -- "$test" "$ROOT/tests/CMakeLists.txt"; then
     echo "PASS capability references unregistered contract: $test" >&2
     exit 1
   fi

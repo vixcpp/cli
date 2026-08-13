@@ -7462,132 +7462,73 @@ namespace vix::commands::BuildCommand
     out << "Usage:\n";
     out << "  vix build [source.cpp] [options] -- [cmake args...]\n\n";
 
-    out << "Description:\n";
-    out << "  Configure and build a C++ project with Vix.\n";
-    out << "  Works with CMake projects, vix.app projects, and single C++ files.\n\n";
+    out << "Build a C++ project or a single source file.\n\n";
 
     out << "Project:\n";
-    out << "  [source.cpp]              Build one C++ source file directly\n";
-    out << "  -d, --dir <path>          Project directory\n";
-    out << "  --dir=<path>              Same as --dir <path>\n\n";
+    out << "  [source.cpp]              Build a single C++ source file\n";
+    out << "  -d, --dir <path>          Project directory\n\n";
 
-    out << "Build:\n";
-    out << "  --preset <name>           Use a preset: dev, dev-ninja, release\n";
-    out << "  --preset=<name>           Same as --preset <name>\n";
+    out << "Build options:\n";
+    out << "  --preset <name>           Build preset: dev, dev-ninja, release\n";
     out << "  --build-target <name>     Build a specific CMake target\n";
-    out << "  --build-target=<name>     Same as --build-target <name>\n";
     out << "  -j, --jobs <n>            Number of parallel build jobs\n";
-    out << "  --jobs=<n>                Same as --jobs <n>\n";
     out << "  --clean                   Remove local build directories and configure again\n";
     out << "  --watch                   Watch project files and rebuild incrementally\n";
     out << "  --fast                    Use fast no-op detection when possible\n";
-    out << "  --explain                 Explain why files or targets rebuild\n";
-    out << "  --warnings                Show warnings from the last build log\n";
+    out << "  --static                  Request static linking\n\n";
+
+    out << "Output:\n";
+    out << "  --bin                     Export the built executable to the project root\n";
+    out << "  --out <path>              Export the built executable to a specific path\n\n";
+
+    out << "Checks:\n";
     out << "  --warning-check           Build with strong compiler warnings enabled\n";
-    out << "  --sanitize                Build with AddressSanitizer and UndefinedBehaviorSanitizer\n";
+    out << "  --sanitize                Enable AddressSanitizer and UndefinedBehaviorSanitizer\n";
     out << "  --sanitize=<mode>         Sanitizer: address, undefined, address,undefined, thread\n";
     out << "  --san                     Alias for --sanitize\n";
     out << "  --asan                    Alias for --sanitize=address\n";
     out << "  --ubsan                   Alias for --sanitize=undefined\n";
-    out << "  --tsan                    Alias for --sanitize=thread\n";
-    out << "  --report                  Submit a Softadastra Cloud build report\n";
-    out << "  --page <n>                Warning page to display with --warnings, default: 1\n";
-    out << "  --limit <n>               Warnings per page with --warnings, default: 10\n";
-    out << "  --no-cache                Disable Vix cache shortcuts\n";
-    out << "  --no-status               Disable Ninja progress status\n";
-    out << "  --no-up-to-date           Disable Ninja dry-run up-to-date detection\n\n";
-
-    out << "Output:\n";
-    out << "  --bin                     Export the built executable to the project root\n";
-    out << "  --out <path>              Export the built executable to a specific path\n";
-    out << "  --out=<path>              Same as --out <path>\n\n";
-
-    out << "Tooling:\n";
-    out << "  --launcher <mode>         Compiler launcher: auto, none, sccache, ccache\n";
-    out << "  --launcher=<mode>         Same as --launcher <mode>\n";
-    out << "  --linker <mode>           Linker mode: auto, default, mold, lld\n";
-    out << "  --linker=<mode>           Same as --linker <mode>\n\n";
-
-    out << "Platform:\n";
-    out << "  --target <triple>         Build for a target platform\n";
-    out << "  --target native           Build for the current platform (default)\n";
-    out << "  --target=<triple>         Same as --target <triple>\n";
-    out << "  --sysroot <path>          Sysroot for the target toolchain (mainly cross builds)\n";
-    out << "  --sysroot=<path>          Same as --sysroot <path>\n";
-    out << "  --targets                 List detected targets and toolchains\n\n";
-
-    out << "Linking and dependencies:\n";
-    out << "  --static                  Request static linking\n";
-    out << "  --with-sqlite             Enable SQLite support\n";
-    out << "  --with-mysql              Enable MySQL support\n\n";
-    out << "Managed SDK:\n";
-    out << "  --managed-sdk             Resolve Vix dependencies from installed managed SDK profiles\n\n";
+    out << "  --tsan                    Alias for --sanitize=thread\n\n";
 
     out << "Diagnostics:\n";
     out << "  -v, --verbose             Show additional useful build information\n";
+    out << "  --warnings                Show warnings from the last build log\n";
+    out << "  --explain                 Explain why files or targets rebuild\n";
+    out << "  --page <n>                Warning page to display with --warnings, default: 1\n";
+    out << "  --limit <n>               Warnings per page with --warnings, default: 10\n";
+    out << "  --log [path]              Show the current build log or a log file/directory\n";
     out << "  --debug                   Show internal Vix build diagnostics\n";
     out << "  --debug-log <scope>       Debug cache, graph, configure, process, toolchain, or all\n";
-    out << "  --log [path]              Show the current build log or a log file/directory\n";
     out << "  --cmake-verbose           Stream raw CMake, Ninja and compiler output\n";
-    out << "  -q, --quiet               Minimal output\n";
-    out << "  -h, --help                Show this help\n\n";
+    out << "  -q, --quiet               Minimal output\n\n";
+
+    out << "Toolchain:\n";
+    out << "  --launcher <mode>         Compiler launcher: auto, none, sccache, ccache\n";
+    out << "  --linker <mode>           Linker mode: auto, default, mold, lld\n";
+    out << "  --target <triple>         Build for a target platform (default: native)\n";
+    out << "  --sysroot <path>          Sysroot for the target toolchain (mainly cross builds)\n";
+    out << "  --targets                 List detected targets and toolchains\n\n";
+
+    out << "Dependencies:\n";
+    out << "  --with-sqlite             Enable SQLite support\n";
+    out << "  --with-mysql              Enable MySQL support\n";
+    out << "  --managed-sdk             Resolve Vix dependencies from installed managed SDK profiles\n\n";
+
+    out << "Cloud:\n";
+    out << "  --report                  Submit a Softadastra Cloud build report\n\n";
 
     out << "Advanced:\n";
     out << "  --graph-executor <mode>   Graph executor: auto, on, off\n";
     out << "  --heartbeat               Show progress heartbeat when a build is silent\n";
-    out << "  --no-heartbeat            Disable the progress heartbeat\n\n";
+    out << "  --no-heartbeat            Disable the progress heartbeat\n";
+    out << "  --no-cache                Disable Vix cache shortcuts\n";
+    out << "  --no-status               Disable Ninja progress status\n";
+    out << "  --no-up-to-date           Disable Ninja dry-run up-to-date detection\n\n";
 
-    out << "CMake passthrough:\n";
+    out << "CMake:\n";
     out << "  -- [cmake args...]        Pass extra arguments to CMake configure\n\n";
 
-    out << "Examples:\n";
-    out << "  vix build\n";
-    out << "  vix build -v\n";
-    out << "  vix build --fast\n";
-    out << "  vix build --report\n";
-    out << "  vix build --clean\n";
-    out << "  vix build --watch\n";
-    out << "  vix build --explain\n";
-    out << "  vix build --warnings\n";
-    out << "  vix build --warning-check --build-target all -v --clean\n";
-    out << "  vix build --sanitize\n";
-    out << "  vix build --sanitize=address\n";
-    out << "  vix build --sanitize=undefined\n";
-    out << "  vix build --sanitize=thread\n";
-    out << "  vix build --warnings --page 2\n";
-    out << "  vix build --warnings --limit 50\n";
-    out << "  vix build --warnings --page 3 --limit 20\n";
-    out << "  vix build --preset release\n";
-    out << "  vix build --preset=release\n";
-    out << "  vix build --build-target all\n";
-    out << "  vix build --build-target vix -v\n";
-    out << "  vix build --build-target=vix\n";
-    out << "  vix build -j 8\n";
-    out << "  vix build --jobs=8\n";
-    out << "  vix build --launcher ccache --linker mold\n";
-    out << "  vix build --launcher=ccache --linker=mold\n";
-    out << "  vix build --with-sqlite\n";
-    out << "  vix build --with-mysql\n";
-    out << "  vix build --preset release --static\n";
-    out << "  vix build --target aarch64-linux-gnu\n";
-    out << "  vix build --target native\n";
-    out << "  vix build --target=aarch64-linux-gnu\n";
-    out << "  vix build --sysroot /opt/sysroot\n";
-    out << "  vix build --targets\n";
-    out << "  vix build --bin\n";
-    out << "  vix build --out dist/app\n";
-    out << "  vix build --out=dist/app\n";
-    out << "  vix build main.cpp\n";
-    out << "  vix build main.cpp --bin\n";
-    out << "  vix build main.cpp --out app\n";
-    out << "  vix build main.cpp --with-sqlite --out app\n";
-    out << "  vix build main.cpp --target x86_64-windows-gnu --out app.exe\n";
-    out << "  vix build --linker lld -- -DVIX_SYNC_BUILD_TESTS=ON\n";
-    out << "  vix build --debug\n";
-    out << "  vix build --log\n";
-    out << "  vix build --log ./build/\n";
-    out << "  vix build --log build-ninja/build.log\n";
-    out << "  vix build --target aarch64-linux-gnu --sysroot /opt/sysroots/aarch64\n\n";
+    out << "  -h, --help                Show this help\n";
 
     return 0;
   }

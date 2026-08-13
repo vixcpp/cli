@@ -4,8 +4,10 @@
 # a subset of static libraries.
 set -euo pipefail
 VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"
+VIX_ROOT="$(cd "$(dirname "$VIX_BIN")" && pwd)"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 export HOME="$ROOT/home"; mkdir -p "$HOME"
+export VIX_ROOT
 cat >"$ROOT/app.cpp" <<'CPP'
 #include <vix.hpp>
 int main() { vix::App app; return 0; }

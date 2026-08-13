@@ -7502,7 +7502,7 @@ namespace vix::commands::BuildCommand
     out << "  --cmake-verbose           Stream raw CMake, Ninja and compiler output\n";
     out << "  -q, --quiet               Minimal output\n\n";
 
-    out << "Toolchain:\n";
+    out << "Platform:\n";
     out << "  --launcher <mode>         Compiler launcher: auto, none, sccache, ccache\n";
     out << "  --linker <mode>           Linker mode: auto, default, mold, lld\n";
     out << "  --target <triple>         Build for a target platform (default: native)\n";

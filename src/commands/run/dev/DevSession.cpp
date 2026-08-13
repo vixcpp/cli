@@ -536,7 +536,7 @@ namespace vix::commands::RunCommand::dev
     DevSessionResult result;
     bool completed = false;
 
-    auto mainTask =
+    auto runMainTask =
         [this, &ctx, &cancel, &result, &completed]() -> vix::async::core::task<void>
     {
       try
@@ -562,7 +562,9 @@ namespace vix::commands::RunCommand::dev
       ctx.stop();
 
       co_return;
-    }();
+    };
+
+    auto mainTask = runMainTask();
 
     std::move(mainTask).start(ctx.get_scheduler());
 

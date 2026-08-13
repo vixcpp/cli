@@ -581,6 +581,11 @@ namespace vix
         return commands::DesktopCommand::help();
       if (cmd == "mobile")
         return commands::MobileCommand::help();
+      if (cmd == "game")
+        return commands::GameCommand::help();
+      if (cmd == "agent")
+        return commands::AgentCommand::help();
+
       if (cmd == "fmt")
         return commands::FmtCommand::help();
       if (cmd == "clean")
@@ -589,6 +594,9 @@ namespace vix
         return commands::ResetCommand::help();
       if (cmd == "task")
         return commands::TaskCommand::help();
+      if (cmd == "modules")
+        return commands::ModulesCommand::help();
+
       if (cmd == "service")
         return commands::ServiceCommand::help();
       if (cmd == "proxy")
@@ -605,10 +613,7 @@ namespace vix
         return commands::ProductionCommand{}.help();
       if (cmd == "ws")
         return commands::WsCommand::help();
-      if (cmd == "modules")
-        return commands::ModulesCommand::help();
-      if (cmd == "game")
-        return commands::GameCommand::help();
+
       if (cmd == "login" || cmd == "logout" || cmd == "cloud")
         return commands::CloudCommand::help();
 
@@ -644,9 +649,13 @@ namespace vix
         return commands::UnpublishCommand{}.help();
       if (cmd == "install" || cmd == "i")
         return commands::InstallCommand::help();
+
       if (cmd == "deps")
       {
-        vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
+        vix::cli::util::warn_line(
+            std::cout,
+            "'vix deps' is deprecated, use 'vix install'");
+
         return commands::InstallCommand::help();
       }
 
@@ -675,138 +684,96 @@ namespace vix
       return 1;
     }
 
-#ifndef VIX_CLI_VERSION
-#define VIX_CLI_VERSION "dev"
-#endif
-
     std::ostream &out = std::cout;
 
-    auto command = [&](std::string_view name, std::string_view description)
-    {
-      constexpr std::size_t command_width = 18;
+    out << "Usage:\n";
+    out << "  vix <command> [options]\n";
+    out << "  vix <file.cpp>\n";
+    out << "  vix help <command>\n\n";
 
-      out << "    " << CYAN << name << RESET;
+    out << "Common commands:\n";
+    out << "  new <name>                 Create a new Vix project\n";
+    out << "  init                       Initialize the current directory\n";
+    out << "  add <package>              Add a dependency\n";
+    out << "  install                    Install project dependencies\n";
+    out << "  run                        Build and run a project or C++ file\n";
+    out << "  dev                        Start development mode\n";
+    out << "  build                      Configure and build\n";
+    out << "  test                       Run project tests\n";
+    out << "  deploy                     Deploy the application\n\n";
 
-      if (name.size() < command_width)
-        out << std::string(command_width - name.size(), ' ');
-      else
-        out << ' ';
+    out << "Project:\n";
+    out << "  make                       Generate C++ scaffolding\n";
+    out << "  check                      Validate a project or source file\n";
+    out << "  replay                     Replay a recorded execution\n";
+    out << "  repl                       Start the interactive REPL\n";
+    out << "  task                       Run project tasks\n";
+    out << "  fmt                        Format C++ source files\n";
+    out << "  clean                      Remove local build caches\n";
+    out << "  reset                      Reset caches and dependencies\n";
+    out << "  modules                    Manage optional project modules\n\n";
 
-      out << description << "\n";
-    };
+    out << "Applications:\n";
+    out << "  note                       Open a Vix Note document\n";
+    out << "  desktop                    Run a web application as desktop\n";
+    out << "  mobile                     Generate mobile WebView shells\n";
+    out << "  game                       Manage Vix game projects\n";
+    out << "  agent                      Run the local-first Vix AI agent\n\n";
 
-    auto group = [&](std::string_view title)
-    {
-      out << "\n";
-      section_title(out, std::string(title));
-    };
+    out << "Production:\n";
+    out << "  production                 Show production status\n";
+    out << "  service                    Manage the system service\n";
+    out << "  proxy                      Manage reverse proxy configuration\n";
+    out << "  health                     Check application health\n";
+    out << "  logs                       Show application and proxy logs\n";
+    out << "  env                        Validate environment variables\n";
+    out << "  ws                         Diagnose WebSocket endpoints\n\n";
 
-    section_title(out, "Usage");
+    out << "Dependencies and registry:\n";
+    out << "  registry                   Manage the registry index\n";
+    out << "  search <query>             Search registry packages\n";
+    out << "  list                       List project dependencies\n";
+    out << "  remove <package>           Remove a dependency\n";
+    out << "  update                     Update dependencies\n";
+    out << "  outdated                   Check outdated dependencies\n";
+    out << "  store                      Manage the local package store\n";
+    out << "  publish                    Publish a package version\n";
+    out << "  unpublish                  Remove a published version\n\n";
 
-    out << "    vix <command> [options]\n";
-    out << "    vix <file.cpp>\n";
-    out << "    vix help <command>\n";
+    out << "Packaging:\n";
+    out << "  pack                       Create a distributable package\n";
+    out << "  verify                     Verify package integrity\n";
+    out << "  cache                      Cache a package locally\n\n";
 
-    group("Common commands");
+    out << "Cloud:\n";
+    out << "  login                      Connect to Softadastra Cloud\n";
+    out << "  logout                     Remove the local cloud session\n";
+    out << "  cloud                      Manage Cloud project links\n";
+    out << "  doctor --cloud             Diagnose Cloud connectivity\n\n";
 
-    command("new <name>", "Create a new project");
-    command("add <package>", "Add a dependency");
-    command("install", "Install project dependencies");
-    command("run", "Build and run a project or C++ file");
-    command("dev", "Start development mode");
-    command("build", "Configure and build");
-    command("test", "Run project tests");
-    command("deploy", "Deploy the application");
+    out << "Data and networking:\n";
+    out << "  db                         Inspect SQLite databases\n";
+    out << "  orm                        Manage database migrations\n";
+    out << "  p2p                        Run P2P tools\n\n";
 
-    group("Project");
+    out << "System:\n";
+    out << "  doctor                     Check the installation and toolchain\n";
+    out << "  info                       Show environment information\n";
+    out << "  completion                 Generate shell completions\n";
+    out << "  upgrade                    Upgrade the Vix CLI\n";
+    out << "  uninstall                  Uninstall the Vix CLI\n\n";
 
-    command("make", "Generate C++ scaffolding");
-    command("check", "Validate a project or source file");
-    command("replay", "Replay a recorded execution");
-    command("repl", "Start the interactive REPL");
-    command("task", "Run project tasks");
-    command("fmt", "Format C++ source files");
-    command("clean", "Remove local build caches");
-    command("reset", "Reset caches and dependencies");
-    command("modules", "Manage optional project modules");
+    out << "Global options:\n";
+    out << "  --verbose                  Enable debug output\n";
+    out << "  -q, --quiet                Only show warnings and errors\n";
+    out << "  --log-level <level>        Set trace, debug, info, warn, error or critical\n";
+    out << "  -h, --help                 Show command help\n";
+    out << "  -v, --version              Show the installed version\n\n";
 
-    group("Applications");
-
-    command("note", "Open a Vix Note document");
-    command("desktop", "Run a web application as desktop");
-    command("mobile", "Generate mobile WebView shells");
-    command("game", "Manage Vix game projects");
-    command("agent", "Run local AI agent commands");
-
-    group("Production");
-
-    command("deploy", "Run the deployment workflow");
-    command("production", "Show production status");
-    command("service", "Manage the system service");
-    command("proxy", "Manage reverse proxy configuration");
-    command("health", "Check application health");
-    command("logs", "Show application and proxy logs");
-    command("env", "Validate environment variables");
-    command("ws", "Diagnose WebSocket endpoints");
-
-    group("Dependencies and registry");
-
-    command("registry", "Manage the registry index");
-    command("search <query>", "Search registry packages");
-    command("list", "List project dependencies");
-    command("remove <package>", "Remove a dependency");
-    command("update", "Update dependencies");
-    command("outdated", "Check outdated dependencies");
-    command("store", "Manage the local package store");
-    command("publish", "Publish a package version");
-    command("unpublish", "Remove a published version");
-
-    group("Packaging");
-
-    command("pack", "Create a distributable package");
-    command("verify", "Verify package integrity");
-    command("cache", "Cache a package locally");
-
-    group("Cloud");
-
-    command("login", "Connect to Softadastra Cloud");
-    command("logout", "Remove the local cloud session");
-    command("cloud", "Manage Cloud project links");
-    command("doctor --cloud", "Diagnose Cloud connectivity");
-
-    group("Data and networking");
-
-    command("db", "Inspect SQLite databases");
-    command("orm", "Manage database migrations");
-    command("p2p", "Run P2P tools");
-
-    group("System");
-
-    command("doctor", "Check the installation and toolchain");
-    command("info", "Show environment information");
-    command("completion", "Generate shell completions");
-    command("upgrade", "Upgrade the Vix CLI");
-    command("uninstall", "Uninstall the Vix CLI");
-
-    group("Global options");
-
-    command("--verbose", "Enable debug output");
-    command("-q, --quiet", "Only show warnings and errors");
-    command("--log-level <level>", "Set trace, debug, info, warn, error or critical");
-    command("-h, --help", "Show command help");
-    command("-v, --version", "Show the installed version");
-
-    out << "\n";
-    out << GRAY
-        << "Run `vix help <command>` for detailed command usage."
-        << RESET
-        << "\n";
-
-    out << GRAY
-        << "Documentation: "
-        << RESET
+    out << "Run 'vix help <command>' for detailed command usage.\n";
+    out << "Documentation: "
         << link("https://docs.vixcpp.com/cli/")
-        << "\n\n";
+        << "\n";
 
     return 0;
   }

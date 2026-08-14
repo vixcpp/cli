@@ -26,10 +26,40 @@
 #include <iomanip>
 
 #include <vix/cli/Style.hpp>
+#include <vix/cli/util/Strings.hpp>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace vix::cli::build
 {
   namespace style = vix::cli::style;
+
+  namespace
+  {
+    bool output_is_tty(std::ostream &out) noexcept
+    {
+      if (&out != &std::cout)
+        return false;
+#ifdef _WIN32
+      return _isatty(_fileno(stdout)) != 0;
+#else
+      return ::isatty(STDOUT_FILENO) != 0;
+#endif
+    }
+
+    const char *duration_color(long long milliseconds) noexcept
+    {
+      if (milliseconds >= 10000)
+        return style::RED;
+      if (milliseconds >= 3000)
+        return style::YELLOW;
+      return style::GREEN;
+    }
+  } // namespace
 
   static std::string colorize(
       const char *color,
@@ -318,6 +348,26 @@ namespace vix::cli::build
     }
 
     out << "\n";
+  }
+
+  std::string format_build_duration(long long milliseconds)
+  {
+    if (milliseconds > 0 && milliseconds < 1000)
+      return std::to_string(milliseconds) + "ms";
+
+    return util::format_seconds(milliseconds);
+  }
+
+  void write_build_duration(
+      std::ostream &out,
+      long long milliseconds)
+  {
+    const std::string duration = format_build_duration(milliseconds);
+    if (output_is_tty(out))
+      out << duration_color(milliseconds) << style::BOLD
+          << duration << style::RESET;
+    else
+      out << duration;
   }
 
   bool BuildLocation::valid() const

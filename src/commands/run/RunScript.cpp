@@ -22,6 +22,7 @@
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/utils/Env.hpp>
@@ -37,7 +38,6 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -173,21 +173,6 @@ namespace vix::commands::RunCommand::detail
       std::thread worker_;
     };
 
-    std::string format_single_file_build_duration(std::chrono::milliseconds duration)
-    {
-      const long long milliseconds = duration.count();
-      if (milliseconds < 1000)
-        return std::to_string(milliseconds) + "ms";
-
-      std::ostringstream out;
-      out << std::fixed << std::setprecision(1)
-          << static_cast<double>(milliseconds) / 1000.0;
-      std::string seconds = out.str();
-      if (seconds.size() >= 2 &&
-          seconds.compare(seconds.size() - 2, 2, ".0") == 0)
-        seconds.resize(seconds.size() - 2);
-      return seconds + "s";
-    }
 #endif
 
     void print_double_dash_warning_if_needed(const Options &opt);
@@ -2342,8 +2327,11 @@ namespace vix::commands::RunCommand::detail
       if (isRebuild)
       {
         std::cout << "Rebuilt " << script.filename().string()
-                  << " in " << format_single_file_build_duration(buildDuration)
-                  << "\n" << std::flush;
+                  << " in ";
+        vix::cli::build::write_build_duration(
+            std::cout,
+            buildDuration.count());
+        std::cout << "\n" << std::flush;
       }
 
       const auto childStart = Clock::now();

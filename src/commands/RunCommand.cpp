@@ -1511,7 +1511,7 @@ namespace
       for (const auto &a : args)
       {
         out += " ";
-        out += a;
+        out += vix::commands::RunCommand::detail::quote(a);
       }
       return out;
     };
@@ -1537,7 +1537,7 @@ namespace
       std::string cmd =
           "docker run -it --rm " +
           join_args(opt.runArgs) + " " +
-          image;
+          vix::commands::RunCommand::detail::quote(image);
 
       return std::system(cmd.c_str());
     }
@@ -1550,7 +1550,7 @@ namespace
       std::string target = raw.substr(6);
 
       std::string cmd =
-          "ssh " + target +
+          "ssh " + vix::commands::RunCommand::detail::quote(target) +
           join_args(opt.runArgs);
 
       return std::system(cmd.c_str());
@@ -1563,7 +1563,7 @@ namespace
         raw.rfind("https://", 0) == 0)
     {
       std::string cmd =
-          "curl -L " + raw +
+          "curl -L " + vix::commands::RunCommand::detail::quote(raw) +
           join_args(opt.runArgs);
 
       return std::system(cmd.c_str());
@@ -1694,9 +1694,10 @@ namespace vix::commands::RunCommand
 #endif
       }
 
-      return run_last_built_project(
-          resolved.userProjectDir,
-          opt);
+      if (opt.checkOnly)
+        return run_project_with_presets(resolved.userProjectDir, opt, showUi);
+
+      return run_last_built_project(resolved.userProjectDir, opt);
     }
 
     default:
@@ -1760,9 +1761,10 @@ namespace vix::commands::RunCommand
       print_vue_fullstack_banner();
     }
 
-    return run_last_built_project(
-        resolved.userProjectDir,
-        opt);
+    if (opt.checkOnly)
+      return run_project_with_presets(resolved.userProjectDir, opt, showUi);
+
+    return run_last_built_project(resolved.userProjectDir, opt);
   }
 
   int help()
@@ -1772,7 +1774,7 @@ namespace vix::commands::RunCommand
     out << "Usage:\n";
     out << "  vix run [target] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
 
-    out << "Build and run a C++ target with Vix.\n\n";
+    out << "Run a C++ file, executable, or a previously built project.\n\n";
 
     out << "Targets:\n";
     out << "  project                    Current project or project directory/name\n";
@@ -1786,11 +1788,10 @@ namespace vix::commands::RunCommand
 
     out << "Project:\n";
     out << "  -d, --dir <path>           Project directory\n";
-    out << "  --preset <name>            Configure/build preset, default: dev-ninja\n";
-    out << "  --run-preset <name>        Run preset name\n";
-    out << "  -j, --jobs <n>             Number of parallel build jobs\n";
-    out << "  --clean                    Clean/reconfigure before running\n";
-    out << "  --check                    Build/check the current project without running it\n";
+    out << "  --preset <name>            Build preset used with --check, default: dev-ninja\n";
+    out << "  -j, --jobs <n>             Parallel build jobs used with --check\n";
+    out << "  --clean                    Clean/reconfigure when used with --check\n";
+    out << "  --check                    Build the project without running it\n";
     out << "  --replay                   Record this run under .vix/runs/\n\n";
 
     out << "Runtime:\n";
@@ -1804,6 +1805,7 @@ namespace vix::commands::RunCommand
     out << "  --reload                   Alias for --watch\n";
     out << "  --force-server             Treat the program as a long-running server\n";
     out << "  --force-script             Treat the program as a short-lived script\n\n";
+    out << "  --dev-mode                 Use the build-ninja project watch layout\n\n";
 
     out << "Run behavior:\n";
     out << "  --ui                       Enable interactive run progress UI\n";
@@ -1838,6 +1840,7 @@ namespace vix::commands::RunCommand
     out << "  --clear <mode>             Terminal clearing: auto, always, never\n";
     out << "  --no-clear                 Alias for --clear=never\n";
     out << "  --log-level <level>        trace, debug, info, warn, error, critical, off\n";
+    out << "  --loglevel <level>         Alias for --log-level\n";
     out << "  --verbose                  Alias for --log-level=debug\n";
     out << "  -q, --quiet                Alias for --log-level=warn\n";
     out << "  --log-format <format>      kv, json, json-pretty\n";

@@ -202,8 +202,16 @@ namespace vix::commands::RunCommand::detail
           opt.autoDeps = AutoDepsMode::Local;
       }
 
-      normalize_clear_mode(opt);
-      normalize_compiler_fingerprint(opt);
+    normalize_clear_mode(opt);
+    normalize_compiler_fingerprint(opt);
+
+    if (!opt.runPreset.empty())
+    {
+      error("--run-preset is not supported by vix run.");
+      hint("Build the desired preset with `vix build --preset <name>`, then run it with `vix run`.");
+      opt.parseFailed = true;
+      opt.parseExitCode = 2;
+    }
     }
 
     void handle_positional_argument(Options &opt, const std::string &arg)

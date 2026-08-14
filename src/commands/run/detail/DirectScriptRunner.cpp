@@ -1209,8 +1209,11 @@ namespace vix::commands::RunCommand::detail
 
   } // namespace
 
-  fs::path get_direct_scripts_cache_root()
+  fs::path get_direct_scripts_cache_root(bool localCache)
   {
+    if (localCache)
+      return fs::current_path() / ".vix-scripts";
+
 #ifdef _WIN32
     const char *home = vix::utils::vix_getenv("USERPROFILE");
 #else
@@ -1311,7 +1314,7 @@ namespace vix::commands::RunCommand::detail
     plan.fingerprint = make_direct_build_fingerprint(plan.scriptPath, probe, opt);
     direct_perf_trace("fingerprint", fingerprintStart);
     plan.cacheKey = direct_build_fingerprint_cache_key(plan.fingerprint);
-    plan.cacheDir = get_direct_scripts_cache_root() / plan.cacheKey;
+    plan.cacheDir = get_direct_scripts_cache_root(opt.localCache) / plan.cacheKey;
 
     plan.binaryPath = plan.cacheDir / (plan.exeName + executable_suffix());
 

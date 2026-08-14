@@ -720,7 +720,7 @@ namespace vix::commands::RunCommand::detail
   /**
    * @brief Compute the global cache root used for directly compiled scripts.
    */
-  fs::path get_direct_scripts_cache_root();
+  fs::path get_direct_scripts_cache_root(bool localCache = false);
 
   /**
    * @brief Compute the cache key used for a directly compiled script.

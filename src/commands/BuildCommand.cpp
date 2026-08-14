@@ -6411,8 +6411,23 @@ namespace vix::commands::BuildCommand
     runOpt.withSqlite = opt_.withSqlite;
     runOpt.withMySql = opt_.withMySql;
 
-    runOpt.enableSanitizers = false;
-    runOpt.enableUbsanOnly = false;
+    // Single-file builds reuse the script engine.  Do not silently drop the
+    // sanitizer selected by `vix build`: its cache key and generated CMake
+    // fallback both need the same instrumentation choice.
+    runOpt.enableSanitizers =
+        opt_.sanitizerMode == process::SanitizerMode::AddressUndefined;
+    runOpt.enableUbsanOnly =
+        opt_.sanitizerMode == process::SanitizerMode::Undefined;
+    runOpt.enableThreadSanitizer =
+        opt_.sanitizerMode == process::SanitizerMode::Thread;
+
+    if (opt_.sanitizerMode == process::SanitizerMode::Address)
+    {
+      error("The address-only sanitizer is not supported for single-file builds.");
+      hint("Use `vix build file.cpp --sanitize` for address and undefined checks.");
+      hint("`--asan` remains available for CMake and vix.app projects.");
+      return 2;
+    }
 
     runOpt.forceServerLike = false;
     runOpt.forceScriptLike = true;
@@ -7526,7 +7541,7 @@ namespace vix::commands::BuildCommand
     out << "  --no-up-to-date           Disable Ninja dry-run up-to-date detection\n\n";
 
     out << "CMake:\n";
-    out << "  -- [cmake args...]        Pass extra arguments to CMake configure\n\n";
+    out << "  -- [args...]              Pass CMake configure arguments (project), or compiler/linker flags (single file)\n\n";
 
     out << "  -h, --help                Show this help\n";
 

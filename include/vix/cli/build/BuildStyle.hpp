@@ -177,6 +177,14 @@ namespace vix::cli::build
       const std::string &message,
       long long milliseconds);
 
+  /** Format a build duration using the build/watch convention. */
+  std::string format_build_duration(long long milliseconds);
+
+  /** Write only a duration, colored when the destination is a TTY. */
+  void write_build_duration(
+      std::ostream &out,
+      long long milliseconds);
+
   void print_task_header_full(
       std::ostream &out,
       const std::string &action,

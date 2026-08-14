@@ -15,6 +15,7 @@
  */
 
 #include <vix/cli/commands/run/dev/DevSession.hpp>
+#include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
@@ -112,13 +113,21 @@ namespace vix::commands::RunCommand::dev
                 << "\n\n";
     }
 
-    void print_dev_started(int pid)
+    void print_dev_started(
+        int pid,
+        std::optional<long long> rebuildDurationMs)
     {
       std::cout << "  "
-                << GREEN << "✔" << RESET
-                << " Started"
-                << GRAY << " pid=" << pid << RESET
-                << "\n";
+                << GREEN << "✔" << RESET << " ";
+      if (rebuildDurationMs)
+      {
+        std::cout << "Rebuilt in ";
+        vix::cli::build::write_build_duration(
+            std::cout,
+            *rebuildDurationMs);
+        std::cout << GRAY << " · " << RESET;
+      }
+      std::cout << "Started" << GRAY << " pid=" << pid << RESET << "\n";
     }
 
     void print_dev_app_exited_cleanly()
@@ -284,9 +293,18 @@ namespace vix::commands::RunCommand::dev
               << GRAY << " (dev)" << RESET
               << "\n";
 
+    fs::path changedPath = change.path;
+    if (!dev_verbose_ui(options_))
+    {
+      std::error_code ec;
+      const fs::path relative = fs::relative(change.path, options_.projectDir, ec);
+      if (!ec && !relative.empty())
+        changedPath = relative;
+    }
+
     std::cout << "  "
               << GRAY << "changed: " << RESET
-              << change.path.string()
+              << changedPath.generic_string()
               << "\n";
   }
 
@@ -378,9 +396,18 @@ namespace vix::commands::RunCommand::dev
     {
       const DevChangeKind rebuildKind = pendingChangeKind_;
       pendingChangeKind_ = DevChangeKind::Ignore;
+      const bool isRebuild = rebuildKind != DevChangeKind::Ignore;
+      const auto rebuildStart = std::chrono::steady_clock::now();
 
       DevRebuilderResult rebuildResult =
           co_await rebuild_async(ctx, rebuildKind, ct);
+
+      const std::optional<long long> rebuildDurationMs = isRebuild && rebuildResult.ok
+                                                              ? std::optional<long long>(
+                                                                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                                        std::chrono::steady_clock::now() - rebuildStart)
+                                                                        .count())
+                                                              : std::nullopt;
 
       if (ct.is_cancelled())
       {
@@ -448,7 +475,7 @@ namespace vix::commands::RunCommand::dev
       }
 
       const DevChildRunResult childResult =
-          co_await run_child_once_async(ctx, *exePath, ct);
+          co_await run_child_once_async(ctx, *exePath, ct, rebuildDurationMs);
 
       if (childResult.reason == DevChildExitReason::RestartRequested)
         continue;
@@ -859,7 +886,8 @@ namespace vix::commands::RunCommand::dev
   vix::async::core::task<DevChildRunResult> DevSession::run_child_once_async(
       vix::async::core::io_context &ctx,
       const fs::path &exePath,
-      vix::async::core::cancel_token ct)
+      vix::async::core::cancel_token ct,
+      std::optional<long long> rebuildDurationMs)
   {
     using Clock = std::chrono::steady_clock;
 
@@ -907,7 +935,7 @@ namespace vix::commands::RunCommand::dev
     std::string runtimeLog;
 
     if (!options_.quiet)
-      print_dev_started(static_cast<int>(pid));
+      print_dev_started(static_cast<int>(pid), rebuildDurationMs);
 
     // Do not make the first observable child output wait for a complete file
     // polling period. File indexing remains at pollInterval; this short,

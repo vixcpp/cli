@@ -126,7 +126,8 @@ namespace vix::commands::RunCommand::dev
     vix::async::core::task<DevChildRunResult> run_child_once_async(
         vix::async::core::io_context &ctx,
         const fs::path &exePath,
-        vix::async::core::cancel_token ct);
+        vix::async::core::cancel_token ct,
+        std::optional<long long> rebuildDurationMs = std::nullopt);
 
     [[noreturn]] void exec_child_process(const fs::path &exePath) const;
 

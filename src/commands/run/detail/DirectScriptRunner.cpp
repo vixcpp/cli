@@ -23,6 +23,7 @@
 #include <vix/utils/Env.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -168,6 +169,24 @@ namespace vix::commands::RunCommand::detail
 #else
       return "";
 #endif
+    }
+
+    bool direct_perf_trace_enabled()
+    {
+      const char *value = vix::utils::vix_getenv("VIX_PERF_TRACE");
+      return value && std::string(value) == "1";
+    }
+
+    void direct_perf_trace(const char *stage,
+                           std::chrono::steady_clock::time_point started)
+    {
+      if (!direct_perf_trace_enabled())
+        return;
+
+      const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - started);
+      std::cerr << "[vix-perf] " << stage << "="
+                << static_cast<double>(elapsed.count()) / 1000.0 << "ms\n";
     }
 
 #ifndef _WIN32
@@ -675,10 +694,12 @@ namespace vix::commands::RunCommand::detail
         for (const auto &lib : find_vix_direct_module_libs(abs))
           fp.depFingerprints.push_back(path_fingerprint(lib));
       }
+      const auto dependencyDiscoveryStart = std::chrono::steady_clock::now();
       fp.headerFingerprints = collect_direct_header_fingerprints(
           abs,
           probe,
           compiler);
+      direct_perf_trace("dependency_discovery", dependencyDiscoveryStart);
       const auto dependencyHeaders = collect_header_fingerprints(probe);
       fp.headerFingerprints.insert(
           fp.headerFingerprints.end(),
@@ -1274,7 +1295,7 @@ namespace vix::commands::RunCommand::detail
     return out;
   }
 
-  DirectScriptPlan make_direct_script_plan(
+    DirectScriptPlan make_direct_script_plan(
       const Options &opt,
       const ScriptProbeResult &probe)
   {
@@ -1286,7 +1307,9 @@ namespace vix::commands::RunCommand::detail
 
     plan.exeName = stem.empty() ? "script" : stem;
 
+    const auto fingerprintStart = std::chrono::steady_clock::now();
     plan.fingerprint = make_direct_build_fingerprint(plan.scriptPath, probe, opt);
+    direct_perf_trace("fingerprint", fingerprintStart);
     plan.cacheKey = direct_build_fingerprint_cache_key(plan.fingerprint);
     plan.cacheDir = get_direct_scripts_cache_root() / plan.cacheKey;
 
@@ -1300,9 +1323,11 @@ namespace vix::commands::RunCommand::detail
     plan.compileCmd = make_direct_compile_cmd(opt, plan);
     plan.runCmd = make_direct_run_cmd(opt, plan);
 
-    const auto cache = load_direct_script_cache_state(plan);
-    plan.shouldCompile = cache.needsRebuild;
-    print_direct_cache_trace(opt, plan, cache);
+    const auto cacheValidationStart = std::chrono::steady_clock::now();
+    plan.cacheState = load_direct_script_cache_state(plan);
+    direct_perf_trace("cache_validation", cacheValidationStart);
+    plan.shouldCompile = plan.cacheState.needsRebuild;
+    print_direct_cache_trace(opt, plan, plan.cacheState);
 
     return plan;
   }
@@ -1448,8 +1473,7 @@ namespace vix::commands::RunCommand::detail
         opt.enableThreadSanitizer);
 #endif
 
-    const auto cache =
-        load_direct_script_cache_state(plan);
+    const DirectScriptCacheState &cache = plan.cacheState;
 
     if (cache.cachedFailure)
     {
@@ -1460,6 +1484,7 @@ namespace vix::commands::RunCommand::detail
 
     if (cache.needsRebuild)
     {
+      const auto compileStart = std::chrono::steady_clock::now();
       const LiveRunResult build = run_cmd_live_filtered_capture(
           plan.compileCmd,
           "",
@@ -1470,6 +1495,7 @@ namespace vix::commands::RunCommand::detail
               opt.enableUbsanOnly,
               opt.enableThreadSanitizer),
           true);
+      direct_perf_trace("compiler_and_linker", compileStart);
 
       if (build.exitCode != 0)
       {
@@ -1507,8 +1533,10 @@ namespace vix::commands::RunCommand::detail
                    : 1;
       }
 
+      const auto persistenceStart = std::chrono::steady_clock::now();
       if (!persist_direct_script_cache_metadata(plan))
         std::cerr << "warning: unable to persist direct script cache metadata\n";
+      direct_perf_trace("cache_persistence", persistenceStart);
     }
 
     if (!plan.shouldRun)

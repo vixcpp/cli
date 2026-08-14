@@ -369,6 +369,10 @@ namespace vix::commands::RunCommand::detail
     int effectiveTimeoutSec = 0;
 
     DirectBuildFingerprint fingerprint;
+    // Cache validation is performed while constructing the immutable plan.
+    // Consumers of that plan must reuse this snapshot instead of rereading
+    // metadata and recomputing the same comparison.
+    DirectScriptCacheState cacheState;
     ScriptProbeResult probe;
   };
   /**

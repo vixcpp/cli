@@ -40,7 +40,9 @@ interrupt
 : > "$ROOT/dev.log"
 printf '%s\n' 'int main( { return 0; }' > "$ROOT/main.cpp"
 start
-wait_for 'Script compile failed'
+# Rich compiler diagnostics render the compiler error directly; the legacy
+# "Script compile failed" summary is intentionally omitted in that path.
+wait_for 'error:'
 interrupt
 
 # Rebuild: start a fresh session, change a header, then interrupt the build.

@@ -29,13 +29,17 @@
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <sstream>
@@ -92,6 +96,98 @@ namespace vix::commands::RunCommand::detail
           ::sigaction(SIGINT, &previous, nullptr);
       }
     };
+
+    // Single-file builds do not produce BuildEvent values: direct compilation
+    // and the generated CMake fallback both capture their compiler output.
+    // Keep their presentation local to this watch loop so the project dev
+    // session continues to own its existing renderer.
+    class SingleFileBuildPresentation
+    {
+    public:
+      explicit SingleFileBuildPresentation(const fs::path &script)
+          : file_(script.filename().string()),
+            interactive_(::isatty(STDOUT_FILENO) != 0)
+      {
+      }
+
+      void start()
+      {
+        if (!interactive_)
+          return;
+
+        active_.store(true, std::memory_order_release);
+        worker_ = std::thread([this]()
+        {
+          // A quick rebuild needs no transient UI.  This is deliberately a
+          // generic presentation delay, not a source- or runtime-specific
+          // threshold.
+          std::unique_lock<std::mutex> lock(waitMutex_);
+          if (wake_.wait_for(lock, std::chrono::milliseconds(250), [this]()
+                             { return !active_.load(std::memory_order_acquire); }))
+            return;
+          lock.unlock();
+          if (!active_.load(std::memory_order_acquire))
+            return;
+
+          shown_.store(true, std::memory_order_release);
+          std::size_t frame = 0;
+          while (active_.load(std::memory_order_acquire))
+          {
+            constexpr std::size_t width = 18;
+            const std::size_t filled = (frame % width) + 1;
+            std::cout << "\r\033[2KRebuilding " << file_
+                      << "  build ["
+                      << std::string(filled, '=')
+                      << ">"
+                      << std::string(width - filled, ' ')
+                      << "]" << std::flush;
+            ++frame;
+            std::this_thread::sleep_for(std::chrono::milliseconds(90));
+          }
+        });
+      }
+
+      void finish()
+      {
+        active_.store(false, std::memory_order_release);
+        wake_.notify_one();
+        if (worker_.joinable())
+          worker_.join();
+
+        if (shown_.exchange(false, std::memory_order_acq_rel))
+          std::cout << "\r\033[2K" << std::flush;
+      }
+
+      ~SingleFileBuildPresentation()
+      {
+        finish();
+      }
+
+    private:
+      std::string file_;
+      bool interactive_ = false;
+      std::atomic<bool> active_{false};
+      std::atomic<bool> shown_{false};
+      std::mutex waitMutex_;
+      std::condition_variable wake_;
+      std::thread worker_;
+    };
+
+    std::string format_single_file_build_duration(std::chrono::milliseconds duration)
+    {
+      const long long milliseconds = duration.count();
+      if (milliseconds < 1000)
+        return std::to_string(milliseconds) + "ms";
+
+      std::ostringstream out;
+      out << std::fixed << std::setprecision(1)
+          << static_cast<double>(milliseconds) / 1000.0;
+      std::string seconds = out.str();
+      if (seconds.size() >= 2 &&
+          seconds.compare(seconds.size() - 2, 2, ".0") == 0)
+        seconds.resize(seconds.size() - 2);
+      return seconds + "s";
+    }
 #endif
 
     void print_double_dash_warning_if_needed(const Options &opt);
@@ -1774,7 +1870,7 @@ namespace vix::commands::RunCommand::detail
             o.enableThreadSanitizer);
 #endif
 
-        const DirectScriptCacheState cache = load_direct_script_cache_state(directPlan);
+        const DirectScriptCacheState &cache = directPlan.cacheState;
 
         if (cache.cachedFailure)
         {
@@ -1785,6 +1881,7 @@ namespace vix::commands::RunCommand::detail
 
         if (cache.needsRebuild)
         {
+          const auto compileStart = std::chrono::steady_clock::now();
           const LiveRunResult build = run_cmd_live_filtered_capture(
               directPlan.compileCmd,
               "Compiling script...",
@@ -1792,6 +1889,14 @@ namespace vix::commands::RunCommand::detail
               0,
               o.enableSanitizers || o.enableUbsanOnly,
               true);
+          if (const char *trace = vix::utils::vix_getenv("VIX_PERF_TRACE");
+              trace && std::string(trace) == "1")
+          {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - compileStart);
+            std::cerr << "[vix-perf] compiler_and_linker="
+                      << static_cast<double>(elapsed.count()) / 1000.0 << "ms\n";
+          }
 
           if (build.exitCode != 0)
           {
@@ -1825,8 +1930,17 @@ namespace vix::commands::RunCommand::detail
             return build.exitCode != 0 ? build.exitCode : 1;
           }
 
+          const auto persistenceStart = std::chrono::steady_clock::now();
           if (!persist_direct_script_cache_metadata(directPlan))
             std::cerr << "warning: unable to persist direct script cache metadata\n";
+          if (const char *trace = vix::utils::vix_getenv("VIX_PERF_TRACE");
+              trace && std::string(trace) == "1")
+          {
+            const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - persistenceStart);
+            std::cerr << "[vix-perf] cache_persistence="
+                      << static_cast<double>(elapsed.count()) / 1000.0 << "ms\n";
+          }
         }
 
         exePath = directPlan.binaryPath;
@@ -2082,6 +2196,7 @@ namespace vix::commands::RunCommand::detail
     const bool hasForceServer = opt.forceServerLike;
     const bool hasForceScript = opt.forceScriptLike;
     bool dynamicServerLike = usesVixRuntime;
+    bool rebuildRequested = false;
 
     auto final_is_server = [&](bool runtimeGuess) -> bool
     {
@@ -2099,7 +2214,10 @@ namespace vix::commands::RunCommand::detail
       return final_is_server(runtimeGuess) ? "dev server" : "script";
     };
 
-    hint("Watching: " + script.string());
+    const std::string scriptDisplay = opt.verbose
+                                          ? script.string()
+                                          : script.filename().string();
+    std::cout << "Watching " << scriptDisplay << "\n" << std::flush;
 
 #ifdef _WIN32
     std::error_code ec;
@@ -2151,7 +2269,7 @@ namespace vix::commands::RunCommand::detail
         if (nowWrite != lastWrite)
         {
           lastWrite = nowWrite;
-          print_watch_restart_banner(script, "Rebuilding script...");
+          rebuildRequested = true;
           break;
         }
       }
@@ -2165,9 +2283,19 @@ namespace vix::commands::RunCommand::detail
       if (g_single_cpp_watch_interrupted)
         return 0;
 
+      const bool isRebuild = rebuildRequested;
+      rebuildRequested = false;
+      const auto buildStart = Clock::now();
+      SingleFileBuildPresentation presentation(script);
+      if (isRebuild)
+        presentation.start();
+
       fs::path exePath;
       std::vector<fs::path> buildInputs;
       int buildCode = build_script_executable(opt, exePath, &buildInputs);
+      const auto buildDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+          Clock::now() - buildStart);
+      presentation.finish();
       if (buildCode == 130)
         return 0;
       if (buildCode != 0)
@@ -2176,13 +2304,9 @@ namespace vix::commands::RunCommand::detail
         // A failed direct-compile probe may omit a just-deleted header; replacing
         // the set with that partial probe would make recreating the header
         // invisible and prevent automatic recovery.
-        watch_spinner_stop();
-
-        const std::string label = kind_label(dynamicServerLike);
-        error("Last " + label + " build failed (exit code " + std::to_string(buildCode) + ").");
-        hint("Fix the errors, save the file, and Vix will rebuild automatically.");
-        // Dev keeps running after a compile error; make the recovery guidance
-        // observable immediately when stdout is redirected by an IDE or test.
+        if (opt.verbose)
+          error("Last " + kind_label(dynamicServerLike) +
+                " build failed (exit code " + std::to_string(buildCode) + ").");
         std::cout << std::flush;
 
         for (;;)
@@ -2195,7 +2319,7 @@ namespace vix::commands::RunCommand::detail
           if (watched_inputs_changed())
           {
             accept_watched_change();
-            print_watch_restart_banner(script, "Rebuilding script...");
+            rebuildRequested = true;
             break;
           }
         }
@@ -2211,8 +2335,15 @@ namespace vix::commands::RunCommand::detail
       if (watched_inputs_changed())
       {
         accept_watched_change();
-        print_watch_restart_banner(script, "Rebuilding script...");
+        rebuildRequested = true;
         continue;
+      }
+
+      if (isRebuild)
+      {
+        std::cout << "Rebuilt " << script.filename().string()
+                  << " in " << format_single_file_build_duration(buildDuration)
+                  << "\n" << std::flush;
       }
 
       const auto childStart = Clock::now();
@@ -2312,8 +2443,7 @@ namespace vix::commands::RunCommand::detail
       bool needRestart = false;
       bool running = true;
 
-      watch_spinner_stop();
-
+      if (opt.verbose)
       {
         const bool isServer = final_is_server(dynamicServerLike);
         const std::string kind = isServer ? "Dev server" : "Script";
@@ -2347,7 +2477,7 @@ namespace vix::commands::RunCommand::detail
         if (watched_inputs_changed())
         {
           accept_watched_change();
-          print_watch_restart_banner(script, "Rebuilding script...");
+          rebuildRequested = true;
           needRestart = true;
 
           if (kill(pid, SIGINT) != 0)
@@ -2433,7 +2563,7 @@ namespace vix::commands::RunCommand::detail
             if (watched_inputs_changed())
             {
               accept_watched_change();
-              print_watch_restart_banner(script, "Rebuilding script...");
+              rebuildRequested = true;
               break;
             }
           }

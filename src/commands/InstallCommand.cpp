@@ -19,7 +19,7 @@
 #include <vix/cli/util/Shell.hpp>
 #include <vix/cli/util/Hash.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/cli/commands/helpers/ProcessHelpers.hpp>
+#include <vix/process/Process.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/util/Semver.hpp>
 
@@ -444,6 +444,11 @@ namespace vix::commands
       return 1;
     }
 
+    static vix::process::ProcessOutput run_process(
+        const std::string &program,
+        std::vector<std::string> args,
+        const fs::path &cwd);
+
     static int clone_checkout(
         const std::string &repoUrl,
         const std::string &idDot,
@@ -460,21 +465,19 @@ namespace vix::commands
 
       fs::create_directories(dst.parent_path());
 
-      {
-        const std::string cmd = "git clone -q " + repoUrl + " " + dst.string();
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
-          return rc;
-      }
+      const auto clone = run_process(
+          "git",
+          {"clone", "-q", repoUrl, dst.string()},
+          {});
+      if (!clone.success())
+        return clone.exit_code == 0 ? 1 : clone.exit_code;
 
-      {
-        const std::string cmd =
-            "git -C " + dst.string() +
-            " -c advice.detachedHead=false checkout -q " + commit;
-        const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
-        if (rc != 0)
-          return rc;
-      }
+      const auto checkout = run_process(
+          "git",
+          {"-c", "advice.detachedHead=false", "checkout", "-q", commit},
+          dst);
+      if (!checkout.success())
+        return checkout.exit_code == 0 ? 1 : checkout.exit_code;
 
       return 0;
     }
@@ -605,35 +608,36 @@ namespace vix::commands
       return parsed;
     }
 
-    static std::string shell_quote_integrity(const std::string &s)
+    static vix::process::ProcessOutput run_process(
+        const std::string &program,
+        std::vector<std::string> args,
+        const fs::path &cwd = {})
     {
-      std::string out;
-      out.reserve(s.size() + 2);
-      out.push_back('\'');
-      for (char c : s)
-      {
-        if (c == '\'')
-          out += "'\\''";
-        else
-          out.push_back(c);
-      }
-      out.push_back('\'');
-      return out;
-    }
+      vix::process::Command command(program);
+      command.args(std::move(args));
+      command.search_in_path(true);
+      command.stdout_mode(vix::process::PipeMode::Pipe);
+      command.stderr_mode(vix::process::PipeMode::Pipe);
+      if (!cwd.empty())
+        command.cwd(cwd.string());
 
-    static std::string capture_integrity_command(const std::string &cmd, int &code)
-    {
-      return vix::cli::commands::helpers::run_and_capture_with_code(cmd, code);
+      const auto result = vix::process::output(std::move(command));
+      if (result)
+        return result.value();
+
+      vix::process::ProcessOutput output;
+      output.exit_code = 127;
+      output.stderr_text = result.error().message();
+      return output;
     }
 
     static bool git_checkout_is_clean(const fs::path &checkout)
     {
-      int code = 0;
-      const std::string out = capture_integrity_command(
-          "git -C " + shell_quote_integrity(checkout.string()) +
-              " status --porcelain --untracked-files=no 2>/dev/null",
-          code);
-      return code == 0 && out.empty();
+      const auto output = run_process(
+          "git",
+          {"status", "--porcelain", "--untracked-files=no"},
+          checkout);
+      return output.success() && trim_copy(output.stdout_text).empty();
     }
 
     static bool git_checkout_head_matches(const fs::path &checkout, const std::string &commit)
@@ -641,13 +645,8 @@ namespace vix::commands
       if (commit.empty())
         return true;
 
-      int code = 0;
-      std::string out = capture_integrity_command(
-          "git -C " + shell_quote_integrity(checkout.string()) +
-              " rev-parse HEAD 2>/dev/null",
-          code);
-      out = trim_copy(out);
-      return code == 0 && out == commit;
+      const auto output = run_process("git", {"rev-parse", "HEAD"}, checkout);
+      return output.success() && trim_copy(output.stdout_text) == commit;
     }
 
     static bool lock_hash_metadata_is_current(const DepResolved &dep)
@@ -1414,11 +1413,6 @@ namespace vix::commands
       return out;
     }
 
-    static std::string shell_quote(const std::string &s)
-    {
-      return vix::cli::commands::helpers::quote(s);
-    }
-
     static bool starts_with_local(const std::string &s, const std::string &prefix)
     {
       return s.rfind(prefix, 0) == 0;
@@ -1490,13 +1484,14 @@ namespace vix::commands
       return vix::cli::util::hex64(vix::cli::util::fnv1a64_str(url, 1469598103934665603ull));
     }
 
-    static std::string capture_command_or_throw(const std::string &cmd, const std::string &what)
+    static std::string capture_git_or_throw(
+        std::vector<std::string> args,
+        const std::string &what)
     {
-      int code = 0;
-      std::string out = vix::cli::commands::helpers::run_and_capture_with_code(cmd, code);
-      if (code != 0)
+      const auto output = run_process("git", std::move(args));
+      if (!output.success())
         throw std::runtime_error(what + " failed");
-      return trim_copy(out);
+      return trim_copy(output.stdout_text);
     }
 
     static std::string first_ls_remote_hash(const std::string &output)
@@ -1534,12 +1529,11 @@ namespace vix::commands
 
     static std::string select_latest_stable_git_tag(const std::string &url, bool allowPrerelease)
     {
-      int code = 0;
-      const std::string out = vix::cli::commands::helpers::run_and_capture_with_code(
-          "git ls-remote --tags " + shell_quote(url),
-          code);
-      if (code != 0)
+      const auto output = run_process("git", {"ls-remote", "--tags", url});
+      if (!output.success())
         return {};
+
+      const std::string out = output.stdout_text;
 
       std::vector<std::pair<std::string, std::string>> candidates;
       std::istringstream in(out);
@@ -1598,14 +1592,14 @@ namespace vix::commands
 
       if (!tag.empty())
       {
-        std::string out = capture_command_or_throw(
-            "git ls-remote " + shell_quote(url) + " " + shell_quote("refs/tags/" + tag + "^{}"),
+        std::string out = capture_git_or_throw(
+            {"ls-remote", url, "refs/tags/" + tag + "^{}"},
             "git ls-remote");
         std::string hash = first_ls_remote_hash(out);
         if (hash.empty())
         {
-          out = capture_command_or_throw(
-              "git ls-remote " + shell_quote(url) + " " + shell_quote("refs/tags/" + tag),
+          out = capture_git_or_throw(
+              {"ls-remote", url, "refs/tags/" + tag},
               "git ls-remote");
           hash = first_ls_remote_hash(out);
         }
@@ -1616,8 +1610,8 @@ namespace vix::commands
 
       if (!branch.empty())
       {
-        const std::string out = capture_command_or_throw(
-            "git ls-remote " + shell_quote(url) + " " + shell_quote("refs/heads/" + branch),
+        const std::string out = capture_git_or_throw(
+            {"ls-remote", url, "refs/heads/" + branch},
             "git ls-remote");
         const std::string hash = first_ls_remote_hash(out);
         if (hash.empty())
@@ -1628,8 +1622,8 @@ namespace vix::commands
       if (!rev.empty())
         return rev;
 
-      const std::string out = capture_command_or_throw(
-          "git ls-remote " + shell_quote(url) + " HEAD",
+      const std::string out = capture_git_or_throw(
+          {"ls-remote", url, "HEAD"},
           "git ls-remote");
       const std::string hash = first_ls_remote_hash(out);
       if (hash.empty())
@@ -1655,17 +1649,15 @@ namespace vix::commands
       fs::create_directories(parent, ec);
       fs::remove_all(tmp, ec);
 
-      int code = 0;
-      std::string out = vix::cli::commands::helpers::run_and_capture_with_code(
-          "git clone -q " + shell_quote(url) + " " + shell_quote(tmp.string()),
-          code);
-      if (code != 0)
+      auto output = run_process("git", {"clone", "-q", url, tmp.string()});
+      if (!output.success())
         throw std::runtime_error("git clone failed for: " + url);
 
-      out = vix::cli::commands::helpers::run_and_capture_with_code(
-          "git -C " + shell_quote(tmp.string()) + " -c advice.detachedHead=false checkout -q " + shell_quote(commit),
-          code);
-      if (code != 0)
+      output = run_process(
+          "git",
+          {"-c", "advice.detachedHead=false", "checkout", "-q", commit},
+          tmp);
+      if (!output.success())
       {
         fs::remove_all(tmp, ec);
         throw std::runtime_error("git checkout failed for: " + commit);
@@ -1881,9 +1873,7 @@ namespace vix::commands
     {
       fs::create_directories(project_vix_dir());
 
-      std::ofstream out(project_deps_cmake());
-      if (!out)
-        throw std::runtime_error("cannot write: " + project_deps_cmake().string());
+      std::ostringstream out;
 
       out << "cmake_minimum_required(VERSION 3.20)\n";
       out << "# ======================================================\n";
@@ -1916,6 +1906,7 @@ namespace vix::commands
       out << "  string(TOUPPER \"${dep_ns}\" _VIX_NS_UPPER)\n";
       out << "  string(TOUPPER \"${dep_name}\" _VIX_NAME_UPPER)\n";
       out << "\n";
+
       out << "  # Generic knobs used by many projects\n";
       out << "  set(BUILD_TESTING OFF CACHE BOOL \"\" FORCE)\n";
       out << "  set(BUILD_TESTS OFF CACHE BOOL \"\" FORCE)\n";
@@ -2228,6 +2219,21 @@ namespace vix::commands
       }
 
       out << "\n";
+
+      const std::string generated = out.str();
+      std::ifstream existing(project_deps_cmake(), std::ios::binary);
+      std::ostringstream existingContents;
+      if (existing)
+        existingContents << existing.rdbuf();
+      if (existing && existingContents.str() == generated)
+        return;
+
+      std::ofstream file(project_deps_cmake(), std::ios::binary | std::ios::trunc);
+      if (!file)
+        throw std::runtime_error("cannot write: " + project_deps_cmake().string());
+      file << generated;
+      if (!file)
+        throw std::runtime_error("cannot write: " + project_deps_cmake().string());
     }
 
     struct GlobalExecutableDecl
@@ -3070,14 +3076,18 @@ namespace vix::commands
     }
 #endif
 
-    static int run_checked_command(const std::string &cmd, const std::string &what)
+    static int run_checked_process(
+        const std::string &program,
+        std::vector<std::string> args,
+        const std::string &what)
     {
-      int code = 0;
-      const std::string out = vix::cli::commands::helpers::run_and_capture_with_code(cmd, code);
-      if (code != 0)
+      const auto output = run_process(program, std::move(args));
+      if (!output.success())
       {
-        if (!out.empty())
-          std::cerr << out;
+        if (!output.stdout_text.empty())
+          std::cerr << output.stdout_text;
+        if (!output.stderr_text.empty())
+          std::cerr << output.stderr_text;
         vix::cli::util::err_line(std::cerr, what + " failed");
         return 1;
       }
@@ -3298,25 +3308,24 @@ namespace vix::commands
         return 1;
       }
 
-      const std::string cmake = "cmake";
-      const std::string qSource = vix::cli::commands::helpers::quote(rootDep.checkout.string());
-      const std::string qBuild = vix::cli::commands::helpers::quote(buildDir.string());
-      const std::string qStage = vix::cli::commands::helpers::quote(stageDir.string());
-
-      const std::string configureCmd =
-          cmake + " -S " + qSource + " -B " + qBuild +
-          " -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=" + qStage;
-      if (run_checked_command(configureCmd, "cmake configure") != 0)
+      if (run_checked_process(
+              "cmake",
+              {"-S", rootDep.checkout.string(), "-B", buildDir.string(),
+               "-DCMAKE_BUILD_TYPE=Release",
+               "-DCMAKE_INSTALL_PREFIX=" + stageDir.string()},
+              "cmake configure") != 0)
         return 1;
 
-      const std::string buildCmd =
-          cmake + " --build " + qBuild + " --config Release";
-      if (run_checked_command(buildCmd, "cmake build") != 0)
+      if (run_checked_process(
+              "cmake",
+              {"--build", buildDir.string(), "--config", "Release"},
+              "cmake build") != 0)
         return 1;
 
-      const std::string installCmd =
-          cmake + " --install " + qBuild + " --config Release";
-      if (run_checked_command(installCmd, "cmake install") != 0)
+      if (run_checked_process(
+              "cmake",
+              {"--install", buildDir.string(), "--config", "Release"},
+              "cmake install") != 0)
       {
         vix::cli::util::warn_line(std::cerr, "Global packages with executables must provide CMake install(TARGETS ... RUNTIME DESTINATION bin) rules.");
         return 1;
@@ -4063,14 +4072,17 @@ namespace vix::commands
         if (dep.source != "git")
           load_dep_manifest(dep);
 
-        try
+        if (linkNeedsUpdate)
         {
-          ensure_symlink_or_copy_dir(dep.checkout, link);
-        }
-        catch (const std::exception &ex)
-        {
-          vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
-          return 1;
+          try
+          {
+            ensure_symlink_or_copy_dir(dep.checkout, link);
+          }
+          catch (const std::exception &ex)
+          {
+            vix::cli::util::err_line(std::cerr, std::string("install failed: ") + ex.what());
+            return 1;
+          }
         }
 
         if (!linkExistedBefore || linkNeedsUpdate)

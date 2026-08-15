@@ -22,6 +22,7 @@ external service/toolchain and is not relabelled as a passing behavior.
 | run     | `--reload`               | existing watch tests              | B     | PASS        |
 | run     | `--force-server`         | existing run tests                | B     | PASS        |
 | run     | `--force-script`         | RunCore                           | B     | PASS        |
+| run     | `--dev-mode`             | DevProjectContractTest            | B     | PASS        |
 | run     | `--ui`                   | existing run tests                | B     | PASS        |
 | run     | `--no-ui`                | existing run tests                | B     | PASS        |
 | run     | `--env-hint`             | existing run tests                | C     | PASS        |
@@ -44,6 +45,7 @@ external service/toolchain and is not relabelled as a passing behavior.
 | run     | `--clear`                | RunCore                           | A     | PASS        |
 | run     | `--no-clear`             | RunCore                           | B     | PASS        |
 | run     | `--log-level`            | RunCore                           | A     | PASS        |
+| run     | `--loglevel`             | RunCore                           | B     | PASS        |
 | run     | `--verbose`              | RunCore                           | B     | PASS        |
 | run     | `--quiet`                | RunCore                           | B     | PASS        |
 | run     | `--log-format`           | RunCore                           | A     | PASS        |
@@ -129,9 +131,8 @@ external service/toolchain and is not relabelled as a passing behavior.
 
 Short aliases covered by their long-option tests: run `-d`, `-j`, `-q`, `-h`;
 build `-d`, `-j`, `-v`, `-q`, `-h`. Equal-sign forms are covered where their
-long form accepts a value. `run --dev-mode` and `run --loglevel` are parsed
-but absent from help; they are intentionally listed as undocumented until the
-public contract is decided.
+long form accepts a value. `run --loglevel` is the documented alias for
+`--log-level`; `run --dev-mode` is covered by the project dev-mode contract.
 
 The `RunVixAppContractTest` is covered but currently **FAIL** by design: it is
 a success contract for a real `vix::App` program, not an expected-failure test.

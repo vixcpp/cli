@@ -84,7 +84,7 @@ run_build() {
 HOME_A="$ROOT/home-a"
 mkdir -p "$HOME_A"
 make_profile "$HOME_A" data v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json SQLite::SQLite3 'vix::db|SQLite::SQLite3;vix::json' vix::orm vix::kv 'vix::vix_validation|vix::core'
-make_profile "$HOME_A" web v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json vix::requests vix::vix_webrpc vix::middleware 'vix::websocket|vix::core;vix::utils;vix::json' vix::vix_validation
+make_profile "$HOME_A" web v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json vix::requests vix::vix_webrpc vix::middleware 'vix::websocket|vix::core;vix::utils;vix::json' 'vix::realtime|vix::core;vix::utils;vix::json' vix::vix_validation
 mkdir -p "$HOME_A/sdk-web/include/vix/validation"
 cat > "$HOME_A/sdk-web/include/vix/validation/Validate.hpp" <<'HPP'
 #pragma once
@@ -127,7 +127,7 @@ if grep -A4 'set_target_properties(vix::vix_validation' "$config_validation" | g
   exit 1
 fi
 
-make_project "$ROOT/project-web" vix::websocket vix::requests vix::webrpc vix::middleware
+make_project "$ROOT/project-web" vix::websocket vix::realtime vix::requests vix::webrpc vix::middleware
 run_build "$HOME_A" "$ROOT/project-web"
 
 make_project "$ROOT/project-data" vix::db vix::orm vix::cache vix::kv
@@ -179,7 +179,7 @@ fi
 
 HOME_B="$ROOT/home-b"
 mkdir -p "$HOME_B"
-make_profile "$HOME_B" web v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json vix::requests vix::vix_webrpc vix::middleware 'vix::websocket|vix::core;vix::utils;vix::json' vix::vix_validation
+make_profile "$HOME_B" web v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json vix::requests vix::vix_webrpc vix::middleware 'vix::websocket|vix::core;vix::utils;vix::json' 'vix::realtime|vix::core;vix::utils;vix::json' vix::vix_validation
 make_profile "$HOME_B" data v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json SQLite::SQLite3 'vix::db|SQLite::SQLite3;vix::json' vix::orm vix::kv
 make_project "$ROOT/project-order" vix::db vix::websocket
 run_build "$HOME_B" "$ROOT/project-order"
@@ -220,7 +220,7 @@ fi
 HOME_VERSION="$ROOT/home-version"
 mkdir -p "$HOME_VERSION"
 make_profile "$HOME_VERSION" data v2.7.3 vix::vix vix::core vix::cache vix::utils vix::json SQLite::SQLite3 'vix::db|SQLite::SQLite3;vix::json'
-make_profile "$HOME_VERSION" web v2.8.0 vix::vix vix::core vix::cache vix::utils vix::json 'vix::websocket|vix::core;vix::utils;vix::json'
+make_profile "$HOME_VERSION" web v2.8.0 vix::vix vix::core vix::cache vix::utils vix::json 'vix::websocket|vix::core;vix::utils;vix::json' 'vix::realtime|vix::core;vix::utils;vix::json'
 make_project "$ROOT/project-version" vix::db vix::websocket
 set +e
 HOME="$HOME_VERSION" "$VIX_BIN" build --managed-sdk --preset release --dir "$ROOT/project-version" >"$ROOT/version.log" 2>&1

@@ -3757,7 +3757,7 @@ namespace vix::commands
 
         << "SDK profiles\n"
         << "  default    Balanced SDK for normal Vix.cpp projects\n"
-        << "  web        HTTP, middleware, WebSocket, validation, crypto, WebRPC and requests\n"
+        << "  web        HTTP, middleware, WebSocket, Realtime, validation, crypto, WebRPC and requests\n"
         << "  data       Database, ORM, KV and cache workflows\n"
         << "  desktop    Desktop apps with the Vix UI desktop shell\n"
         << "  p2p        Peer-to-peer networking and local-first systems\n"

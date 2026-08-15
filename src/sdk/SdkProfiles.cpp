@@ -328,7 +328,7 @@ namespace vix::cli::sdk
     {
       if (module == "db" || module == "orm" || module == "kv")
         return "data";
-      if (module == "websocket" || module == "middleware" ||
+      if (module == "websocket" || module == "realtime" || module == "middleware" ||
           module == "validation" || module == "webrpc")
         return "web";
       if (module == "p2p" || module == "p2p_http")
@@ -425,8 +425,8 @@ namespace vix::cli::sdk
 
     if (profile == "web")
       return make_info(profile, "Web SDK",
-                       "SDK for HTTP, middleware, WebSocket, validation, crypto, WebRPC and requests.",
-                       {"websocket", "middleware", "validation", "webrpc"},
+                       "SDK for HTTP, middleware, WebSocket, Realtime, validation, crypto, WebRPC and requests.",
+                       {"websocket", "realtime", "middleware", "validation", "webrpc"},
                        baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
                        {"Use this for APIs, realtime apps and backend services."});
 
@@ -466,7 +466,7 @@ namespace vix::cli::sdk
     if (profile == "all")
       return make_info(profile, "Full SDK",
                        "Complete SDK with web, data, desktop, p2p, game and agent modules.",
-                       {"websocket", "middleware", "validation", "webrpc",
+                       {"websocket", "realtime", "middleware", "validation", "webrpc",
                         "db", "orm", "kv", "p2p", "p2p_http", "game", "agent"},
                        baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
                        {"This profile is heavier. Prefer a smaller profile when possible."});

@@ -3609,7 +3609,9 @@ namespace vix::commands
       if (!fs::exists(appPath))
         return {};
 
-      const auto load = vix::cli::app::load_app_manifest(appPath);
+      const auto load = vix::cli::app::load_app_manifest(
+          appPath,
+          vix::cli::app::AppManifestLoadMode::DependenciesOnly);
       if (!load.success())
         throw std::runtime_error(load.error);
 
@@ -3736,19 +3738,53 @@ namespace vix::commands
       }
     }
 
-    static void append_git_dependency_to_vix_app(const ParsedArgs &parsed)
+    static bool requested_git_dependency_matches(
+        const vix::cli::app::AppGitDependency &existing,
+        const ParsedArgs &parsed)
+    {
+      return existing.git == parsed.gitSpec &&
+             (parsed.gitTag.empty() || existing.tag == parsed.gitTag) &&
+             (parsed.gitBranch.empty() || existing.branch == parsed.gitBranch) &&
+             (parsed.gitRev.empty() || existing.rev == parsed.gitRev) &&
+             (parsed.gitSubdirectory.empty() || existing.subdirectory == parsed.gitSubdirectory) &&
+             (parsed.gitTarget.empty() || existing.target == parsed.gitTarget) &&
+             (!parsed.gitHeaderOnly || existing.headerOnly) &&
+             (parsed.gitInclude.empty() || existing.include == parsed.gitInclude);
+    }
+
+    static bool append_git_dependency_to_vix_app(const ParsedArgs &parsed)
     {
       const fs::path appPath = fs::current_path() / "vix.app";
-      create_minimal_vix_app_if_missing(appPath);
 
       std::string name = trim_copy(parsed.gitName.empty() ? git_url_to_default_name(parsed.gitSpec) : parsed.gitName);
       if (!is_safe_local_dep_name(name))
         throw std::runtime_error("invalid dependency name: " + name);
 
+      if (fs::exists(appPath))
+      {
+        const auto load = vix::cli::app::load_app_manifest(
+            appPath,
+            vix::cli::app::AppManifestLoadMode::DependenciesOnly);
+        if (!load.success())
+          throw std::runtime_error(load.error);
+
+        for (const auto &existing : load.manifest.gitDependencies)
+        {
+          if (existing.name != name)
+            continue;
+          if (!requested_git_dependency_matches(existing, parsed))
+            throw std::runtime_error(
+                "conflicting dependency declaration in vix.app: " + name);
+          return false;
+        }
+      }
+
+      create_minimal_vix_app_if_missing(appPath);
+
       const std::string content = read_text_file_or_empty_local(appPath);
       const std::string section = "[dependencies." + name + "]";
       if (content.find(section) != std::string::npos)
-        throw std::runtime_error("dependency already exists in vix.app: " + name);
+        throw std::runtime_error("conflicting dependency declaration in vix.app: " + name);
 
       if (!parsed.gitSubdirectory.empty() && !safe_relative_path_string(parsed.gitSubdirectory))
         throw std::runtime_error("unsafe subdirectory: " + parsed.gitSubdirectory);
@@ -3776,6 +3812,39 @@ namespace vix::commands
         out << "header_only = true\n";
       if (!parsed.gitInclude.empty())
         out << "include = \"" << parsed.gitInclude << "\"\n";
+      return true;
+    }
+
+    struct FileSnapshot
+    {
+      fs::path path;
+      bool existed{false};
+      std::string contents;
+    };
+
+    static FileSnapshot snapshot_file(const fs::path &path)
+    {
+      FileSnapshot snapshot;
+      snapshot.path = path;
+      snapshot.existed = fs::exists(path);
+      if (snapshot.existed)
+        snapshot.contents = read_text_file_or_empty_local(path);
+      return snapshot;
+    }
+
+    static void restore_file_snapshot(const FileSnapshot &snapshot)
+    {
+      if (!snapshot.existed)
+      {
+        std::error_code ec;
+        fs::remove(snapshot.path, ec);
+        return;
+      }
+
+      std::ofstream out(snapshot.path, std::ios::binary | std::ios::trunc);
+      if (!out)
+        throw std::runtime_error("cannot restore " + snapshot.path.string());
+      out << snapshot.contents;
     }
 
     static void ensure_line_in_dependency_block(
@@ -3834,6 +3903,8 @@ namespace vix::commands
         return 1;
       }
 
+      const FileSnapshot appSnapshot = snapshot_file(fs::current_path() / "vix.app");
+      const FileSnapshot lockSnapshot = snapshot_file(lock_path());
       try
       {
         append_git_dependency_to_vix_app(parsed);
@@ -3842,13 +3913,33 @@ namespace vix::commands
       }
       catch (const std::exception &ex)
       {
+        try
+        {
+          restore_file_snapshot(appSnapshot);
+          restore_file_snapshot(lockSnapshot);
+        }
+        catch (const std::exception &restoreEx)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("failed to restore project state: ") + restoreEx.what());
+        }
         vix::cli::util::err_line(std::cerr, ex.what());
         return 1;
       }
 
       const int rc = install_project_dependencies();
       if (rc != 0)
+      {
+        try
+        {
+          restore_file_snapshot(appSnapshot);
+          restore_file_snapshot(lockSnapshot);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("failed to restore project state: ") + ex.what());
+        }
         return rc;
+      }
 
       const std::string name = trim_copy(parsed.gitName.empty() ? git_url_to_default_name(parsed.gitSpec) : parsed.gitName);
       vix::cli::util::ok_line(
@@ -3864,16 +3955,6 @@ namespace vix::commands
       bool printedRefreshLine = false;
       bool lockChanged = false;
       std::size_t installedCount = 0;
-
-      try
-      {
-        sync_vix_app_git_dependencies();
-      }
-      catch (const std::exception &ex)
-      {
-        vix::cli::util::err_line(std::cerr, std::string("failed to resolve Git dependencies: ") + ex.what());
-        return 1;
-      }
 
       const fs::path lp = lock_path();
 

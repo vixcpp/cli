@@ -128,3 +128,73 @@ grep -q '\[dependencies.sample\]' "$CLI_APP/vix.app"
 (cd "$CLI_APP" && "$VIX_BIN" uninstall sample >/dev/null)
 ! grep -q '\[dependencies.sample\]' "$CLI_APP/vix.app"
 test ! -e "$CLI_APP/.vix/deps/sample"
+
+# A freshly initialized app may not have sources yet. Installing a dependency
+# is dependency work, not build-completeness validation.
+FRESH_INIT_APP="$ROOT/fresh-init-app"
+mkdir -p "$FRESH_INIT_APP"
+(cd "$FRESH_INIT_APP" && "$VIX_BIN" init >/dev/null && "$VIX_BIN" install "$HEADER_REPO" --name sample --rev "$HEADER_COMMIT" --header-only --include include >/dev/null)
+grep -q '\[dependencies.sample\]' "$FRESH_INIT_APP/vix.app"
+test -e "$FRESH_INIT_APP/.vix/deps/sample"
+
+# A failed direct install must restore both user-visible dependency state files.
+FAILED_APP="$ROOT/failed-install-app"
+mkdir -p "$FAILED_APP"
+cat > "$FAILED_APP/vix.app" <<'APP'
+name = "failed_install"
+type = "executable"
+standard = "c++20"
+APP
+cp "$FAILED_APP/vix.app" "$FAILED_APP/vix.app.before"
+if (cd "$FAILED_APP" && "$VIX_BIN" install "file://$ROOT/does-not-exist" --name missing >/dev/null 2>&1); then
+  echo "install unexpectedly resolved a missing repository" >&2
+  exit 1
+fi
+cmp "$FAILED_APP/vix.app.before" "$FAILED_APP/vix.app"
+test ! -e "$FAILED_APP/vix.lock"
+if (cd "$FAILED_APP" && "$VIX_BIN" install "file://$ROOT/does-not-exist" --name missing 2>"$FAILED_APP/retry.err"); then
+  echo "retry unexpectedly resolved a missing repository" >&2
+  exit 1
+fi
+! grep -q 'dependency already exists' "$FAILED_APP/retry.err"
+cmp "$FAILED_APP/vix.app.before" "$FAILED_APP/vix.app"
+
+# An existing identical declaration is recoverable when it has not yet been
+# materialized; a differing declaration remains a conflict.
+DECLARED_APP="$ROOT/declared-install-app"
+mkdir -p "$DECLARED_APP"
+cat > "$DECLARED_APP/vix.app" <<APP
+name = "declared_install"
+type = "executable"
+standard = "c++20"
+
+[dependencies.sample]
+git = "$HEADER_REPO"
+rev = "$HEADER_COMMIT"
+header_only = true
+include = "include"
+APP
+(cd "$DECLARED_APP" && "$VIX_BIN" install "$HEADER_REPO" --name sample --header-only --include include >/dev/null)
+test -e "$DECLARED_APP/.vix/deps/sample"
+if (cd "$DECLARED_APP" && "$VIX_BIN" install "$HEADER_REPO" --name sample --header-only --include other >/dev/null 2>"$DECLARED_APP/conflict.err"); then
+  echo "install accepted a conflicting dependency declaration" >&2
+  exit 1
+fi
+grep -q 'conflicting dependency declaration' "$DECLARED_APP/conflict.err"
+
+# Build errors caused by vix.app must not cascade into a generic directory hint.
+INVALID_APP="$ROOT/invalid-manifest-app"
+mkdir -p "$INVALID_APP"
+cat > "$INVALID_APP/vix.app" <<'APP'
+name = "invalid_manifest"
+type = "executable"
+standard = "c++20"
+sources = ["main.cpp"]
+unknown = "field"
+APP
+if (cd "$INVALID_APP" && "$VIX_BIN" build >"$INVALID_APP/build.out" 2>&1); then
+  echo "build unexpectedly accepted an invalid vix.app" >&2
+  exit 1
+fi
+grep -q "Unknown scalar field in vix.app: 'unknown'" "$INVALID_APP/build.out"
+! grep -q 'Unable to determine the project directory' "$INVALID_APP/build.out"

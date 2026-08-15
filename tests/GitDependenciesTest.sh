@@ -90,6 +90,50 @@ CPP
 
 grep -q 'cm::cm' "$CMAKE_APP/vix.lock"
 
+# A lockfile-driven no-op install must not resolve the remote again, recreate
+# an already-correct dependency link, or rewrite generated CMake integration.
+NOOP_LINK="$CMAKE_APP/.vix/deps/cm"
+NOOP_CMAKE="$CMAKE_APP/.vix/vix_deps.cmake"
+NOOP_LINK_TIME="$(stat -c %Y "$NOOP_LINK")"
+NOOP_CMAKE_TIME="$(stat -c %Y "$NOOP_CMAKE")"
+GIT_REAL="$(command -v git)"
+FAKE_GIT_BIN="$ROOT/fake-git-bin"
+mkdir -p "$FAKE_GIT_BIN"
+cat > "$FAKE_GIT_BIN/git" <<EOF
+#!/usr/bin/env bash
+if [ "\${1:-}" = "ls-remote" ]; then
+  echo "unexpected git ls-remote during lockfile install" >&2
+  exit 88
+fi
+exec "$GIT_REAL" "\$@"
+EOF
+chmod +x "$FAKE_GIT_BIN/git"
+sleep 1
+(cd "$CMAKE_APP" && PATH="$FAKE_GIT_BIN:$PATH" "$VIX_BIN" install >/dev/null)
+test "$NOOP_LINK_TIME" = "$(stat -c %Y "$NOOP_LINK")"
+test "$NOOP_CMAKE_TIME" = "$(stat -c %Y "$NOOP_CMAKE")"
+
+# Removing project integration must reuse the immutable checkout without a
+# remote lookup and repair both the dependency link and CMake integration.
+rm "$NOOP_LINK" "$NOOP_CMAKE"
+(cd "$CMAKE_APP" && PATH="$FAKE_GIT_BIN:$PATH" "$VIX_BIN" install >/dev/null)
+test -e "$NOOP_LINK"
+test -e "$NOOP_CMAKE"
+
+# Structured Git execution keeps local repository paths with spaces as one
+# argument through direct installation.
+SPACED_REPO="$ROOT/header repo with spaces"
+git clone -q "$HEADER_REPO" "$SPACED_REPO"
+SPACED_APP="$ROOT/space-path-app"
+mkdir -p "$SPACED_APP"
+cat > "$SPACED_APP/vix.app" <<'APP'
+name = "space_path"
+type = "executable"
+standard = "c++20"
+APP
+(cd "$SPACED_APP" && "$VIX_BIN" install "$SPACED_REPO" --name spaced --rev "$HEADER_COMMIT" --header-only --include include >/dev/null)
+test -e "$SPACED_APP/.vix/deps/spaced"
+
 AUTO_RUN_APP="$ROOT/auto-run-app"
 mkdir -p "$AUTO_RUN_APP"
 cat > "$AUTO_RUN_APP/vix.app" <<APP

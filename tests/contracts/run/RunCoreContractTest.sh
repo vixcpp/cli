@@ -45,7 +45,10 @@ for mode in auto always never; do "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --
 for value in 0 1 true false; do "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --docs="$value" -- -I"$PROJECT/include" >/dev/null; done
 for value in kv json json-pretty; do "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --log-format="$value" -- -I"$PROJECT/include" >/dev/null; done
 for value in auto always never; do "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --log-color="$value" -- -I"$PROJECT/include" >/dev/null; done
-for value in trace debug info warn error critical off; do "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --log-level="$value" -- -I"$PROJECT/include" >/dev/null; done
+for value in trace debug info warn error critical off; do
+  "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --log-level="$value" -- -I"$PROJECT/include" >/dev/null
+  "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --loglevel="$value" -- -I"$PROJECT/include" >/dev/null
+done
 expect_failure 'Invalid value for --compiler-fingerprint' "$VIX_BIN" run "$PROJECT/main.cpp" --compiler-fingerprint=bad
 expect_failure 'Missing value for --cwd' "$VIX_BIN" run "$PROJECT/main.cpp" --cwd
 expect_failure 'Invalid value for --auto-deps' "$VIX_BIN" run "$PROJECT/main.cpp" --auto-deps=bad

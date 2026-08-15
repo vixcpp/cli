@@ -1198,7 +1198,8 @@ namespace vix::cli::app
     static bool parse_manifest_text(
         const std::string &text,
         AppManifest &manifest,
-        std::string &error)
+        std::string &error,
+        const bool requireBuildFields)
     {
       std::istringstream in(text);
       std::string line;
@@ -1448,7 +1449,7 @@ namespace vix::cli::app
         return false;
       }
 
-      if (manifest.sources.empty())
+      if (requireBuildFields && manifest.sources.empty())
       {
         error = "Invalid vix.app: missing required field 'sources' "
                 "(at least one source file is required)";
@@ -1533,12 +1534,17 @@ namespace vix::cli::app
 
   bool AppManifestLoadResult::success() const
   {
-    return error.empty() && manifest.valid();
+    return error.empty() &&
+           !manifest.name.empty() &&
+           (!requireBuildFields || manifest.valid());
   }
 
-  AppManifestLoadResult load_app_manifest(const fs::path &path)
+  AppManifestLoadResult load_app_manifest(
+      const fs::path &path,
+      const AppManifestLoadMode mode)
   {
     AppManifestLoadResult result;
+    result.requireBuildFields = mode == AppManifestLoadMode::CompleteProject;
 
     std::error_code ec;
 
@@ -1556,7 +1562,11 @@ namespace vix::cli::app
       return result;
     }
 
-    if (!parse_manifest_text(text, result.manifest, result.error))
+    if (!parse_manifest_text(
+            text,
+            result.manifest,
+            result.error,
+            result.requireBuildFields))
       return result;
 
     return result;

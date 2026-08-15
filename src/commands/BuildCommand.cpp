@@ -5188,6 +5188,14 @@ namespace vix::commands::BuildCommand
           const app::AppProjectResolveResult project =
               app::resolve_app_project(base);
 
+          if (!project.success() &&
+              project.kind == app::AppProjectKind::VixApp)
+          {
+            error("Failed to resolve vix.app project.");
+            hint(project.error);
+            return 1;
+          }
+
           if (project.success() &&
               project.kind == app::AppProjectKind::VixApp)
           {

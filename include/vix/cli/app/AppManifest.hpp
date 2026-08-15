@@ -373,6 +373,9 @@ namespace vix::cli::app
      */
     std::string error;
 
+    /// True when the caller requested build-completeness validation.
+    bool requireBuildFields{true};
+
     /**
      * @brief Returns true when the load operation succeeded.
      *
@@ -382,12 +385,24 @@ namespace vix::cli::app
   };
 
   /**
+   * @brief Selects whether a consumer needs a complete build manifest or
+   * only syntactically valid dependency declarations.
+   */
+  enum class AppManifestLoadMode
+  {
+    CompleteProject,
+    DependenciesOnly
+  };
+
+  /**
    * @brief Loads a vix.app file from disk.
    *
    * @param path Path to the vix.app file.
    * @return Load result containing either a manifest or an error.
    */
-  AppManifestLoadResult load_app_manifest(const fs::path &path);
+  AppManifestLoadResult load_app_manifest(
+      const fs::path &path,
+      AppManifestLoadMode mode = AppManifestLoadMode::CompleteProject);
 
 } // namespace vix::cli::app
 

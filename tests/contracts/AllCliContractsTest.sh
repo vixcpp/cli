@@ -25,5 +25,7 @@ run dev/DevSingleCppSignalContractTest.sh
 run build/BuildCoreContractTest.sh
 run build/BuildPassthroughContractTest.sh
 run build/BuildExecutionPathsContractTest.sh
+run install/InstallCMakeCompatibilityContractTest.sh
+run install/InstallReconciliationContractTest.sh
 
 echo "AllCliContractsTest passed"

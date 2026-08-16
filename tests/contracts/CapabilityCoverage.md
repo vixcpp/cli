@@ -54,6 +54,8 @@ future contract, never a pass.
 | build | dependency | `local-vix-modules` | SdkProfileCompositionTest | PASS |
 | build | dependency | `managed-sdk-composed` | SdkProfileCompositionTest | PASS |
 | build | dependency | `managed-sdk-missing` | SdkProfileCompositionTest | PASS |
+| install | dependency-model | `git-cmake-targets` / header, static, shared, alias, interface, generated-header, transitive | InstallCMakeCompatibilityContractTest | PASS |
+| install | reconciliation | `no-lock,no-op,cache-rebuild,add,failed` | InstallReconciliationContractTest | PASS |
 | build | linkage | `cmake-interface-target` | BuildNativeCMakeDiscoveryTest | PASS |
 | build | linkage | `compiled-vix-target` | CMake package linkage contract | UNCOVERED |
 | build | linkage | `transitive-system-library` | CMake package linkage contract | UNCOVERED |

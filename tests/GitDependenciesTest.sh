@@ -242,3 +242,75 @@ if (cd "$INVALID_APP" && "$VIX_BIN" build >"$INVALID_APP/build.out" 2>&1); then
 fi
 grep -q "Unknown scalar field in vix.app: 'unknown'" "$INVALID_APP/build.out"
 ! grep -q 'Unable to determine the project directory' "$INVALID_APP/build.out"
+
+# Reconciliation is manifest-driven: retain an unchanged direct lock entry,
+# resolve only a newly declared entry, update CMake-only metadata without a
+# remote lookup, and remove only explicitly-owned root entries.
+RECON_APP="$ROOT/reconciliation-app"
+mkdir -p "$RECON_APP"
+cat > "$RECON_APP/vix.app" <<APP
+name = "reconciliation"
+type = "executable"
+standard = "c++20"
+
+[dependencies.headers]
+git = "$HEADER_REPO"
+rev = "$HEADER_COMMIT"
+header_only = true
+include = "include"
+APP
+(cd "$RECON_APP" && "$VIX_BIN" install >/dev/null)
+HEADERS_LOCKED_COMMIT="$(python3 -c 'import json,sys; print(next(x["commit"] for x in json.load(open(sys.argv[1]))["dependencies"] if x["id"] == "headers"))' "$RECON_APP/vix.lock")"
+cat >> "$RECON_APP/vix.app" <<APP
+
+[dependencies.cm]
+git = "$CMAKE_REPO"
+rev = "$CMAKE_COMMIT"
+target = "cm::cm"
+
+[dependencies.cm.cmake]
+CM_OPTION = true
+APP
+(cd "$RECON_APP" && PATH="$FAKE_GIT_BIN:$PATH" "$VIX_BIN" install >/dev/null)
+test "$HEADERS_LOCKED_COMMIT" = "$(python3 -c 'import json,sys; print(next(x["commit"] for x in json.load(open(sys.argv[1]))["dependencies"] if x["id"] == "headers"))' "$RECON_APP/vix.lock")"
+grep -q '"id": "cm"' "$RECON_APP/vix.lock"
+
+sed -i 's/CM_OPTION = true/CM_OPTION = false/' "$RECON_APP/vix.app"
+(cd "$RECON_APP" && PATH="$FAKE_GIT_BIN:$PATH" "$VIX_BIN" install >/dev/null)
+grep -q 'set(CM_OPTION false CACHE STRING "" FORCE)' "$RECON_APP/.vix/vix_deps.cmake"
+
+sed -i '/\[dependencies.cm\]/,$d' "$RECON_APP/vix.app"
+(cd "$RECON_APP" && PATH="$FAKE_GIT_BIN:$PATH" "$VIX_BIN" install >/dev/null)
+test ! -e "$RECON_APP/.vix/deps/cm"
+! grep -q '"id": "cm"' "$RECON_APP/vix.lock"
+
+# A failure while resolving a new declaration must not publish any partial
+# reconciliation over the previously usable lockfile.
+ATOMIC_APP="$ROOT/atomic-reconciliation-app"
+mkdir -p "$ATOMIC_APP"
+cat > "$ATOMIC_APP/vix.app" <<APP
+name = "atomic_reconciliation"
+type = "executable"
+standard = "c++20"
+
+[dependencies.headers]
+git = "$HEADER_REPO"
+rev = "$HEADER_COMMIT"
+header_only = true
+include = "include"
+APP
+(cd "$ATOMIC_APP" && "$VIX_BIN" install >/dev/null)
+cp "$ATOMIC_APP/vix.lock" "$ATOMIC_APP/vix.lock.before"
+cat >> "$ATOMIC_APP/vix.app" <<APP
+
+[dependencies.missing]
+git = "file://$ROOT/not-a-repository"
+rev = "deadbeef"
+header_only = true
+include = "include"
+APP
+if (cd "$ATOMIC_APP" && "$VIX_BIN" install >/dev/null 2>&1); then
+  echo "install unexpectedly resolved a missing reconciliation dependency" >&2
+  exit 1
+fi
+cmp "$ATOMIC_APP/vix.lock.before" "$ATOMIC_APP/vix.lock"

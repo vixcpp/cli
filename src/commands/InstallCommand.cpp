@@ -41,6 +41,7 @@
 #include <vector>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace fs = std::filesystem;
 #ifdef _WIN32
@@ -3577,6 +3578,10 @@ namespace vix::commands
       for (const std::string &target : dep.cmakeTargets)
         item["targets"].push_back(target);
       item["cmake_options"] = cmake_options_json(dep.cmakeOptions);
+      // This lets a later reconciliation remove only entries which Vix knows
+      // came from the root vix.app.  Older locks may contain transitive
+      // entries without enough ownership information, so they are retained.
+      item["manifest_direct"] = true;
       return item;
     }
 
@@ -3612,11 +3617,94 @@ namespace vix::commands
       arr.push_back(dependency);
     }
 
-    static std::vector<DepResolved> sync_vix_app_git_dependencies()
+    struct AppGitReconciliation
     {
+      std::vector<DepResolved> resolved;
+      std::vector<std::string> removedDirectIds;
+    };
+
+    static bool app_git_resolution_matches_lock(
+        const vix::cli::app::AppGitDependency &appDep,
+        const json &locked)
+    {
+      if (!locked.is_object() || locked.value("source", "") != "git" ||
+          locked.value("repo", locked.value("url", "")) != appDep.git ||
+          locked.value("subdirectory", "") != appDep.subdirectory)
+        return false;
+
+      // A lock written by current Vix records the selector kind.  For old
+      // locks retain a pinned entry when its legacy requested/tag metadata
+      // agrees with the explicit selector in vix.app.
+      const std::string selector = locked.value("selector", "");
+      const std::string value = locked.value("selector_value", locked.value("requested", ""));
+      if (!appDep.tag.empty())
+        return (selector.empty() ? locked.value("tag", "") == appDep.tag : selector == "tag" && value == appDep.tag);
+      if (!appDep.branch.empty())
+        return selector.empty() ? value == appDep.branch : selector == "branch" && value == appDep.branch;
+      if (!appDep.rev.empty())
+        return selector.empty() ? (value == appDep.rev || locked.value("commit", "") == appDep.rev) : selector == "rev" && value == appDep.rev;
+
+      // An unspecified selector means "use the existing exact resolution"
+      // once it is locked; it must never cause an ls-remote on a no-op run.
+      return true;
+    }
+
+    static void apply_app_git_integration_metadata(
+        json &locked,
+        const vix::cli::app::AppGitDependency &appDep)
+    {
+      // Do not mutate older lock entries solely to add ownership metadata:
+      // preserving their bytes is the safe compatibility path. New entries
+      // are marked by git_dependency_to_lock_json().
+      if (locked.contains("manifest_direct"))
+        locked["manifest_direct"] = true;
+      locked["subdirectory"] = appDep.subdirectory;
+      locked["header_only"] = appDep.headerOnly;
+      locked["includes"] = json::array();
+      const auto &includes = appDep.includes.empty() && appDep.headerOnly
+                                 ? std::vector<std::string>{"include"}
+                                 : appDep.includes;
+      for (const std::string &include : includes)
+        locked["includes"].push_back(include);
+      locked["targets"] = json::array();
+      const auto &targets = appDep.targets.empty() && !appDep.target.empty()
+                                ? std::vector<std::string>{appDep.target}
+                                : appDep.targets;
+      for (const std::string &target : targets)
+        locked["targets"].push_back(target);
+      locked["cmake_options"] = cmake_options_json(app_cmake_options_to_pairs(appDep.cmakeOptions));
+    }
+
+    static void annotate_git_lock_selector(json &locked, const vix::cli::app::AppGitDependency &appDep)
+    {
+      if (!appDep.tag.empty())
+      {
+        locked["selector"] = "tag";
+        locked["selector_value"] = appDep.tag;
+      }
+      else if (!appDep.branch.empty())
+      {
+        locked["selector"] = "branch";
+        locked["selector_value"] = appDep.branch;
+      }
+      else if (!appDep.rev.empty())
+      {
+        locked["selector"] = "rev";
+        locked["selector_value"] = appDep.rev;
+      }
+      else
+      {
+        locked["selector"] = "default";
+        locked["selector_value"] = "";
+      }
+    }
+
+    static AppGitReconciliation sync_vix_app_git_dependencies()
+    {
+      AppGitReconciliation result;
       const fs::path appPath = fs::current_path() / "vix.app";
       if (!fs::exists(appPath))
-        return {};
+        return result;
 
       const auto load = vix::cli::app::load_app_manifest(
           appPath,
@@ -3624,24 +3712,68 @@ namespace vix::commands
       if (!load.success())
         throw std::runtime_error(load.error);
 
-      std::vector<DepResolved> resolved;
       if (load.manifest.gitDependencies.empty())
-        return resolved;
+      {
+        // Still reconcile previously-marked root entries if all Git
+        // declarations were removed from vix.app.
+      }
 
       json root = read_lock_or_empty();
-      root["lockVersion"] = 1;
+      bool changed = !fs::exists(lock_path());
+      if (!root.contains("lockVersion"))
+      {
+        root["lockVersion"] = 1;
+        changed = true;
+      }
+      std::unordered_set<std::string> declared;
 
       for (const auto &appDep : load.manifest.gitDependencies)
       {
+        declared.insert(appDep.name);
+        json *locked = nullptr;
+        for (auto &item : root["dependencies"])
+          if (item.is_object() && item.value("id", "") == appDep.name)
+          {
+            locked = &item;
+            break;
+          }
+        if (locked && app_git_resolution_matches_lock(appDep, *locked))
+        {
+          const json before = *locked;
+          apply_app_git_integration_metadata(*locked, appDep);
+          if (*locked != before)
+            changed = true;
+          continue;
+        }
+
         DepResolved dep = resolve_app_git_dependency_or_throw(appDep);
-        upsert_lock_dependency(root, git_dependency_to_lock_json(dep));
-        resolved.push_back(dep);
+        json item = git_dependency_to_lock_json(dep);
+        annotate_git_lock_selector(item, appDep);
+        upsert_lock_dependency(root, item);
+        result.resolved.push_back(dep);
+        changed = true;
+      }
+
+      auto &dependencies = root["dependencies"];
+      for (auto it = dependencies.begin(); it != dependencies.end();)
+      {
+        if (it->is_object() && it->value("source", "") == "git" &&
+            it->value("manifest_direct", false) &&
+            declared.find(it->value("id", "")) == declared.end())
+        {
+          result.removedDirectIds.push_back(it->value("id", ""));
+          it = dependencies.erase(it);
+          changed = true;
+        }
+        else
+          ++it;
       }
 
       std::sort(root["dependencies"].begin(), root["dependencies"].end(), [](const json &a, const json &b)
                 { return a.value("id", "") < b.value("id", ""); });
-      save_lock_json(root);
-      return resolved;
+      if (changed)
+        save_lock_json(root);
+      return result;
     }
 
     static bool dependency_link_needs_update(
@@ -3917,8 +4049,8 @@ namespace vix::commands
       try
       {
         append_git_dependency_to_vix_app(parsed);
-        const auto resolved = sync_vix_app_git_dependencies();
-        update_vix_app_with_detected_git_metadata(resolved);
+        const auto reconciliation = sync_vix_app_git_dependencies();
+        update_vix_app_with_detected_git_metadata(reconciliation.resolved);
       }
       catch (const std::exception &ex)
       {
@@ -3967,6 +4099,34 @@ namespace vix::commands
 
       const fs::path lp = lock_path();
 
+      // vix.app is the desired state for Git dependencies. Reconcile it
+      // before reading the exact state to materialize, without touching
+      // unchanged locked entries.
+      AppGitReconciliation reconciliation;
+      try
+      {
+        reconciliation = sync_vix_app_git_dependencies();
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
+
+      for (const std::string &id : reconciliation.removedDirectIds)
+      {
+        if (id.empty())
+          continue;
+        std::error_code ec;
+        fs::remove_all(project_deps_dir() / sanitize_id_dot(id), ec);
+        if (ec)
+        {
+          vix::cli::util::err_line(std::cerr, "failed to remove stale dependency link: " + id + ": " + ec.message());
+          return 1;
+        }
+        didWork = true;
+      }
+
       if (!fs::exists(lp))
       {
         vix::cli::util::err_line(std::cerr, "missing vix.lock");
@@ -3994,6 +4154,15 @@ namespace vix::commands
       auto &depsArr = lock["dependencies"];
       if (depsArr.empty())
       {
+        try
+        {
+          generate_cmake({});
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("failed to generate CMake integration: ") + ex.what());
+          return 1;
+        }
         vix::cli::util::warn_line(std::cout, "No dependencies to install");
         return 0;
       }
@@ -4191,74 +4360,30 @@ namespace vix::commands
 
   int InstallCommand::help()
   {
-    std::cout
-        << "vix install\n"
-        << "Install project dependencies from vix.lock or install one global package.\n\n"
+    std::ostream &out = std::cout;
 
-        << "Usage\n"
-        << "  vix install\n"
-        << "  vix install <git-url> [options]\n"
-        << "  vix install -g [@]namespace/name[@version]\n\n"
+    out << "Usage:\n";
+    out << "  vix install\n";
+    out << "  vix install <git-url> [options]\n";
+    out << "  vix install -g <package>\n\n";
 
-        << "Examples\n"
-        << "  vix install\n"
-        << "  vix install https://github.com/fmtlib/fmt\n"
-        << "  vix install https://github.com/fmtlib/fmt@11.2.0\n"
-        << "  vix install https://github.com/nlohmann/json.git --tag v3.12.0 --target nlohmann_json::nlohmann_json\n"
-        << "  vix install https://github.com/example/headers --header-only --include include\n"
-        << "  vix install git@github.com:company/repo.git --name parser --subdirectory libs/parser --target company::parser\n"
-        << "  vix install -g gk/jwt\n"
-        << "  vix install -g gk/jwt@^1.0.0\n"
-        << "  vix install -g @gk/jwt\n"
-        << "  vix install -g @gk/jwt@~1.2.0\n\n"
+    out << "Install project dependencies, Git dependencies, or global packages.\n\n";
 
-        << "What happens\n"
-        << "  • Project mode:\n"
-        << "    - Reads exact resolved dependencies from vix.lock\n"
-        << "    - Reuses cached packages when available\n"
-        << "    - Installs dependencies into ./.vix/deps/\n"
-        << "    - Generates ./.vix/vix_deps.cmake for CMake projects\n"
-        << "\n"
-        << "  • Git dependency mode:\n"
-        << "    - Adds a [dependencies.<name>] block to vix.app\n"
-        << "    - Auto-selects the newest stable SemVer tag when no revision is provided\n"
-        << "    - Auto-detects the main CMake target when possible\n"
-        << "    - Resolves tag, branch, rev, or HEAD to an exact commit\n"
-        << "    - Stores the checkout in ~/.vix/cache/git/ and links it into ./.vix/deps/\n"
-        << "    - Supports CMake repositories and header-only repositories\n"
-        << "\n"
-        << "  • Global mode (-g):\n"
-        << "    - Resolves a package from the registry\n"
-        << "    - Builds it with CMake in Release mode\n"
-        << "    - Runs cmake --install into a Vix-managed user prefix\n"
-        << "    - Records installed files and commands in ~/.vix/global/installed.json\n\n"
+    out << "Git options:\n";
+    out << "  --name <name>              Dependency name\n";
+    out << "  --tag <tag>                Use a Git tag\n";
+    out << "  --branch <branch>          Use a Git branch\n";
+    out << "  --rev, --commit <rev>      Use a Git commit or revision\n";
+    out << "  --target <target>          CMake target to link\n";
+    out << "  --subdirectory, --subdir <dir>\n";
+    out << "                             CMake project inside the repository\n";
+    out << "  --header-only, --headers   Treat the dependency as header-only\n";
+    out << "  --include <dir>            Include directory for header-only dependencies\n\n";
 
-        << "Git options\n"
-        << "  --name <name>           Local dependency name in vix.app\n"
-        << "  --tag <tag>             Resolve a Git tag; also supports <url>@<tag>\n"
-        << "  --branch <branch>       Resolve a Git branch to a commit\n"
-        << "  --rev <commit>          Use a commit/revision\n"
-        << "  --target <target>       CMake target to link, e.g. fmt::fmt\n"
-        << "  --subdirectory <dir>    CMake project inside a monorepo\n"
-        << "  --header-only           Treat the repository as headers only\n"
-        << "  --include <dir>         Include directory for header-only deps\n\n"
+    out << "Global:\n";
+    out << "  -g, --global <package>     Install a package globally\n\n";
 
-        << "Project outputs\n"
-        << "  ./.vix/deps/\n"
-        << "  ./.vix/vix_deps.cmake\n\n"
-
-        << "Global outputs\n"
-        << "  ~/.vix/global/bin/\n"
-        << "  ~/.vix/global/include/\n"
-        << "  ~/.vix/global/lib/\n"
-        << "  ~/.vix/global/installed.json\n\n"
-
-        << "Notes\n"
-        << "  • Project install is strict and reproducible\n"
-        << "  • Project install does not resolve dependency ranges from vix.json\n"
-        << "  • Use 'vix add' or 'vix update' to change resolved versions\n"
-        << "  • Use 'vix registry sync' if a package is not found\n"
-        << "  • '@namespace/name' is supported\n";
+    out << "  -h, --help                 Show this help\n";
 
     return 0;
   }

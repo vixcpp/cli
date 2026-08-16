@@ -22,6 +22,7 @@
 #include <vix/process/Process.hpp>
 #include <vix/utils/Env.hpp>
 #include <vix/cli/util/Semver.hpp>
+#include <vix/cli/util/GitProgress.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -42,6 +43,12 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <mutex>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 #ifdef _WIN32
@@ -450,6 +457,94 @@ namespace vix::commands
         std::vector<std::string> args,
         const fs::path &cwd);
 
+    static bool install_progress_is_tty()
+    {
+#ifdef _WIN32
+      if (_isatty(_fileno(stdout)) == 0)
+        return false;
+#else
+      if (::isatty(STDOUT_FILENO) == 0)
+        return false;
+#endif
+      const char *term = std::getenv("TERM");
+      return (!term || std::string_view(term) != "dumb") && std::getenv("NO_COLOR") == nullptr;
+    }
+
+    class GitInstallProgress
+    {
+    public:
+      GitInstallProgress(std::string dependency, std::size_t packageIndex, std::size_t packageCount)
+          : dependency_(std::move(dependency)), packageIndex_(packageIndex), packageCount_(packageCount), started_(std::chrono::steady_clock::now()), tty_(install_progress_is_tty()), parser_([this](const auto &event)
+                                                                                                                                                                                               { render(event); }) {}
+
+      void push(std::string_view chunk) { parser_.push(chunk); }
+      void finish()
+      {
+        parser_.finish();
+        if (visible_)
+        {
+          std::cout << "\r\033[2K" << std::flush;
+          visible_ = false;
+        }
+      }
+
+    private:
+      void render(const vix::cli::util::GitProgressEvent &event)
+      {
+        if (!tty_)
+          return;
+        const auto now = std::chrono::steady_clock::now();
+        if (now - started_ < std::chrono::milliseconds(200))
+          return;
+        if (visible_ && event.phase == lastPhase_ && now - lastRender_ < std::chrono::milliseconds(100))
+          return;
+        std::ostringstream line;
+        line << "  " << CYAN << "•" << RESET << " " << CYAN << BOLD << dependency_ << RESET;
+        if (packageCount_ > 1)
+          line << " " << GRAY << "(" << (packageIndex_ + 1) << "/" << packageCount_ << " packages)" << RESET;
+        line << "  " << GRAY << event.phase;
+        if (event.percent)
+          line << " " << *event.percent << "%";
+        if (!event.transferred.empty())
+          line << "  " << event.transferred;
+        if (!event.speed.empty())
+          line << "  " << event.speed;
+        line << RESET;
+        std::cout << "\r\033[2K" << line.str() << std::flush;
+        visible_ = true;
+        lastRender_ = now;
+        lastPhase_ = event.phase;
+      }
+      std::string dependency_;
+      std::size_t packageIndex_{};
+      std::size_t packageCount_{};
+      std::chrono::steady_clock::time_point started_, lastRender_{};
+      bool tty_{false}, visible_{false};
+      std::string lastPhase_;
+      vix::cli::util::GitProgressParser parser_;
+    };
+
+    static vix::process::ProcessOutput run_git_clone_streamed(
+        std::vector<std::string> args, const fs::path &cwd, const std::string &dependency,
+        std::size_t packageIndex = 0, std::size_t packageCount = 1)
+    {
+      GitInstallProgress progress(dependency, packageIndex, packageCount);
+      vix::process::Command command("git");
+      command.args(std::move(args));
+      command.search_in_path(true);
+      if (!cwd.empty())
+        command.cwd(cwd.string());
+      const auto result = vix::process::output_streamed(std::move(command), {{}, [&progress](std::string_view chunk)
+                                                                             { progress.push(chunk); }});
+      progress.finish();
+      if (result)
+        return result.value();
+      vix::process::ProcessOutput output;
+      output.exit_code = 127;
+      output.stderr_text = result.error().message();
+      return output;
+    }
+
     static int clone_checkout(
         const std::string &repoUrl,
         const std::string &idDot,
@@ -466,10 +561,9 @@ namespace vix::commands
 
       fs::create_directories(dst.parent_path());
 
-      const auto clone = run_process(
-          "git",
-          {"clone", "-q", repoUrl, dst.string()},
-          {});
+      const auto clone = run_git_clone_streamed(
+          {"clone", "--progress", "-q", repoUrl, dst.string()},
+          {}, idDot);
       if (!clone.success())
         return clone.exit_code == 0 ? 1 : clone.exit_code;
 
@@ -1637,7 +1731,9 @@ namespace vix::commands
       return git_cache_dir() / short_hash_for_url(url) / commit;
     }
 
-    static fs::path clone_git_to_cache_or_throw(const std::string &url, const std::string &commit)
+    static fs::path clone_git_to_cache_or_throw(
+        const std::string &url, const std::string &commit,
+        const std::string &dependency = "dependency", std::size_t packageIndex = 0, std::size_t packageCount = 1)
     {
       fs::create_directories(git_cache_dir());
       const fs::path dst = git_cache_checkout_path(url, commit);
@@ -1650,7 +1746,8 @@ namespace vix::commands
       fs::create_directories(parent, ec);
       fs::remove_all(tmp, ec);
 
-      auto output = run_process("git", {"clone", "-q", url, tmp.string()});
+      auto output = run_git_clone_streamed(
+          {"clone", "--progress", "-q", url, tmp.string()}, {}, dependency, packageIndex, packageCount);
       if (!output.success())
         throw std::runtime_error("git clone failed for: " + url);
 
@@ -3473,7 +3570,7 @@ namespace vix::commands
         selectedTag = select_latest_stable_git_tag(appDep.git, false);
 
       const std::string commit = resolve_git_commit_or_throw(appDep.git, selectedTag, appDep.branch, appDep.rev);
-      const fs::path checkout = clone_git_to_cache_or_throw(appDep.git, commit);
+      const fs::path checkout = clone_git_to_cache_or_throw(appDep.git, commit, appDep.name);
       const fs::path sourceDir = appDep.subdirectory.empty() ? checkout : (checkout / appDep.subdirectory);
 
       if (!fs::exists(sourceDir))
@@ -4203,7 +4300,7 @@ namespace vix::commands
           {
             try
             {
-              dep.checkout = clone_git_to_cache_or_throw(dep.repo, dep.commit);
+              dep.checkout = clone_git_to_cache_or_throw(dep.repo, dep.commit, dep.id, resolved.size(), depsArr.size());
             }
             catch (const std::exception &ex)
             {

@@ -71,6 +71,10 @@ add_executable(vix_cli_dependency_constraints_tests DependencyConstraintsTests.c
 target_include_directories(vix_cli_dependency_constraints_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_dependency_constraints_tests COMMAND vix_cli_dependency_constraints_tests)
 
+add_executable(vix_cli_project_mutation_tests ProjectMutationTests.cpp ../src/util/ProjectMutation.cpp)
+target_include_directories(vix_cli_project_mutation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+add_test(NAME vix_cli_project_mutation_tests COMMAND vix_cli_project_mutation_tests)
+
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
 )
@@ -261,6 +265,14 @@ add_test(
   NAME vix_cli_git_dependencies
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/GitDependenciesTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
+  NAME vix_cli_mutation_command_contracts
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/MutationCommandContractsTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
 

@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/RemoveCommand.hpp>
+#include <vix/cli/util/ProjectMutation.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
 
@@ -240,6 +241,12 @@ namespace vix::commands
 
   int RemoveCommand::run(const std::vector<std::string> &args)
   {
+    vix::cli::util::ProjectMutationLock mutationLock(fs::current_path());
+    if (!mutationLock.acquired())
+    {
+      vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + mutationLock.error());
+      return 1;
+    }
     vix::cli::util::section(std::cout, "Remove");
 
     Options opt;

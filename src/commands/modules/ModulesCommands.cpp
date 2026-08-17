@@ -16,9 +16,11 @@
 #include <vix/cli/modules/ModuleGraph.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/util/ProjectMutation.hpp>
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <iomanip>
@@ -322,6 +324,12 @@ namespace vix::commands::modules_cmd::commands
       const std::string &moduleRaw,
       bool enabled)
   {
+    vix::cli::util::ProjectMutationLock mutationLock(root);
+    if (!mutationLock.acquired())
+    {
+      ui::err_line(std::cout, "Cannot acquire project mutation lock: " + mutationLock.error());
+      return false;
+    }
     const fs::path appPath = root / "vix.app";
 
     if (!utils::exists_file(appPath))
@@ -440,9 +448,12 @@ namespace vix::commands::modules_cmd::commands
       return true;
     }
 
-    if (!utils::write_file_overwrite(appPath, join_lines(lines)))
+    std::string transactionError;
+    vix::cli::util::ProjectMutationTransaction transaction(root);
+    if (!transaction.stage_write(appPath, join_lines(lines), transactionError) ||
+        !transaction.commit(transactionError))
     {
-      ui::err_line(std::cout, "Failed to update vix.app.");
+      ui::err_line(std::cout, "Failed to update vix.app: " + transactionError);
       return false;
     }
 
@@ -647,6 +658,12 @@ namespace vix::commands::modules_cmd::commands
       const std::string &module,
       const AddModuleOptions &options)
   {
+    vix::cli::util::ProjectMutationLock mutationLock(root);
+    if (!mutationLock.acquired())
+    {
+      ui::err_line(std::cout, "Cannot acquire project mutation lock: " + mutationLock.error());
+      return false;
+    }
     const bool patchRootLink = options.patchRootLink;
 
     if (!cnt::is_valid_module_name(module))
@@ -668,7 +685,15 @@ namespace vix::commands::modules_cmd::commands
     const std::string normalized = cnt::normalize_module_id(module);
 
     const fs::path modulesDir = root / "modules";
-    const fs::path moduleDir = modulesDir / normalized;
+    const fs::path finalModuleDir = modulesDir / normalized;
+    // Generate privately, then publish the complete tree only after its
+    // authoritative registration has succeeded.
+    const fs::path moduleDir = modulesDir / ("." + normalized + ".vix-txn-" + std::to_string(std::hash<std::string>{}(normalized + project)));
+    struct TemporaryModuleCleanup
+    {
+      fs::path path; bool published{false};
+      ~TemporaryModuleCleanup() { if (!published) { std::error_code ec; fs::remove_all(path, ec); } }
+    } temporaryModule{moduleDir};
 
     const bool hasRootCMake =
         utils::exists_file(root / "CMakeLists.txt");
@@ -730,11 +755,23 @@ namespace vix::commands::modules_cmd::commands
       return false;
     }
 
-    if (utils::exists_dir(moduleDir))
+    if (utils::exists_dir(finalModuleDir))
     {
       ui::err_line(std::cout, "Module already exists: modules/" + normalized);
       return false;
     }
+
+    const auto originalRootCMake = hasRootCMake ? utils::read_file(root / "CMakeLists.txt") : std::optional<std::string>{};
+    const auto originalVixApp = hasVixApp ? utils::read_file(root / "vix.app") : std::optional<std::string>{};
+    const auto restore_registration = [&]()
+    {
+      std::string error;
+      vix::cli::util::ProjectMutationTransaction transaction(root);
+      if (originalRootCMake) transaction.stage_write(root / "CMakeLists.txt", *originalRootCMake, error);
+      if (originalVixApp) transaction.stage_write(root / "vix.app", *originalVixApp, error);
+      if (!error.empty() || !transaction.commit(error))
+        ui::err_line(std::cout, "Failed to restore project registration: " + error);
+    };
 
     if (!utils::ensure_dir(includeDir))
     {
@@ -1000,10 +1037,20 @@ namespace vix::commands::modules_cmd::commands
 
     bool registeredInVixApp = false;
 
+    // Deterministic contract-test seam: generation has completed, but no
+    // project registration has been published yet.
+    if (const char *failRegistration = std::getenv("VIX_TEST_FAIL_MODULE_REGISTRATION");
+        failRegistration != nullptr && std::string(failRegistration) == "1")
+    {
+      ui::err_line(std::cout, "Injected module registration failure.");
+      return false;
+    }
+
     if (patchRootLink && hasRootCMake)
     {
       if (!cnt::patch_root_cmakelists_link_module(root, project, normalized))
       {
+        restore_registration();
         ui::err_line(
             std::cout,
             "Failed to patch root CMakeLists.txt with module link.");
@@ -1014,6 +1061,7 @@ namespace vix::commands::modules_cmd::commands
     {
       if (!append_module_section_to_vix_app(root, normalized, moduleKind))
       {
+        restore_registration();
         ui::err_line(std::cout, "Failed to register module in vix.app.");
         return false;
       }
@@ -1025,6 +1073,18 @@ namespace vix::commands::modules_cmd::commands
       ui::warn_line(
           std::cout,
           "CMakeLists.txt not found. Skipping auto-link.");
+    }
+
+    {
+      std::error_code ec;
+      fs::rename(moduleDir, finalModuleDir, ec);
+      if (ec)
+      {
+        restore_registration();
+        ui::err_line(std::cout, "Failed to publish module directory: " + ec.message());
+        return false;
+      }
+      temporaryModule.published = true;
     }
 
     print_modules_banner(normalized, "module created");

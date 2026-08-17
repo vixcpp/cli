@@ -19,6 +19,7 @@
 #include <vix/cli/util/Resolver.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/util/Ui.hpp>
+#include <vix/cli/util/ProjectMutation.hpp>
 #include <vix/utils/Env.hpp>
 
 #include <nlohmann/json.hpp>
@@ -1159,6 +1160,13 @@ namespace vix::commands
     if (args.empty())
     {
       return help();
+    }
+
+    vix::cli::util::ProjectMutationLock mutationLock(fs::current_path());
+    if (!mutationLock.acquired())
+    {
+      vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + mutationLock.error());
+      return 1;
     }
 
     if (ensure_registry_present() != 0)

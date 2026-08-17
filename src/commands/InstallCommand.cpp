@@ -23,6 +23,7 @@
 #include <vix/utils/Env.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/util/GitProgress.hpp>
+#include <vix/cli/util/ProjectMutation.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -345,7 +346,7 @@ namespace vix::commands
     }
 
     static fs::path git_cache_checkout_path(const std::string &url, const std::string &commit);
-    static int install_project_dependencies();
+    static int install_project_dependencies(bool lockAlreadyHeld = false);
 
     static fs::path entry_path(const std::string &ns, const std::string &name)
     {
@@ -3189,6 +3190,7 @@ namespace vix::commands
         vix::cli::util::err_line(std::cerr, what + " failed");
         return 1;
       }
+
       return 0;
     }
 
@@ -4141,6 +4143,13 @@ namespace vix::commands
         return 1;
       }
 
+      vix::cli::util::ProjectMutationLock mutationLock(fs::current_path());
+      if (!mutationLock.acquired())
+      {
+        vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + mutationLock.error());
+        return 1;
+      }
+
       const FileSnapshot appSnapshot = snapshot_file(fs::current_path() / "vix.app");
       const FileSnapshot lockSnapshot = snapshot_file(lock_path());
       try
@@ -4164,7 +4173,7 @@ namespace vix::commands
         return 1;
       }
 
-      const int rc = install_project_dependencies();
+      const int rc = install_project_dependencies(true);
       if (rc != 0)
       {
         try
@@ -4186,8 +4195,20 @@ namespace vix::commands
       return 0;
     }
 
-    static int install_project_dependencies()
+    // vix.lock is both input and authoritative output. Hold the common lock
+    // through resolution and publication to prevent lost-update races.
+    static int install_project_dependencies(bool lockAlreadyHeld)
     {
+      std::optional<vix::cli::util::ProjectMutationLock> mutationLock;
+      if (!lockAlreadyHeld)
+      {
+        mutationLock.emplace(fs::current_path());
+        if (!mutationLock->acquired())
+        {
+          vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + mutationLock->error());
+          return 1;
+        }
+      }
       bool didWork = false;
       bool printedHeader = false;
       bool printedRefreshLine = false;

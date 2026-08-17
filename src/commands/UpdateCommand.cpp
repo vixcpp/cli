@@ -12,11 +12,12 @@
  *
  */
 #include <vix/cli/commands/UpdateCommand.hpp>
-#include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Manifest.hpp>
 #include <vix/cli/util/Semver.hpp>
+#include <vix/cli/util/Resolver.hpp>
+#include <vix/cli/util/ProjectMutation.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -539,6 +540,17 @@ namespace vix::commands
         return InstallCommand::run({"-g", opt.globalSpec});
       }
 
+      std::optional<vix::cli::util::ProjectMutationLock> mutationLock;
+      if (!opt.dryRun)
+      {
+        mutationLock.emplace(fs::current_path());
+        if (!mutationLock->acquired())
+        {
+          vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + mutationLock->error());
+          return 1;
+        }
+      }
+
       const auto manifestDeps =
           vix::cli::util::manifest::read_manifest_dependencies_or_throw(manifest_path());
 
@@ -568,6 +580,10 @@ namespace vix::commands
       {
         vix::cli::util::section(std::cout, "Update");
       }
+
+      // Build the complete desired manifest in memory.  Update deliberately
+      // does not call AddCommand here: all roots resolve before one publish.
+      auto updatedManifestDeps = manifestDeps;
 
       for (auto &item : items)
       {
@@ -730,46 +746,58 @@ namespace vix::commands
           continue;
         }
 
-        const int rc =
-            AddCommand::run({updateSpec});
-        if (rc != 0)
-        {
-          return rc;
-        }
-
-        const json refreshedLock = read_lock_or_throw();
-
         const std::string resolvedId =
             item.targetId.empty()
                 ? item.id
                 : item.targetId;
+        bool replaced = false;
+        for (auto &dep : updatedManifestDeps)
+        {
+          if (dep.id == item.id)
+          {
+            dep.id = resolvedId;
+            dep.requested = item.latestVersion;
+            replaced = true;
+            break;
+          }
+        }
+        if (!replaced)
+          throw std::runtime_error("dependency disappeared while preparing update: " + item.id);
+      }
 
-        item.afterVersion =
-            read_locked_version(
-                refreshedLock,
-                resolvedId);
+      std::vector<vix::cli::util::lockfile::LockedDependency> resolvedDependencies;
+      if (!opt.dryRun)
+        resolvedDependencies = vix::cli::util::resolver::resolve_project_dependencies_or_throw(updatedManifestDeps);
 
-        item.afterHash =
-            read_locked_hash(
-                refreshedLock,
-                resolvedId);
+      json newLock;
+      if (!opt.dryRun)
+      {
+        newLock["lockVersion"] = 1;
+        newLock["dependencies"] = json::array();
+        std::sort(resolvedDependencies.begin(), resolvedDependencies.end(), [](const auto &a, const auto &b) { return a.id < b.id; });
+        for (const auto &dep : resolvedDependencies)
+          newLock["dependencies"].push_back({{"id",dep.id},{"requested",dep.requested},{"version",dep.version},{"repo",dep.repo},{"tag",dep.tag},{"commit",dep.commit},{"hash",dep.hash},{"hash_algorithm",dep.hashAlgorithm},{"hash_version",dep.hashVersion}});
 
-        item.versionChanged =
-            item.moved ||
-            (!item.afterVersion.empty() &&
-             item.afterVersion !=
-                 item.beforeVersion);
+        json newManifest = read_json_or_throw(manifest_path());
+        newManifest["deps"] = json::array();
+        for (const auto &dep : updatedManifestDeps)
+          newManifest["deps"].push_back({{"id",dep.id},{"version",dep.requested}});
+        std::string transactionError;
+        vix::cli::util::ProjectMutationTransaction transaction(fs::current_path());
+        if (!transaction.stage_write(manifest_path(), newManifest.dump(2) + "\n", transactionError) ||
+            !transaction.stage_write(lock_path(), newLock.dump(2) + "\n", transactionError) ||
+            !transaction.commit(transactionError))
+          throw std::runtime_error("cannot publish update: " + transactionError);
+      }
 
-        item.lockChanged =
-            item.moved ||
-            item.afterVersion !=
-                item.beforeVersion ||
-            item.afterHash !=
-                item.beforeHash;
-
-        item.skipped =
-            !item.versionChanged &&
-            !item.lockChanged;
+      for (auto &item : items)
+      {
+        const std::string resolvedId = item.targetId.empty() ? item.id : item.targetId;
+        item.afterVersion = opt.dryRun ? item.latestVersion : read_locked_version(newLock, resolvedId);
+        item.afterHash = opt.dryRun ? item.beforeHash : read_locked_hash(newLock, resolvedId);
+        item.versionChanged = item.moved || item.afterVersion != item.beforeVersion;
+        item.lockChanged = item.moved || item.afterVersion != item.beforeVersion || item.afterHash != item.beforeHash;
+        item.skipped = !item.versionChanged && !item.lockChanged;
       }
 
       std::size_t versionChangedCount = 0;
@@ -795,6 +823,7 @@ namespace vix::commands
           vix::cli::util::step("installing updated dependencies...");
         }
 
+        mutationLock.reset();
         const int rc = InstallCommand::run({});
         if (rc != 0)
         {

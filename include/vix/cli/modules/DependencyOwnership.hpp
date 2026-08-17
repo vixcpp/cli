@@ -36,10 +36,16 @@ namespace vix::cli::modules
     DependencyVisibility visibility{DependencyVisibility::Private};
     std::string target;
   };
+  struct OwnedGitDependency
+  {
+    DependencyOwner owner;
+    vix::cli::app::AppGitDependency dependency;
+  };
   struct DependencyOwnership
   {
     std::vector<OwnedDependencyRequirement> requirements;
     std::vector<OwnedDependencyLink> links;
+    std::vector<OwnedGitDependency> gitDependencies;
     std::string error;
     bool success() const { return error.empty(); }
   };

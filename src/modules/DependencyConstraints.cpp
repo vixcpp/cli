@@ -84,4 +84,15 @@ namespace vix::cli::modules
     }
     return result;
   }
+  GitConstraintResult analyze_owned_git_constraints(const DependencyOwnership &ownership)
+  {
+    std::vector<GitDependencyConstraint> constraints;
+    for (const auto &item : ownership.gitDependencies)
+    {
+      const auto &d = item.dependency;
+      const std::string revision = !d.rev.empty() ? d.rev : (!d.tag.empty() ? "tag:" + d.tag : (!d.branch.empty() ? "branch:" + d.branch : ""));
+      constraints.push_back({item.owner, {d.git, revision, d.subdirectory, d.cmakeOptions, d.targets}});
+    }
+    return analyze_git_constraints(std::move(constraints));
+  }
 }

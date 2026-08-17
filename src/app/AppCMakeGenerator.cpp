@@ -16,6 +16,7 @@
 
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/modules/ModuleManifest.hpp>
+#include <vix/cli/modules/ModuleGraph.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -1476,6 +1477,16 @@ namespace vix::cli::app
 
     const fs::path normalizedProjectDir =
         fs::absolute(projectDir).lexically_normal();
+
+    std::string graphError;
+    const auto graph = vix::cli::modules::ModuleGraph::from_app_modules(
+        manifest.appModules, graphError);
+    if (!graph.valid() ||
+        !graph.validate_paths(normalizedProjectDir, true, graphError))
+    {
+      result.error = "Invalid module graph: " + graphError;
+      return result;
+    }
 
     const std::vector<AppModule> runtimeModules =
         enabled_runtime_app_modules(manifest, normalizedProjectDir);

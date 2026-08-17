@@ -13,6 +13,7 @@
 #include <vix/cli/commands/modules/ModulesUtils.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/modules/ModuleManifest.hpp>
+#include <vix/cli/modules/ModuleGraph.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Ui.hpp>
 
@@ -1357,109 +1358,6 @@ namespace vix::commands::modules_cmd::commands
     return set_module_enabled_in_vix_app(root, module, false);
   }
 
-  static bool check_dependency_cycle_visit(
-      const std::string &module,
-      const std::unordered_map<std::string, std::vector<std::string>> &graph,
-      std::unordered_set<std::string> &visiting,
-      std::unordered_set<std::string> &visited,
-      std::vector<std::string> &stack,
-      std::vector<std::string> &cycle)
-  {
-    if (visited.find(module) != visited.end())
-      return false;
-
-    if (visiting.find(module) != visiting.end())
-    {
-      cycle.clear();
-
-      bool capture = false;
-
-      for (const std::string &item : stack)
-      {
-        if (item == module)
-          capture = true;
-
-        if (capture)
-          cycle.push_back(item);
-      }
-
-      cycle.push_back(module);
-      return true;
-    }
-
-    visiting.insert(module);
-    stack.push_back(module);
-
-    const auto it = graph.find(module);
-
-    if (it != graph.end())
-    {
-      for (const std::string &dep : it->second)
-      {
-        if (check_dependency_cycle_visit(
-                dep,
-                graph,
-                visiting,
-                visited,
-                stack,
-                cycle))
-        {
-          return true;
-        }
-      }
-    }
-
-    stack.pop_back();
-    visiting.erase(module);
-    visited.insert(module);
-
-    return false;
-  }
-
-  static bool check_dependency_cycles(
-      const std::unordered_map<std::string, std::vector<std::string>> &graph,
-      std::vector<std::string> &cycle)
-  {
-    std::unordered_set<std::string> visiting;
-    std::unordered_set<std::string> visited;
-    std::vector<std::string> stack;
-
-    for (const auto &entry : graph)
-    {
-      if (check_dependency_cycle_visit(
-              entry.first,
-              graph,
-              visiting,
-              visited,
-              stack,
-              cycle))
-      {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  static std::string join_cycle(
-      const std::vector<std::string> &cycle)
-  {
-    if (cycle.empty())
-      return "-";
-
-    std::ostringstream out;
-
-    for (std::size_t i = 0; i < cycle.size(); ++i)
-    {
-      if (i > 0)
-        out << " -> ";
-
-      out << cycle[i];
-    }
-
-    return out.str();
-  }
-
   bool cmd_check(const fs::path &root, const std::string &project)
   {
     const fs::path modulesDir = root / "modules";
@@ -1481,7 +1379,7 @@ namespace vix::commands::modules_cmd::commands
     std::unordered_map<std::string, bool> enabledInApp;
     std::unordered_map<std::string, std::string> kindInApp;
     std::unordered_map<std::string, std::string> pathInApp;
-    std::unordered_map<std::string, std::vector<std::string>> appDeps;
+    vix::cli::modules::ModuleGraph graph;
 
     if (hasVixApp)
     {
@@ -1495,6 +1393,15 @@ namespace vix::commands::modules_cmd::commands
         return false;
       }
 
+      std::string graphError;
+      graph = vix::cli::modules::ModuleGraph::from_app_modules(
+          loadResult.manifest.appModules, graphError);
+      if (!graph.valid() || !graph.validate_paths(root, false, graphError))
+      {
+        ui::err_line(std::cout, "Invalid module graph: " + graphError);
+        return false;
+      }
+
       for (const auto &module : loadResult.manifest.appModules)
       {
         const std::string name =
@@ -1504,11 +1411,6 @@ namespace vix::commands::modules_cmd::commands
         enabledInApp[name] = module.enabled;
         kindInApp[name] = module.kind.empty() ? "module" : module.kind;
         pathInApp[name] = module.path.empty() ? ("modules/" + name) : module.path;
-
-        for (const std::string &depRaw : module.depends)
-        {
-          appDeps[name].push_back(cnt::normalize_module_id(depRaw));
-        }
       }
     }
 
@@ -1587,43 +1489,6 @@ namespace vix::commands::modules_cmd::commands
         }
       }
 
-      for (const auto &entry : appDeps)
-      {
-        const std::string &module = entry.first;
-
-        for (const std::string &dep : entry.second)
-        {
-          if (declaredInApp.find(dep) == declaredInApp.end())
-          {
-            ok = false;
-            ++violations;
-
-            ui::err_line(std::cout, "Module depends on an undeclared module");
-            ui::kv(std::cout, "module", module, 12);
-            ui::kv(std::cout, "depends", dep, 12);
-          }
-          else if (enabledInApp[module] && !enabledInApp[dep])
-          {
-            ok = false;
-            ++violations;
-
-            ui::err_line(std::cout, "Enabled module depends on a disabled module");
-            ui::kv(std::cout, "module", module, 12);
-            ui::kv(std::cout, "depends", dep, 12);
-          }
-        }
-      }
-
-      std::vector<std::string> cycle;
-
-      if (check_dependency_cycles(appDeps, cycle))
-      {
-        ok = false;
-        ++violations;
-
-        ui::err_line(std::cout, "Circular module dependency detected");
-        ui::kv(std::cout, "cycle", join_cycle(cycle), 12);
-      }
     }
 
     std::unordered_map<std::string, std::string> routePrefixes;

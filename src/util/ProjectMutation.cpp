@@ -17,7 +17,11 @@ namespace vix::cli::util
     std::optional<std::string> read_bytes(const fs::path &p) { std::ifstream in(p, std::ios::binary); if (!in) return std::nullopt; return std::string((std::istreambuf_iterator<char>(in)), {}); }
     bool write_bytes(const fs::path &p, const std::string &bytes) { std::ofstream out(p, std::ios::binary | std::ios::trunc); return out && static_cast<bool>(out << bytes); }
     bool atomic_replace(const fs::path &from, const fs::path &to, std::string &error) { std::error_code ec; fs::rename(from,to,ec); if (!ec) return true; error="commit failed: "+ec.message(); return false; }
-    bool under_root(const fs::path &root, const fs::path &path) { const auto rel=path.lexically_relative(root); return !rel.empty() && rel.native().find("..") != 0; }
+    bool under_root(const fs::path &root, const fs::path &path)
+    {
+      const fs::path relative = path.lexically_relative(root);
+      return !relative.empty() && *relative.begin() != fs::path("..");
+    }
     bool recover_transactions(const fs::path &root, std::string &error)
     {
       const fs::path base=root/".vix"/"transactions"; std::error_code ec;

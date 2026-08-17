@@ -528,7 +528,8 @@ namespace vix::commands
           std::cout << "\r\033[2K" << line.str() << std::flush;
         else
           std::cout << dependency_ << ": " << event.phase
-                    << (event.percent ? std::string(" ") + std::to_string(*event.percent) + "%" : "") << "\n" << std::flush;
+                    << (event.percent ? std::string(" ") + std::to_string(*event.percent) + "%" : "") << "\n"
+                    << std::flush;
         visible_ = true;
         lastRender_ = now;
         lastPhase_ = event.phase;
@@ -3595,7 +3596,8 @@ namespace vix::commands
 
       const std::string commit = resolve_git_commit_or_throw(appDep.git, selectedTag, appDep.branch, appDep.rev);
       if (emitNetworkPhase && !fs::exists(git_cache_checkout_path(appDep.git, commit)))
-        std::cout << "  " << appDep.name << "  connecting\n" << std::flush;
+        std::cout << "  " << appDep.name << "  connecting\n"
+                  << std::flush;
       const fs::path checkout = clone_git_to_cache_or_throw(appDep.git, commit, appDep.name);
       const fs::path sourceDir = appDep.subdirectory.empty() ? checkout : (checkout / appDep.subdirectory);
 
@@ -4156,13 +4158,20 @@ namespace vix::commands
     {
       const std::string section = "[dependencies." + dependency.name + "]";
       std::ostringstream replacement;
-      replacement << section << "\n" << "git = \"" << dependency.git << "\"\n";
-      if (!dependency.tag.empty()) replacement << "tag = \"" << dependency.tag << "\"\n";
-      if (!dependency.branch.empty()) replacement << "branch = \"" << dependency.branch << "\"\n";
-      if (!dependency.rev.empty()) replacement << "rev = \"" << dependency.rev << "\"\n";
-      if (!dependency.subdirectory.empty()) replacement << "subdirectory = \"" << dependency.subdirectory << "\"\n";
-      if (!dependency.target.empty()) replacement << "target = \"" << dependency.target << "\"\n";
-      if (!dependency.cmakeOptions.empty()) {
+      replacement << section << "\n"
+                  << "git = \"" << dependency.git << "\"\n";
+      if (!dependency.tag.empty())
+        replacement << "tag = \"" << dependency.tag << "\"\n";
+      if (!dependency.branch.empty())
+        replacement << "branch = \"" << dependency.branch << "\"\n";
+      if (!dependency.rev.empty())
+        replacement << "rev = \"" << dependency.rev << "\"\n";
+      if (!dependency.subdirectory.empty())
+        replacement << "subdirectory = \"" << dependency.subdirectory << "\"\n";
+      if (!dependency.target.empty())
+        replacement << "target = \"" << dependency.target << "\"\n";
+      if (!dependency.cmakeOptions.empty())
+      {
         replacement << "\n[dependencies." << dependency.name << ".cmake]\n";
         for (const auto &[key, value] : dependency.cmakeOptions)
           replacement << key << " = " << value << "\n";
@@ -4175,7 +4184,8 @@ namespace vix::commands
       if (end != std::string::npos && original.compare(end + 1, section.size() - 1, section.substr(1)) == 0 &&
           original.compare(end + section.size(), 6, ".cmake") == 0)
         end = original.find("\n[", end + 1);
-      if (end == std::string::npos) end = original.size();
+      if (end == std::string::npos)
+        end = original.size();
       return original.substr(0, start) + replacement.str() + original.substr(end);
     }
 
@@ -4183,56 +4193,124 @@ namespace vix::commands
     {
       const fs::path root = fs::current_path();
       vix::cli::util::ProjectMutationLock lock(root);
-      if (!lock.acquired()) { vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + lock.error()); return 1; }
+      if (!lock.acquired())
+      {
+        vix::cli::util::err_line(std::cerr, "cannot acquire project mutation lock: " + lock.error());
+        return 1;
+      }
       const fs::path appPath = root / "vix.app";
-      if (!fs::exists(appPath)) { vix::cli::util::err_line(std::cerr, "--module requires a vix.app application"); return 1; }
+      if (!fs::exists(appPath))
+      {
+        vix::cli::util::err_line(std::cerr, "--module requires a vix.app application");
+        return 1;
+      }
       const auto appLoad = vix::cli::app::load_app_manifest(
           appPath,
           vix::cli::app::AppManifestLoadMode::DependenciesOnly);
-      if (!appLoad.success()) { vix::cli::util::err_line(std::cerr, appLoad.error); return 1; }
+      if (!appLoad.success())
+      {
+        vix::cli::util::err_line(std::cerr, appLoad.error);
+        return 1;
+      }
       std::string graphError;
       const auto graph = vix::cli::modules::ModuleGraph::from_app_modules(appLoad.manifest.appModules, graphError);
-      if (!graph.valid() || !graph.validate_paths(root, true, graphError)) { vix::cli::util::err_line(std::cerr, "Invalid module graph: " + graphError); return 1; }
+      if (!graph.valid() || !graph.validate_paths(root, true, graphError))
+      {
+        vix::cli::util::err_line(std::cerr, "Invalid module graph: " + graphError);
+        return 1;
+      }
       const auto *node = graph.find(parsed.module);
-      if (!node) { vix::cli::util::err_line(std::cerr, "module '" + parsed.module + "' is not declared in vix.app"); return 1; }
-      if (!node->enabled) { vix::cli::util::err_line(std::cerr, "module '" + node->name + "' is disabled\nenable it with:\n  vix modules enable " + node->name); return 1; }
+      if (!node)
+      {
+        vix::cli::util::err_line(std::cerr, "module '" + parsed.module + "' is not declared in vix.app");
+        return 1;
+      }
+      if (!node->enabled)
+      {
+        vix::cli::util::err_line(std::cerr, "module '" + node->name + "' is disabled\nenable it with:\n  vix modules enable " + node->name);
+        return 1;
+      }
       const fs::path modulePath = node->path.is_absolute() ? node->path : root / node->path;
       const fs::path manifestPath = modulePath / "vix.module";
       const auto moduleLoad = vix::cli::modules::load_module_manifest(manifestPath);
-      if (!moduleLoad.success()) { vix::cli::util::err_line(std::cerr, "module '" + node->name + "' has no valid vix.module: " + moduleLoad.error); return 1; }
+      if (!moduleLoad.success())
+      {
+        vix::cli::util::err_line(std::cerr, "module '" + node->name + "' has no valid vix.module: " + moduleLoad.error);
+        return 1;
+      }
 
       vix::cli::app::AppGitDependency desired;
       desired.name = trim_copy(parsed.gitName.empty() ? git_url_to_default_name(parsed.gitSpec) : parsed.gitName);
-      desired.git = parsed.gitSpec; desired.tag = parsed.gitTag; desired.branch = parsed.gitBranch; desired.rev = parsed.gitRev;
-      desired.target = parsed.gitTarget; desired.subdirectory = parsed.gitSubdirectory;
-      if (!desired.target.empty()) desired.targets.push_back(desired.target);
-      if (!is_safe_local_dep_name(desired.name)) { vix::cli::util::err_line(std::cerr, "invalid dependency name: " + desired.name); return 1; }
-      for (const auto &existing : moduleLoad.manifest.gitDependencies) if (existing.name == desired.name && existing.git != desired.git) {
-        vix::cli::util::err_line(std::cerr, "conflicting dependency repository in vix.module: " + desired.name); return 1;
+      desired.git = parsed.gitSpec;
+      desired.tag = parsed.gitTag;
+      desired.branch = parsed.gitBranch;
+      desired.rev = parsed.gitRev;
+      desired.target = parsed.gitTarget;
+      desired.subdirectory = parsed.gitSubdirectory;
+      if (!desired.target.empty())
+        desired.targets.push_back(desired.target);
+      if (!is_safe_local_dep_name(desired.name))
+      {
+        vix::cli::util::err_line(std::cerr, "invalid dependency name: " + desired.name);
+        return 1;
       }
+      for (const auto &existing : moduleLoad.manifest.gitDependencies)
+        if (existing.name == desired.name && existing.git != desired.git)
+        {
+          vix::cli::util::err_line(std::cerr, "conflicting dependency repository in vix.module: " + desired.name);
+          return 1;
+        }
 
       auto ownership = vix::cli::modules::build_dependency_ownership(appLoad.manifest, graph, root);
-      if (!ownership.success()) { vix::cli::util::err_line(std::cerr, ownership.error); return 1; }
-      ownership.gitDependencies.erase(std::remove_if(ownership.gitDependencies.begin(), ownership.gitDependencies.end(), [&](const auto &item) {
-        return item.owner.kind == vix::cli::modules::DependencyOwnerKind::Module && item.owner.module == node->name && item.dependency.name == desired.name;
-      }), ownership.gitDependencies.end());
-      ownership.gitDependencies.push_back({{vix::cli::modules::DependencyOwnerKind::Module, node->name, true}, desired});
-      for (const auto &item : ownership.gitDependencies) if (item.owner.active && item.dependency.name == desired.name && item.dependency.git != desired.git) {
-        vix::cli::util::err_line(std::cerr, "conflicting dependency repository for: " + desired.name); return 1;
+      if (!ownership.success())
+      {
+        vix::cli::util::err_line(std::cerr, ownership.error);
+        return 1;
       }
+      ownership.gitDependencies.erase(std::remove_if(ownership.gitDependencies.begin(), ownership.gitDependencies.end(), [&](const auto &item)
+                                                     { return item.owner.kind == vix::cli::modules::DependencyOwnerKind::Module && item.owner.module == node->name && item.dependency.name == desired.name; }),
+                                      ownership.gitDependencies.end());
+      ownership.gitDependencies.push_back({{vix::cli::modules::DependencyOwnerKind::Module, node->name, true}, desired});
+      for (const auto &item : ownership.gitDependencies)
+        if (item.owner.active && item.dependency.name == desired.name && item.dependency.git != desired.git)
+        {
+          vix::cli::util::err_line(std::cerr, "conflicting dependency repository for: " + desired.name);
+          return 1;
+        }
       const auto constraints = vix::cli::modules::analyze_owned_git_constraints(ownership);
-      if (!constraints.success()) { vix::cli::util::err_line(std::cerr, "Git dependency conflict: " + constraints.conflicts.front().repository + ". " + constraints.conflicts.front().reason); return 1; }
+      if (!constraints.success())
+      {
+        vix::cli::util::err_line(std::cerr, "Git dependency conflict: " + constraints.conflicts.front().repository + ". " + constraints.conflicts.front().reason);
+        return 1;
+      }
 
-      try {
+      try
+      {
         json lockJson = read_lock_or_empty();
-        json *locked = nullptr; for (auto &item : lockJson["dependencies"]) if (item.value("id", "") == desired.name) { locked = &item; break; }
-        const bool unchanged = std::any_of(moduleLoad.manifest.gitDependencies.begin(), moduleLoad.manifest.gitDependencies.end(), [&](const auto &d) { return d.name == desired.name && requested_git_dependency_matches(d, parsed); }) && locked && app_git_resolution_matches_lock(desired, *locked) && fs::exists(project_deps_dir() / sanitize_id_dot(desired.name));
-        if (unchanged) { vix::cli::util::ok_line(std::cout, "Dependency already installed for " + node->name); return 0; }
-        std::cout << "Installing dependency for " << node->name << "\n\n  " << desired.name << "  resolving revision\n" << std::flush;
+        json *locked = nullptr;
+        for (auto &item : lockJson["dependencies"])
+          if (item.value("id", "") == desired.name)
+          {
+            locked = &item;
+            break;
+          }
+        const bool unchanged = std::any_of(moduleLoad.manifest.gitDependencies.begin(), moduleLoad.manifest.gitDependencies.end(), [&](const auto &d)
+                                           { return d.name == desired.name && requested_git_dependency_matches(d, parsed); }) &&
+                               locked && app_git_resolution_matches_lock(desired, *locked) && fs::exists(project_deps_dir() / sanitize_id_dot(desired.name));
+        if (unchanged)
+        {
+          vix::cli::util::ok_line(std::cout, "Dependency already installed for " + node->name);
+          return 0;
+        }
+        std::cout << "Installing dependency for " << node->name << "\n\n  " << desired.name << "  resolving revision\n"
+                  << std::flush;
         DepResolved resolved = resolve_app_git_dependency_or_throw(desired, true);
-        json entry = git_dependency_to_lock_json(resolved); annotate_git_lock_selector(entry, desired); entry["manifest_direct"] = false;
+        json entry = git_dependency_to_lock_json(resolved);
+        annotate_git_lock_selector(entry, desired);
+        entry["manifest_direct"] = false;
         upsert_lock_dependency(lockJson, entry);
-        std::sort(lockJson["dependencies"].begin(), lockJson["dependencies"].end(), [](const json &a, const json &b) { return a.value("id", "") < b.value("id", ""); });
+        std::sort(lockJson["dependencies"].begin(), lockJson["dependencies"].end(), [](const json &a, const json &b)
+                  { return a.value("id", "") < b.value("id", ""); });
 
         // Authoritative metadata is deliberately not published until this
         // prospective dependency has a complete cache checkout and a valid
@@ -4259,17 +4337,26 @@ namespace vix::commands
           throw;
         }
 
-        vix::cli::util::ProjectMutationTransaction transaction(root); std::string error;
+        vix::cli::util::ProjectMutationTransaction transaction(root);
+        std::string error;
         if (const char *fail = std::getenv("VIX_TEST_FAIL_MODULE_METADATA_PUBLICATION"); fail && *fail)
           transaction.fail_publish_at_for_test(1);
         if (!transaction.stage_write(manifestPath, module_dependency_text(read_text_file_or_empty_local(manifestPath), desired), error) ||
-            !transaction.stage_write(lock_path(), lockJson.dump(2) + "\n", error) || !transaction.commit(error)) throw std::runtime_error(error);
-      } catch (const std::exception &ex) { vix::cli::util::err_line(std::cerr, ex.what()); return 1; }
+            !transaction.stage_write(lock_path(), lockJson.dump(2) + "\n", error) || !transaction.commit(error))
+          throw std::runtime_error(error);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, ex.what());
+        return 1;
+      }
       const int rc = install_project_dependencies(true);
-      if (rc != 0) return rc;
+      if (rc != 0)
+        return rc;
       vix::cli::util::ok_line(std::cout, desired.name + " installed");
       vix::cli::util::info(std::cout, "module  " + node->name);
-      if (!desired.target.empty()) vix::cli::util::info(std::cout, "target  " + desired.target);
+      if (!desired.target.empty())
+        vix::cli::util::info(std::cout, "target  " + desired.target);
       return 0;
     }
 

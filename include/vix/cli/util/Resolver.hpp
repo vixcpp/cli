@@ -17,12 +17,16 @@
 #include <vix/cli/util/Manifest.hpp>
 
 #include <vector>
+#include <string>
 
 namespace vix::cli::util::resolver
 {
   std::vector<vix::cli::util::lockfile::LockedDependency>
   resolve_project_dependencies_or_throw(
       const std::vector<vix::cli::util::manifest::Dependency> &manifestDependencies);
+
+  std::vector<std::string> available_registry_versions_or_throw(
+      const std::string &packageId);
 }
 
 #endif

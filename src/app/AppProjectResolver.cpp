@@ -18,8 +18,8 @@
 
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/AppManifest.hpp>
-#include <vix/cli/modules/ModuleManifest.hpp>
 #include <vix/cli/modules/ModuleGraph.hpp>
+#include <vix/cli/modules/DependencyOwnership.hpp>
 
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Manifest.hpp>
@@ -108,60 +108,34 @@ namespace vix::cli::app
       return !packageId.empty() && !version.empty();
     }
 
-    static fs::path module_manifest_path(
-        const fs::path &projectDir,
-        const AppModule &module)
+    static std::vector<std::string> active_registry_requirements(
+        const vix::cli::modules::DependencyOwnership &ownership)
     {
-      const std::string name = module.name;
-
-      const std::string path =
-          module.path.empty() ? ("modules/" + name) : module.path;
-
-      return (projectDir / path / "vix.module").lexically_normal();
-    }
-
-    static bool contains_string(
-        const std::vector<std::string> &values,
-        const std::string &needle)
-    {
-      return std::find(values.begin(), values.end(), needle) != values.end();
-    }
-
-    static void merge_enabled_module_registry_deps(
-        AppManifest &manifest,
-        const fs::path &projectDir)
-    {
-      for (const AppModule &module : manifest.appModules)
+      std::vector<std::string> requirements;
+      for (const auto &requirement : ownership.requirements)
       {
-        if (!module.enabled)
+        if (requirement.source != vix::cli::modules::DependencySource::Registry ||
+            !requirement.owner.active)
           continue;
-
-        const fs::path path =
-            module_manifest_path(projectDir, module);
-
-        const auto loaded = vix::cli::modules::load_module_manifest(path);
-        const std::vector<std::string> deps = loaded.success() ? loaded.manifest.registryDependencies : std::vector<std::string>{};
-
-        for (const std::string &dep : deps)
-        {
-          if (!contains_string(manifest.deps, dep))
-            manifest.deps.push_back(dep);
-        }
+        if (std::find(requirements.begin(), requirements.end(),
+                      requirement.requirement) == requirements.end())
+          requirements.push_back(requirement.requirement);
       }
+      return requirements;
     }
 
     static bool sync_vix_app_registry_deps(
-        const AppManifest &manifest,
+        const std::vector<std::string> &requirements,
         const fs::path &projectDir,
         std::string &error)
     {
-      if (manifest.deps.empty())
+      if (requirements.empty())
         return true;
 
       const fs::path manifestPath = app_manifest_json_path(projectDir);
       const fs::path lockPath = app_lock_path(projectDir);
 
-      for (const std::string &dep : manifest.deps)
+      for (const std::string &dep : requirements)
       {
         std::string packageId;
         std::string version;
@@ -284,14 +258,19 @@ namespace vix::cli::app
         return result;
       }
 
-      merge_enabled_module_registry_deps(
-          manifest,
-          projectDir);
+      const auto ownership = vix::cli::modules::build_dependency_ownership(
+          manifest, graph, projectDir);
+      if (!ownership.success())
+      {
+        result.error = "Invalid dependency ownership: " + ownership.error;
+        return result;
+      }
+      const auto requirements = active_registry_requirements(ownership);
 
       std::string depsError;
 
       if (!sync_vix_app_registry_deps(
-              manifest,
+              requirements,
               projectDir,
               depsError))
       {

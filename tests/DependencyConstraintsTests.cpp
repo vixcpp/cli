@@ -24,6 +24,11 @@ int main()
   GitDependencyConstraint gb{mod("billing"), {"https://example.invalid/repo.git", "abc", "", {{"OPT", "ON"}}, {"repo::x"}}};
   assert(analyze_git_constraints({ga, gb}).success());
   gb.build.revision = "def"; assert(!analyze_git_constraints({ga, gb}).success());
+  gb.build.subdirectory = "."; assert(!analyze_git_constraints({ga, gb}).success());
+  gb.build.subdirectory.clear();
   gb.build.revision = "abc"; gb.build.cmakeOptions = {{"OPT", "OFF"}}; assert(!analyze_git_constraints({ga, gb}).success());
   gb.build.repository = "https://example.invalid/other.git"; assert(analyze_git_constraints({ga, gb}).success());
+  GitDependencyConstraint root{app(), {"https://example.invalid/repo.git", "abc", ".", {{"OPT", "ON"}}, {"repo::x"}}};
+  gb.build.repository = root.build.repository; gb.build.revision = "def"; gb.build.subdirectory.clear(); gb.build.cmakeOptions = root.build.cmakeOptions;
+  assert(!analyze_git_constraints({root, gb}).success());
 }

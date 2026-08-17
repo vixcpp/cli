@@ -50,7 +50,8 @@ target_include_directories(vix_cli_git_progress_parser_tests PRIVATE ${CMAKE_CUR
 add_test(NAME vix_cli_git_progress_parser_tests COMMAND vix_cli_git_progress_parser_tests)
 
 add_executable(vix_cli_module_manifest_tests ModuleManifestTests.cpp
-  ../src/modules/ModuleManifest.cpp ../src/commands/modules/ModulesContent.cpp)
+  ../src/modules/ModuleManifest.cpp ../src/commands/modules/ModulesContent.cpp
+  ../src/commands/modules/ModulesUtils.cpp)
 target_include_directories(vix_cli_module_manifest_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_module_manifest_tests COMMAND vix_cli_module_manifest_tests)
 
@@ -273,6 +274,14 @@ add_test(
   COMMAND
     bash
     ${CMAKE_CURRENT_SOURCE_DIR}/MutationCommandContractsTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
+  NAME vix_cli_module_git_install_contracts
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/ModuleGitInstallContractTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
 

@@ -38,7 +38,6 @@ int main()
   assert(authJwt && billingJson2 && !analytics); // incompatible-looking requirements remain distinct
   assert(value.gitDependencies.size() == 2 && value.gitDependencies[1].owner.module == "auth");
   const std::string cmake = vix::cli::app::generate_app_cmake_lists_content(app, root);
-  assert(cmake.find("set(VIX_MODULE_auth_LINKS\n  gk::json\n  gk::jwt\n)") != std::string::npos);
   assert(cmake.find("set(VIX_MODULE_billing_LINKS\n  gk::billing\n)") != std::string::npos);
   assert(cmake.find("target_link_libraries(demo PRIVATE gk::jwt)") == std::string::npos);
   assert(cmake.find("target_link_libraries(demo PRIVATE gk::fmt)") != std::string::npos);

@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <vix/cli/app/AppManifest.hpp>
 
 namespace vix::cli::modules
 {
@@ -20,6 +21,8 @@ namespace vix::cli::modules
     std::string name, kind, workflow, routePrefix, exportInclude;
     bool runtime{false}, testsEnabled{true};
     std::vector<std::string> registryDependencies, links;
+    // Deliberately shares the root vix.app Git contract.
+    std::vector<vix::cli::app::AppGitDependency> gitDependencies;
     std::optional<ModuleWebSocket> websocket;
   };
   struct ModuleManifestLoadResult

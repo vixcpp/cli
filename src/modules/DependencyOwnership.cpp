@@ -28,6 +28,7 @@ namespace vix::cli::modules
     for (const auto &dependency : app.gitDependencies)
     {
       result.requirements.push_back({application, DependencySource::Git, dependency.name});
+      result.gitDependencies.push_back({application, dependency});
       if (!dependency.target.empty()) result.links.push_back({application, DependencySource::Git, DependencyVisibility::Private, dependency.target});
       for (const std::string &target : dependency.targets)
         result.links.push_back({application, DependencySource::Git, DependencyVisibility::Private, target});
@@ -50,6 +51,14 @@ namespace vix::cli::modules
         result.requirements.push_back({owner, DependencySource::Registry, requirement});
       for (const std::string &target : loaded.manifest.links)
         result.links.push_back({owner, DependencySource::Registry, DependencyVisibility::Private, target});
+      for (const auto &dependency : loaded.manifest.gitDependencies)
+      {
+        result.requirements.push_back({owner, DependencySource::Git, dependency.name});
+        result.gitDependencies.push_back({owner, dependency});
+        if (!dependency.target.empty() && std::find(dependency.targets.begin(), dependency.targets.end(), dependency.target) == dependency.targets.end()) result.links.push_back({owner, DependencySource::Git, DependencyVisibility::Private, dependency.target});
+        for (const std::string &target : dependency.targets)
+          result.links.push_back({owner, DependencySource::Git, DependencyVisibility::Private, target});
+      }
     }
     std::stable_sort(result.requirements.begin(), result.requirements.end(), [](const auto &a, const auto &b) {
       if (owner_less(a.owner, b.owner)) return true; if (owner_less(b.owner, a.owner)) return false;
@@ -58,6 +67,10 @@ namespace vix::cli::modules
     std::stable_sort(result.links.begin(), result.links.end(), [](const auto &a, const auto &b) {
       if (owner_less(a.owner, b.owner)) return true; if (owner_less(b.owner, a.owner)) return false;
       if (a.source != b.source) return a.source < b.source; return a.target < b.target;
+    });
+    std::stable_sort(result.gitDependencies.begin(), result.gitDependencies.end(), [](const auto &a, const auto &b) {
+      if (owner_less(a.owner, b.owner)) return true; if (owner_less(b.owner, a.owner)) return false;
+      return a.dependency.name < b.dependency.name;
     });
     return result;
   }

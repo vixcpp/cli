@@ -138,7 +138,7 @@ namespace vix::cli::app
       if (!manifest.deps.empty() || !manifest.gitDependencies.empty())
         return true;
       return std::any_of(ownership.requirements.begin(), ownership.requirements.end(), [](const auto &item) {
-        return item.owner.active && item.source == vix::cli::modules::DependencySource::Registry;
+        return item.owner.active && (item.source == vix::cli::modules::DependencySource::Registry || item.source == vix::cli::modules::DependencySource::Git);
       });
     }
 
@@ -153,14 +153,14 @@ namespace vix::cli::app
       {
         if (link.owner.kind != vix::cli::modules::DependencyOwnerKind::Module ||
             !link.owner.active ||
-            link.source != vix::cli::modules::DependencySource::Registry)
+            (link.source != vix::cli::modules::DependencySource::Registry && link.source != vix::cli::modules::DependencySource::Git))
           continue;
 
         const std::string normalized = vix::cli::modules::ModuleGraph::canonical_identity(link.owner.module);
 
         if (!wroteHeader)
         {
-          out << "# Module registry links declared in vix.module\n";
+          out << "# Module dependency links declared in vix.module\n";
           wroteHeader = true;
         }
 
@@ -785,11 +785,11 @@ namespace vix::cli::app
       const fs::path depsFile =
           fs::absolute(projectDir / ".vix" / "vix_deps.cmake").lexically_normal();
 
-      out << "# Registry dependencies declared in vix.app or enabled vix.module files\n";
+      out << "# Dependencies declared in vix.app or enabled vix.module files\n";
       out << "if(EXISTS " << cmake_quoted_path(depsFile) << ")\n";
       out << "  include(" << cmake_quoted_path(depsFile) << ")\n";
       out << "else()\n";
-      out << "  message(FATAL_ERROR \"Registry dependencies are declared by vix.app or enabled modules, but .vix/vix_deps.cmake was not found. Run: vix install\")\n";
+      out << "  message(FATAL_ERROR \"Dependencies are declared by vix.app or enabled modules, but .vix/vix_deps.cmake was not found. Run: vix install\")\n";
       out << "endif()\n\n";
     }
 

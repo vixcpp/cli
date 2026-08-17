@@ -285,6 +285,13 @@ namespace vix::cli::app
         result.error = "Invalid dependency ownership: " + ownership.error;
         return result;
       }
+      const auto gitAnalysis = vix::cli::modules::analyze_owned_git_constraints(ownership);
+      if (!gitAnalysis.success())
+      {
+        const auto &conflict = gitAnalysis.conflicts.front();
+        result.error = "Git dependency conflict: " + conflict.repository + ". " + conflict.reason;
+        return result;
+      }
       std::vector<std::string> requirements;
       if (!analyze_active_registry_constraints(ownership, requirements, graphError))
       {

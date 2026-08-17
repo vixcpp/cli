@@ -51,5 +51,7 @@ namespace vix::cli::modules
       const std::string &requirement);
   GitConstraintResult analyze_git_constraints(
       std::vector<GitDependencyConstraint> constraints);
+  GitConstraintResult analyze_owned_git_constraints(
+      const DependencyOwnership &ownership);
 }
 #endif

@@ -18,6 +18,7 @@
 
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/AppManifest.hpp>
+#include <vix/cli/modules/ModuleManifest.hpp>
 
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Manifest.hpp>
@@ -106,134 +107,6 @@ namespace vix::cli::app
       return !packageId.empty() && !version.empty();
     }
 
-    static std::string trim_copy_local(std::string value)
-    {
-      auto is_space = [](unsigned char c)
-      {
-        return std::isspace(c) != 0;
-      };
-
-      while (!value.empty() && is_space(static_cast<unsigned char>(value.front())))
-        value.erase(value.begin());
-
-      while (!value.empty() && is_space(static_cast<unsigned char>(value.back())))
-        value.pop_back();
-
-      return value;
-    }
-
-    static std::string strip_quotes_local(const std::string &value)
-    {
-      const std::string s = trim_copy_local(value);
-
-      if (s.size() >= 2 &&
-          ((s.front() == '"' && s.back() == '"') ||
-           (s.front() == '\'' && s.back() == '\'')))
-      {
-        return s.substr(1, s.size() - 2);
-      }
-
-      return s;
-    }
-
-    static std::vector<std::string> parse_vix_module_array(
-        const fs::path &path,
-        const std::string &section,
-        const std::string &key)
-    {
-      std::vector<std::string> out;
-
-      std::ifstream in(path);
-      if (!in)
-        return out;
-
-      std::string activeSection;
-      bool collecting = false;
-      std::string line;
-
-      while (std::getline(in, line))
-      {
-        std::string s = trim_copy_local(line);
-
-        const std::size_t comment = s.find('#');
-        if (comment != std::string::npos)
-          s = trim_copy_local(s.substr(0, comment));
-
-        if (s.empty())
-          continue;
-
-        if (!collecting && s.size() >= 2 && s.front() == '[' && s.back() == ']')
-        {
-          activeSection = trim_copy_local(s.substr(1, s.size() - 2));
-          continue;
-        }
-
-        if (activeSection != section)
-          continue;
-
-        if (!collecting)
-        {
-          const std::size_t eq = s.find('=');
-          if (eq == std::string::npos)
-            continue;
-
-          const std::string currentKey =
-              trim_copy_local(s.substr(0, eq));
-
-          if (currentKey != key)
-            continue;
-
-          std::string value = trim_copy_local(s.substr(eq + 1));
-
-          if (value.find('[') == std::string::npos)
-            continue;
-
-          collecting = true;
-
-          const std::size_t open = value.find('[');
-          value = value.substr(open + 1);
-
-          const std::size_t close = value.find(']');
-          if (close != std::string::npos)
-          {
-            value = value.substr(0, close);
-            collecting = false;
-          }
-
-          std::stringstream ss(value);
-          std::string item;
-
-          while (std::getline(ss, item, ','))
-          {
-            item = strip_quotes_local(trim_copy_local(item));
-            if (!item.empty())
-              out.push_back(item);
-          }
-
-          continue;
-        }
-
-        const std::size_t close = s.find(']');
-        if (close != std::string::npos)
-        {
-          s = s.substr(0, close);
-          collecting = false;
-        }
-
-        std::stringstream ss(s);
-        std::string item;
-
-        while (std::getline(ss, item, ','))
-        {
-          item = strip_quotes_local(trim_copy_local(item));
-          if (!item.empty())
-            out.push_back(item);
-        }
-      }
-
-      return out;
-    }
-
     static fs::path module_manifest_path(
         const fs::path &projectDir,
         const AppModule &module)
@@ -265,8 +138,8 @@ namespace vix::cli::app
         const fs::path path =
             module_manifest_path(projectDir, module);
 
-        const std::vector<std::string> deps =
-            parse_vix_module_array(path, "deps", "registry");
+        const auto loaded = vix::cli::modules::load_module_manifest(path);
+        const std::vector<std::string> deps = loaded.success() ? loaded.manifest.registryDependencies : std::vector<std::string>{};
 
         for (const std::string &dep : deps)
         {

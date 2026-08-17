@@ -17,6 +17,7 @@
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/modules/ModuleManifest.hpp>
 #include <vix/cli/modules/ModuleGraph.hpp>
+#include <vix/cli/modules/DependencyOwnership.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -130,63 +131,32 @@ namespace vix::cli::app
       return absolute_project_path(projectDir, path) / "vix.module";
     }
 
-    static bool enabled_module_has_registry_deps(
-        const AppManifest &manifest,
-        const fs::path &projectDir)
-    {
-      for (const AppModule &module : manifest.appModules)
-      {
-        if (!module.enabled)
-          continue;
-
-        const fs::path manifestPath =
-            module_manifest_path(projectDir, module);
-
-        const auto loaded = vix::cli::modules::load_module_manifest(manifestPath);
-        const std::vector<std::string> registryDeps = loaded.success() ? loaded.manifest.registryDependencies : std::vector<std::string>{};
-
-        if (!registryDeps.empty())
-          return true;
-      }
-
-      return false;
-    }
-
     static bool app_needs_registry_deps_loader(
         const AppManifest &manifest,
-        const fs::path &projectDir)
+        const vix::cli::modules::DependencyOwnership &ownership)
     {
       if (!manifest.deps.empty() || !manifest.gitDependencies.empty())
         return true;
-
-      return enabled_module_has_registry_deps(
-          manifest,
-          projectDir);
+      return std::any_of(ownership.requirements.begin(), ownership.requirements.end(), [](const auto &item) {
+        return item.owner.active && item.source == vix::cli::modules::DependencySource::Registry;
+      });
     }
 
     static void emit_module_links_for_loader(
         std::ostringstream &out,
-        const AppManifest &manifest,
-        const fs::path &projectDir)
+        const vix::cli::modules::DependencyOwnership &ownership)
     {
       bool wroteHeader = false;
+      std::string currentModule;
 
-      for (const AppModule &module : manifest.appModules)
+      for (const auto &link : ownership.links)
       {
-        if (!module.enabled)
+        if (link.owner.kind != vix::cli::modules::DependencyOwnerKind::Module ||
+            !link.owner.active ||
+            link.source != vix::cli::modules::DependencySource::Registry)
           continue;
 
-        const std::string normalized =
-            normalize_module_id(module.name);
-
-        const fs::path manifestPath =
-            module_manifest_path(projectDir, module);
-
-        const auto loaded = vix::cli::modules::load_module_manifest(manifestPath);
-        const std::vector<std::string> links = loaded.success() ? loaded.manifest.links : std::vector<std::string>{};
-
-        if (links.empty())
-          continue;
+        const std::string normalized = vix::cli::modules::ModuleGraph::canonical_identity(link.owner.module);
 
         if (!wroteHeader)
         {
@@ -194,13 +164,16 @@ namespace vix::cli::app
           wroteHeader = true;
         }
 
-        out << "set(VIX_MODULE_" << normalized << "_LINKS\n";
+        if (currentModule != normalized)
+        {
+          if (!currentModule.empty()) out << ")\n\n";
+          currentModule = normalized;
+          out << "set(VIX_MODULE_" << normalized << "_LINKS\n";
+        }
 
-        for (const std::string &link : links)
-          out << "  " << link << "\n";
-
-        out << ")\n\n";
+        out << "  " << link.target << "\n";
       }
+      if (!currentModule.empty()) out << ")\n\n";
     }
 
     static bool supports_generated_app_modules(
@@ -803,9 +776,10 @@ namespace vix::cli::app
     static void emit_registry_deps_loader(
         std::ostringstream &out,
         const AppManifest &manifest,
-        const fs::path &projectDir)
+        const fs::path &projectDir,
+        const vix::cli::modules::DependencyOwnership &ownership)
     {
-      if (!app_needs_registry_deps_loader(manifest, projectDir))
+      if (!app_needs_registry_deps_loader(manifest, ownership))
         return;
 
       const fs::path depsFile =
@@ -1141,10 +1115,14 @@ namespace vix::cli::app
 
     static void emit_git_deps_links(
         std::ostringstream &out,
-        const AppManifest &manifest,
+        const vix::cli::modules::DependencyOwnership &ownership,
         const std::string &targetName)
     {
-      if (manifest.gitDependencies.empty())
+      const bool hasGit = std::any_of(ownership.requirements.begin(), ownership.requirements.end(), [](const auto &item) {
+        return item.owner.kind == vix::cli::modules::DependencyOwnerKind::Application &&
+               item.source == vix::cli::modules::DependencySource::Git;
+      });
+      if (!hasGit)
         return;
 
       out << "# Git dependencies declared in vix.app\n";
@@ -1157,17 +1135,20 @@ namespace vix::cli::app
 
     static void emit_registry_deps_links(
         std::ostringstream &out,
-        const AppManifest &manifest,
+        const vix::cli::modules::DependencyOwnership &ownership,
         const std::string &targetName)
     {
-      if (manifest.deps.empty())
-        return;
+      bool wroteHeader = false;
 
-      out << "# Registry dependencies declared in vix.app\n";
-
-      for (const std::string &dep : manifest.deps)
+      for (const auto &item : ownership.requirements)
       {
+        if (item.owner.kind != vix::cli::modules::DependencyOwnerKind::Application ||
+            item.source != vix::cli::modules::DependencySource::Registry)
+          continue;
+        const std::string &dep = item.requirement;
         std::string alias;
+
+        if (!wroteHeader) { out << "# Registry dependencies declared in vix.app\n"; wroteHeader = true; }
 
         if (!parse_registry_dep_alias(dep, alias))
         {
@@ -1423,6 +1404,14 @@ namespace vix::cli::app
   {
     const std::string targetName = manifest.name;
 
+    std::string graphError;
+    const auto graph = vix::cli::modules::ModuleGraph::from_app_modules(
+        manifest.appModules, graphError);
+    const auto ownership = vix::cli::modules::build_dependency_ownership(
+        manifest, graph, projectDir);
+    if (!ownership.success())
+      return "# Invalid dependency ownership: " + ownership.error + "\n";
+
     std::ostringstream out;
 
     emit_header(out);
@@ -1435,12 +1424,12 @@ namespace vix::cli::app
 
     // Registry dependencies are generated by `vix deps` into
     // .vix/vix_deps.cmake and must be loaded before target linking.
-    emit_registry_deps_loader(out, manifest, projectDir);
+    emit_registry_deps_loader(out, manifest, projectDir, ownership);
 
     emit_tests_prelude(out, targetName);
 
     emit_enabled_modules_for_loader(out, manifest);
-    emit_module_links_for_loader(out, manifest, projectDir);
+    emit_module_links_for_loader(out, ownership);
     emit_modules_loader(out, projectDir);
 
     emit_target(out, manifest, targetName, projectDir);
@@ -1448,8 +1437,8 @@ namespace vix::cli::app
     emit_options_and_features(out, manifest, targetName);
     emit_links(out, manifest, targetName);
     emit_vix_runtime_link(out, targetName);
-    emit_registry_deps_links(out, manifest, targetName);
-    emit_git_deps_links(out, manifest, targetName);
+    emit_registry_deps_links(out, ownership, targetName);
+    emit_git_deps_links(out, ownership, targetName);
     emit_modules_links(out, manifest, targetName);
 
     emit_sanitizer_options(
@@ -1485,6 +1474,14 @@ namespace vix::cli::app
         !graph.validate_paths(normalizedProjectDir, true, graphError))
     {
       result.error = "Invalid module graph: " + graphError;
+      return result;
+    }
+
+    const auto ownership = vix::cli::modules::build_dependency_ownership(
+        manifest, graph, normalizedProjectDir);
+    if (!ownership.success())
+    {
+      result.error = "Invalid dependency ownership: " + ownership.error;
       return result;
     }
 

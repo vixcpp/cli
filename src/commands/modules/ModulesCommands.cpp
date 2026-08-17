@@ -691,8 +691,16 @@ namespace vix::commands::modules_cmd::commands
     const fs::path moduleDir = modulesDir / ("." + normalized + ".vix-txn-" + std::to_string(std::hash<std::string>{}(normalized + project)));
     struct TemporaryModuleCleanup
     {
-      fs::path path; bool published{false};
-      ~TemporaryModuleCleanup() { if (!published) { std::error_code ec; fs::remove_all(path, ec); } }
+      fs::path path;
+      bool published{false};
+      ~TemporaryModuleCleanup()
+      {
+        if (!published)
+        {
+          std::error_code ec;
+          fs::remove_all(path, ec);
+        }
+      }
     } temporaryModule{moduleDir};
 
     const bool hasRootCMake =
@@ -729,7 +737,6 @@ namespace vix::commands::modules_cmd::commands
             "Create a backend app first, then run vix modules add again.");
         return false;
       }
-
     }
 
     const bool isServiceModule =
@@ -767,8 +774,10 @@ namespace vix::commands::modules_cmd::commands
     {
       std::string error;
       vix::cli::util::ProjectMutationTransaction transaction(root);
-      if (originalRootCMake) transaction.stage_write(root / "CMakeLists.txt", *originalRootCMake, error);
-      if (originalVixApp) transaction.stage_write(root / "vix.app", *originalVixApp, error);
+      if (originalRootCMake)
+        transaction.stage_write(root / "CMakeLists.txt", *originalRootCMake, error);
+      if (originalVixApp)
+        transaction.stage_write(root / "vix.app", *originalVixApp, error);
       if (!error.empty() || !transaction.commit(error))
         ui::err_line(std::cout, "Failed to restore project registration: " + error);
     };
@@ -1548,7 +1557,6 @@ namespace vix::commands::modules_cmd::commands
               "Module folder exists but is not declared in vix.app: " + module);
         }
       }
-
     }
 
     std::unordered_map<std::string, std::string> routePrefixes;
@@ -1566,7 +1574,8 @@ namespace vix::commands::modules_cmd::commands
       const auto loadedManifest = vix::cli::modules::load_module_manifest(moduleManifest);
       if (!loadedManifest.success())
       {
-        ok = false; ++violations;
+        ok = false;
+        ++violations;
         ui::err_line(std::cout, "Invalid vix.module: " + loadedManifest.error);
         ui::kv(std::cout, "file", moduleManifest.string(), 12);
         continue;

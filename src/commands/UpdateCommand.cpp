@@ -774,14 +774,15 @@ namespace vix::commands
       {
         newLock["lockVersion"] = 1;
         newLock["dependencies"] = json::array();
-        std::sort(resolvedDependencies.begin(), resolvedDependencies.end(), [](const auto &a, const auto &b) { return a.id < b.id; });
+        std::sort(resolvedDependencies.begin(), resolvedDependencies.end(), [](const auto &a, const auto &b)
+                  { return a.id < b.id; });
         for (const auto &dep : resolvedDependencies)
-          newLock["dependencies"].push_back({{"id",dep.id},{"requested",dep.requested},{"version",dep.version},{"repo",dep.repo},{"tag",dep.tag},{"commit",dep.commit},{"hash",dep.hash},{"hash_algorithm",dep.hashAlgorithm},{"hash_version",dep.hashVersion}});
+          newLock["dependencies"].push_back({{"id", dep.id}, {"requested", dep.requested}, {"version", dep.version}, {"repo", dep.repo}, {"tag", dep.tag}, {"commit", dep.commit}, {"hash", dep.hash}, {"hash_algorithm", dep.hashAlgorithm}, {"hash_version", dep.hashVersion}});
 
         json newManifest = read_json_or_throw(manifest_path());
         newManifest["deps"] = json::array();
         for (const auto &dep : updatedManifestDeps)
-          newManifest["deps"].push_back({{"id",dep.id},{"version",dep.requested}});
+          newManifest["deps"].push_back({{"id", dep.id}, {"version", dep.requested}});
         std::string transactionError;
         vix::cli::util::ProjectMutationTransaction transaction(fs::current_path());
         if (!transaction.stage_write(manifest_path(), newManifest.dump(2) + "\n", transactionError) ||

@@ -160,7 +160,9 @@ namespace vix::cli::modules
         if (depState == 0) { state[dep] = 1; stack.push_back(dep); work.push_back({dep, 0}); }
       }
     }
-    if (error) error->clear(); return true;
+    if (error)
+      error->clear();
+    return true;
   }
 
   bool ModuleGraph::dependency_closure(const std::string &name, std::vector<std::string> &closure, std::string *error) const

@@ -61,15 +61,20 @@ namespace vix::cli::modules
       }
     }
     std::stable_sort(result.requirements.begin(), result.requirements.end(), [](const auto &a, const auto &b) {
-      if (owner_less(a.owner, b.owner)) return true; if (owner_less(b.owner, a.owner)) return false;
-      if (a.source != b.source) return a.source < b.source; return a.requirement < b.requirement;
+      if (owner_less(a.owner, b.owner)) return true;
+      if (owner_less(b.owner, a.owner)) return false;
+      if (a.source != b.source) return a.source < b.source;
+      return a.requirement < b.requirement;
     });
     std::stable_sort(result.links.begin(), result.links.end(), [](const auto &a, const auto &b) {
-      if (owner_less(a.owner, b.owner)) return true; if (owner_less(b.owner, a.owner)) return false;
-      if (a.source != b.source) return a.source < b.source; return a.target < b.target;
+      if (owner_less(a.owner, b.owner)) return true;
+      if (owner_less(b.owner, a.owner)) return false;
+      if (a.source != b.source) return a.source < b.source;
+      return a.target < b.target;
     });
     std::stable_sort(result.gitDependencies.begin(), result.gitDependencies.end(), [](const auto &a, const auto &b) {
-      if (owner_less(a.owner, b.owner)) return true; if (owner_less(b.owner, a.owner)) return false;
+      if (owner_less(a.owner, b.owner)) return true;
+      if (owner_less(b.owner, a.owner)) return false;
       return a.dependency.name < b.dependency.name;
     });
     return result;

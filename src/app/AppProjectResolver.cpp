@@ -20,6 +20,7 @@
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/modules/ModuleGraph.hpp>
 #include <vix/cli/modules/DependencyOwnership.hpp>
+#include <vix/cli/modules/DependencyConstraints.hpp>
 
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Manifest.hpp>
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <system_error>
 
@@ -108,20 +110,38 @@ namespace vix::cli::app
       return !packageId.empty() && !version.empty();
     }
 
-    static std::vector<std::string> active_registry_requirements(
-        const vix::cli::modules::DependencyOwnership &ownership)
+    static bool analyze_active_registry_constraints(
+        const vix::cli::modules::DependencyOwnership &ownership,
+        std::vector<std::string> &requirements,
+        std::string &error)
     {
-      std::vector<std::string> requirements;
+      std::map<std::string, std::vector<std::string>> available;
       for (const auto &requirement : ownership.requirements)
       {
         if (requirement.source != vix::cli::modules::DependencySource::Registry ||
             !requirement.owner.active)
           continue;
-        if (std::find(requirements.begin(), requirements.end(),
-                      requirement.requirement) == requirements.end())
-          requirements.push_back(requirement.requirement);
+        const auto identity = vix::cli::modules::registry_dependency_identity(
+            requirement.requirement);
+        if (!identity.has_value()) { error = "Invalid registry requirement: " + requirement.requirement; return false; }
+        if (available.find(*identity) == available.end())
+        {
+          try { available.emplace(*identity, vix::cli::util::resolver::available_registry_versions_or_throw(*identity)); }
+          catch (const std::exception &ex) { error = ex.what(); return false; }
+        }
       }
-      return requirements;
+      const auto analysis = vix::cli::modules::analyze_dependency_constraints(ownership, available);
+      if (!analysis.error.empty()) { error = analysis.error; return false; }
+      if (!analysis.conflicts.empty())
+      {
+        const auto &conflict = analysis.conflicts.front();
+        error = "Dependency conflict: " + conflict.packageId + ". " + conflict.reason;
+        return false;
+      }
+      requirements.clear();
+      for (const auto &item : analysis.resolvedRegistry)
+        requirements.push_back(item.packageId + "@" + item.version);
+      return true;
     }
 
     static bool sync_vix_app_registry_deps(
@@ -265,7 +285,12 @@ namespace vix::cli::app
         result.error = "Invalid dependency ownership: " + ownership.error;
         return result;
       }
-      const auto requirements = active_registry_requirements(ownership);
+      std::vector<std::string> requirements;
+      if (!analyze_active_registry_constraints(ownership, requirements, graphError))
+      {
+        result.error = graphError;
+        return result;
+      }
 
       std::string depsError;
 

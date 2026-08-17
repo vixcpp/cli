@@ -479,4 +479,17 @@ namespace vix::cli::util::resolver
 
     return lockedDependencies;
   }
+
+  std::vector<std::string> available_registry_versions_or_throw(
+      const std::string &packageId)
+  {
+    ensure_registry_present_or_throw();
+    const auto spec = parse_dep_string_v1(packageId);
+    if (!spec.has_value()) throw std::runtime_error("invalid registry package id: " + packageId);
+    const json entry = read_json_file_or_throw(entry_path(spec->ns, spec->name));
+    if (!entry.contains("versions") || !entry["versions"].is_object()) throw std::runtime_error("invalid registry entry: missing versions for " + packageId);
+    std::vector<std::string> versions;
+    for (auto it = entry["versions"].begin(); it != entry["versions"].end(); ++it) versions.push_back(it.key());
+    return versions;
+  }
 }

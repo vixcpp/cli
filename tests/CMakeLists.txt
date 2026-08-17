@@ -66,6 +66,11 @@ add_executable(vix_cli_dependency_ownership_tests DependencyOwnershipTests.cpp
 target_include_directories(vix_cli_dependency_ownership_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_dependency_ownership_tests COMMAND vix_cli_dependency_ownership_tests)
 
+add_executable(vix_cli_dependency_constraints_tests DependencyConstraintsTests.cpp
+  ../src/modules/DependencyConstraints.cpp ../src/util/Semver.cpp)
+target_include_directories(vix_cli_dependency_constraints_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+add_test(NAME vix_cli_dependency_constraints_tests COMMAND vix_cli_dependency_constraints_tests)
+
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
 )

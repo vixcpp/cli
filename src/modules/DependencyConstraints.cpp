@@ -10,6 +10,11 @@ namespace vix::cli::modules
   namespace
   {
     std::string trim(std::string value) { const auto b = std::find_if_not(value.begin(), value.end(), [](unsigned char c){ return std::isspace(c); }); const auto e = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c){ return std::isspace(c); }).base(); return b >= e ? "" : std::string(b, e); }
+    std::string git_source_subdirectory_identity(const std::string &subdirectory)
+    {
+      // An omitted subdirectory and "." both select the repository root.
+      return subdirectory == "." ? "" : subdirectory;
+    }
     bool owner_less(const DependencyOwner &a, const DependencyOwner &b) { if (a.kind != b.kind) return a.kind == DependencyOwnerKind::Application; return a.module < b.module; }
     bool requirement_less(const RegistryRequirement &a, const RegistryRequirement &b) { if (owner_less(a.owner,b.owner)) return true; if (owner_less(b.owner,a.owner)) return false; return a.requestedVersion < b.requestedVersion; }
     bool parse(const std::string &raw, std::string &id, std::string &version)
@@ -63,12 +68,12 @@ namespace vix::cli::modules
     GitConstraintResult result;
     std::sort(constraints.begin(), constraints.end(), [](const auto &a, const auto &b) {
       if (a.build.repository != b.build.repository) return a.build.repository < b.build.repository;
-      if (a.build.subdirectory != b.build.subdirectory) return a.build.subdirectory < b.build.subdirectory;
+      if (git_source_subdirectory_identity(a.build.subdirectory) != git_source_subdirectory_identity(b.build.subdirectory)) return git_source_subdirectory_identity(a.build.subdirectory) < git_source_subdirectory_identity(b.build.subdirectory);
       return owner_less(a.owner, b.owner);
     });
     for (std::size_t begin=0; begin<constraints.size();)
     {
-      std::size_t end=begin+1; while (end<constraints.size() && constraints[end].build.repository == constraints[begin].build.repository && constraints[end].build.subdirectory == constraints[begin].build.subdirectory) ++end;
+      std::size_t end=begin+1; while (end<constraints.size() && constraints[end].build.repository == constraints[begin].build.repository && git_source_subdirectory_identity(constraints[end].build.subdirectory) == git_source_subdirectory_identity(constraints[begin].build.subdirectory)) ++end;
       std::vector<GitDependencyConstraint> active; for (std::size_t i=begin;i<end;++i) if (constraints[i].owner.active) active.push_back(constraints[i]);
       if (active.size() > 1)
       {

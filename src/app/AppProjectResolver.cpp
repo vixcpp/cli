@@ -19,6 +19,7 @@
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/modules/ModuleManifest.hpp>
+#include <vix/cli/modules/ModuleGraph.hpp>
 
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Manifest.hpp>
@@ -273,6 +274,15 @@ namespace vix::cli::app
       }
 
       AppManifest manifest = loadResult.manifest;
+
+      std::string graphError;
+      const auto graph = vix::cli::modules::ModuleGraph::from_app_modules(
+          manifest.appModules, graphError);
+      if (!graph.valid() || !graph.validate_paths(projectDir, true, graphError))
+      {
+        result.error = "Invalid module graph: " + graphError;
+        return result;
+      }
 
       merge_enabled_module_registry_deps(
           manifest,

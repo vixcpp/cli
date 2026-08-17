@@ -54,6 +54,11 @@ add_executable(vix_cli_module_manifest_tests ModuleManifestTests.cpp
 target_include_directories(vix_cli_module_manifest_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_module_manifest_tests COMMAND vix_cli_module_manifest_tests)
 
+add_executable(vix_cli_module_graph_tests ModuleGraphTests.cpp
+  ../src/modules/ModuleGraph.cpp)
+target_include_directories(vix_cli_module_graph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+add_test(NAME vix_cli_module_graph_tests COMMAND vix_cli_module_graph_tests)
+
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
 )

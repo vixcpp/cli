@@ -192,7 +192,10 @@ namespace vix::cli::app
               std::string("[module.").size(),
               value.size() - std::string("[module.").size() - 1);
 
-      moduleName = normalize_module_id(rawName);
+      // Preserve the spelling supplied by the user.  ModuleGraph owns the
+      // CMake identity normalization and must be able to diagnose collisions
+      // such as foo-bar versus foo_bar.
+      moduleName = trim_copy(rawName);
 
       return is_valid_module_name(moduleName);
     }

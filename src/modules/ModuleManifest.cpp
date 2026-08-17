@@ -8,7 +8,19 @@
 namespace vix::cli::modules
 {
 namespace {
-std::string trim(std::string s) { auto p=[](unsigned char c){return std::isspace(c);}; while(!s.empty()&&p(s.front()))s.erase(s.begin()); while(!s.empty()&&p(s.back()))s.pop_back(); return s; }
+bool is_space(char ch)
+{
+  return std::isspace(static_cast<unsigned char>(ch)) != 0;
+}
+
+std::string trim(std::string s)
+{
+  while (!s.empty() && is_space(s.front()))
+    s.erase(s.begin());
+  while (!s.empty() && is_space(s.back()))
+    s.pop_back();
+  return s;
+}
 std::string lower(std::string s) { for(char &c:s)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; }
 std::string unquote(std::string s) { s=trim(std::move(s)); if(s.size()>=2&&((s.front()=='"'&&s.back()=='"')||(s.front()=='\''&&s.back()=='\''))) return s.substr(1,s.size()-2); return s; }
 bool valid_name(const std::string &s) { return !s.empty() && std::all_of(s.begin(),s.end(),[](unsigned char c){return std::isalnum(c)||c=='_'||c=='-';}); }

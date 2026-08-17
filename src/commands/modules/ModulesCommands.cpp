@@ -12,6 +12,7 @@
 #include <vix/cli/commands/modules/ModulesContent.hpp>
 #include <vix/cli/commands/modules/ModulesUtils.hpp>
 #include <vix/cli/app/AppManifest.hpp>
+#include <vix/cli/modules/ModuleManifest.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Ui.hpp>
 
@@ -1356,137 +1357,6 @@ namespace vix::commands::modules_cmd::commands
     return set_module_enabled_in_vix_app(root, module, false);
   }
 
-  static std::string read_manifest_value(
-      const fs::path &path,
-      const std::string &section,
-      const std::string &wantedKey)
-  {
-    auto contentOpt = utils::read_file(path);
-
-    if (!contentOpt)
-      return "";
-
-    std::istringstream in(*contentOpt);
-    std::string line;
-    std::string activeSection;
-
-    while (std::getline(in, line))
-    {
-      const std::string stripped =
-          trim_copy(strip_inline_comment(line));
-
-      if (stripped.empty())
-        continue;
-
-      if (is_section_header(stripped))
-      {
-        activeSection = stripped.substr(1, stripped.size() - 2);
-        activeSection = lower_copy(trim_copy(activeSection));
-        continue;
-      }
-
-      if (lower_copy(activeSection) != lower_copy(section))
-        continue;
-
-      const auto eq = stripped.find('=');
-
-      if (eq == std::string::npos)
-        continue;
-
-      const std::string key =
-          lower_copy(trim_copy(stripped.substr(0, eq)));
-
-      if (key != lower_copy(wantedKey))
-        continue;
-
-      return strip_quotes(trim_copy(stripped.substr(eq + 1)));
-    }
-
-    return "";
-  }
-
-  static std::vector<std::string> read_manifest_array(
-      const fs::path &path,
-      const std::string &section,
-      const std::string &wantedKey)
-  {
-    std::vector<std::string> out;
-
-    auto contentOpt = utils::read_file(path);
-
-    if (!contentOpt)
-      return out;
-
-    std::istringstream in(*contentOpt);
-    std::string line;
-    std::string activeSection;
-    bool collecting = false;
-
-    while (std::getline(in, line))
-    {
-      std::string stripped =
-          trim_copy(strip_inline_comment(line));
-
-      if (stripped.empty())
-        continue;
-
-      if (!collecting && is_section_header(stripped))
-      {
-        activeSection = stripped.substr(1, stripped.size() - 2);
-        activeSection = lower_copy(trim_copy(activeSection));
-        continue;
-      }
-
-      if (lower_copy(activeSection) != lower_copy(section))
-        continue;
-
-      if (!collecting)
-      {
-        const auto eq = stripped.find('=');
-
-        if (eq == std::string::npos)
-          continue;
-
-        const std::string key =
-            lower_copy(trim_copy(stripped.substr(0, eq)));
-
-        if (key != lower_copy(wantedKey))
-          continue;
-
-        stripped = trim_copy(stripped.substr(eq + 1));
-
-        if (stripped.find('[') == std::string::npos)
-          continue;
-
-        collecting = true;
-
-        const std::size_t open = stripped.find('[');
-        stripped = stripped.substr(open + 1);
-      }
-
-      const std::size_t close = stripped.find(']');
-
-      if (close != std::string::npos)
-      {
-        stripped = stripped.substr(0, close);
-        collecting = false;
-      }
-
-      std::istringstream items(stripped);
-      std::string item;
-
-      while (std::getline(items, item, ','))
-      {
-        item = strip_quotes(trim_copy(item));
-
-        if (!item.empty())
-          out.push_back(item);
-      }
-    }
-
-    return out;
-  }
-
   static bool check_dependency_cycle_visit(
       const std::string &module,
       const std::unordered_map<std::string, std::vector<std::string>> &graph,
@@ -1768,11 +1638,16 @@ namespace vix::commands::modules_cmd::commands
       if (!utils::exists_file(moduleManifest))
         continue;
 
-      const std::vector<std::string> registryDeps =
-          read_manifest_array(moduleManifest, "deps", "registry");
-
-      const std::vector<std::string> depLinks =
-          read_manifest_array(moduleManifest, "deps", "links");
+      const auto loadedManifest = vix::cli::modules::load_module_manifest(moduleManifest);
+      if (!loadedManifest.success())
+      {
+        ok = false; ++violations;
+        ui::err_line(std::cout, "Invalid vix.module: " + loadedManifest.error);
+        ui::kv(std::cout, "file", moduleManifest.string(), 12);
+        continue;
+      }
+      const std::vector<std::string> &registryDeps = loadedManifest.manifest.registryDependencies;
+      const std::vector<std::string> &depLinks = loadedManifest.manifest.links;
 
       if (!registryDeps.empty() && depLinks.empty())
       {
@@ -1794,8 +1669,7 @@ namespace vix::commands::modules_cmd::commands
         ui::kv(std::cout, "file", moduleManifest.string(), 12);
       }
 
-      const std::string routePrefix =
-          read_manifest_value(moduleManifest, "routes", "prefix");
+      const std::string &routePrefix = loadedManifest.manifest.routePrefix;
 
       if (routePrefix.empty())
         continue;

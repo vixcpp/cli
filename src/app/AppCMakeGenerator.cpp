@@ -15,6 +15,7 @@
  */
 
 #include <vix/cli/app/AppCMakeGenerator.hpp>
+#include <vix/cli/modules/ModuleManifest.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -115,184 +116,6 @@ namespace vix::cli::app
       return name;
     }
 
-    static std::string trim_copy_local(std::string value)
-    {
-      auto is_space = [](unsigned char c)
-      {
-        return std::isspace(c) != 0;
-      };
-
-      while (!value.empty() && is_space(static_cast<unsigned char>(value.front())))
-        value.erase(value.begin());
-
-      while (!value.empty() && is_space(static_cast<unsigned char>(value.back())))
-        value.pop_back();
-
-      return value;
-    }
-
-    static std::string strip_quotes_local(const std::string &value)
-    {
-      const std::string s = trim_copy_local(value);
-
-      if (s.size() >= 2 &&
-          ((s.front() == '"' && s.back() == '"') ||
-           (s.front() == '\'' && s.back() == '\'')))
-      {
-        return s.substr(1, s.size() - 2);
-      }
-
-      return s;
-    }
-
-    static std::string parse_vix_module_value(
-        const fs::path &path,
-        const std::string &section,
-        const std::string &key)
-    {
-      std::ifstream in(path);
-
-      if (!in)
-        return "";
-
-      std::string activeSection;
-      std::string line;
-
-      while (std::getline(in, line))
-      {
-        std::string s = trim_copy_local(line);
-
-        const std::size_t comment = s.find('#');
-        if (comment != std::string::npos)
-          s = trim_copy_local(s.substr(0, comment));
-
-        if (s.empty())
-          continue;
-
-        if (s.size() >= 2 && s.front() == '[' && s.back() == ']')
-        {
-          activeSection = trim_copy_local(s.substr(1, s.size() - 2));
-          continue;
-        }
-
-        if (activeSection != section)
-          continue;
-
-        const std::size_t eq = s.find('=');
-
-        if (eq == std::string::npos)
-          continue;
-
-        const std::string currentKey =
-            trim_copy_local(s.substr(0, eq));
-
-        if (currentKey != key)
-          continue;
-
-        return strip_quotes_local(trim_copy_local(s.substr(eq + 1)));
-      }
-
-      return "";
-    }
-
-    static std::vector<std::string> parse_vix_module_array(
-        const fs::path &path,
-        const std::string &section,
-        const std::string &key)
-    {
-      std::vector<std::string> out;
-
-      std::ifstream in(path);
-      if (!in)
-        return out;
-
-      std::string activeSection;
-      bool collecting = false;
-      std::string line;
-
-      while (std::getline(in, line))
-      {
-        std::string s = trim_copy_local(line);
-
-        const std::size_t comment = s.find('#');
-        if (comment != std::string::npos)
-          s = trim_copy_local(s.substr(0, comment));
-
-        if (s.empty())
-          continue;
-
-        if (!collecting && s.size() >= 2 && s.front() == '[' && s.back() == ']')
-        {
-          activeSection = trim_copy_local(s.substr(1, s.size() - 2));
-          continue;
-        }
-
-        if (activeSection != section)
-          continue;
-
-        if (!collecting)
-        {
-          const std::size_t eq = s.find('=');
-          if (eq == std::string::npos)
-            continue;
-
-          const std::string currentKey =
-              trim_copy_local(s.substr(0, eq));
-
-          if (currentKey != key)
-            continue;
-
-          std::string value = trim_copy_local(s.substr(eq + 1));
-
-          if (value.find('[') == std::string::npos)
-            continue;
-
-          collecting = true;
-
-          const std::size_t open = value.find('[');
-          value = value.substr(open + 1);
-
-          const std::size_t close = value.find(']');
-          if (close != std::string::npos)
-          {
-            value = value.substr(0, close);
-            collecting = false;
-          }
-
-          std::stringstream ss(value);
-          std::string item;
-
-          while (std::getline(ss, item, ','))
-          {
-            item = strip_quotes_local(trim_copy_local(item));
-            if (!item.empty())
-              out.push_back(item);
-          }
-
-          continue;
-        }
-
-        const std::size_t close = s.find(']');
-        if (close != std::string::npos)
-        {
-          s = s.substr(0, close);
-          collecting = false;
-        }
-
-        std::stringstream ss(s);
-        std::string item;
-
-        while (std::getline(ss, item, ','))
-        {
-          item = strip_quotes_local(trim_copy_local(item));
-          if (!item.empty())
-            out.push_back(item);
-        }
-      }
-
-      return out;
-    }
-
     static fs::path module_manifest_path(
         const fs::path &projectDir,
         const AppModule &module)
@@ -318,8 +141,8 @@ namespace vix::cli::app
         const fs::path manifestPath =
             module_manifest_path(projectDir, module);
 
-        const std::vector<std::string> registryDeps =
-            parse_vix_module_array(manifestPath, "deps", "registry");
+        const auto loaded = vix::cli::modules::load_module_manifest(manifestPath);
+        const std::vector<std::string> registryDeps = loaded.success() ? loaded.manifest.registryDependencies : std::vector<std::string>{};
 
         if (!registryDeps.empty())
           return true;
@@ -358,8 +181,8 @@ namespace vix::cli::app
         const fs::path manifestPath =
             module_manifest_path(projectDir, module);
 
-        const std::vector<std::string> links =
-            parse_vix_module_array(manifestPath, "deps", "links");
+        const auto loaded = vix::cli::modules::load_module_manifest(manifestPath);
+        const std::vector<std::string> links = loaded.success() ? loaded.manifest.links : std::vector<std::string>{};
 
         if (links.empty())
           continue;
@@ -408,19 +231,15 @@ namespace vix::cli::app
       const fs::path manifestPath =
           module_manifest_path(projectDir, module);
 
-      const std::string workflow =
-          lower_copy(parse_vix_module_value(manifestPath, "", "workflow"));
+      const auto loaded = vix::cli::modules::load_module_manifest(manifestPath);
+      const std::string workflow = loaded.success() ? lower_copy(loaded.manifest.workflow) : "";
 
       if (workflow == "websocket.client")
         return false;
 
-      const std::string runtime =
-          lower_copy(parse_vix_module_value(manifestPath, "", "runtime"));
+      const bool runtime = loaded.success() && loaded.manifest.runtime;
 
-      if (runtime == "true" ||
-          runtime == "yes" ||
-          runtime == "on" ||
-          runtime == "1")
+      if (runtime)
       {
         return true;
       }

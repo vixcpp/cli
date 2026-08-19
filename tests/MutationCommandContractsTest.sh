@@ -122,7 +122,9 @@ mkdir -p "$MODULE_OK/modules"
 printf '# KEEP\nname = "module_ok"\nstandard = "c++20"\n' > "$MODULE_OK/vix.app"
 (cd "$MODULE_OK" && "$VIX_BIN" modules add auth >/dev/null)
 test -f "$MODULE_OK/modules/auth/vix.module"; test -f "$MODULE_OK/modules/auth/CMakeLists.txt"
-test -f "$MODULE_OK/modules/auth/include/auth/api.hpp"; test -f "$MODULE_OK/modules/auth/src/auth.cpp"; test -f "$MODULE_OK/modules/auth/tests/test_auth.cpp"
+test -f "$MODULE_OK/modules/auth/include/auth/AuthModule.hpp"; test -f "$MODULE_OK/modules/auth/src/AuthModule.cpp"
+test -f "$MODULE_OK/modules/auth/include/auth/controllers/AuthController.hpp"; test -f "$MODULE_OK/modules/auth/src/controllers/AuthController.cpp"
+test -f "$MODULE_OK/modules/auth/tests/test_auth.cpp"
 grep -q '\[module.auth\]' "$MODULE_OK/vix.app"
 assert_clean_mutation_state "$MODULE_OK"
 (cd "$MODULE_OK" && "$VIX_BIN" modules disable auth >/dev/null)

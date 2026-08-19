@@ -420,10 +420,13 @@ namespace vix::commands
           UpdateItem item;
           item.id = dep.id;
 
-          // Respect the version/range declared in vix.json.
-          // If vix.json says rix/rix@0.6.1, update must not jump to 0.9.0.
-          // If vix.json says "*", then resolving latest is expected.
-          item.rawSpec = make_raw_spec(dep.id, dep.requested);
+          // `vix update` advances every selected dependency to the latest
+          // registry version.  The version recorded in vix.json describes
+          // the currently requested dependency; it is not a ceiling for an
+          // explicit update operation.  A version supplied on the command
+          // line (for example `vix update acme/lib@1.2.3`) is still handled
+          // below as an explicit request.
+          item.rawSpec = dep.id;
 
           item.beforeVersion = read_locked_version(lock, dep.id);
           item.beforeHash = read_locked_hash(lock, dep.id);

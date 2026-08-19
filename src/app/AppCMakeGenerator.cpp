@@ -1105,11 +1105,15 @@ namespace vix::cli::app
     {
       out << "# Vix runtime used by generated app glue\n";
       out << "find_package(vix QUIET CONFIG)\n";
-      out << "if(NOT vix_FOUND)\n";
+      out << "if(NOT TARGET vix::vix AND NOT TARGET Vix::vix)\n";
       out << "  find_package(Vix QUIET CONFIG)\n";
       out << "endif()\n";
       out << "if(TARGET vix::vix)\n";
       out << "  target_link_libraries(" << targetName << " PRIVATE vix::vix)\n";
+      out << "elseif(TARGET Vix::vix)\n";
+      out << "  target_link_libraries(" << targetName << " PRIVATE Vix::vix)\n";
+      out << "else()\n";
+      out << "  message(FATAL_ERROR \"No umbrella Vix target found (vix::vix or Vix::vix). Generated application glue requires the full Vix package.\")\n";
       out << "endif()\n\n";
     }
 

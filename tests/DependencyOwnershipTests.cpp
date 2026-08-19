@@ -42,6 +42,12 @@ int main()
   assert(cmake.find("target_link_libraries(demo PRIVATE gk::jwt)") == std::string::npos);
   assert(cmake.find("target_link_libraries(demo PRIVATE gk::fmt)") != std::string::npos);
   assert(cmake.find("set(VIX_MODULE_auth_LINKS\n  gk::json\n  gk::jwt\n  spdlog::spdlog\n)") != std::string::npos);
+  assert(cmake.find("No umbrella Vix target found") == std::string::npos);
+  assert(cmake.find("vix_app_modules.cpp") == std::string::npos);
+  app.links = {"vix::vix"};
+  const std::string vixCmake = vix::cli::app::generate_app_cmake_lists_content(app, root);
+  assert(vixCmake.find("No umbrella Vix target found") != std::string::npos);
+  assert(vixCmake.find("vix_app_modules.cpp") != std::string::npos);
   AppManifest missing; missing.name = "missing"; missing.appModules = {module("required")};
   std::string error; auto graph = vix::cli::modules::ModuleGraph::from_app_modules(missing.appModules, error); assert(graph.valid()); assert(!vix::cli::modules::build_dependency_ownership(missing, graph, root).success());
   fs::remove_all(root);

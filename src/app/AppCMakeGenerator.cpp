@@ -179,7 +179,20 @@ namespace vix::cli::app
     static bool supports_generated_app_modules(
         const AppManifest &manifest)
     {
-      return manifest.type == AppTargetType::Executable;
+      if (manifest.type != AppTargetType::Executable)
+        return false;
+
+      // The generated module bridge includes and uses the Vix application
+      // runtime.  A plain C++ executable declared in vix.app must remain
+      // usable with only its own dependencies, so only generate that bridge
+      // when the application explicitly links the umbrella Vix target.
+      return std::any_of(
+          manifest.links.begin(),
+          manifest.links.end(),
+          [](const std::string &link)
+          {
+            return link == "vix::vix" || link == "Vix::vix";
+          });
     }
 
     static bool is_routed_app_module(
@@ -1440,7 +1453,8 @@ namespace vix::cli::app
     emit_includes_and_defines(out, manifest, targetName, projectDir);
     emit_options_and_features(out, manifest, targetName);
     emit_links(out, manifest, targetName);
-    emit_vix_runtime_link(out, targetName);
+    if (supports_generated_app_modules(manifest))
+      emit_vix_runtime_link(out, targetName);
     emit_registry_deps_links(out, ownership, targetName);
     emit_git_deps_links(out, ownership, targetName);
     emit_modules_links(out, manifest, targetName);

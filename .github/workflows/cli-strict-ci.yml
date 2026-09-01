@@ -102,8 +102,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
             git \
             ca-certificates \
             libasio-dev
@@ -339,8 +339,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $DEPS
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $DEPS
 
           test -f /usr/include/asio.hpp
 
@@ -480,8 +480,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $DEPS
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $DEPS
 
       - name: Download sibling dependencies
         uses: actions/download-artifact@v4
@@ -580,8 +580,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $DEPS
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $DEPS
 
       - name: Download sibling dependencies
         uses: actions/download-artifact@v4
@@ -723,8 +723,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $DEPS
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $DEPS
 
       - name: Download sibling dependencies
         uses: actions/download-artifact@v4
@@ -822,8 +822,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $DEPS
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $DEPS
 
       - name: Download sibling dependencies
         uses: actions/download-artifact@v4
@@ -940,8 +940,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends $DEPS
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo timeout 10m apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends $DEPS
 
       - name: Download sibling dependencies
         uses: actions/download-artifact@v4

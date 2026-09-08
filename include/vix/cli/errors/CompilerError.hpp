@@ -26,6 +26,9 @@ namespace vix::cli::errors
     int line = 0;
     /// 1-based column number in the source file.
     int column = 0;
+    /// Optional inclusive end column supplied by a compiler underline.
+    /// Zero means the compiler reported only a start column.
+    int endColumn = 0;
     /// Human-readable error message (without the file:line:column prefix).
     std::string message;
     /// Raw line as seen in the compiler output (for debugging/fallbacks).

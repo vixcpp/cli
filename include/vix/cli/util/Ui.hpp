@@ -38,10 +38,10 @@ namespace vix::cli::util
     if (static_cast<int>(k.size()) < pad)
       k.append(static_cast<std::size_t>(pad - static_cast<int>(k.size())), ' ');
 
-    os << "    " << GRAY << "• " << RESET
-       << GRAY << k << RESET
-       << GRAY << ": " << RESET
-       << YELLOW << BOLD << value << RESET << "\n";
+    os << "    " << ACCENT << "•" << RESET << " "
+       << LABEL << k << RESET
+       << ": "
+       << WARNING << value << RESET << "\n";
   }
 
   inline void section(std::ostream &os, std::string_view title)
@@ -51,28 +51,28 @@ namespace vix::cli::util
 
   inline void ok_line(std::ostream &os, std::string_view msg)
   {
-    os << "  " << GREEN << "✔" << RESET << " " << msg << "\n";
+    os << "  " << SUCCESS << "✔" << RESET << " " << msg << "\n";
   }
 
   inline void warn_line(std::ostream &os, std::string_view msg)
   {
-    os << "  " << YELLOW << "!" << RESET << " " << msg << "\n";
+    os << "  " << WARNING << "!" << RESET << " " << msg << "\n";
   }
 
   inline void tip_line(std::ostream &os, std::string_view msg)
   {
     os << "\n"
-       << BOLD << CYAN << "TIP:" << RESET << " " << msg << "\n\n";
+       << ACCENT << "TIP:" << RESET << " " << msg << "\n\n";
   }
 
   inline void err_line(std::ostream &os, std::string_view msg)
   {
-    os << "  " << RED << "✖" << RESET << " " << msg << "\n";
+    os << "  " << ERROR << "✖" << RESET << " " << msg << "\n";
   }
 
   inline std::string dim(std::string_view s)
   {
-    return std::string(GRAY) + std::string(s) + RESET;
+    return std::string(MUTED) + std::string(s) + RESET;
   }
 
   inline std::string strong(std::string_view s)
@@ -82,12 +82,12 @@ namespace vix::cli::util
 
   inline void info_line(std::ostream &os, std::string_view msg)
   {
-    os << "  " << CYAN << "•" << RESET << " " << msg << "\n";
+    os << "  " << ACCENT << "•" << RESET << " " << msg << "\n";
   }
 
   inline void info(std::ostream &os, std::string_view msg)
   {
-    os << "  " << GRAY << "•" << RESET << " " << msg << "\n";
+    os << "  " << MUTED << "•" << RESET << " " << msg << "\n";
   }
 
   inline std::string faint_sep()

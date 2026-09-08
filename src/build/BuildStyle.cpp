@@ -107,21 +107,21 @@ namespace vix::cli::build
     static std::string label_color(const std::string &label)
     {
       if (label == "error:")
-        return style::RED;
+        return style::ERROR;
 
       if (label == "hint:")
-        return style::YELLOW;
+        return style::WARNING;
 
       if (label == "location:")
-        return style::CYAN;
+        return style::ACCENT;
 
       if (label == "code:")
-        return style::CYAN;
+        return style::LABEL;
 
       if (label == "message:")
-        return style::CYAN;
+        return style::LABEL;
 
-      return style::GRAY;
+      return style::LABEL;
     }
 
     static void print_label(
@@ -548,7 +548,7 @@ namespace vix::cli::build
       out << "  "
           << colorize(label_color("location:").c_str(), "location:")
           << " "
-          << format_build_location(diagnostic.location)
+          << colorize(style::PATH, format_build_location(diagnostic.location))
           << "\n";
     }
 
@@ -568,9 +568,9 @@ namespace vix::cli::build
         const std::size_t lineNumber = firstLine + i;
 
         out << "    "
-            << lineNumber
+            << colorize(style::LINE_NUMBER, std::to_string(lineNumber))
             << " | "
-            << diagnostic.codeFrame.lines[i]
+            << colorize(style::CODE, diagnostic.codeFrame.lines[i])
             << "\n";
 
         if (lineNumber == diagnostic.codeFrame.location.line)
@@ -581,7 +581,7 @@ namespace vix::cli::build
           if (!pointer.empty())
           {
             out << "      | "
-                << colorize(style::RED, pointer)
+                << colorize(style::ERROR, pointer)
                 << "\n";
           }
         }
@@ -793,7 +793,7 @@ namespace vix::cli::build
       return;
 
     out << "  "
-        << colorize(style::YELLOW, "warning")
+        << colorize(style::WARNING, "warning")
         << " "
         << colorize(style::BOLD, std::to_string(total))
         << " compiler warning"
@@ -805,16 +805,16 @@ namespace vix::cli::build
     for (const BuildWarning &warning : warnings)
     {
       out << "    "
-          << colorize(style::YELLOW, "•")
+          << colorize(style::WARNING, "•")
           << " ";
 
       if (warning.has_location())
       {
-        out << colorize(style::CYAN, warning.file.filename().string());
+        out << colorize(style::PATH, warning.file.filename().string());
 
         if (warning.line > 0)
         {
-          out << style::GRAY
+          out << style::MUTED
               << ":"
               << warning.line;
 
@@ -834,7 +834,7 @@ namespace vix::cli::build
       if (!warning.hint.empty())
       {
         out << "      "
-            << colorize(style::GRAY, "hint:")
+            << colorize(style::WARNING, "hint:")
             << " "
             << warning.hint
             << "\n";
@@ -844,9 +844,9 @@ namespace vix::cli::build
     if (total > shown)
     {
       out << "    "
-          << colorize(style::GRAY, "• ")
+          << colorize(style::MUTED, "• ")
           << colorize(
-                 style::GRAY,
+                 style::MUTED,
                  std::to_string(total - shown) +
                      " more warning" +
                      ((total - shown) > 1 ? "s" : "") +
@@ -855,9 +855,9 @@ namespace vix::cli::build
     }
 
     out << "    "
-        << colorize(style::GRAY, "hint:")
+        << colorize(style::WARNING, "hint:")
         << " run "
-        << colorize(style::CYAN, "vix build --warnings")
+        << colorize(style::ACCENT, "vix build --warnings")
         << " to view all warnings"
         << "\n\n";
   }

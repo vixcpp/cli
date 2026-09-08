@@ -45,6 +45,15 @@ add_test(
   COMMAND vix_cli_cmake_build_errors_tests
 )
 
+add_executable(vix_cli_code_frame_style_tests
+  CodeFrameStyleTests.cpp
+  ../src/errors/CodeFrame.cpp
+)
+target_include_directories(vix_cli_code_frame_style_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_code_frame_style_tests COMMAND vix_cli_code_frame_style_tests)
+
 add_executable(vix_cli_git_progress_parser_tests GitProgressParserTests.cpp)
 target_include_directories(vix_cli_git_progress_parser_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_git_progress_parser_tests COMMAND vix_cli_git_progress_parser_tests)

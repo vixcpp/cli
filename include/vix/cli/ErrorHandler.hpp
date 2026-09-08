@@ -26,6 +26,13 @@ namespace vix::cli
     static bool printBuildErrors(
         const std::string &buildLog,
         const fs::path &sourceFile,
+        const std::string &contextMessage,
+        bool verbose);
+
+    // Compatibility overload for callers that do not expose a verbose mode.
+    static bool printBuildErrors(
+        const std::string &buildLog,
+        const fs::path &sourceFile,
         const std::string &contextMessage = "Script build failed");
   };
 } // namespace vix::cli

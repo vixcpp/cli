@@ -27,6 +27,7 @@
 #include <vix/utils/Env.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/util/GitProgress.hpp>
+#include <vix/cli/util/NetworkProgress.hpp>
 #include <vix/cli/util/ProjectMutation.hpp>
 
 #include <nlohmann/json.hpp>
@@ -463,24 +464,11 @@ namespace vix::commands
         std::vector<std::string> args,
         const fs::path &cwd);
 
-    static bool install_progress_is_tty()
-    {
-#ifdef _WIN32
-      if (_isatty(_fileno(stdout)) == 0)
-        return false;
-#else
-      if (::isatty(STDOUT_FILENO) == 0)
-        return false;
-#endif
-      const char *term = std::getenv("TERM");
-      return (!term || std::string_view(term) != "dumb") && std::getenv("NO_COLOR") == nullptr;
-    }
-
     class GitInstallProgress
     {
     public:
       GitInstallProgress(std::string dependency, std::size_t packageIndex, std::size_t packageCount)
-          : dependency_(std::move(dependency)), packageIndex_(packageIndex), packageCount_(packageCount), started_(std::chrono::steady_clock::now()), tty_(install_progress_is_tty()), parser_([this](const auto &event)
+          : dependency_(std::move(dependency)), packageIndex_(packageIndex), packageCount_(packageCount), parser_([this](const auto &event)
                                                                                                                                                                                                { render(event); }) {}
 
       void push(std::string_view chunk) { parser_.push(chunk); }
@@ -496,50 +484,30 @@ namespace vix::commands
       void finish()
       {
         parser_.finish();
-        if (visible_)
-        {
-          std::cout << "\r\033[2K" << std::flush;
-          visible_ = false;
-        }
+        progress_.stop();
       }
 
     private:
       void render(const vix::cli::util::GitProgressEvent &event)
       {
-        // CI output must remain useful without terminal control sequences.
-        const auto now = std::chrono::steady_clock::now();
-        // The first measurable Git event is deliberately not delayed.  The
-        // old delay made a real remote operation look hung.
-        if (visible_ && event.phase == lastPhase_ && now - lastRender_ < std::chrono::milliseconds(100))
-          return;
         std::ostringstream line;
-        line << "  " << CYAN << "•" << RESET << " " << CYAN << BOLD << dependency_ << RESET;
+        line << event.phase;
         if (packageCount_ > 1)
-          line << " " << GRAY << "(" << (packageIndex_ + 1) << "/" << packageCount_ << " packages)" << RESET;
-        line << "  " << GRAY << event.phase;
+          line << " " << dependency_ << " (" << (packageIndex_ + 1) << "/" << packageCount_ << " packages)";
+        else
+          line << " " << dependency_;
         if (event.percent)
           line << " " << *event.percent << "%";
         if (!event.transferred.empty())
           line << "  " << event.transferred;
         if (!event.speed.empty())
           line << "  " << event.speed;
-        line << RESET;
-        if (tty_)
-          std::cout << "\r\033[2K" << line.str() << std::flush;
-        else
-          std::cout << dependency_ << ": " << event.phase
-                    << (event.percent ? std::string(" ") + std::to_string(*event.percent) + "%" : "") << "\n"
-                    << std::flush;
-        visible_ = true;
-        lastRender_ = now;
-        lastPhase_ = event.phase;
+        progress_.update(line.str());
       }
       std::string dependency_;
       std::size_t packageIndex_{};
       std::size_t packageCount_{};
-      std::chrono::steady_clock::time_point started_, lastRender_{};
-      bool tty_{false}, visible_{false};
-      std::string lastPhase_;
+      vix::cli::util::NetworkProgress progress_{dependency_};
       vix::cli::util::GitProgressParser parser_;
     };
 

@@ -16,6 +16,7 @@
 #include <vix/cli/errors/ClangGccParser.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
+#include <vix/cli/errors/CompilerDiagnosticPresentation.hpp>
 #include <vix/cli/errors/ErrorContext.hpp>
 #include <vix/cli/errors/ErrorPipeline.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
@@ -260,6 +261,19 @@ namespace vix::cli
       const fs::path &sourceFile,
       const std::string &contextMessage)
   {
+    return printBuildErrors(
+        buildLog,
+        sourceFile,
+        contextMessage,
+        false);
+  }
+
+  bool ErrorHandler::printBuildErrors(
+      const std::string &buildLog,
+      const fs::path &sourceFile,
+      const std::string &contextMessage,
+      bool verbose)
+  {
     using namespace vix::cli::errors;
 
     const std::string cleanedLog = ::trim_build_preamble(buildLog);
@@ -333,7 +347,10 @@ namespace vix::cli
     ErrorContext ctx{sourceFile, contextMessage, buildLog};
     ErrorPipeline pipeline;
 
-    if (pipeline.tryHandle(errors, ctx))
+    // Focused rules are intentionally concise. For a diagnostic batch they
+    // can select a secondary cascading error; render the first parsed error
+    // instead. Verbose mode always renders the complete parsed set.
+    if (!verbose && errors.size() == 1 && pipeline.tryHandle(errors, ctx))
       return true;
 
     std::vector<CompilerError> unique;
@@ -374,15 +391,8 @@ namespace vix::cli
       return false;
     }
 
-    /*
-     * Show the first compiler error by default.
-     *
-     * Compiler errors frequently cascade: once the parser cannot
-     * understand one declaration, it may report several secondary
-     * errors. Showing the first error keeps the output focused for
-     * beginners.
-     */
-    const std::size_t maxToShow = 1;
+    const CompilerDiagnosticPresentation presentation =
+        compiler_diagnostic_presentation(unique.size(), verbose);
 
     CodeFrameOptions codeFrameOptions;
     codeFrameOptions.contextLines = 1;
@@ -391,7 +401,7 @@ namespace vix::cli
     codeFrameOptions.leadingBlankLine = false;
 
     for (std::size_t i = 0;
-         i < unique.size() && i < maxToShow;
+         i < presentation.shown;
          ++i)
     {
       const CompilerError &err = unique[i];
@@ -420,17 +430,12 @@ namespace vix::cli
         print_hint(hint);
     }
 
-    const std::size_t hiddenCount =
-        unique.size() > maxToShow
-            ? unique.size() - maxToShow
-            : 0;
-
-    if (hiddenCount > 0)
+    if (presentation.show_verbose_hint())
     {
       std::cerr << MUTED
-                << hiddenCount
+                << presentation.hidden
                 << " more compiler error"
-                << (hiddenCount == 1 ? "" : "s")
+                << (presentation.hidden == 1 ? "" : "s")
                 << " hidden. Run with --verbose to see them."
                 << RESET
                 << "\n";

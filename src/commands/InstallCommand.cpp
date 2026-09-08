@@ -3973,6 +3973,18 @@ namespace vix::commands
       if (fs::exists(appPath))
         return;
 
+      // A project with its own CMakeLists.txt owns its target type, sources,
+      // and language settings.  Its vix.app is only a dependency manifest.
+      std::error_code cmakeEc;
+      if (fs::is_regular_file(fs::current_path() / "CMakeLists.txt", cmakeEc) &&
+          !cmakeEc)
+      {
+        std::ofstream out(appPath, std::ios::binary | std::ios::trunc);
+        if (!out)
+          throw std::runtime_error("cannot create vix.app");
+        return;
+      }
+
       std::vector<std::string> sources;
       std::error_code ec;
       for (const auto &entry : fs::directory_iterator(fs::current_path(), ec))

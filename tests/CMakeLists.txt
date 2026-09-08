@@ -336,6 +336,11 @@ add_test(
     ${CMAKE_BINARY_DIR}/vix
 )
 
+add_test(
+  NAME vix_cli_cmake_vix_dependency_manifest
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/CMakeVixDependencyManifestTest.sh ${CMAKE_BINARY_DIR}/vix
+)
+
 # Contract tests deliberately consume the built CLI, so help text, parser and
 # observable execution stay tied together. The App test is a real regression
 # contract when an installed SDK include directory is supplied.

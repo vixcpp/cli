@@ -1,71 +1,68 @@
 /**
+ * @file AppProjectResolver.cpp
+ * @author Gaspard Kirira
  *
- *  @file AppProjectResolver.cpp
- *  @author Gaspard Kirira
+ * Copyright 2026, Gaspard Kirira. All rights reserved.
+ * https://github.com/vixcpp/vix
  *
- *  Copyright 2026, Gaspard Kirira. All rights reserved.
- *  https://github.com/vixcpp/vix
- *  Use of this source code is governed by a MIT license
- *  that can be found in the License file.
+ * Use of this source code is governed by an MIT license that can be found in
+ * the License file.
  *
- *  Vix.cpp
+ * Vix.cpp
  *
- *  Project resolver for CMake and vix.app based applications.
- *
+ * Project resolver for CMake and vix.app based applications.
  */
 
 #include <vix/cli/app/AppProjectResolver.hpp>
 
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/AppManifest.hpp>
-#include <vix/cli/modules/ModuleGraph.hpp>
-#include <vix/cli/modules/DependencyOwnership.hpp>
 #include <vix/cli/modules/DependencyConstraints.hpp>
-
+#include <vix/cli/modules/DependencyOwnership.hpp>
+#include <vix/cli/modules/ModuleGraph.hpp>
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Manifest.hpp>
 #include <vix/cli/util/Resolver.hpp>
 
-#include <algorithm>
 #include <cctype>
-#include <fstream>
+#include <exception>
 #include <map>
-#include <sstream>
+#include <string>
 #include <system_error>
+#include <vector>
 
 namespace vix::cli::app
 {
   namespace
   {
-    static bool file_exists_regular(const fs::path &path)
+    bool file_exists_regular(const fs::path &path)
     {
-      std::error_code ec;
-      return fs::exists(path, ec) && fs::is_regular_file(path, ec);
+      std::error_code error;
+      return fs::exists(path, error) && fs::is_regular_file(path, error);
     }
 
-    static fs::path normalize_absolute(const fs::path &path)
+    fs::path normalize_absolute(const fs::path &path)
     {
-      std::error_code ec;
+      std::error_code error;
 
-      fs::path out = fs::absolute(path, ec);
+      fs::path absolutePath = fs::absolute(path, error);
+      if (error)
+        absolutePath = path;
 
-      if (ec)
-        out = path;
-
-      return out.lexically_normal();
+      return absolutePath.lexically_normal();
     }
 
-    static fs::path app_manifest_json_path(const fs::path &projectDir)
+    fs::path app_manifest_json_path(const fs::path &projectDir)
     {
       return projectDir / "vix.json";
     }
 
-    static fs::path app_lock_path(const fs::path &projectDir)
+    fs::path app_lock_path(const fs::path &projectDir)
     {
       return projectDir / "vix.lock";
     }
 
-    static bool parse_registry_dep_spec(
+    bool parse_registry_dep_spec(
         const std::string &raw,
         std::string &packageId,
         std::string &version)
@@ -92,8 +89,11 @@ namespace vix::cli::app
 
       const std::size_t slash = value.find('/');
 
-      if (slash == std::string::npos || slash == 0 || slash + 1 >= value.size())
+      if (slash == std::string::npos || slash == 0 ||
+          slash + 1 >= value.size())
+      {
         return false;
+      }
 
       const std::size_t atVersion = value.find('@', slash + 1);
 
@@ -110,41 +110,78 @@ namespace vix::cli::app
       return !packageId.empty() && !version.empty();
     }
 
-    static bool analyze_active_registry_constraints(
+    bool analyze_active_registry_constraints(
         const vix::cli::modules::DependencyOwnership &ownership,
         std::vector<std::string> &requirements,
         std::string &error)
     {
       std::map<std::string, std::vector<std::string>> available;
+
       for (const auto &requirement : ownership.requirements)
       {
-        if (requirement.source != vix::cli::modules::DependencySource::Registry ||
+        if (requirement.source !=
+                vix::cli::modules::DependencySource::Registry ||
             !requirement.owner.active)
+        {
           continue;
-        const auto identity = vix::cli::modules::registry_dependency_identity(
-            requirement.requirement);
-        if (!identity.has_value()) { error = "Invalid registry requirement: " + requirement.requirement; return false; }
+        }
+
+        const auto identity =
+            vix::cli::modules::registry_dependency_identity(
+                requirement.requirement);
+
+        if (!identity.has_value())
+        {
+          error =
+              "Invalid registry requirement: " + requirement.requirement;
+          return false;
+        }
+
         if (available.find(*identity) == available.end())
         {
-          try { available.emplace(*identity, vix::cli::util::resolver::available_registry_versions_or_throw(*identity)); }
-          catch (const std::exception &ex) { error = ex.what(); return false; }
+          try
+          {
+            available.emplace(
+                *identity,
+                vix::cli::util::resolver::
+                    available_registry_versions_or_throw(*identity));
+          }
+          catch (const std::exception &ex)
+          {
+            error = ex.what();
+            return false;
+          }
         }
       }
-      const auto analysis = vix::cli::modules::analyze_dependency_constraints(ownership, available);
-      if (!analysis.error.empty()) { error = analysis.error; return false; }
+
+      const auto analysis =
+          vix::cli::modules::analyze_dependency_constraints(
+              ownership,
+              available);
+
+      if (!analysis.error.empty())
+      {
+        error = analysis.error;
+        return false;
+      }
+
       if (!analysis.conflicts.empty())
       {
         const auto &conflict = analysis.conflicts.front();
-        error = "Dependency conflict: " + conflict.packageId + ". " + conflict.reason;
+        error = "Dependency conflict: " + conflict.packageId + ". " +
+                conflict.reason;
         return false;
       }
+
       requirements.clear();
+
       for (const auto &item : analysis.resolvedRegistry)
         requirements.push_back(item.packageId + "@" + item.version);
+
       return true;
     }
 
-    static bool sync_vix_app_registry_deps(
+    bool sync_vix_app_registry_deps(
         const std::vector<std::string> &requirements,
         const fs::path &projectDir,
         std::string &error)
@@ -155,31 +192,35 @@ namespace vix::cli::app
       const fs::path manifestPath = app_manifest_json_path(projectDir);
       const fs::path lockPath = app_lock_path(projectDir);
 
-      for (const std::string &dep : requirements)
+      for (const std::string &dependency : requirements)
       {
         std::string packageId;
         std::string version;
 
-        if (!parse_registry_dep_spec(dep, packageId, version))
+        if (!parse_registry_dep_spec(dependency, packageId, version))
         {
-          error = "Invalid vix.app dependency: " + dep;
+          error = "Invalid vix.app dependency: " + dependency;
           return false;
         }
 
-        const std::string requested =
+        const std::string requestedVersion =
             version.empty() ? std::string("*") : version;
 
         try
         {
-          vix::cli::util::manifest::upsert_manifest_dependency_or_throw(
-              manifestPath,
-              vix::cli::util::manifest::Dependency{
-                  packageId,
-                  requested});
+          vix::cli::util::manifest::
+              upsert_manifest_dependency_or_throw(
+                  manifestPath,
+                  vix::cli::util::manifest::Dependency{
+                      packageId,
+                      requestedVersion});
         }
         catch (const std::exception &ex)
         {
-          error = std::string("Failed to update vix.json from vix.app deps: ") + ex.what();
+          error =
+              std::string("Failed to update vix.json from vix.app "
+                          "deps: ") +
+              ex.what();
           return false;
         }
       }
@@ -187,12 +228,13 @@ namespace vix::cli::app
       try
       {
         const auto manifestDependencies =
-            vix::cli::util::manifest::read_manifest_dependencies_or_throw(
-                manifestPath);
+            vix::cli::util::manifest::
+                read_manifest_dependencies_or_throw(manifestPath);
 
         const auto lockedDependencies =
-            vix::cli::util::resolver::resolve_project_dependencies_or_throw(
-                manifestDependencies);
+            vix::cli::util::resolver::
+                resolve_project_dependencies_or_throw(
+                    manifestDependencies);
 
         vix::cli::util::lockfile::write_lockfile_replace_all_or_throw(
             lockPath,
@@ -200,14 +242,16 @@ namespace vix::cli::app
       }
       catch (const std::exception &ex)
       {
-        error = std::string("Failed to resolve vix.app dependencies: ") + ex.what();
+        error =
+            std::string("Failed to resolve vix.app dependencies: ") +
+            ex.what();
         return false;
       }
 
       return true;
     }
 
-    static fs::path search_project_root(const fs::path &base)
+    fs::path search_project_root(const fs::path &base)
     {
       fs::path current = normalize_absolute(base);
 
@@ -233,7 +277,7 @@ namespace vix::cli::app
       return {};
     }
 
-    static AppProjectResolveResult resolve_cmake_project(
+    AppProjectResolveResult resolve_cmake_project(
         const fs::path &projectDir)
     {
       AppProjectResolveResult result;
@@ -242,13 +286,19 @@ namespace vix::cli::app
       result.userProjectDir = projectDir;
       result.cmakeSourceDir = projectDir;
       result.cmakeListsPath = projectDir / "CMakeLists.txt";
+
+      // CMake remains authoritative, but keep an adjacent dependency-only
+      // manifest so build planning can inject Vix-managed dependencies.
+      if (file_exists_regular(projectDir / "vix.app"))
+        result.appManifestPath = projectDir / "vix.app";
+
       result.targetName = projectDir.filename().string();
       result.generated = false;
 
       return result;
     }
 
-    static AppProjectResolveResult resolve_vix_app_project(
+    AppProjectResolveResult resolve_vix_app_project(
         const fs::path &projectDir)
     {
       AppProjectResolveResult result;
@@ -270,50 +320,65 @@ namespace vix::cli::app
       AppManifest manifest = loadResult.manifest;
 
       std::string graphError;
-      const auto graph = vix::cli::modules::ModuleGraph::from_app_modules(
-          manifest.appModules, graphError);
-      if (!graph.valid() || !graph.validate_paths(projectDir, true, graphError))
+      const auto graph =
+          vix::cli::modules::ModuleGraph::from_app_modules(
+              manifest.appModules,
+              graphError);
+
+      if (!graph.valid() ||
+          !graph.validate_paths(projectDir, true, graphError))
       {
         result.error = "Invalid module graph: " + graphError;
         return result;
       }
 
-      const auto ownership = vix::cli::modules::build_dependency_ownership(
-          manifest, graph, projectDir);
+      const auto ownership =
+          vix::cli::modules::build_dependency_ownership(
+              manifest,
+              graph,
+              projectDir);
+
       if (!ownership.success())
       {
         result.error = "Invalid dependency ownership: " + ownership.error;
         return result;
       }
-      const auto gitAnalysis = vix::cli::modules::analyze_owned_git_constraints(ownership);
+
+      const auto gitAnalysis =
+          vix::cli::modules::analyze_owned_git_constraints(ownership);
+
       if (!gitAnalysis.success())
       {
         const auto &conflict = gitAnalysis.conflicts.front();
-        result.error = "Git dependency conflict: " + conflict.repository + ". " + conflict.reason;
+        result.error = "Git dependency conflict: " +
+                       conflict.repository + ". " + conflict.reason;
         return result;
       }
+
       std::vector<std::string> requirements;
-      if (!analyze_active_registry_constraints(ownership, requirements, graphError))
+
+      if (!analyze_active_registry_constraints(
+              ownership,
+              requirements,
+              graphError))
       {
         result.error = graphError;
         return result;
       }
 
-      std::string depsError;
+      std::string dependenciesError;
 
       if (!sync_vix_app_registry_deps(
               requirements,
               projectDir,
-              depsError))
+              dependenciesError))
       {
-        result.error = depsError;
+        result.error = dependenciesError;
         return result;
       }
 
       const AppCMakeGenerateResult generateResult =
-          generate_app_cmake_project(
-              manifest,
-              projectDir);
+          generate_app_cmake_project(manifest, projectDir);
 
       if (!generateResult.success())
       {
@@ -361,7 +426,8 @@ namespace vix::cli::app
     if (projectDir.empty())
     {
       result.error =
-          "Unable to determine the project directory. Missing CMakeLists.txt or vix.app.";
+          "Unable to determine the project directory. Missing "
+          "CMakeLists.txt or vix.app.";
       return result;
     }
 
@@ -375,9 +441,9 @@ namespace vix::cli::app
       return resolve_vix_app_project(projectDir);
 
     result.error =
-        "Unable to determine the project directory. Missing CMakeLists.txt or vix.app.";
+        "Unable to determine the project directory. Missing CMakeLists.txt "
+        "or vix.app.";
 
     return result;
   }
-
 } // namespace vix::cli::app

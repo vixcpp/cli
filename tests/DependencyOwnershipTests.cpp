@@ -1,4 +1,5 @@
 #include <vix/cli/app/AppCMakeGenerator.hpp>
+#include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/modules/DependencyOwnership.hpp>
 
 #include <cassert>
@@ -23,6 +24,17 @@ int main()
   const fs::path root = fs::temp_directory_path() / "vix-dependency-ownership-tests";
   fs::remove_all(root); fs::create_directories(root);
   AppManifest app; app.name = "demo"; app.deps = {"gk/fmt@^10"};
+  // A CMake-owned project can use a dependency-only manifest without Vix
+  // application fields.  Complete-project loading deliberately remains more
+  // strict for generated vix.app projects.
+  const fs::path dependencyOnly = root / "dependency-only.app";
+  { std::ofstream out(dependencyOnly); out << "[dependencies.sample]\ngit = \"https://example.invalid/sample.git\"\ntarget = \"sample::sample\"\n"; }
+  const auto dependencyOnlyLoad = vix::cli::app::load_app_manifest(
+      dependencyOnly, vix::cli::app::AppManifestLoadMode::DependenciesOnly);
+  assert(dependencyOnlyLoad.success());
+  assert(dependencyOnlyLoad.manifest.name.empty());
+  assert(dependencyOnlyLoad.manifest.gitDependencies.size() == 1);
+  assert(!vix::cli::app::load_app_manifest(dependencyOnly).success());
   vix::cli::app::AppGitDependency git; git.name = "catch2"; git.git = "https://example.invalid/catch2.git"; git.target = "Catch2::Catch2"; app.gitDependencies.push_back(git);
   app.appModules = {module("auth"), module("billing"), module("analytics", false), module("space", true, "modules/with space")};
   manifest(root / "modules/auth/vix.module", "\"gk/jwt@^1\", \"gk/json@^1\"", "\"gk::jwt\", \"gk::json\"");

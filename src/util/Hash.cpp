@@ -409,6 +409,18 @@ namespace vix::cli::util
     if (file_exists(vixLock))
       files.push_back(vixLock);
 
+    // CMake-owned projects can opt into Vix dependency integration through
+    // an adjacent dependency-only vix.app.  Both files affect the configure
+    // graph via CMAKE_PROJECT_INCLUDE, so a changed install must
+    // invalidate the configure signature.
+    const fs::path vixApp = projectDir / "vix.app";
+    if (file_exists(vixApp))
+      files.push_back(vixApp);
+
+    const fs::path vixDepsCmake = projectDir / ".vix" / "vix_deps.cmake";
+    if (file_exists(vixDepsCmake))
+      files.push_back(vixDepsCmake);
+
     std::sort(files.begin(), files.end());
     files.erase(std::unique(files.begin(), files.end()), files.end());
 

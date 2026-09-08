@@ -2395,14 +2395,8 @@ namespace vix::commands::BuildCommand
       options.linkStatic = opt.linkStatic;
       options.targetTriple = opt.targetTriple;
       options.sysroot = opt.sysroot;
-      // --fast changes only the build execution strategy. It must not
-      // invalidate a CMake configuration produced without that flag.
-      options.useCache = opt.useCache;
       options.warningCheck = opt.warningCheck;
       options.linker = opt.linker;
-      options.launcher = opt.launcher;
-      options.verbose = opt.verbose;
-      options.cmakeVerbose = opt.cmakeVerbose;
       options.rawCMakeArgs = opt.cmakeArgs;
       options.toolchainContent = toolchainContent;
       return options;

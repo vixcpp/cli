@@ -346,6 +346,9 @@ namespace vix::cli::errors
         err.file = candidate->file;
         err.line = candidate->line;
         err.column = candidate->column;
+        // The underline belongs to the original system-header location.  A
+        // re-anchored call site has no compiler-supplied end position.
+        err.endColumn = 0;
       }
     }
 
@@ -366,6 +369,24 @@ namespace vix::cli::errors
           R"(^[0-9]+\s*\|\s*)");
 
       return std::regex_search(line, gccSnippetRe);
+    }
+
+    std::optional<int> underline_width(const std::string &line)
+    {
+      const std::size_t caret = line.find('^');
+      if (caret == std::string::npos)
+        return std::nullopt;
+
+      std::size_t end = caret;
+      while (end < line.size() &&
+             (line[end] == '^' || line[end] == '~'))
+      {
+        ++end;
+      }
+
+      const std::size_t width = end - caret;
+      return width == 0 ? std::nullopt :
+                          std::optional<int>(static_cast<int>(width));
     }
 
     bool looks_like_template_or_instantiation_note(
@@ -653,13 +674,22 @@ namespace vix::cli::errors
 
     while (std::getline(input, line))
     {
-      line = strip_ansi(trim_copy(line));
+      const std::string rawLine = strip_ansi(line);
+      line = trim_copy(rawLine);
 
       if (line.empty())
         continue;
 
       if (is_build_noise_line(line))
         continue;
+
+      if (const auto width = underline_width(rawLine);
+          width && !out.empty() && out.back().endColumn == 0)
+      {
+        CompilerError &last = out.back();
+        last.endColumn = last.column + *width - 1;
+        continue;
+      }
 
       if (is_caret_or_snippet_line(line))
         continue;

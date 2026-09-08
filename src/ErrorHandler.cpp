@@ -388,7 +388,7 @@ namespace vix::cli
     codeFrameOptions.contextLines = 1;
     codeFrameOptions.maxLineWidth = 120;
     codeFrameOptions.tabWidth = 4;
-    codeFrameOptions.leadingBlankLine = true;
+    codeFrameOptions.leadingBlankLine = false;
 
     for (std::size_t i = 0;
          i < unique.size() && i < maxToShow;
@@ -427,8 +427,7 @@ namespace vix::cli
 
     if (hiddenCount > 0)
     {
-      std::cerr << "\n"
-                << GRAY
+      std::cerr << MUTED
                 << hiddenCount
                 << " more compiler error"
                 << (hiddenCount == 1 ? "" : "s")

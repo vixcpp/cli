@@ -64,7 +64,11 @@ namespace vix::cli::errors
     return out;
   }
 
-  static std::string makeCaretLine(int caretCol1Based, int tabWidth, const std::string &originalLine)
+  static std::string makeCaretLine(
+      int caretCol1Based,
+      int endCol1Based,
+      int tabWidth,
+      const std::string &originalLine)
   {
     std::string expanded = expandTabs(originalLine, tabWidth);
 
@@ -72,10 +76,13 @@ namespace vix::cli::errors
     int maxPos = static_cast<int>(expanded.size()) + 1;
     col = std::min(col, maxPos);
 
+    int end = endCol1Based > 0 ? endCol1Based : col;
+    end = std::max(col, std::min(end, maxPos));
+
     std::string caret;
-    caret.reserve(static_cast<std::size_t>(col));
+    caret.reserve(static_cast<std::size_t>(end));
     caret.append(static_cast<std::size_t>(col - 1), ' ');
-    caret.push_back('^');
+    caret.append(static_cast<std::size_t>(end - col + 1), '^');
     return caret;
   }
 
@@ -84,9 +91,11 @@ namespace vix::cli::errors
       const std::string &caret,
       int maxWidth,
       const std::string &prefix,
+      const std::string &prefixColor,
       const std::string &lineColor,
       const std::string &caretColor,
-      const std::string &resetColor)
+      const std::string &resetColor,
+      const std::string &caretPrefix)
   {
     auto caretPos = [](const std::string &c) -> int
     {
@@ -103,8 +112,9 @@ namespace vix::cli::errors
     // No truncation needed
     if (maxWidth <= 0 || static_cast<int>(line.size()) <= maxWidth)
     {
-      std::cerr << lineColor << prefix << line << resetColor << "\n";
-      std::cerr << std::string(prefix.size(), ' ')
+      std::cerr << prefixColor << prefix << resetColor
+                << lineColor << line << resetColor << "\n";
+      std::cerr << caretPrefix
                 << caretColor << caret << resetColor << "\n";
       return;
     }
@@ -138,8 +148,9 @@ namespace vix::cli::errors
     if (rightCut && !slice.empty())
       slice = slice.substr(0, slice.size() - 1) + "…";
 
-    std::cerr << lineColor << prefix << slice << resetColor << "\n";
-    std::cerr << std::string(prefix.size(), ' ')
+    std::cerr << prefixColor << prefix << resetColor
+              << lineColor << slice << resetColor << "\n";
+    std::cerr << caretPrefix
               << caretColor << caretSlice << resetColor << "\n";
   }
 
@@ -205,8 +216,6 @@ namespace vix::cli::errors
               << PATH << err.file << ":" << err.line << ":" << err.column
               << RESET << "\n";
 
-    std::cerr << LABEL << "code:" << RESET << "\n";
-
     for (int ln = from; ln <= to; ++ln)
     {
       const bool isMain = (ln == err.line);
@@ -216,7 +225,7 @@ namespace vix::cli::errors
       const std::size_t pad = (width > lnStr.size()) ? (width - lnStr.size()) : 0;
 
       std::ostringstream p;
-      p << "  " << std::string(pad, ' ') << lnStr << " |";
+      p << std::string(pad, ' ') << lnStr << " |";
       const std::string prefixBase = p.str();
 
       const bool addGap = !expanded.empty();
@@ -252,9 +261,20 @@ namespace vix::cli::errors
         continue;
       }
 
-      const std::string caret = makeCaretLine(err.column, opt.tabWidth, rawLine);
+      const std::string caret = makeCaretLine(
+          err.column, err.endColumn, opt.tabWidth, rawLine);
+      const std::string caretPrefix =
+          std::string(width, ' ') + " | ";
       printTruncatedLineWithPrefix(
-          expanded, caret, opt.maxLineWidth, prefixPrint, CODE, ERROR, RESET);
+          expanded,
+          caret,
+          opt.maxLineWidth,
+          prefixPrint,
+          ERROR,
+          CODE,
+          ERROR,
+          RESET,
+          caretPrefix);
     }
   }
 

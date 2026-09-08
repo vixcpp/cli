@@ -13,7 +13,6 @@
 #include <vix/cli/util/Resolver.hpp>
 
 #include <vix/cli/util/Hash.hpp>
-#include <vix/cli/util/NetworkProgress.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/util/Shell.hpp>
 #include <vix/utils/Env.hpp>
@@ -216,34 +215,27 @@ namespace vix::cli::util::resolver
       }
 
       fs::create_directories(dst.parent_path());
-      vix::cli::util::NetworkProgress progress(idDot);
 
       {
-        progress.phase("Connecting to " + idDot);
         const std::string cmd =
             "git clone -q " + repoUrl + " " + dst.string();
         const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
         if (rc != 0)
         {
-          progress.failure();
           throw std::runtime_error("git clone failed for: " + repoUrl);
         }
       }
 
       {
-        progress.phase("Preparing " + idDot);
         const std::string cmd =
             "git -C " + dst.string() +
             " -c advice.detachedHead=false checkout -q " + commit;
         const int rc = vix::cli::util::run_cmd_retry_debug(cmd);
         if (rc != 0)
         {
-          progress.failure();
           throw std::runtime_error("git checkout failed for commit: " + commit);
         }
       }
-
-      progress.success(idDot + " installed");
 
       return 0;
     }

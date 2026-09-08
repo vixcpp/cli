@@ -3721,17 +3721,17 @@ namespace vix::commands::BuildCommand
       return value == "debug" || value == "trace";
     }
 
-    static void print_debug_command_if_enabled(
+    static void print_failure_command_if_requested(
         const process::Options &opt,
         const process::ExecResult &result)
     {
-      if (!debug_build_details_enabled(opt))
+      if (!opt.verbose && !debug_build_details_enabled(opt))
         return;
 
       if (result.displayCommand.empty())
         return;
 
-      std::cerr << GRAY
+      std::cerr << LABEL
                 << "command: "
                 << RESET
                 << result.displayCommand
@@ -5836,7 +5836,8 @@ namespace vix::commands::BuildCommand
                 vix::cli::ErrorHandler::printBuildErrors(
                     log,
                     plan_.cmakeSourceDir / "CMakeLists.txt",
-                    "CMake configure failed");
+                    "CMake configure failed",
+                    opt_.verbose);
 
             if (!handled && opt_.verbose && !log.empty())
             {
@@ -5849,7 +5850,7 @@ namespace vix::commands::BuildCommand
               if (!handled)
                 hint("run `vix build --log configure` for the captured configure output");
 
-              print_debug_command_if_enabled(opt_, r);
+              print_failure_command_if_requested(opt_, r);
             }
 
             return exitCode;
@@ -6197,8 +6198,7 @@ namespace vix::commands::BuildCommand
 
           const bool legacyBuildQuiet =
               opt_.quiet ||
-              (liveBuild &&
-               !showRawBuildOutput);
+              !showRawBuildOutput;
 
           const process::ExecResult r =
               measurePhase(
@@ -6245,14 +6245,15 @@ namespace vix::commands::BuildCommand
                 vix::cli::ErrorHandler::printBuildErrors(
                     log,
                     plan_.cmakeSourceDir / "CMakeLists.txt",
-                    "Build failed");
+                    "Build failed",
+                    opt_.verbose);
 
             if (!opt_.quiet)
             {
               if (!handled)
                 hint("run `vix build --log build` for the captured build output");
 
-              print_debug_command_if_enabled(opt_, r);
+              print_failure_command_if_requested(opt_, r);
             }
             return exitCode;
           }

@@ -63,6 +63,17 @@ target_include_directories(vix_cli_clang_gcc_parser_tests PRIVATE
 )
 add_test(NAME vix_cli_clang_gcc_parser_tests COMMAND vix_cli_clang_gcc_parser_tests)
 
+add_executable(vix_cli_compiler_diagnostic_presentation_tests
+  CompilerDiagnosticPresentationTests.cpp
+)
+target_include_directories(vix_cli_compiler_diagnostic_presentation_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(
+  NAME vix_cli_compiler_diagnostic_presentation_tests
+  COMMAND vix_cli_compiler_diagnostic_presentation_tests
+)
+
 add_executable(vix_cli_git_progress_parser_tests GitProgressParserTests.cpp)
 target_include_directories(vix_cli_git_progress_parser_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_git_progress_parser_tests COMMAND vix_cli_git_progress_parser_tests)

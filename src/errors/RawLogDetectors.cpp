@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/cli/errors/BuildFailureClassification.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
 #include <vix/cli/errors/runtime/IRuntimeErrorRule.hpp>
@@ -885,6 +886,12 @@ namespace vix::cli::errors
       const std::filesystem::path &sourceFile,
       [[maybe_unused]] const std::string &contextMessage)
   {
+    // A failed incremental Ninja invocation can still contain a stale linker
+    // line. A source-location compiler diagnostic is stronger evidence and
+    // must not be presented as a link failure.
+    if (contains_source_compiler_diagnostic(buildLog))
+      return false;
+
     if (handleLinkerErrors(buildLog, sourceFile))
       return true;
 

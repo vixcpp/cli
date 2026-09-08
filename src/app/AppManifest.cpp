@@ -1446,7 +1446,11 @@ namespace vix::cli::app
         return false;
       }
 
-      if (manifest.name.empty())
+      // A CMake-owned project may use vix.app solely as a dependency
+      // manifest.  In that mode CMake, not Vix, owns the target name and
+      // build fields, so requiring `name` would make a useful minimal
+      // dependency declaration impossible.
+      if (requireBuildFields && manifest.name.empty())
       {
         error = "Invalid vix.app: missing required field 'name'";
         return false;
@@ -1538,7 +1542,6 @@ namespace vix::cli::app
   bool AppManifestLoadResult::success() const
   {
     return error.empty() &&
-           !manifest.name.empty() &&
            (!requireBuildFields || manifest.valid());
   }
 

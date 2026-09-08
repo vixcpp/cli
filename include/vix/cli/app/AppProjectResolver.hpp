@@ -74,7 +74,9 @@ namespace vix::cli::app
     fs::path cmakeListsPath;
 
     /**
-     * @brief Path to vix.app when the project uses vix.app.
+     * @brief Path to vix.app when present.  For a CMake project it is an
+     * optional dependency-only manifest; for a vix.app project it supplies
+     * the complete generated build definition.
      */
     fs::path appManifestPath;
 
@@ -108,8 +110,10 @@ namespace vix::cli::app
    * 1. CMakeLists.txt
    * 2. vix.app
    *
-   * If CMakeLists.txt exists, the current build behavior is preserved.
-   * vix.app is used only when no CMakeLists.txt is present.
+   * If CMakeLists.txt exists, it remains the build authority.  An adjacent
+   * vix.app is retained as an optional dependency-only manifest.  vix.app
+   * supplies a generated build definition only when no CMakeLists.txt is
+   * present.
    *
    * @param base Directory to start from.
    * @return Resolved project result.

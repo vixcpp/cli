@@ -6198,7 +6198,8 @@ namespace vix::commands::BuildCommand
 
           const bool legacyBuildQuiet =
               opt_.quiet ||
-              !showRawBuildOutput;
+              (liveBuild &&
+               !showRawBuildOutput);
 
           const process::ExecResult r =
               measurePhase(

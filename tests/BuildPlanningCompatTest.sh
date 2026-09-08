@@ -34,7 +34,24 @@ test -f "$PROJECT/build-ninja/CMakeCache.txt"
 first_sig="$(cat "$PROJECT/build-ninja/.vix-config.sig")"
 printf '%s\n' "$first_sig" | grep -q "preset=dev-ninja"
 printf '%s\n' "$first_sig" | grep -q "linker=1"
-printf '%s\n' "$first_sig" | grep -q "launcher=1"
+if printf '%s\n' "$first_sig" | grep -Eq '^(useCache|verbose|cmakeVerbose|launcher|launcherTool)='; then
+  echo "presentation or execution option leaked into configuration signature" >&2
+  exit 1
+fi
+
+# These alter presentation or execution policy only. They must not alter the
+# persisted CMake configuration identity.
+HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --dir "$PROJECT" \
+  --launcher none --linker default >/dev/null
+test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
+
+HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --cmake-verbose --dir "$PROJECT" \
+  --launcher none --linker default >/dev/null
+test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
+
+HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --quiet --dir "$PROJECT" \
+  --launcher none --linker default >/dev/null
+test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
 
 second_output="$(run_build --launcher none --linker default)"
 if printf '%s\n' "$second_output" | grep -q "Configuring project (dev)"; then
@@ -44,6 +61,7 @@ fi
 
 nocache_output="$(run_build --no-cache --launcher none --linker default)"
 printf '%s\n' "$nocache_output" | grep -q "Configuring project (dev)"
+test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
 
 clean_output="$(run_build --clean --launcher none --linker default)"
 printf '%s\n' "$clean_output" | grep -q "Configuring project (dev)"

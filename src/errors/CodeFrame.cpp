@@ -201,10 +201,11 @@ namespace vix::cli::errors
       std::cerr << "\n";
     }
 
-    std::cerr << GRAY << "--> " << RESET
-              << err.file << ":" << err.line << ":" << err.column << "\n";
+    std::cerr << ACCENT << "-->" << RESET << " "
+              << PATH << err.file << ":" << err.line << ":" << err.column
+              << RESET << "\n";
 
-    std::cerr << GRAY << "code:" << RESET << "\n";
+    std::cerr << LABEL << "code:" << RESET << "\n";
 
     for (int ln = from; ln <= to; ++ln)
     {
@@ -238,25 +239,22 @@ namespace vix::cli::errors
             cropped += "…";
           }
 
-          if (cropped.empty())
-            std::cerr << GRAY << prefixPrint << RESET << "\n";
-          else
-            std::cerr << GRAY << prefixPrint << cropped << RESET << "\n";
+          std::cerr << LINE_NUMBER << prefixPrint << RESET
+                    << CODE << cropped << RESET << "\n";
         }
         else
         {
           // no crop needed
-          if (expanded.empty())
-            std::cerr << GRAY << prefixPrint << RESET << "\n";
-          else
-            std::cerr << GRAY << prefixPrint << expanded << RESET << "\n";
+          std::cerr << LINE_NUMBER << prefixPrint << RESET
+                    << CODE << expanded << RESET << "\n";
         }
 
         continue;
       }
 
       const std::string caret = makeCaretLine(err.column, opt.tabWidth, rawLine);
-      printTruncatedLineWithPrefix(expanded, caret, opt.maxLineWidth, prefixPrint, "", RED, RESET);
+      printTruncatedLineWithPrefix(
+          expanded, caret, opt.maxLineWidth, prefixPrint, CODE, ERROR, RESET);
     }
   }
 

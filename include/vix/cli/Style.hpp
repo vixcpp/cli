@@ -18,26 +18,41 @@
 
 namespace vix::cli::style
 {
-  // ANSI (Linux/macOS/WSL)
+  // ANSI (Linux/macOS/WSL).  Keep semantic text readable on both dark and
+  // light themes: required information uses the terminal default foreground
+  // unless its meaning needs a strong accent.  In particular, do not use
+  // bright-black (90) for paths, code, labels, or actionable guidance.
   inline constexpr const char *RESET = "\033[0m";
   inline constexpr const char *BOLD = "\033[1m";
   inline constexpr const char *UNDERLINE = "\033[4m";
-  inline constexpr const char *RED = "\033[31m";
-  inline constexpr const char *GREEN = "\033[32m";
-  inline constexpr const char *YELLOW = "\033[33m";
-  inline constexpr const char *CYAN = "\033[36m";
-  inline constexpr const char *GRAY = "\033[90m";
-  inline constexpr const char *MAGENTA = "\033[35m";
+  inline constexpr const char *ERROR = "\033[1;91m";
+  inline constexpr const char *WARNING = "\033[1;93m";
+  inline constexpr const char *SUCCESS = "\033[1;92m";
+  inline constexpr const char *ACCENT = "\033[1;96m";
+  inline constexpr const char *MUTED = RESET;
+  inline constexpr const char *PATH = ACCENT;
+  inline constexpr const char *CODE = RESET;
+  inline constexpr const char *LINE_NUMBER = RESET;
+  inline constexpr const char *LABEL = BOLD;
+
+  // Compatibility aliases for existing callers.  New diagnostic code should
+  // prefer the semantic names above.
+  inline constexpr const char *RED = ERROR;
+  inline constexpr const char *GREEN = SUCCESS;
+  inline constexpr const char *YELLOW = WARNING;
+  inline constexpr const char *CYAN = ACCENT;
+  inline constexpr const char *GRAY = MUTED;
+  inline constexpr const char *MAGENTA = "\033[1;95m";
   inline constexpr const char *PAD = "  ";
 
   inline void error(const std::string &msg)
   {
-    std::cerr << PAD << RED << "✖ " << msg << RESET << "\n";
+    std::cerr << PAD << ERROR << "✖ " << msg << RESET << "\n";
   }
 
   inline void success(const std::string &msg)
   {
-    std::cout << PAD << GREEN << "✔ " << msg << RESET << "\n";
+    std::cout << PAD << SUCCESS << "✔ " << msg << RESET << "\n";
   }
 
   inline void info(const std::string &msg)
@@ -47,7 +62,7 @@ namespace vix::cli::style
 
   inline void hint(const std::string &msg)
   {
-    std::cout << PAD << GRAY << "➜ " << msg << RESET << "\n";
+    std::cout << PAD << ACCENT << "➜" << RESET << " " << msg << "\n";
   }
 
   inline void step(const std::string &msg)
@@ -57,7 +72,7 @@ namespace vix::cli::style
 
   inline void section_title(std::ostream &out, const std::string &label)
   {
-    out << PAD << BOLD << CYAN << label << RESET << "\n";
+    out << PAD << ACCENT << label << RESET << "\n";
   }
 
   inline void blank(std::ostream &out = std::cout)
@@ -67,12 +82,12 @@ namespace vix::cli::style
 
   inline void dim_note(std::ostream &out, const std::string &label)
   {
-    out << PAD << GRAY << label << RESET << "\n";
+    out << PAD << MUTED << label << RESET << "\n";
   }
 
   inline std::string link(const std::string &url)
   {
-    return std::string(GREEN) + url + RESET;
+    return std::string(ACCENT) + url + RESET;
   }
 
 } // namespace vix::cli::style

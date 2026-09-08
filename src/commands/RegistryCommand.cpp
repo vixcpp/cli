@@ -13,7 +13,6 @@
  */
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/util/Shell.hpp>
-#include <vix/cli/util/NetworkProgress.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
@@ -82,12 +81,9 @@ namespace vix::commands
       return name;
     }
 
-    static int normalize_registry_worktree(const fs::path &dir, bool quiet,
-                                           vix::cli::util::NetworkProgress *progress = nullptr)
+    static int normalize_registry_worktree(const fs::path &dir, bool quiet)
     {
-      if (progress)
-        progress->phase("Fetching registry index");
-      else if (!quiet)
+      if (!quiet)
         step("fetching origin (prune)...");
       {
         const std::string cmd =
@@ -97,9 +93,7 @@ namespace vix::commands
           return rc;
       }
 
-      if (progress)
-        progress->phase("Preparing registry index");
-      else if (!quiet)
+      if (!quiet)
         step("checking out main...");
       {
         const std::string cmd =
@@ -109,7 +103,7 @@ namespace vix::commands
           return rc;
       }
 
-      if (!quiet && !progress)
+      if (!quiet)
         step("resetting to origin/main...");
       {
         const std::string cmd =
@@ -191,50 +185,43 @@ namespace vix::commands
           vix::cli::util::warn_line(std::cerr, "Tip: re-run with VIX_DEBUG=1 to see git output");
       };
 
-      vix::cli::util::NetworkProgress progress("registry");
-
       if (!fs::exists(dir))
       {
         if (!quiet)
-          progress.phase("Connecting to registry");
+          step("cloning index (depth=1)...");
         const std::string cmd =
             "git clone -q --depth 1 " + registry_repo_url() + " " + dir.string();
 
         const int rc = git_run(cmd);
         if (rc != 0)
         {
-          progress.failure();
           print_sync_failure();
           return rc;
         }
 
-        const int nrc = normalize_registry_worktree(
-            dir, quiet, quiet ? nullptr : &progress);
+        const int nrc = normalize_registry_worktree(dir, quiet);
         if (nrc != 0)
         {
-          progress.failure();
           print_sync_failure();
           return nrc;
         }
 
         if (!quiet)
-          progress.success("Registry synced: " + dir.string());
+          vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
         return 0;
       }
 
       if (!quiet)
-        progress.phase("Fetching registry index");
-      const int nrc = normalize_registry_worktree(
-          dir, quiet, quiet ? nullptr : &progress);
+        step("normalizing worktree...");
+      const int nrc = normalize_registry_worktree(dir, quiet);
       if (nrc != 0)
       {
-        progress.failure();
         print_sync_failure();
         return nrc;
       }
 
       if (!quiet)
-        progress.success("Registry synced: " + dir.string());
+        vix::cli::util::ok_line(std::cout, "registry synced: " + dir.string());
       return 0;
     }
   } // namespace

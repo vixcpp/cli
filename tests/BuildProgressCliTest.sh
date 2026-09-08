@@ -96,6 +96,7 @@ SH
   WATCH_PID=""
 
   require_output "build .*\\[============================\\].*done" "$NORMAL_TTY_OUT"
+  require_output "› .*src/.*\\.cpp" "$NORMAL_TTY_OUT"
   require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$NORMAL_TTY_OUT"
   reject_output "launcher:\|linker:\|jobs:" "$NORMAL_TTY_OUT"
   reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$NORMAL_TTY_OUT"
@@ -122,6 +123,7 @@ SH
 
   require_output "build .*\\[" "$TTY_OUT"
   require_output "build .*\[============================\].*done" "$TTY_OUT"
+  require_output "› .*src/.*\\.cpp" "$TTY_OUT"
   require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$TTY_OUT"
   reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$TTY_OUT"
   reject_output "^Building progress-app [0-9]" "$TTY_OUT"

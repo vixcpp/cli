@@ -78,13 +78,6 @@ add_executable(vix_cli_git_progress_parser_tests GitProgressParserTests.cpp)
 target_include_directories(vix_cli_git_progress_parser_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_git_progress_parser_tests COMMAND vix_cli_git_progress_parser_tests)
 
-add_executable(vix_cli_network_progress_tests
-  NetworkProgressTests.cpp
-  ../src/util/NetworkProgress.cpp
-)
-target_include_directories(vix_cli_network_progress_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-add_test(NAME vix_cli_network_progress_tests COMMAND vix_cli_network_progress_tests)
-
 add_executable(vix_cli_module_manifest_tests ModuleManifestTests.cpp
   ../src/modules/ModuleManifest.cpp ../src/commands/modules/ModulesContent.cpp
   ../src/commands/modules/ModulesUtils.cpp)

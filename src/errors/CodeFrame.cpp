@@ -270,9 +270,9 @@ namespace vix::cli::errors
           caret,
           opt.maxLineWidth,
           prefixPrint,
-          ERROR,
+          ERROR_TEXT,
           CODE,
-          ERROR,
+          ERROR_TEXT,
           RESET,
           caretPrefix);
     }

@@ -54,6 +54,14 @@ target_include_directories(vix_cli_code_frame_style_tests PRIVATE
 )
 add_test(NAME vix_cli_code_frame_style_tests COMMAND vix_cli_code_frame_style_tests)
 
+add_executable(vix_cli_style_windows_macro_compile_test StyleWindowsMacroCompileTest.cpp)
+target_include_directories(vix_cli_style_windows_macro_compile_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_style_windows_macro_compile_test
+  COMMAND vix_cli_style_windows_macro_compile_test
+)
+
 add_executable(vix_cli_clang_gcc_parser_tests
   ClangGccParserTests.cpp
   ../src/errors/ClangGccParser.cpp

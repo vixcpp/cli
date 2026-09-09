@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <cstdlib>
 #include <sstream>
 
@@ -90,6 +91,18 @@ namespace
 
     const std::size_t keep = maxWidth - 3;
     return line.substr(0, keep) + "...";
+  }
+
+  std::string truncate_progress_action(const std::string &line, std::size_t maxWidth)
+  {
+    if (line.size() <= maxWidth)
+      return line;
+
+    if (maxWidth <= 3)
+      return std::string(maxWidth, '.');
+
+    // The filename at the end is the useful part of a Ninja action.
+    return "..." + line.substr(line.size() - (maxWidth - 3));
   }
 }
 #endif
@@ -333,7 +346,6 @@ namespace vix::cli::build
     std::string currentProgressLine;
     bool progressVisible = false;
     bool heartbeatVisible = false;
-    std::size_t lastRenderedWidth = 0;
     std::string lastRenderedProgressLine;
     auto lastProgressRenderTs = std::chrono::steady_clock::now();
 
@@ -366,15 +378,10 @@ namespace vix::cli::build
       if (quiet || !progressVisible)
         return;
 
-      std::string clear;
-      clear += "\r\033[2K";
-      clear += "\n\r\033[2K";
-      clear += "\033[1A\r";
-
-      write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
+      constexpr const char *clear = "\r\033[2K";
+      write_all_fd(STDOUT_FILENO, clear, std::strlen(clear));
 
       progressVisible = false;
-      lastRenderedWidth = 0;
     };
 
     auto clear_rendered_progress_lines = [&]() -> void
@@ -382,15 +389,8 @@ namespace vix::cli::build
       if (quiet || !progressVisible)
         return;
 
-      std::string clear;
-
-      clear += "\033[2A\r";
-      clear += "\033[2K";
-      clear += "\n\r";
-      clear += "\033[2K";
-      clear += "\033[1A\r";
-
-      write_all_fd(STDOUT_FILENO, clear.data(), clear.size());
+      constexpr const char *clear = "\r\033[2K";
+      write_all_fd(STDOUT_FILENO, clear, std::strlen(clear));
     };
 
     auto render_progress_line = [&](const std::string &line) -> void
@@ -466,44 +466,45 @@ namespace vix::cli::build
 
       if (barWidth > 0)
       {
-        bar += style::GRAY;
+        bar += style::MUTED;
         bar += "[";
-        bar += style::CYAN;
+        bar += style::ACCENT;
         bar.append(static_cast<std::size_t>(filled), '=');
-        bar += style::GRAY;
+        bar += style::MUTED;
         bar.append(static_cast<std::size_t>(barWidth - filled), '-');
         bar += "]";
         bar += style::RESET;
       }
 
+      const std::string progress =
+          std::to_string(current) + "/" + std::to_string(total);
+      const std::size_t fixedWidth =
+          2 + std::string("build ").size() +
+          (barWidth > 0 ? static_cast<std::size_t>(barWidth + 3) : 0) +
+          progress.size() + 1;
       const std::string action =
-          truncate_progress_text(
+          truncate_progress_action(
               rest,
-              width > 8 ? width - 8 : width);
+              width > fixedWidth + 1 ? width - fixedWidth - 1 : 0);
 
       std::ostringstream lineOut;
-
-      lineOut << "  "
-              << style::CYAN << "build " << style::RESET;
+      lineOut << "  " << style::ACCENT << "build " << style::RESET;
 
       if (!bar.empty())
         lineOut << bar << " ";
 
-      lineOut << style::CYAN << current << "/" << total << style::RESET
-              << "\n"
-              << "  "
-              << style::CYAN << "› " << style::RESET
-              << action
-              << "\n";
+      lineOut << style::ACCENT << progress << style::RESET;
+      if (!action.empty())
+        lineOut << " " << action;
 
       if (progressVisible)
         clear_rendered_progress_lines();
 
-      const std::string rendered = lineOut.str();
+      const std::string rendered = "\r\033[2K" + lineOut.str();
       write_all_fd(STDOUT_FILENO, rendered.data(), rendered.size());
 
       progressVisible = true;
-      lastRenderedWidth = width;
+      heartbeatVisible = false;
     };
 
     auto keep_progress_line = [&]() -> void
@@ -528,7 +529,7 @@ namespace vix::cli::build
 
       std::string out;
       out += "  ";
-      out += style::CYAN;
+      out += style::ACCENT;
       out += "build ";
       if (barWidth > 0)
       {
@@ -544,7 +545,6 @@ namespace vix::cli::build
       write_all_fd(STDOUT_FILENO, out.data(), out.size());
 
       progressVisible = false;
-      lastRenderedWidth = 0;
       currentProgressLine.clear();
       lastRenderedProgressLine.clear();
     };
@@ -557,7 +557,6 @@ namespace vix::cli::build
       clear_rendered_progress_lines();
 
       progressVisible = false;
-      lastRenderedWidth = 0;
       currentProgressLine.clear();
       lastRenderedProgressLine.clear();
     };
@@ -567,8 +566,8 @@ namespace vix::cli::build
       if (quiet || !heartbeatVisible)
         return;
 
-      const std::string newline = "\n";
-      write_all_fd(STDOUT_FILENO, newline.data(), newline.size());
+      constexpr const char *clear = "\r\033[2K";
+      write_all_fd(STDOUT_FILENO, clear, std::strlen(clear));
 
       heartbeatVisible = false;
     };
@@ -810,7 +809,7 @@ namespace vix::cli::build
 
     if (heartbeatEnabled && heartbeatPrinted)
     {
-      // nothing else to clear because heartbeat is now printed on its own line
+      finish_heartbeat_line();
     }
 
     r.capturedFirstLine = util::trim(firstLine);

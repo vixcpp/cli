@@ -119,6 +119,10 @@ namespace vix::commands::BuildCommand
     {
       process::Plan plan;
       std::string sdkResolutionError;
+      std::optional<fs::path> vixDepsLoader;
+      std::optional<fs::path> vixDepsProjectInclude;
+      bool clearLegacyVixTopLevelInclude{false};
+      std::string toolchainContent;
     };
 
     enum class WatchDisplayAction
@@ -2481,6 +2485,8 @@ namespace vix::commands::BuildCommand
 
     static bool cmake_globs_still_current(const fs::path &buildDir)
     {
+      // This is exclusively a --fast no-op guard.  The normal CMake/Ninja
+      // path owns CONFIGURE_DEPENDS through its generated build graph.
       const fs::path verify = buildDir / "CMakeFiles" / "VerifyGlobs.cmake";
       const fs::path stamp = buildDir / "CMakeFiles" / "cmake.verify_globs";
 
@@ -2653,7 +2659,11 @@ namespace vix::commands::BuildCommand
 
       return ResolvedBuildPlan{
           std::move(plan),
-          std::move(sdkResolutionError)};
+          std::move(sdkResolutionError),
+          vixDepsLoader,
+          vixDepsProjectInclude,
+          clearLegacyVixTopLevelInclude,
+          std::move(toolchainContent)};
     }
     static vix::engine::ConfigureDecision
     evaluate_configure_decision(
@@ -5365,6 +5375,13 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = resolvedPlanOpt->plan;
+        const std::optional<fs::path> vixDepsLoader =
+            resolvedPlanOpt->vixDepsLoader;
+        const std::optional<fs::path> vixDepsProjectInclude =
+            resolvedPlanOpt->vixDepsProjectInclude;
+        const bool clearLegacyVixTopLevelInclude =
+            resolvedPlanOpt->clearLegacyVixTopLevelInclude;
+        std::string tc = resolvedPlanOpt->toolchainContent;
 
         if (!resolvedPlanOpt->sdkResolutionError.empty())
         {
@@ -5451,29 +5468,6 @@ namespace vix::commands::BuildCommand
         }
 
         const fs::path globalPackagesFile = plan_.buildDir / "vix-global-packages.cmake";
-        std::string dependencyManifestError;
-        const auto vixDepsLoader = cmake_vix_deps_loader(
-            plan_.projectDir,
-            util::file_exists(plan_.projectDir / "CMakeLists.txt"),
-            dependencyManifestError);
-
-        if (!dependencyManifestError.empty())
-        {
-          error(dependencyManifestError);
-          return 1;
-        }
-        const auto vixDepsProjectInclude =
-            write_cmake_vix_deps_project_bridge(
-                vixDepsLoader,
-                plan_.buildDir,
-                dependencyManifestError);
-        if (!dependencyManifestError.empty())
-        {
-          error(dependencyManifestError);
-          return 1;
-        }
-        const bool clearLegacyVixTopLevelInclude =
-            has_legacy_vix_top_level_include(plan_.buildDir, vixDepsLoader);
 
         const bool debugMode = debug_build_details_enabled(opt_);
         const bool verboseMode = opt_.verbose || debugMode;
@@ -5514,8 +5508,6 @@ namespace vix::commands::BuildCommand
           buildHeaderPrinted = true;
           std::cout.flush();
         };
-
-        std::string tc;
 
 #ifndef _WIN32
         if (!util::executable_on_path("ld"))
@@ -5565,13 +5557,6 @@ namespace vix::commands::BuildCommand
             plan_.dependencyEnvironmentMode,
             plan_.sdkConfigDir);
 
-        if (!opt_.targetTriple.empty())
-        {
-          tc = build::toolchain_contents_for_triple(
-              opt_.targetTriple,
-              opt_.sysroot);
-        }
-
         plan_.signature = build_configuration_signature(plan_, opt_, tc);
 #endif
 
@@ -5612,15 +5597,21 @@ namespace vix::commands::BuildCommand
         artifact_cache::Artifact projectArtifact =
             make_project_artifact(plan_, opt_, tc);
 
-        const auto previousState =
-            artifact_cache::ArtifactCache::read_build_state(plan_.buildDir);
+        // Build state is read only by the optional Vix fast no-op path.  The
+        // normal path delegates this question directly to Ninja.
+        std::optional<artifact_cache::BuildState> previousState;
+        if (opt_.fast)
+          previousState = artifact_cache::ArtifactCache::read_build_state(plan_.buildDir);
 
         const bool canFastNoopCheck =
             measurePhase(
                 "up-to-date check",
                 [&]()
                 {
-                  return opt_.useCache &&
+                  // Project-input and VerifyGlobs scans are Vix's fast
+                  // no-op proof; they must not precede a normal Ninja build.
+                  return opt_.fast &&
+                         opt_.useCache &&
                          !opt_.clean &&
                          previousState &&
                          previousState->signature == plan_.signature &&
@@ -5638,7 +5629,11 @@ namespace vix::commands::BuildCommand
                          cmake_globs_still_current(plan_.buildDir);
                 });
 
-        if (previousState && !canFastNoopCheck && debug_build_details_enabled(opt_) && !opt_.quiet)
+        if (opt_.fast &&
+            previousState &&
+            !canFastNoopCheck &&
+            debug_build_details_enabled(opt_) &&
+            !opt_.quiet)
         {
           if (previousState->signature != plan_.signature)
             step("fast no-op miss: signature changed");
@@ -5684,12 +5679,19 @@ namespace vix::commands::BuildCommand
           return 0;
         }
 
-        std::vector<artifact_cache::ProjectInput> projectInputs =
-            artifact_cache::ArtifactCache::snapshot_project_inputs(
-                plan_.userProjectDir,
-                previousState ? &previousState->inputs : nullptr);
+        const bool needsProjectInputsBeforeBackend =
+            opt_.fast || needs_build_graph(opt_, forceBuildGraph_);
+
+        std::vector<artifact_cache::ProjectInput> projectInputs;
+        if (needsProjectInputsBeforeBackend)
+        {
+          projectInputs = artifact_cache::ArtifactCache::snapshot_project_inputs(
+              plan_.userProjectDir,
+              previousState ? &previousState->inputs : nullptr);
+        }
 
         const bool buildStateHit =
+            opt_.fast &&
             opt_.useCache &&
             !opt_.clean &&
             previousState &&
@@ -5903,16 +5905,19 @@ namespace vix::commands::BuildCommand
             can_use_target_artifact_cache(opt_) &&
             restore_project_target_artifact(projectArtifact, opt_, plan_))
         {
-          const fs::path restoredBinary =
-              build::default_project_executable_path(opt_, plan_);
-          const auto state = artifact_cache::ArtifactCache::make_build_state(
-              plan_.signature, plan_.projectFingerprint, projectArtifact.root.string(),
-              restoredBinary.string(), opt_.buildTarget, plan_.preset.name,
-              plan_.preset.buildType, projectArtifact.target, projectArtifact.compiler,
-              projectInputs);
-          if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
-              !opt_.quiet)
-            hint("Warning: unable to write Vix build state");
+          if (opt_.fast)
+          {
+            const fs::path restoredBinary =
+                build::default_project_executable_path(opt_, plan_);
+            const auto state = artifact_cache::ArtifactCache::make_build_state(
+                plan_.signature, plan_.projectFingerprint, projectArtifact.root.string(),
+                restoredBinary.string(), opt_.buildTarget, plan_.preset.name,
+                plan_.preset.buildType, projectArtifact.target, projectArtifact.compiler,
+                projectInputs);
+            if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+                !opt_.quiet)
+              hint("Warning: unable to write Vix build state");
+          }
           if (liveBuild)
           {
             print_vix_build_success("Artifact cache hit");
@@ -6288,8 +6293,10 @@ namespace vix::commands::BuildCommand
                 opt_.sanitizerMode);
           }
 
-          const auto state =
-              artifact_cache::ArtifactCache::make_build_state(
+          if (opt_.fast)
+          {
+            const auto state =
+                artifact_cache::ArtifactCache::make_build_state(
                   plan_.signature,
                   plan_.projectFingerprint,
                   projectArtifact.root.string(),
@@ -6299,12 +6306,13 @@ namespace vix::commands::BuildCommand
                   plan_.preset.buildType,
                   projectArtifact.target,
                   projectArtifact.compiler,
-                  projectInputs);
+                    projectInputs);
 
-          if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
-              !opt_.quiet)
-          {
-            hint("Warning: unable to write Vix build state");
+            if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+                !opt_.quiet)
+            {
+              hint("Warning: unable to write Vix build state");
+            }
           }
 
           const std::string buildLog =

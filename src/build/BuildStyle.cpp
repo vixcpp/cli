@@ -54,7 +54,7 @@ namespace vix::cli::build
     const char *duration_color(long long milliseconds) noexcept
     {
       if (milliseconds >= 10000)
-        return style::ERROR;
+        return style::ERROR_TEXT;
       if (milliseconds >= 3000)
         return style::WARNING;
       return style::SUCCESS;
@@ -107,7 +107,7 @@ namespace vix::cli::build
     static std::string label_color(const std::string &label)
     {
       if (label == "error:")
-        return style::ERROR;
+        return style::ERROR_TEXT;
 
       if (label == "hint:")
         return style::WARNING;
@@ -410,7 +410,7 @@ namespace vix::cli::build
     case BuildMessageKind::Warning:
       return colorize(style::WARNING, "!");
     case BuildMessageKind::Error:
-      return colorize(style::ERROR, "✖");
+      return colorize(style::ERROR_TEXT, "✖");
     default:
       return "•";
     }
@@ -534,7 +534,7 @@ namespace vix::cli::build
             : diagnostic.title;
 
     out << "  "
-        << style::ERROR
+        << style::ERROR_TEXT
         << style::BOLD
         << "✖ "
         << title
@@ -581,7 +581,7 @@ namespace vix::cli::build
           if (!pointer.empty())
           {
             out << "      | "
-                << colorize(style::ERROR, pointer)
+                << colorize(style::ERROR_TEXT, pointer)
                 << "\n";
           }
         }
@@ -738,7 +738,7 @@ namespace vix::cli::build
         << (static_cast<double>(milliseconds) / 1000.0);
 
     out << "  "
-        << colorize(style::ERROR, "✖")
+        << colorize(style::ERROR_TEXT, "✖")
         << " "
         << message
         << " after "

@@ -67,7 +67,7 @@ namespace vix::cli::util
 
   inline void err_line(std::ostream &os, std::string_view msg)
   {
-    os << "  " << ERROR << "✖" << RESET << " " << msg << "\n";
+    os << "  " << ERROR_TEXT << "✖" << RESET << " " << msg << "\n";
   }
 
   inline std::string dim(std::string_view s)

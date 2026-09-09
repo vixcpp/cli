@@ -25,7 +25,8 @@ namespace vix::cli::style
   inline constexpr const char *RESET = "\033[0m";
   inline constexpr const char *BOLD = "\033[1m";
   inline constexpr const char *UNDERLINE = "\033[4m";
-  inline constexpr const char *ERROR = "\033[1;91m";
+  // Do not name this ERROR: Windows headers define ERROR as a macro.
+  inline constexpr const char *ERROR_TEXT = "\033[1;91m";
   inline constexpr const char *WARNING = "\033[1;93m";
   inline constexpr const char *SUCCESS = "\033[1;92m";
   inline constexpr const char *ACCENT = "\033[1;96m";
@@ -37,7 +38,7 @@ namespace vix::cli::style
 
   // Compatibility aliases for existing callers.  New diagnostic code should
   // prefer the semantic names above.
-  inline constexpr const char *RED = ERROR;
+  inline constexpr const char *RED = ERROR_TEXT;
   inline constexpr const char *GREEN = SUCCESS;
   inline constexpr const char *YELLOW = WARNING;
   inline constexpr const char *CYAN = ACCENT;
@@ -47,7 +48,7 @@ namespace vix::cli::style
 
   inline void error(const std::string &msg)
   {
-    std::cerr << PAD << ERROR << "✖ " << msg << RESET << "\n";
+    std::cerr << PAD << ERROR_TEXT << "✖ " << msg << RESET << "\n";
   }
 
   inline void success(const std::string &msg)

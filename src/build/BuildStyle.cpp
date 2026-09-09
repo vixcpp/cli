@@ -54,10 +54,10 @@ namespace vix::cli::build
     const char *duration_color(long long milliseconds) noexcept
     {
       if (milliseconds >= 10000)
-        return style::RED;
+        return style::ERROR;
       if (milliseconds >= 3000)
-        return style::YELLOW;
-      return style::GREEN;
+        return style::WARNING;
+      return style::SUCCESS;
     }
   } // namespace
 
@@ -265,7 +265,7 @@ namespace vix::cli::build
       const std::optional<std::string> &fastLinkerFlag,
       int jobs)
   {
-    out << style::CYAN
+    out << style::ACCENT
         << style::BOLD
         << "Compiling"
         << style::RESET;
@@ -273,14 +273,14 @@ namespace vix::cli::build
     if (!target.empty())
     {
       out << " "
-          << style::CYAN
+          << style::ACCENT
           << style::BOLD
           << target
           << style::RESET;
     }
 
     if (!preset.empty())
-      out << " " << colorize(style::GRAY, "(" + preset + ")");
+      out << " " << colorize(style::MUTED, "(" + preset + ")");
 
     out << "\n";
 
@@ -289,7 +289,7 @@ namespace vix::cli::build
     if (launcher && !launcher->empty())
     {
       meta.push_back(
-          "launcher: " + colorize(style::MAGENTA, *launcher));
+          "launcher: " + colorize(style::CODE, *launcher));
     }
 
     if (fastLinkerFlag && !fastLinkerFlag->empty())
@@ -300,23 +300,23 @@ namespace vix::cli::build
               : "lld";
 
       meta.push_back(
-          "linker: " + colorize(style::MAGENTA, name));
+          "linker: " + colorize(style::CODE, name));
     }
 
     if (jobs > 0)
     {
       meta.push_back(
-          "jobs: " + colorize(style::MAGENTA, std::to_string(jobs)));
+          "jobs: " + colorize(style::CODE, std::to_string(jobs)));
     }
 
     if (!meta.empty())
     {
-      out << style::GRAY << "  * " << style::RESET;
+      out << style::MUTED << "  * " << style::RESET;
 
       for (std::size_t i = 0; i < meta.size(); ++i)
       {
         if (i > 0)
-          out << style::GRAY << " | " << style::RESET;
+          out << style::MUTED << " | " << style::RESET;
 
         out << meta[i];
       }
@@ -331,7 +331,7 @@ namespace vix::cli::build
       long long milliseconds)
   {
     out << "  "
-        << colorize(style::GREEN, "ok")
+        << colorize(style::SUCCESS, "ok")
         << " "
         << message;
 
@@ -344,7 +344,7 @@ namespace vix::cli::build
       time.precision(seconds >= 10.0 ? 1 : 2);
       time << seconds << "s";
 
-      out << " " << colorize(style::GRAY, "| " + time.str());
+      out << " " << colorize(style::SUCCESS, "| " + time.str());
     }
 
     out << "\n";
@@ -402,15 +402,15 @@ namespace vix::cli::build
     switch (kind)
     {
     case BuildMessageKind::Info:
-      return colorize(style::CYAN, "•");
+      return colorize(style::ACCENT, "•");
     case BuildMessageKind::Step:
-      return colorize(style::CYAN, "›");
+      return colorize(style::ACCENT, "›");
     case BuildMessageKind::Success:
-      return colorize(style::GREEN, "✔");
+      return colorize(style::SUCCESS, "✔");
     case BuildMessageKind::Warning:
-      return colorize(style::YELLOW, "!");
+      return colorize(style::WARNING, "!");
     case BuildMessageKind::Error:
-      return colorize(style::RED, "✖");
+      return colorize(style::ERROR, "✖");
     default:
       return "•";
     }
@@ -471,10 +471,10 @@ namespace vix::cli::build
     out << colorize(style::BOLD, "Building");
 
     if (!target.empty())
-      out << " " << colorize(style::CYAN, target);
+      out << " " << colorize(style::ACCENT, target);
 
     if (!preset.empty())
-      out << " " << colorize(style::GRAY, "[" + preset + "]");
+      out << " " << colorize(style::MUTED, "[" + preset + "]");
 
     out << "\n";
   }
@@ -486,7 +486,7 @@ namespace vix::cli::build
     if (!progress.valid())
       return;
 
-    out << "  " << colorize(style::CYAN, "›") << " ";
+    out << "  " << colorize(style::ACCENT, "›") << " ";
 
     if (progress.total > 0)
     {
@@ -501,7 +501,7 @@ namespace vix::cli::build
       out << progress.action;
 
     if (!progress.target.empty())
-      out << " " << colorize(style::GRAY, progress.target);
+      out << " " << colorize(style::MUTED, progress.target);
 
     out << "\n";
   }
@@ -512,14 +512,14 @@ namespace vix::cli::build
       const std::string &duration)
   {
     out << "  "
-        << colorize(style::GREEN, "✔")
+        << colorize(style::SUCCESS, "✔")
         << " Finished";
 
     if (!profile.empty())
       out << " " << profile;
 
     if (!duration.empty())
-      out << " in " << duration;
+      out << " in " << colorize(style::SUCCESS, duration);
 
     out << "\n";
   }
@@ -534,7 +534,7 @@ namespace vix::cli::build
             : diagnostic.title;
 
     out << "  "
-        << style::RED
+        << style::ERROR
         << style::BOLD
         << "✖ "
         << title
@@ -674,7 +674,7 @@ namespace vix::cli::build
       const std::string &preset,
       const std::vector<std::pair<std::string, std::string>> &meta)
   {
-    out << style::CYAN
+    out << style::ACCENT
         << style::BOLD
         << action
         << style::RESET;
@@ -682,29 +682,29 @@ namespace vix::cli::build
     if (!target.empty())
     {
       out << " "
-          << style::CYAN
+          << style::ACCENT
           << style::BOLD
           << target
           << style::RESET;
     }
 
     if (!preset.empty())
-      out << " " << colorize(style::GRAY, "(" + preset + ")");
+      out << " " << colorize(style::MUTED, "(" + preset + ")");
 
     out << "\n";
 
     if (meta.empty())
       return;
 
-    out << style::GRAY << "  * " << style::RESET;
+    out << style::MUTED << "  * " << style::RESET;
 
     for (std::size_t i = 0; i < meta.size(); ++i)
     {
       if (i > 0)
-        out << style::GRAY << " | " << style::RESET;
+        out << style::MUTED << " | " << style::RESET;
 
       out << meta[i].first << ": "
-          << colorize(style::MAGENTA, meta[i].second);
+          << colorize(style::CODE, meta[i].second);
     }
 
     out << "\n";
@@ -720,12 +720,12 @@ namespace vix::cli::build
         << (static_cast<double>(milliseconds) / 1000.0);
 
     out << "  "
-        << colorize(style::GREEN, "✔")
+        << colorize(style::SUCCESS, "✔")
         << " "
         << message
         << " in "
-        << oss.str()
-        << "s\n";
+        << colorize(style::SUCCESS, oss.str() + "s")
+        << "\n";
   }
 
   void print_task_failure_timed(
@@ -738,7 +738,7 @@ namespace vix::cli::build
         << (static_cast<double>(milliseconds) / 1000.0);
 
     out << "  "
-        << colorize(style::RED, "✖")
+        << colorize(style::ERROR, "✖")
         << " "
         << message
         << " after "
@@ -814,14 +814,12 @@ namespace vix::cli::build
 
         if (warning.line > 0)
         {
-          out << style::MUTED
-              << ":"
-              << warning.line;
+          out << style::MUTED << ":" << style::RESET
+              << colorize(style::LINE_NUMBER, std::to_string(warning.line));
 
           if (warning.column > 0)
-            out << ":" << warning.column;
-
-          out << style::RESET;
+            out << style::MUTED << ":" << style::RESET
+                << colorize(style::LINE_NUMBER, std::to_string(warning.column));
         }
 
         out << "\n";

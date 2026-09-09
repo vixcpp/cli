@@ -52,7 +52,7 @@ namespace vix::cli::style
 
   inline void success(const std::string &msg)
   {
-    std::cout << PAD << SUCCESS << "✔ " << msg << RESET << "\n";
+    std::cout << PAD << SUCCESS << "✔" << RESET << " " << msg << "\n";
   }
 
   inline void info(const std::string &msg)
@@ -62,7 +62,7 @@ namespace vix::cli::style
 
   inline void hint(const std::string &msg)
   {
-    std::cout << PAD << ACCENT << "➜" << RESET << " " << msg << "\n";
+    std::cout << PAD << WARNING << "➜" << RESET << " " << msg << "\n";
   }
 
   inline void step(const std::string &msg)

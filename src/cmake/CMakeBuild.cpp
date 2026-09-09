@@ -95,15 +95,57 @@ namespace
 
   std::string truncate_progress_action(const std::string &line, std::size_t maxWidth)
   {
+    if (maxWidth == 0)
+      return "";
+
     if (line.size() <= maxWidth)
       return line;
 
     if (maxWidth <= 3)
       return std::string(maxWidth, '.');
 
-    // The filename at the end is the useful part of a Ninja action.
+    // Ninja actions end with the object or source path, which is the useful part.
     return "..." + line.substr(line.size() - (maxWidth - 3));
   }
+
+  std::string summarize_ninja_action(std::string_view action)
+  {
+    constexpr std::string_view cmakeFiles = "CMakeFiles/";
+    const std::size_t cmakeFilesStart = action.find(cmakeFiles);
+    if (cmakeFilesStart != std::string_view::npos)
+    {
+      const std::size_t sourceStart = action.find(
+          ".dir/", cmakeFilesStart + cmakeFiles.size());
+      if (sourceStart != std::string_view::npos)
+      {
+        const std::string_view source = action.substr(sourceStart + 5);
+        constexpr std::string_view objectSuffixes[] = {".o", ".obj"};
+        for (const std::string_view suffix : objectSuffixes)
+        {
+          if (source.size() > suffix.size() && source.ends_with(suffix))
+            return std::string(source.substr(0, source.size() - suffix.size()));
+        }
+      }
+    }
+
+    constexpr std::string_view linking = "Linking ";
+    if (action.rfind(linking, 0) == 0)
+    {
+      const std::string_view details = action.substr(linking.size());
+      const std::size_t artifactStart = details.find_last_of(" \t");
+      if (artifactStart != std::string_view::npos &&
+          artifactStart + 1 < details.size() &&
+          details.find_first_of(" \t") != artifactStart)
+      {
+        const std::string_view artifact = details.substr(artifactStart + 1);
+        if (artifact.find_first_of(" \t") == std::string_view::npos)
+          return std::string(artifact);
+      }
+    }
+
+    return std::string(action);
+  }
+
 }
 #endif
 
@@ -378,7 +420,7 @@ namespace vix::cli::build
       if (quiet || !progressVisible)
         return;
 
-      constexpr const char *clear = "\r\033[2K";
+      constexpr const char *clear = "\r\033[2K\033[1A\r\033[2K";
       write_all_fd(STDOUT_FILENO, clear, std::strlen(clear));
 
       progressVisible = false;
@@ -389,7 +431,9 @@ namespace vix::cli::build
       if (quiet || !progressVisible)
         return;
 
-      constexpr const char *clear = "\r\033[2K";
+      // Frames are always two non-wrapping physical lines. Clear the action
+      // first, then move up to clear the progress line.
+      constexpr const char *clear = "\r\033[2K\033[1A\r\033[2K";
       write_all_fd(STDOUT_FILENO, clear, std::strlen(clear));
     };
 
@@ -418,7 +462,7 @@ namespace vix::cli::build
 
       int current = 0;
       int total = 1;
-      std::string rest = line;
+      std::string action;
 
       if (line[0] == '[' &&
           slash != std::string::npos &&
@@ -429,13 +473,14 @@ namespace vix::cli::build
         {
           current = std::stoi(line.substr(1, slash - 1));
           total = std::stoi(line.substr(slash + 1, rb - slash - 1));
-          rest = line.size() > rb + 2 ? line.substr(rb + 2) : "";
+          const std::size_t actionStart = line.find_first_not_of(" \t", rb + 1);
+          action = actionStart == std::string::npos ? "" : line.substr(actionStart);
         }
         catch (...)
         {
           current = 0;
           total = 1;
-          rest = line;
+          action = line;
         }
       }
 
@@ -451,6 +496,16 @@ namespace vix::cli::build
 
       if (width < 45)
         barWidth = 0;
+
+      const std::string progress =
+          std::to_string(current) + "/" + std::to_string(total);
+      const std::size_t fixedWidth =
+          2 + std::string("build ").size() + progress.size();
+      const std::size_t availableBarWidth =
+          width > fixedWidth + 3 ? width - fixedWidth - 3 : 0;
+      barWidth = std::min(
+          barWidth,
+          static_cast<int>(availableBarWidth));
 
       const int filled =
           total > 0 && barWidth > 0
@@ -476,17 +531,6 @@ namespace vix::cli::build
         bar += style::RESET;
       }
 
-      const std::string progress =
-          std::to_string(current) + "/" + std::to_string(total);
-      const std::size_t fixedWidth =
-          2 + std::string("build ").size() +
-          (barWidth > 0 ? static_cast<std::size_t>(barWidth + 3) : 0) +
-          progress.size() + 1;
-      const std::string action =
-          truncate_progress_action(
-              rest,
-              width > fixedWidth + 1 ? width - fixedWidth - 1 : 0);
-
       std::ostringstream lineOut;
       lineOut << "  " << style::ACCENT << "build " << style::RESET;
 
@@ -494,13 +538,22 @@ namespace vix::cli::build
         lineOut << bar << " ";
 
       lineOut << style::ACCENT << progress << style::RESET;
-      if (!action.empty())
-        lineOut << " " << action;
+
+      const std::size_t actionWidth = width > 4 ? width - 4 : 0;
+      const std::string visibleAction =
+          truncate_progress_action(
+              summarize_ninja_action(action),
+              actionWidth);
+
+      std::ostringstream actionOut;
+      actionOut << "  " << style::MUTED << "› " << style::RESET
+                << visibleAction;
 
       if (progressVisible)
         clear_rendered_progress_lines();
 
-      const std::string rendered = "\r\033[2K" + lineOut.str();
+      const std::string rendered =
+          "\r\033[2K" + lineOut.str() + "\n\r\033[2K" + actionOut.str();
       write_all_fd(STDOUT_FILENO, rendered.data(), rendered.size());
 
       progressVisible = true;

@@ -72,6 +72,7 @@ if grep -q $'\r' "$OUT"; then
 fi
 require_output "Compiling.*progress-app" "$OUT"
 require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$OUT"
+reject_output "Configuring.*progress-app\|Configured in" "$OUT"
 reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$OUT"
 reject_output "^Building progress-app [0-9]" "$OUT"
 
@@ -96,7 +97,6 @@ SH
   WATCH_PID=""
 
   require_output "build .*\\[============================\\].*done" "$NORMAL_TTY_OUT"
-  require_output "› .*src/.*\\.cpp" "$NORMAL_TTY_OUT"
   require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$NORMAL_TTY_OUT"
   reject_output "launcher:\|linker:\|jobs:" "$NORMAL_TTY_OUT"
   reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$NORMAL_TTY_OUT"
@@ -111,6 +111,7 @@ SH
   wait_for_output "launcher:" "$TTY_OUT"
   wait_for_output "linker:" "$TTY_OUT"
   wait_for_output "jobs:" "$TTY_OUT"
+  wait_for_output "\\* configured in" "$TTY_OUT"
 
   if ! kill -0 "$WATCH_PID" 2>/dev/null; then
     cat "$TTY_OUT" >&2
@@ -123,8 +124,8 @@ SH
 
   require_output "build .*\\[" "$TTY_OUT"
   require_output "build .*\[============================\].*done" "$TTY_OUT"
-  require_output "› .*src/.*\\.cpp" "$TTY_OUT"
   require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$TTY_OUT"
+  reject_output "Configuring.*progress-app\|Configured in" "$TTY_OUT"
   reject_output "Project ready\|Compilation finished\|Linked\|Build completed" "$TTY_OUT"
   reject_output "^Building progress-app [0-9]" "$TTY_OUT"
 

@@ -5795,9 +5795,6 @@ namespace vix::commands::BuildCommand
 
           if (verboseMode && !opt_.quiet)
           {
-            out.print("Configuring " + build::default_build_target_name(opt_, plan_) +
-                      " (" + display_build_profile(plan_) + ")\n");
-
             if (debug_build_details_enabled(opt_))
             {
               if (plan_.launcher)
@@ -5887,8 +5884,7 @@ namespace vix::commands::BuildCommand
 
           if (!opt_.quiet && verboseMode)
           {
-            out.print(PAD + std::string(GREEN) + "✔ Configured in " + RESET +
-                      util::format_seconds(ms) + "\n");
+            out.print("  * configured in " + util::format_seconds(ms) + "\n");
           }
         }
         else
@@ -6297,15 +6293,15 @@ namespace vix::commands::BuildCommand
           {
             const auto state =
                 artifact_cache::ArtifactCache::make_build_state(
-                  plan_.signature,
-                  plan_.projectFingerprint,
-                  projectArtifact.root.string(),
-                  lastBinary,
-                  opt_.buildTarget,
-                  plan_.preset.name,
-                  plan_.preset.buildType,
-                  projectArtifact.target,
-                  projectArtifact.compiler,
+                    plan_.signature,
+                    plan_.projectFingerprint,
+                    projectArtifact.root.string(),
+                    lastBinary,
+                    opt_.buildTarget,
+                    plan_.preset.name,
+                    plan_.preset.buildType,
+                    projectArtifact.target,
+                    projectArtifact.compiler,
                     projectInputs);
 
             if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&

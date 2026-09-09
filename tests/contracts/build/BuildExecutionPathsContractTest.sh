@@ -19,6 +19,27 @@ if "$VIX_BIN" build "$ROOT/missing.cpp" --out "$ROOT/missing" >/dev/null 2>&1; t
   fail "missing single source unexpectedly built"
 fi
 
+# This is deliberately a named CMake target (rather than an `all` shortcut):
+# with the graph executor disabled, CMake/Ninja is the only consumer and no
+# Vix graph may be imported or persisted before that backend runs.
+BACKEND_PROJECT="$ROOT/backend-fixture"; mkdir -p "$BACKEND_PROJECT"
+cat >"$BACKEND_PROJECT/CMakeLists.txt" <<'CMAKE'
+cmake_minimum_required(VERSION 3.20)
+project(generic_backend_fixture LANGUAGES CXX)
+add_executable(backend_alpha main.cpp)
+CMAKE
+cat >"$BACKEND_PROJECT/main.cpp" <<'CPP'
+int main() { return 0; }
+CPP
+BACKEND_LOG="$ROOT/backend.log"
+"$VIX_BIN" build --dir "$BACKEND_PROJECT" --build-target backend_alpha --graph-executor off --no-cache --debug --launcher none --linker default >"$BACKEND_LOG" 2>&1
+test -x "$BACKEND_PROJECT/build-ninja/backend_alpha" || fail "CMake/Ninja backend did not build target"
+if grep -Fq 'build graph:' "$BACKEND_LOG"; then
+  cat "$BACKEND_LOG" >&2
+  fail "CMake/Ninja backend imported a Vix build graph without a consumer"
+fi
+test ! -e "$BACKEND_PROJECT/build-ninja/.vix/build-graph.vix" || fail "CMake/Ninja backend persisted an unused Vix build graph"
+
 PROJECT="$ROOT/graph"; mkdir -p "$PROJECT"
 cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)

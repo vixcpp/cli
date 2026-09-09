@@ -1199,10 +1199,7 @@ namespace vix::commands::BuildCommand
       return target.empty() || target == "all";
     }
 
-    static bool can_use_target_graph_executor(
-        const process::Options &opt,
-        const std::size_t importedCompileCommands,
-        const std::size_t importedNinjaTasks)
+    static bool can_attempt_target_graph_executor(const process::Options &opt)
     {
       if (!graph_executor_enabled(opt))
         return false;
@@ -1228,6 +1225,17 @@ namespace vix::commands::BuildCommand
       if (opt.linkStatic)
         return false;
 
+      return true;
+    }
+
+    static bool can_use_target_graph_executor(
+        const process::Options &opt,
+        const std::size_t importedCompileCommands,
+        const std::size_t importedNinjaTasks)
+    {
+      if (!can_attempt_target_graph_executor(opt))
+        return false;
+
       if (importedCompileCommands == 0)
         return false;
 
@@ -1235,6 +1243,14 @@ namespace vix::commands::BuildCommand
         return false;
 
       return true;
+    }
+
+    static bool needs_build_graph(
+        const process::Options &opt,
+        const bool requiredByCaller)
+    {
+      return requiredByCaller || opt.explain ||
+             can_attempt_target_graph_executor(opt);
     }
 
     static std::string sanitize_cache_component(std::string s)
@@ -5261,7 +5277,8 @@ namespace vix::commands::BuildCommand
     class BuildCommand
     {
     public:
-      explicit BuildCommand(process::Options opt) : opt_(std::move(opt)) {}
+      explicit BuildCommand(process::Options opt, bool forceBuildGraph = false)
+          : opt_(std::move(opt)), forceBuildGraph_(forceBuildGraph) {}
 
       int run()
       {
@@ -5881,296 +5898,282 @@ namespace vix::commands::BuildCommand
           }
         }
 
-        std::size_t importedCompileCommands = 0;
-        std::size_t importedNinjaTasks = 0;
-        build::BuildGraphScanResult scan{};
-
-        build::BuildGraph graph =
-            measurePhase(
-                "graph load",
-                [&]()
-                {
-                  return make_build_graph_after_configure(
-                      opt_,
-                      plan_,
-                      importedCompileCommands,
-                      importedNinjaTasks,
-                      scan);
-                });
-
-        const fs::path graphPath =
-            build::BuildGraph::default_graph_path(plan_.buildDir);
-
-        if (debug_build_details_enabled(opt_) && !opt_.quiet)
-        {
-          step("build graph: " +
-               std::to_string(scan.sources) + " sources, " +
-               std::to_string(scan.headers) + " headers, " +
-               std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
-               std::to_string(importedCompileCommands) + " imported commands, " +
-               std::to_string(importedNinjaTasks) + " ninja tasks");
-        }
-
-        if (!graph_executor_enabled(opt_) &&
+        if (!forceBuildGraph_ &&
+            !graph_executor_enabled(opt_) &&
             can_use_target_artifact_cache(opt_) &&
             restore_project_target_artifact(projectArtifact, opt_, plan_))
         {
-          if (!graph.save(graphPath) && !opt_.quiet)
-            hint("Warning: unable to write Vix build graph");
-
           const fs::path restoredBinary =
               build::default_project_executable_path(opt_, plan_);
-
-          const auto state =
-              artifact_cache::ArtifactCache::make_build_state(
-                  plan_.signature,
-                  plan_.projectFingerprint,
-                  projectArtifact.root.string(),
-                  restoredBinary.string(),
-                  opt_.buildTarget,
-                  plan_.preset.name,
-                  plan_.preset.buildType,
-                  projectArtifact.target,
-                  projectArtifact.compiler,
-                  projectInputs);
-
+          const auto state = artifact_cache::ArtifactCache::make_build_state(
+              plan_.signature, plan_.projectFingerprint, projectArtifact.root.string(),
+              restoredBinary.string(), opt_.buildTarget, plan_.preset.name,
+              plan_.preset.buildType, projectArtifact.target, projectArtifact.compiler,
+              projectInputs);
           if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
               !opt_.quiet)
-          {
             hint("Warning: unable to write Vix build state");
-          }
-
           if (liveBuild)
           {
-            print_vix_build_success(
-                "Artifact cache hit");
-
+            print_vix_build_success("Artifact cache hit");
             liveBuild->finish(0);
           }
-
           return 0;
         }
 
-        std::optional<build::BuildGraph> previousGraphForExplain;
-
-        if (opt_.explain)
+        if (needs_build_graph(opt_, forceBuildGraph_))
         {
-          previousGraphForExplain =
-              build::BuildGraph::load(graphPath);
+          std::size_t importedCompileCommands = 0;
+          std::size_t importedNinjaTasks = 0;
+          build::BuildGraphScanResult scan{};
 
-          print_rebuild_explanation(
-              graph,
-              previousGraphForExplain ? &*previousGraphForExplain : nullptr,
-              opt_,
-              plan_);
-        }
-
-        if (can_use_target_graph_executor(
-                opt_,
-                importedCompileCommands,
-                importedNinjaTasks))
-        {
-          build::BuildGraphExecutorOptions executorOptions;
-          executorOptions.buildDir = plan_.buildDir;
-          executorOptions.target = build::default_graph_target_name(opt_, plan_);
-          executorOptions.jobs = opt_.jobs;
-
-          build::BuildGraphExecutorDependencies executorDependencies;
-          executorDependencies.executeCompileTask =
-              [](build::BuildTask &task)
-          {
-            return build::execute_build_task_process(task);
-          };
-          executorDependencies.executeNinjaTarget =
-              [&](const build::BuildGraphExecutorNinjaRequest &request)
-          {
-            return build::execute_graph_ninja_target(
-                request,
-                !rawBuildOutput,
-                liveBuild
-                    ? liveBuild->observer()
-                    : build::BuildOutputObserver{});
-          };
-
-          executorDependencies.onEvent =
-              [&](const build::BuildGraphExecutorEvent &event)
-          {
-            if (liveBuild &&
-                event.kind ==
-                    build::BuildGraphExecutorEventKind::CompilingTask &&
-                !event.taskId.empty())
-            {
-              liveBuild->compile_progress(
-                  event.current,
-                  event.total,
-                  compile_task_subject_for_id(
-                      graph,
-                      event.taskId,
-                      plan_.userProjectDir),
-                  event.target);
-            }
-
-            build::render_graph_debug_event(
-                event,
-                opt_.quiet,
-                verboseMode);
-          };
-
-          build::BuildGraphExecutor executor(
-              executorOptions,
-              std::move(executorDependencies));
-
-          const build::BuildGraphExecutorResult graphResult =
+          build::BuildGraph graph =
               measurePhase(
-                  "build",
+                  "graph load",
                   [&]()
                   {
-                    return executor.run_target(graph);
+                    return make_build_graph_after_configure(
+                        opt_,
+                        plan_,
+                        importedCompileCommands,
+                        importedNinjaTasks,
+                        scan);
                   });
 
-          if (graphResult.ok)
+          const fs::path graphPath =
+              build::BuildGraph::default_graph_path(plan_.buildDir);
+
+          if (debug_build_details_enabled(opt_) && !opt_.quiet)
           {
-            if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
-                !opt_.quiet &&
-                debug_build_details_enabled(opt_))
+            step("build graph: " +
+                 std::to_string(scan.sources) + " sources, " +
+                 std::to_string(scan.headers) + " headers, " +
+                 std::to_string(graph.compile_tasks().size()) + " compile tasks, " +
+                 std::to_string(importedCompileCommands) + " imported commands, " +
+                 std::to_string(importedNinjaTasks) + " ninja tasks");
+          }
+
+          std::optional<build::BuildGraph> previousGraphForExplain;
+
+          if (opt_.explain)
+          {
+            previousGraphForExplain =
+                build::BuildGraph::load(graphPath);
+
+            print_rebuild_explanation(
+                graph,
+                previousGraphForExplain ? &*previousGraphForExplain : nullptr,
+                opt_,
+                plan_);
+          }
+
+          if (can_use_target_graph_executor(
+                  opt_,
+                  importedCompileCommands,
+                  importedNinjaTasks))
+          {
+            build::BuildGraphExecutorOptions executorOptions;
+            executorOptions.buildDir = plan_.buildDir;
+            executorOptions.target = build::default_graph_target_name(opt_, plan_);
+            executorOptions.jobs = opt_.jobs;
+
+            build::BuildGraphExecutorDependencies executorDependencies;
+            executorDependencies.executeCompileTask =
+                [](build::BuildTask &task)
             {
-              build::print_build_info(
-                  std::cout,
-                  "Artifact cache skipped: no main executable artifact found");
-            }
-
-            std::string lastBinary;
-
-            const auto exeOpt = resolve_main_executable(
-                plan_.buildDir,
-                plan_.userProjectDir,
-                opt_.buildTarget,
-                plan_.defaultTargetName);
-
-            if (exeOpt)
+              return build::execute_build_task_process(task);
+            };
+            executorDependencies.executeNinjaTarget =
+                [&](const build::BuildGraphExecutorNinjaRequest &request)
             {
-              lastBinary = exeOpt->string();
+              return build::execute_graph_ninja_target(
+                  request,
+                  !rawBuildOutput,
+                  liveBuild
+                      ? liveBuild->observer()
+                      : build::BuildOutputObserver{});
+            };
 
-              write_project_build_metadata(
-                  plan_.userProjectDir,
+            executorDependencies.onEvent =
+                [&](const build::BuildGraphExecutorEvent &event)
+            {
+              if (liveBuild &&
+                  event.kind ==
+                      build::BuildGraphExecutorEventKind::CompilingTask &&
+                  !event.taskId.empty())
+              {
+                liveBuild->compile_progress(
+                    event.current,
+                    event.total,
+                    compile_task_subject_for_id(
+                        graph,
+                        event.taskId,
+                        plan_.userProjectDir),
+                    event.target);
+              }
+
+              build::render_graph_debug_event(
+                  event,
+                  opt_.quiet,
+                  verboseMode);
+            };
+
+            build::BuildGraphExecutor executor(
+                executorOptions,
+                std::move(executorDependencies));
+
+            const build::BuildGraphExecutorResult graphResult =
+                measurePhase(
+                    "build",
+                    [&]()
+                    {
+                      return executor.run_target(graph);
+                    });
+
+            if (graphResult.ok)
+            {
+              if (!store_project_target_artifact(projectArtifact, opt_, plan_) &&
+                  !opt_.quiet &&
+                  debug_build_details_enabled(opt_))
+              {
+                build::print_build_info(
+                    std::cout,
+                    "Artifact cache skipped: no main executable artifact found");
+              }
+
+              std::string lastBinary;
+
+              const auto exeOpt = resolve_main_executable(
                   plan_.buildDir,
-                  *exeOpt,
-                  opt_.sanitizerMode);
+                  plan_.userProjectDir,
+                  opt_.buildTarget,
+                  plan_.defaultTargetName);
+
+              if (exeOpt)
+              {
+                lastBinary = exeOpt->string();
+
+                write_project_build_metadata(
+                    plan_.userProjectDir,
+                    plan_.buildDir,
+                    *exeOpt,
+                    opt_.sanitizerMode);
+              }
+
+              const auto state =
+                  artifact_cache::ArtifactCache::make_build_state(
+                      plan_.signature,
+                      plan_.projectFingerprint,
+                      projectArtifact.root.string(),
+                      lastBinary,
+                      opt_.buildTarget,
+                      plan_.preset.name,
+                      plan_.preset.buildType,
+                      projectArtifact.target,
+                      projectArtifact.compiler,
+                      projectInputs);
+
+              if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+                  !opt_.quiet)
+              {
+                hint("Warning: unable to write Vix build state");
+              }
+
+              if (!graph.save(graphPath) && !opt_.quiet)
+                hint("Warning: unable to write Vix build graph");
+
+              if (liveBuild)
+                liveBuild->finish(0);
+
+              if (!opt_.quiet)
+              {
+                build_print_phase_timings(
+                    phaseTimings);
+
+                print_graph_warnings_modern(
+                    graphResult.output);
+
+                /*
+                 * LiveBuild owns the compact presentation for the normal mode.
+                 * Verbose modes keep the historical detailed Vix build presentation.
+                 */
+                if (!liveBuild)
+                {
+                  if (!buildHeaderPrinted)
+                    print_vix_build_header(
+                        "Building",
+                        opt_,
+                        plan_);
+
+                  if (configuredThisRun)
+                    print_vix_build_success(
+                        "Configured");
+
+                  print_vix_build_success(
+                      "Graph target: " +
+                      graphResult.target);
+
+                  if (graphResult.dirtyCompileTasks == 0)
+                  {
+                    print_vix_build_success(
+                        "Up to date");
+                  }
+                  else
+                  {
+                    print_vix_build_success(
+                        "Compiled " +
+                        std::to_string(
+                            graphResult.dirtyCompileTasks) +
+                        " dirty files");
+                  }
+
+                  print_vix_build_success(
+                      "Done");
+                }
+              }
+
+              return 0;
             }
 
-            const auto state =
-                artifact_cache::ArtifactCache::make_build_state(
-                    plan_.signature,
-                    plan_.projectFingerprint,
-                    projectArtifact.root.string(),
-                    lastBinary,
-                    opt_.buildTarget,
-                    plan_.preset.name,
-                    plan_.preset.buildType,
-                    projectArtifact.target,
-                    projectArtifact.compiler,
-                    projectInputs);
+            if (debug_build_details_enabled(opt_) && !opt_.quiet)
+              hint("Graph target executor fallback: " + graphResult.output);
+          }
 
-            if (!artifact_cache::ArtifactCache::write_build_state(plan_.buildDir, state) &&
+          if (graph_executor_enabled(opt_) && can_use_graph_build(opt_, plan_, scan))
+          {
+            const int graphBuildCode =
+                measurePhase(
+                    "build",
+                    [&]()
+                    {
+                      return run_graph_build(
+                          graph,
+                          graphPath,
+                          opt_,
+                          plan_,
+                          projectArtifact,
+                          projectInputs,
+                          verboseMode,
+                          liveBuild
+                              ? &*liveBuild
+                              : nullptr);
+                    });
+
+            if (opt_.explain &&
                 !opt_.quiet)
-            {
-              hint("Warning: unable to write Vix build state");
-            }
-
-            if (!graph.save(graphPath) && !opt_.quiet)
-              hint("Warning: unable to write Vix build graph");
-
-            if (liveBuild)
-              liveBuild->finish(0);
-
-            if (!opt_.quiet)
             {
               build_print_phase_timings(
                   phaseTimings);
-
-              print_graph_warnings_modern(
-                  graphResult.output);
-
-              /*
-               * LiveBuild owns the compact presentation for the normal mode.
-               * Verbose modes keep the historical detailed Vix build presentation.
-               */
-              if (!liveBuild)
-              {
-                if (!buildHeaderPrinted)
-                  print_vix_build_header(
-                      "Building",
-                      opt_,
-                      plan_);
-
-                if (configuredThisRun)
-                  print_vix_build_success(
-                      "Configured");
-
-                print_vix_build_success(
-                    "Graph target: " +
-                    graphResult.target);
-
-                if (graphResult.dirtyCompileTasks == 0)
-                {
-                  print_vix_build_success(
-                      "Up to date");
-                }
-                else
-                {
-                  print_vix_build_success(
-                      "Compiled " +
-                      std::to_string(
-                          graphResult.dirtyCompileTasks) +
-                      " dirty files");
-                }
-
-                print_vix_build_success(
-                    "Done");
-              }
             }
 
-            return 0;
+            if (liveBuild)
+            {
+              liveBuild->finish(
+                  graphBuildCode);
+            }
+
+            return graphBuildCode;
           }
-
-          if (debug_build_details_enabled(opt_) && !opt_.quiet)
-            hint("Graph target executor fallback: " + graphResult.output);
-        }
-
-        if (graph_executor_enabled(opt_) && can_use_graph_build(opt_, plan_, scan))
-        {
-          const int graphBuildCode =
-              measurePhase(
-                  "build",
-                  [&]()
-                  {
-                    return run_graph_build(
-                        graph,
-                        graphPath,
-                        opt_,
-                        plan_,
-                        projectArtifact,
-                        projectInputs,
-                        verboseMode,
-                        liveBuild
-                            ? &*liveBuild
-                            : nullptr);
-                  });
-
-          if (opt_.explain &&
-              !opt_.quiet)
-          {
-            build_print_phase_timings(
-                phaseTimings);
-          }
-
-          if (liveBuild)
-          {
-            liveBuild->finish(
-                graphBuildCode);
-          }
-
-          return graphBuildCode;
         }
 
         {
@@ -6304,9 +6307,6 @@ namespace vix::commands::BuildCommand
             hint("Warning: unable to write Vix build state");
           }
 
-          if (!graph.save(graphPath) && !opt_.quiet)
-            hint("Warning: unable to write Vix build graph");
-
           const std::string buildLog =
               util::read_text_file_or_empty(plan_.buildLog);
 
@@ -6392,6 +6392,7 @@ namespace vix::commands::BuildCommand
     private:
       process::Options opt_;
       process::Plan plan_{};
+      bool forceBuildGraph_ = false;
     };
 
   } // namespace
@@ -7100,7 +7101,7 @@ namespace vix::commands::BuildCommand
     process::Options initialOpt = opt_;
     initialOpt.watch = false;
 
-    BuildCommand initial(std::move(initialOpt));
+    BuildCommand initial(std::move(initialOpt), true);
     const auto initialT0 = std::chrono::steady_clock::now();
     WatchCapturedRun initialRun =
         watch_run_capturing_stderr(
@@ -7251,7 +7252,7 @@ namespace vix::commands::BuildCommand
     auto run_full_refresh =
         [&]() -> WatchCapturedRun
     {
-      BuildCommand cmd(sessionOpt);
+      BuildCommand cmd(sessionOpt, true);
       WatchCapturedRun run =
           watch_run_capturing_stderr(
               structuredWatchOutput && !rawBuildOutput,

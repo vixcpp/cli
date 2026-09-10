@@ -15,7 +15,7 @@
  */
 
 #include <vix/cli/commands/MobileCommand.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/ui/mobile/AndroidProject.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -277,7 +277,6 @@ namespace
 
     std::string androidGradlePluginVersion{"8.13.2"};
 
-    bool allowCleartext{false};
     bool force{false};
 
     MobileLogMode logMode{MobileLogMode::Normal};
@@ -287,12 +286,6 @@ namespace
   bool is_help_arg(const std::string &arg)
   {
     return arg == "-h" || arg == "--help" || arg == "help";
-  }
-
-  bool starts_with(std::string_view value, std::string_view prefix)
-  {
-    return value.size() >= prefix.size() &&
-           value.substr(0, prefix.size()) == prefix;
   }
 
   bool parse_positive_int(const std::string &value, int &out)
@@ -347,71 +340,6 @@ namespace
     return true;
   }
 
-  fs::path detect_android_sdk_directory()
-  {
-    const char *androidHome = vix::utils::vix_getenv("ANDROID_HOME");
-    if (androidHome != nullptr && *androidHome != '\0')
-    {
-      return fs::path(androidHome);
-    }
-
-    const char *androidSdkRoot = vix::utils::vix_getenv("ANDROID_SDK_ROOT");
-    if (androidSdkRoot != nullptr && *androidSdkRoot != '\0')
-    {
-      return fs::path(androidSdkRoot);
-    }
-
-    const char *home = vix::utils::vix_getenv("HOME");
-    if (home != nullptr && *home != '\0')
-    {
-      fs::path candidate = fs::path(home) / "Android" / "Sdk";
-
-      std::error_code ec;
-      if (fs::exists(candidate, ec) && !ec)
-      {
-        return candidate;
-      }
-    }
-
-    return {};
-  }
-
-  std::string escape_local_properties_path(const fs::path &path)
-  {
-    std::string value = path.string();
-    std::string output;
-
-    for (char c : value)
-    {
-      if (c == '\\')
-      {
-        output += "\\\\";
-      }
-      else if (c == ':')
-      {
-        output += "\\:";
-      }
-      else
-      {
-        output.push_back(c);
-      }
-    }
-
-    return output;
-  }
-
-  std::string render_local_properties()
-  {
-    const fs::path sdk = detect_android_sdk_directory();
-
-    if (sdk.empty())
-    {
-      return {};
-    }
-
-    return "sdk.dir=" + escape_local_properties_path(sdk) + "\n";
-  }
-
   bool parse_prefixed_value(
       const std::string &arg,
       const char *prefix,
@@ -426,80 +354,6 @@ namespace
 
     out = arg.substr(p.size());
     return true;
-  }
-
-  std::string xml_escape(std::string_view value)
-  {
-    std::string out;
-
-    for (char c : value)
-    {
-      switch (c)
-      {
-      case '&':
-        out += "&amp;";
-        break;
-
-      case '<':
-        out += "&lt;";
-        break;
-
-      case '>':
-        out += "&gt;";
-        break;
-
-      case '"':
-        out += "&quot;";
-        break;
-
-      case '\'':
-        out += "\\'";
-        break;
-
-      default:
-        out.push_back(c);
-        break;
-      }
-    }
-
-    return out;
-  }
-
-  std::string java_escape(std::string_view value)
-  {
-    std::string out;
-
-    for (char c : value)
-    {
-      switch (c)
-      {
-      case '\\':
-        out += "\\\\";
-        break;
-
-      case '"':
-        out += "\\\"";
-        break;
-
-      case '\n':
-        out += "\\n";
-        break;
-
-      case '\r':
-        out += "\\r";
-        break;
-
-      case '\t':
-        out += "\\t";
-        break;
-
-      default:
-        out.push_back(c);
-        break;
-      }
-    }
-
-    return out;
   }
 
   bool valid_package_part(std::string_view part)
@@ -570,112 +424,6 @@ namespace
     return parts >= 2;
   }
 
-  fs::path java_package_directory(
-      const fs::path &javaRoot,
-      const std::string &packageName)
-  {
-    fs::path path = javaRoot;
-
-    std::size_t start = 0;
-
-    while (start < packageName.size())
-    {
-      const std::size_t dot = packageName.find('.', start);
-
-      const std::string part =
-          dot == std::string::npos
-              ? packageName.substr(start)
-              : packageName.substr(start, dot - start);
-
-      path /= part;
-
-      if (dot == std::string::npos)
-      {
-        break;
-      }
-
-      start = dot + 1;
-    }
-
-    return path;
-  }
-
-  std::string safe_project_name(std::string value)
-  {
-    if (value.empty())
-    {
-      return "VixMobile";
-    }
-
-    std::string out;
-
-    for (char ch : value)
-    {
-      const unsigned char c =
-          static_cast<unsigned char>(ch);
-
-      if (std::isalnum(c))
-      {
-        out.push_back(ch);
-      }
-      else if (ch == ' ' || ch == '-' || ch == '_')
-      {
-        out.push_back('_');
-      }
-    }
-
-    if (out.empty())
-    {
-      return "VixMobile";
-    }
-
-    if (std::isdigit(static_cast<unsigned char>(out.front())))
-    {
-      out.insert(out.begin(), 'V');
-    }
-
-    return out;
-  }
-
-  bool write_text_file(
-      const fs::path &path,
-      const std::string &content,
-      std::string &err)
-  {
-    err.clear();
-
-    std::error_code ec;
-    fs::create_directories(path.parent_path(), ec);
-
-    if (ec)
-    {
-      err = "cannot create directory: " +
-            path.parent_path().string() +
-            ": " +
-            ec.message();
-
-      return false;
-    }
-
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-
-    if (!out.is_open())
-    {
-      err = "cannot write file: " + path.string();
-      return false;
-    }
-
-    out << content;
-
-    if (!out.good())
-    {
-      err = "failed while writing file: " + path.string();
-      return false;
-    }
-
-    return true;
-  }
-
   bool output_directory_is_safe(
       const fs::path &directory,
       bool force,
@@ -722,273 +470,6 @@ namespace
           directory.string();
 
     return false;
-  }
-
-  std::string render_settings_gradle(const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "pluginManagement {\n"
-        << "    repositories {\n"
-        << "        google()\n"
-        << "        mavenCentral()\n"
-        << "        gradlePluginPortal()\n"
-        << "    }\n"
-        << "}\n\n"
-        << "dependencyResolutionManagement {\n"
-        << "    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\n"
-        << "    repositories {\n"
-        << "        google()\n"
-        << "        mavenCentral()\n"
-        << "    }\n"
-        << "}\n\n"
-        << "rootProject.name = '" << safe_project_name(options.name) << "'\n"
-        << "include ':app'\n";
-
-    return out.str();
-  }
-
-  std::string render_root_build_gradle(
-      const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "plugins {\n"
-        << "    id 'com.android.application' version '"
-        << options.androidGradlePluginVersion
-        << "' apply false\n"
-        << "}\n";
-
-    return out.str();
-  }
-
-  std::string render_app_build_gradle(
-      const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "plugins {\n"
-        << "    id 'com.android.application'\n"
-        << "}\n\n"
-        << "android {\n"
-        << "    namespace '" << options.packageName << "'\n"
-        << "    compileSdk " << options.compileSdk << "\n\n"
-        << "    defaultConfig {\n"
-        << "        applicationId '" << options.packageName << "'\n"
-        << "        minSdk " << options.minSdk << "\n"
-        << "        targetSdk " << options.targetSdk << "\n"
-        << "        versionCode " << options.versionCode << "\n"
-        << "        versionName '" << options.versionName << "'\n"
-        << "    }\n"
-        << "}\n";
-
-    return out.str();
-  }
-
-  std::string render_manifest(const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-        << "<manifest xmlns:android=\"http://schemas.android.com/apk/res/android\">\n"
-        << "    <uses-permission android:name=\"android.permission.INTERNET\" />\n\n"
-        << "    <application\n"
-        << "        android:allowBackup=\"true\"\n"
-        << "        android:label=\"@string/app_name\"\n"
-        << "        android:supportsRtl=\"true\"\n"
-        << "        android:theme=\"@style/AppTheme\"";
-
-    if (options.allowCleartext)
-    {
-      out << "\n        android:usesCleartextTraffic=\"true\"";
-    }
-
-    out
-        << ">\n"
-        << "        <activity\n"
-        << "            android:name=\".MainActivity\"\n"
-        << "            android:exported=\"true\">\n"
-        << "            <intent-filter>\n"
-        << "                <action android:name=\"android.intent.action.MAIN\" />\n"
-        << "                <category android:name=\"android.intent.category.LAUNCHER\" />\n"
-        << "            </intent-filter>\n"
-        << "        </activity>\n"
-        << "    </application>\n"
-        << "</manifest>\n";
-
-    return out.str();
-  }
-
-  std::string render_main_activity(const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "package " << options.packageName << ";\n\n"
-        << "import android.annotation.SuppressLint;\n"
-        << "import android.app.Activity;\n"
-        << "import android.os.Bundle;\n"
-        << "import android.webkit.WebResourceRequest;\n"
-        << "import android.webkit.WebSettings;\n"
-        << "import android.webkit.WebView;\n"
-        << "import android.webkit.WebViewClient;\n\n"
-        << "public class MainActivity extends Activity {\n"
-        << "    private static final String APP_URL = \""
-        << java_escape(options.url)
-        << "\";\n\n"
-        << "    private WebView webView;\n\n"
-        << "    @SuppressLint(\"SetJavaScriptEnabled\")\n"
-        << "    @Override\n"
-        << "    protected void onCreate(Bundle savedInstanceState) {\n"
-        << "        super.onCreate(savedInstanceState);\n\n"
-        << "        webView = new WebView(this);\n"
-        << "        setContentView(webView);\n\n"
-        << "        WebSettings settings = webView.getSettings();\n"
-        << "        settings.setJavaScriptEnabled(true);\n"
-        << "        settings.setDomStorageEnabled(true);\n"
-        << "        settings.setLoadWithOverviewMode(true);\n"
-        << "        settings.setUseWideViewPort(true);\n"
-        << "        settings.setAllowFileAccess(false);\n"
-        << "        settings.setAllowContentAccess(false);\n\n"
-        << "        webView.setWebViewClient(new WebViewClient() {\n"
-        << "            @Override\n"
-        << "            public boolean shouldOverrideUrlLoading(\n"
-        << "                    WebView view,\n"
-        << "                    WebResourceRequest request) {\n"
-        << "                view.loadUrl(request.getUrl().toString());\n"
-        << "                return true;\n"
-        << "            }\n"
-        << "        });\n\n"
-        << "        webView.loadUrl(APP_URL);\n"
-        << "    }\n\n"
-        << "    @Override\n"
-        << "    public void onBackPressed() {\n"
-        << "        if (webView != null && webView.canGoBack()) {\n"
-        << "            webView.goBack();\n"
-        << "            return;\n"
-        << "        }\n\n"
-        << "        super.onBackPressed();\n"
-        << "    }\n\n"
-        << "    @Override\n"
-        << "    protected void onDestroy() {\n"
-        << "        if (webView != null) {\n"
-        << "            webView.destroy();\n"
-        << "            webView = null;\n"
-        << "        }\n\n"
-        << "        super.onDestroy();\n"
-        << "    }\n"
-        << "}\n";
-
-    return out.str();
-  }
-
-  std::string render_strings_xml(const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
-        << "<resources>\n"
-        << "    <string name=\"app_name\">"
-        << xml_escape(options.name)
-        << "</string>\n"
-        << "</resources>\n";
-
-    return out.str();
-  }
-
-  std::string render_colors_xml()
-  {
-    return R"XML(<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="vix_accent">#f37726</color>
-</resources>
-)XML";
-  }
-
-  std::string render_styles_xml()
-  {
-    return R"XML(<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
-        <item name="android:fontFamily">sans</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:colorAccent">@color/vix_accent</item>
-    </style>
-</resources>
-)XML";
-  }
-
-  std::string render_gradle_properties()
-  {
-    return R"TXT(org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
-android.useAndroidX=false
-)TXT";
-  }
-
-  std::string render_readme(const AndroidMobileOptions &options)
-  {
-    std::ostringstream out;
-
-    out
-        << "# " << options.name << "\n\n"
-        << "Generated by `vix mobile init android`.\n\n"
-        << "## App URL\n\n"
-        << "```text\n"
-        << options.url << "\n"
-        << "```\n\n"
-        << "## Build\n\n"
-        << "```bash\n"
-        << "gradle :app:assembleDebug\n"
-        << "```\n\n"
-        << "Later, `vix mobile build android` will wrap this command.\n";
-
-    return out.str();
-  }
-
-  bool write_android_project(
-      const AndroidMobileOptions &options,
-      std::string &err)
-  {
-    const fs::path root = options.outputDirectory;
-    const fs::path appRoot = root / "app";
-    const fs::path mainRoot = appRoot / "src" / "main";
-    const fs::path javaRoot = mainRoot / "java";
-    const fs::path packageRoot =
-        java_package_directory(javaRoot, options.packageName);
-
-    std::vector<std::pair<fs::path, std::string>> files{
-        {root / "settings.gradle", render_settings_gradle(options)},
-        {root / "build.gradle", render_root_build_gradle(options)},
-        {root / "gradle.properties", render_gradle_properties()},
-        {root / "README.md", render_readme(options)},
-        {appRoot / "build.gradle", render_app_build_gradle(options)},
-        {mainRoot / "AndroidManifest.xml", render_manifest(options)},
-        {packageRoot / "MainActivity.java", render_main_activity(options)},
-        {mainRoot / "res" / "values" / "strings.xml", render_strings_xml(options)},
-        {mainRoot / "res" / "values" / "colors.xml", render_colors_xml()},
-        {mainRoot / "res" / "values" / "styles.xml", render_styles_xml()}};
-
-    const std::string localProperties = render_local_properties();
-
-    if (!localProperties.empty())
-    {
-      files.push_back({root / "local.properties", localProperties});
-    }
-
-    for (const auto &[path, content] : files)
-    {
-      if (!write_text_file(path, content, err))
-      {
-        return false;
-      }
-    }
-
-    return true;
   }
 
   bool is_android_project_directory(const fs::path &directory)
@@ -1484,41 +965,35 @@ android.useAndroidX=false
       return 1;
     }
 
-    const std::string task =
-        options.release
-            ? ":app:assembleRelease"
-            : ":app:assembleDebug";
-
     out.event("build_start", "project", options.projectDirectory.string());
 
     out.banner("Vix Mobile \u00b7 build");
     out.row("project", options.projectDirectory.string());
     out.row("variant", options.release ? "release" : "debug");
 
-    const int result =
-        run_system_command(
-            make_gradle_command(
-                options.projectDirectory,
-                task,
-                options.gradleCommand));
-
-    if (result != 0)
+    vix::ui::AndroidProject project;
+    if (!options.gradleCommand.empty())
     {
-      out.error("Android mobile build failed.");
-      out.error_hint("Check the Gradle error above.");
-      out.error_hint("If it says SDK location not found, create local.properties with sdk.dir.");
-      out.error_hint("If it says mipmap/ic_launcher not found, regenerate the project after updating Vix.");
-      return result;
+      project.set_gradle_command(options.gradleCommand);
     }
 
-    const fs::path apkDir =
+    const vix::ui::Result<fs::path> result = project.build(
+        options.projectDirectory,
         options.release
-            ? options.projectDirectory / "app" / "build" / "outputs" / "apk" / "release"
-            : options.projectDirectory / "app" / "build" / "outputs" / "apk" / "debug";
+            ? vix::ui::AndroidBuildType::Release
+            : vix::ui::AndroidBuildType::Debug,
+        vix::ui::AndroidArtifact::Apk);
 
-    out.event("build_done", "apk", apkDir.string());
+    if (result.is_failed())
+    {
+      out.error("Android mobile build failed.");
+      out.error_hint(result.error_message());
+      return 1;
+    }
+
+    out.event("build_done", "apk", result.value().string());
     out.success("Android mobile build completed.");
-    out.row("apk", apkDir.string(), out.theme.cyan());
+    out.row("apk", result.value().string(), out.theme.cyan());
 
     return 0;
   }
@@ -1720,8 +1195,6 @@ android.useAndroidX=false
       const std::vector<std::string> &args,
       AndroidMobileOptions &options)
   {
-    options.allowCleartext = starts_with(options.url, "http://");
-
     for (std::size_t i = 0; i < args.size(); ++i)
     {
       const std::string &arg = args[i];
@@ -1753,7 +1226,6 @@ android.useAndroidX=false
           return 1;
         }
 
-        options.allowCleartext = starts_with(options.url, "http://");
         continue;
       }
 
@@ -1872,18 +1344,6 @@ android.useAndroidX=false
         continue;
       }
 
-      if (arg == "--allow-cleartext")
-      {
-        options.allowCleartext = true;
-        continue;
-      }
-
-      if (arg == "--no-cleartext")
-      {
-        options.allowCleartext = false;
-        continue;
-      }
-
       if (arg == "--force")
       {
         options.force = true;
@@ -1901,7 +1361,6 @@ android.useAndroidX=false
       if (parse_prefixed_value(arg, "--url=", value))
       {
         options.url = value;
-        options.allowCleartext = starts_with(options.url, "http://");
         continue;
       }
 
@@ -2042,10 +1501,27 @@ android.useAndroidX=false
       return 1;
     }
 
-    if (!write_android_project(options, err))
+    vix::ui::MobileConfig config;
+    config.set_name(options.name)
+        .set_app_id(options.packageName)
+        .set_version(options.versionName)
+        .set_url(options.url);
+
+    vix::ui::AndroidProject project{
+        vix::ui::MobileProject(std::move(config))};
+    project.set_min_sdk(options.minSdk)
+        .set_target_sdk(options.targetSdk)
+        .set_compile_sdk(options.compileSdk)
+        .set_version_code(options.versionCode)
+        .set_android_gradle_plugin_version(
+            options.androidGradlePluginVersion);
+
+    const vix::ui::Result<void> generated =
+        project.generate(options.outputDirectory);
+    if (generated.is_failed())
     {
       out.error("Failed to generate Android mobile shell.");
-      out.error_hint(err.empty() ? "Unknown file generation error." : err);
+      out.error_hint(generated.error_message());
       return 1;
     }
 
@@ -2215,8 +1691,6 @@ namespace vix::commands
         << "  --version-code <n>         Android version code. Default: 1\n"
         << "  --version-name <name>      Android version name. Default: 1.0.0\n"
         << "  --agp <version>            Android Gradle Plugin version. Default: 8.13.2\n"
-        << "  --allow-cleartext          Allow http:// URLs in Android WebView\n"
-        << "  --no-cleartext             Disable cleartext HTTP traffic\n"
         << "  --gradle <command>         Gradle command to use. Default: ./gradlew or gradle\n"
         << "  --force                    Allow writing into a non-empty output directory\n\n"
 
@@ -2237,7 +1711,7 @@ namespace vix::commands
 
         << "Examples:\n"
         << "  vix mobile init android --name \"My App\" --url https://example.com\n"
-        << "  vix mobile init android --name \"Vix Note\" --url http://192.168.1.10:5179 --allow-cleartext\n"
+        << "  vix mobile init android --name \"Vix Note\" --url http://192.168.1.10:5179\n"
         << "  vix mobile build android\n"
         << "  vix mobile run android\n"
         << "  vix mobile run android --project mobile/android --package com.softadastra.app\n"

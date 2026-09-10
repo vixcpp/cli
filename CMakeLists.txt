@@ -168,7 +168,7 @@ if (EXISTS "${_VIX_NOTE_DIR}/CMakeLists.txt" AND NOT TARGET vix::note)
   add_subdirectory("${_VIX_NOTE_DIR}" "${CMAKE_BINARY_DIR}/_vix_note")
 endif()
 
-if (VIX_CLI_ENABLE_DESKTOP AND EXISTS "${_VIX_UI_DIR}/CMakeLists.txt" AND NOT TARGET vix::ui)
+if (EXISTS "${_VIX_UI_DIR}/CMakeLists.txt" AND NOT TARGET vix::ui)
   set(VIX_UI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_UI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(VIX_UI_INSTALL OFF CACHE BOOL "" FORCE)
@@ -380,7 +380,7 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::note)
     endif()
 
-    if (VIX_CLI_ENABLE_DESKTOP AND TARGET vix::ui)
+    if (TARGET vix::ui)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ui)
     endif()
 
@@ -402,9 +402,7 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_WEBSOCKET_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_NOTE_DIR}/include")
-    if (VIX_CLI_ENABLE_DESKTOP)
-      vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UI_DIR}/include")
-    endif()
+    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UI_DIR}/include")
 
     if (_VIX_LOCAL_LINK_TARGETS)
       list(REMOVE_DUPLICATES _VIX_LOCAL_LINK_TARGETS)
@@ -540,20 +538,19 @@ endif()
 # ----------------------------------------------------
 # Optional UI desktop command support
 # ----------------------------------------------------
-if (VIX_CLI_ENABLE_DESKTOP AND TARGET vix::ui)
-  message(STATUS "[cli] UI desktop command enabled")
+if (TARGET vix::ui)
+  message(STATUS "[cli] UI mobile core enabled")
   target_link_libraries(vix_cli PRIVATE vix::ui)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_UI=1)
+
+  if (VIX_CLI_ENABLE_DESKTOP)
+    target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_UI=1)
+  endif()
 
   if (VIX_UI_ENABLE_LINUX_WEBVIEW)
     target_compile_definitions(vix_cli PRIVATE VIX_UI_ENABLE_LINUX_WEBVIEW=1)
   endif()
 else()
-  if (VIX_CLI_ENABLE_DESKTOP)
-    message(STATUS "[cli] UI desktop command disabled: vix::ui target not found")
-  else()
-    message(STATUS "[cli] UI desktop command disabled: VIX_CLI_ENABLE_DESKTOP=OFF")
-  endif()
+  message(FATAL_ERROR "[cli] vix::ui is required by the mobile command")
 endif()
 
 # ----------------------------------------------------

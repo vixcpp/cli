@@ -16,6 +16,7 @@
 
 #include <vix/cli/commands/MobileCommand.hpp>
 #include <vix/ui/mobile/AndroidProject.hpp>
+#include <vix/ui/mobile/IOSProject.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -279,6 +280,28 @@ namespace
 
     bool force{false};
 
+    MobileLogMode logMode{MobileLogMode::Normal};
+    int colorOverride{-1};
+  };
+
+  struct IOSMobileOptions
+  {
+    std::string name{"Vix Mobile"};
+    std::string packageName{"com.vixcpp.ios"};
+    std::string url{"http://127.0.0.1:8080"};
+    std::string versionName{"1.0.0"};
+    std::string deploymentTarget{"15.0"};
+    fs::path outputDirectory{"mobile/ios"};
+    bool force{false};
+    MobileLogMode logMode{MobileLogMode::Normal};
+    int colorOverride{-1};
+  };
+
+  struct IOSProjectCommandOptions
+  {
+    fs::path projectDirectory{"mobile/ios"};
+    std::string packageName{};
+    bool release{false};
     MobileLogMode logMode{MobileLogMode::Normal};
     int colorOverride{-1};
   };
@@ -648,6 +671,32 @@ namespace
     return 1;
   }
 
+#if defined(__APPLE__)
+  std::string capture_system_command(const std::string &command)
+  {
+    std::string output;
+    std::FILE *pipe = popen(command.c_str(), "r");
+    if (pipe == nullptr)
+    {
+      return output;
+    }
+
+    char buffer[256];
+    while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+      output += buffer;
+    }
+
+    (void)pclose(pipe);
+    while (!output.empty() &&
+           (output.back() == '\n' || output.back() == '\r'))
+    {
+      output.pop_back();
+    }
+    return output;
+  }
+#endif
+
   int run_android_devices(const MobileReporter &out)
   {
     out.info_line("Connected Android devices:");
@@ -707,6 +756,21 @@ namespace
             text[pos] == '\r'))
     {
       ++pos;
+    }
+
+    // Gradle commonly uses `key "value"`, while Xcode project files use
+    // `KEY = "value"`. Support both forms for the generated projects.
+    if (pos < text.size() && text[pos] == '=')
+    {
+      ++pos;
+      while (pos < text.size() &&
+             (text[pos] == ' ' ||
+              text[pos] == '\t' ||
+              text[pos] == '\n' ||
+              text[pos] == '\r'))
+      {
+        ++pos;
+      }
     }
 
     if (pos >= text.size() ||
@@ -1190,6 +1254,384 @@ namespace
     return 0;
   }
 
+  int parse_ios_init_options(
+      const MobileReporter &out,
+      const std::vector<std::string> &args,
+      IOSMobileOptions &options)
+  {
+    for (std::size_t i = 0; i < args.size(); ++i)
+    {
+      const std::string &arg = args[i];
+      if (is_help_arg(arg))
+      {
+        return 2;
+      }
+      if (mob_take_output_flag(arg, options.logMode, options.colorOverride))
+      {
+        continue;
+      }
+
+      if (arg == "--name")
+      {
+        if (!consume_value(out, args, i, "--name", options.name))
+        {
+          return 1;
+        }
+        continue;
+      }
+      if (arg == "--package")
+      {
+        if (!consume_value(out, args, i, "--package", options.packageName))
+        {
+          return 1;
+        }
+        continue;
+      }
+      if (arg == "--url")
+      {
+        if (!consume_value(out, args, i, "--url", options.url))
+        {
+          return 1;
+        }
+        continue;
+      }
+      if (arg == "--version-name")
+      {
+        if (!consume_value(out, args, i, "--version-name", options.versionName))
+        {
+          return 1;
+        }
+        continue;
+      }
+      if (arg == "--deployment-target")
+      {
+        if (!consume_value(
+                out, args, i, "--deployment-target", options.deploymentTarget))
+        {
+          return 1;
+        }
+        continue;
+      }
+
+      if (arg == "--output" || arg == "-o")
+      {
+        std::string value;
+        if (!consume_value(out, args, i, arg, value))
+        {
+          return 1;
+        }
+        options.outputDirectory = value;
+        continue;
+      }
+
+      if (arg == "--force")
+      {
+        options.force = true;
+        continue;
+      }
+
+      std::string value;
+      if (parse_prefixed_value(arg, "--name=", value))
+      {
+        options.name = value;
+      }
+      else if (parse_prefixed_value(arg, "--package=", value))
+      {
+        options.packageName = value;
+      }
+      else if (parse_prefixed_value(arg, "--url=", value))
+      {
+        options.url = value;
+      }
+      else if (parse_prefixed_value(arg, "--version-name=", value))
+      {
+        options.versionName = value;
+      }
+      else if (parse_prefixed_value(arg, "--deployment-target=", value))
+      {
+        options.deploymentTarget = value;
+      }
+      else if (parse_prefixed_value(arg, "--output=", value))
+      {
+        options.outputDirectory = value;
+      }
+      else
+      {
+        out.error("Unexpected mobile init ios argument: " + arg);
+        out.error_hint("Usage: vix mobile init ios --name \"My App\" --url https://example.com");
+        return 1;
+      }
+    }
+
+    return 0;
+  }
+
+  int run_init_ios(const std::vector<std::string> &args)
+  {
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
+    IOSMobileOptions options;
+    const int parsed = parse_ios_init_options(out, args, options);
+    if (parsed == 2)
+    {
+      return vix::commands::MobileCommand::help();
+    }
+    if (parsed != 0)
+    {
+      return parsed;
+    }
+
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+    std::string error;
+    if (!output_directory_is_safe(
+            options.outputDirectory, options.force, error))
+    {
+      out.error(error);
+      out.error_hint("Use --force to overwrite generated files in this directory.");
+      return 1;
+    }
+
+    vix::ui::MobileConfig config;
+    config.set_name(options.name)
+        .set_app_id(options.packageName)
+        .set_version(options.versionName)
+        .set_url(options.url);
+    vix::ui::IOSProject project{
+        vix::ui::MobileProject(std::move(config))};
+    project.set_deployment_target(options.deploymentTarget);
+
+    const vix::ui::Result<void> generated =
+        project.generate(options.outputDirectory);
+    if (generated.is_failed())
+    {
+      out.error("Failed to generate iOS mobile shell.");
+      out.error_hint(generated.error_message());
+      return 1;
+    }
+
+    out.event("generated", "out", options.outputDirectory.string());
+    out.banner("Vix Mobile · iOS");
+    out.row("app", options.name);
+    out.row("out", options.outputDirectory.string(), out.theme.cyan());
+    out.row("url", options.url, out.theme.cyan());
+    out.success("iOS mobile shell generated.");
+    out.hint("Next: vix mobile build ios --project " +
+             options.outputDirectory.string());
+    return 0;
+  }
+
+  int parse_ios_project_command_options(
+      const MobileReporter &out,
+      const std::vector<std::string> &args,
+      IOSProjectCommandOptions &options)
+  {
+    for (std::size_t i = 0; i < args.size(); ++i)
+    {
+      const std::string &arg = args[i];
+      if (is_help_arg(arg))
+      {
+        return 2;
+      }
+      if (mob_take_output_flag(arg, options.logMode, options.colorOverride))
+      {
+        continue;
+      }
+      if (arg == "--project")
+      {
+        std::string value;
+        if (!consume_value(out, args, i, "--project", value))
+        {
+          return 1;
+        }
+        options.projectDirectory = value;
+        continue;
+      }
+      if (arg == "--package")
+      {
+        if (!consume_value(out, args, i, "--package", options.packageName))
+        {
+          return 1;
+        }
+        continue;
+      }
+      if (arg == "--release")
+      {
+        options.release = true;
+        continue;
+      }
+      if (arg == "--debug")
+      {
+        options.release = false;
+        continue;
+      }
+
+      std::string value;
+      if (parse_prefixed_value(arg, "--project=", value))
+      {
+        options.projectDirectory = value;
+      }
+      else if (parse_prefixed_value(arg, "--package=", value))
+      {
+        options.packageName = value;
+      }
+      else
+      {
+        out.error("Unexpected mobile ios argument: " + arg);
+        out.error_hint("Usage: vix mobile build ios [--project mobile/ios]");
+        return 1;
+      }
+    }
+    return 0;
+  }
+
+  bool resolve_ios_bundle_identifier(
+      const fs::path &directory,
+      std::string &bundle,
+      std::string &error)
+  {
+    if (!bundle.empty())
+    {
+      return true;
+    }
+
+    std::error_code filesystem_error;
+    for (fs::directory_iterator iterator(directory, filesystem_error);
+         !filesystem_error && iterator != fs::directory_iterator();
+         iterator.increment(filesystem_error))
+    {
+      if (iterator->path().extension() != ".xcodeproj")
+      {
+        continue;
+      }
+
+      std::string content;
+      if (!read_text_file(iterator->path() / "project.pbxproj", content, error))
+      {
+        return false;
+      }
+
+      if (extract_quoted_value_after_key(
+              content, "PRODUCT_BUNDLE_IDENTIFIER", bundle))
+      {
+        return true;
+      }
+    }
+
+    error = "cannot resolve iOS bundle identifier from generated Xcode project";
+    return false;
+  }
+
+  int run_build_ios(const std::vector<std::string> &args)
+  {
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
+    IOSProjectCommandOptions options;
+    const int parsed = parse_ios_project_command_options(out, args, options);
+    if (parsed == 2)
+    {
+      return vix::commands::MobileCommand::help();
+    }
+    if (parsed != 0)
+    {
+      return parsed;
+    }
+
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+    out.event("build_start", "project", options.projectDirectory.string());
+    vix::ui::IOSProject project;
+    const vix::ui::Result<fs::path> result = project.build(
+        options.projectDirectory,
+        options.release ? vix::ui::IOSBuildType::Release :
+                          vix::ui::IOSBuildType::Debug);
+    if (result.is_failed())
+    {
+      out.error("iOS mobile build failed.");
+      out.error_hint(result.error_message());
+      return 1;
+    }
+
+    out.event("build_done", "app", result.value().string());
+    out.success("iOS mobile build completed.");
+    out.row("app", result.value().string(), out.theme.cyan());
+    return 0;
+  }
+
+  int run_run_ios(const std::vector<std::string> &args)
+  {
+    MobileReporter out;
+    out.theme.color = mob_detect_color(std::cout);
+    IOSProjectCommandOptions options;
+    const int parsed = parse_ios_project_command_options(out, args, options);
+    if (parsed == 2)
+    {
+      return vix::commands::MobileCommand::help();
+    }
+    if (parsed != 0)
+    {
+      return parsed;
+    }
+
+    mob_finalize_reporter(out, options.logMode, options.colorOverride);
+#if !defined(__APPLE__)
+    out.error("iOS mobile run requires macOS, Xcode, and an iOS Simulator.");
+    return 1;
+#else
+    vix::ui::IOSProject project;
+    const vix::ui::Result<fs::path> built = project.build(
+        options.projectDirectory,
+        options.release ? vix::ui::IOSBuildType::Release :
+                          vix::ui::IOSBuildType::Debug);
+    if (built.is_failed())
+    {
+      out.error("iOS mobile build failed.");
+      out.error_hint(built.error_message());
+      return 1;
+    }
+
+    std::string bundle;
+    std::string error;
+    if (!resolve_ios_bundle_identifier(options.projectDirectory, bundle, error))
+    {
+      out.error("Unable to resolve iOS bundle identifier.");
+      out.error_hint(error);
+      return 1;
+    }
+
+    const std::string simulator = capture_system_command(
+        "xcrun simctl list devices booted | "
+        "sed -n 's/.*(\\([0-9A-Fa-f-]*\\)) (Booted).*/\\1/p' | head -n 1");
+    if (simulator.empty())
+    {
+      out.error("No booted iOS Simulator is available.");
+      out.error_hint("Boot an iOS Simulator with Xcode and try again.");
+      return 1;
+    }
+
+    const int install_result = run_system_command(
+        "xcrun simctl install " + shell_quote(simulator) + " " +
+        shell_quote(built.value().string()));
+    if (install_result != 0)
+    {
+      out.error("Unable to install the iOS application in the Simulator.");
+      return install_result;
+    }
+
+    const std::string launched = capture_system_command(
+        "xcrun simctl launch " + shell_quote(simulator) + " " +
+        shell_quote(bundle));
+    if (launched.empty())
+    {
+      out.error("Unable to launch the iOS application in the Simulator.");
+      return 1;
+    }
+
+    out.event("launched", "bundle", bundle);
+    out.success("iOS mobile shell launched.");
+    out.row("bundle", bundle, out.theme.cyan());
+    return 0;
+#endif
+  }
+
   int parse_android_init_options(
       const MobileReporter &out,
       const std::vector<std::string> &args,
@@ -1564,25 +2006,37 @@ namespace vix::commands
       if (args.size() < 2)
       {
         out.error("Missing mobile target.");
-        out.error_hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
+        out.error_hint("Usage: vix mobile init <android|ios> --name \"My App\" --url https://example.com");
         return 1;
       }
 
-      if (args[1] != "android")
+      if (args[1] == "android")
       {
-        out.error("Unsupported mobile init target: " + args[1]);
-        out.error_hint("Supported target: android");
-        return 1;
+        std::vector<std::string> rest(args.begin() + 2, args.end());
+        return run_init_android(rest);
       }
 
-      std::vector<std::string> rest(args.begin() + 2, args.end());
-      return run_init_android(rest);
+      if (args[1] == "ios")
+      {
+        std::vector<std::string> rest(args.begin() + 2, args.end());
+        return run_init_ios(rest);
+      }
+
+      out.error("Unsupported mobile init target: " + args[1]);
+      out.error_hint("Supported targets: android, ios");
+      return 1;
     }
 
     if (args[0] == "android")
     {
       std::vector<std::string> rest(args.begin() + 1, args.end());
       return run_init_android(rest);
+    }
+
+    if (args[0] == "ios")
+    {
+      std::vector<std::string> rest(args.begin() + 1, args.end());
+      return run_init_ios(rest);
     }
 
     if (args[0] == "build")
@@ -1595,9 +2049,8 @@ namespace vix::commands
       }
       else if (args.size() >= 2 && args[1] == "ios")
       {
-        out.error("Unsupported mobile build target: ios");
-        out.error_hint("Supported target: android");
-        return 1;
+        rest.assign(args.begin() + 2, args.end());
+        return run_build_ios(rest);
       }
       else
       {
@@ -1644,9 +2097,8 @@ namespace vix::commands
       }
       else if (args.size() >= 2 && args[1] == "ios")
       {
-        out.error("Unsupported mobile run target: ios");
-        out.error_hint("Supported target: android");
-        return 1;
+        rest.assign(args.begin() + 2, args.end());
+        return run_run_ios(rest);
       }
       else
       {
@@ -1657,7 +2109,7 @@ namespace vix::commands
     }
 
     out.error("Unknown mobile command: " + args[0]);
-    out.error_hint("Usage: vix mobile init android --name \"My App\" --url https://example.com");
+    out.error_hint("Usage: vix mobile init <android|ios> --name \"My App\" --url https://example.com");
     return 1;
   }
 
@@ -1666,16 +2118,20 @@ namespace vix::commands
     std::cout
         << "Usage:\n"
         << "  vix mobile init android [options]\n"
+        << "  vix mobile init ios [options]\n"
         << "  vix mobile android [options]\n"
+        << "  vix mobile ios [options]\n"
         << "  vix mobile build android [options]\n"
+        << "  vix mobile build ios [options]\n"
         << "  vix mobile build [android] [options]\n"
-        << "  vix mobile run [android] [options]\n\n"
+        << "  vix mobile run [android|ios] [options]\n\n"
         << "  vix mobile wrapper [android] [options]\n"
         << "  vix mobile devices\n"
-        << "  vix mobile run android [options]\n\n"
+        << "  vix mobile run android [options]\n"
+        << "  vix mobile run ios [options]\n\n"
         << "Description:\n"
         << "  Generate a mobile WebView shell for a Vix web or PWA application.\n"
-        << "  The MVP generates an Android project that opens a target URL in WebView.\n"
+        << "  Generates Android or iOS projects that open a target URL in WebView.\n"
         << "  It does not embed the Vix C++ runtime yet.\n\n"
 
         << "Required options:\n"
@@ -1694,7 +2150,13 @@ namespace vix::commands
         << "  --gradle <command>         Gradle command to use. Default: ./gradlew or gradle\n"
         << "  --force                    Allow writing into a non-empty output directory\n\n"
 
-        << "Wrapper/build/run options:\n"
+        << "iOS options:\n"
+        << "  --package <name>           iOS bundle identifier. Default: com.vixcpp.ios\n"
+        << "  --output <dir>, -o <dir>   Output directory. Default: mobile/ios\n"
+        << "  --version-name <name>      iOS marketing version. Default: 1.0.0\n"
+        << "  --deployment-target <ver>  iOS deployment target. Default: 15.0\n\n"
+
+        << "Android wrapper/build/run options:\n"
         << "  --project <dir>            Android project directory. Default: mobile/android\n"
         << "  --package <name>           Android package name used by run\n"
         << "  --debug                    Build/install debug variant (default)\n"
@@ -1703,6 +2165,12 @@ namespace vix::commands
         << "  --gradle-version <version> Gradle wrapper version. Default: 8.14.4\n"
         << "  --distribution-type <type> Wrapper distribution type: bin or all. Default: bin\n"
         << "  --no-install               Run without installing first\n\n"
+
+        << "iOS build/run options:\n"
+        << "  --project <dir>            iOS project directory. Default: mobile/ios\n"
+        << "  --package <name>           Bundle identifier used by run (auto-detected by default)\n"
+        << "  --debug                    Build the Debug simulator application (default)\n"
+        << "  --release                  Build the Release simulator application\n\n"
 
         << "Output options:\n"
         << "  --quiet, -q                Only print errors\n"
@@ -1713,6 +2181,9 @@ namespace vix::commands
         << "  vix mobile init android --name \"My App\" --url https://example.com\n"
         << "  vix mobile init android --name \"Vix Note\" --url http://192.168.1.10:5179\n"
         << "  vix mobile build android\n"
+        << "  vix mobile init ios --name \"My App\" --url https://example.com\n"
+        << "  vix mobile build ios\n"
+        << "  vix mobile run ios --project mobile/ios\n"
         << "  vix mobile run android\n"
         << "  vix mobile run android --project mobile/android --package com.softadastra.app\n"
         << "  vix mobile wrapper android\n"

@@ -1199,11 +1199,6 @@ namespace
       return 1;
     }
 
-    const std::string installTask =
-        options.release
-            ? ":app:installRelease"
-            : ":app:installDebug";
-
     out.banner("Vix Mobile \u00b7 run");
     out.row("project", options.projectDirectory.string());
     out.row("package", options.packageName, out.theme.cyan());
@@ -1213,20 +1208,33 @@ namespace
     {
       out.info_line("Installing Android mobile shell...");
 
-      const int installResult =
-          run_system_command(
-              make_gradle_command(
-                  options.projectDirectory,
-                  installTask,
-                  options.gradleCommand));
+      vix::ui::AndroidProject project;
+      if (!options.gradleCommand.empty())
+      {
+        project.set_gradle_command(options.gradleCommand);
+      }
 
-      if (installResult != 0)
+      const vix::ui::Result<fs::path> built = project.build(
+          options.projectDirectory,
+          options.release
+              ? vix::ui::AndroidBuildType::Release
+              : vix::ui::AndroidBuildType::Debug,
+          vix::ui::AndroidArtifact::Apk);
+      if (built.is_failed())
+      {
+        out.error("Android mobile build failed.");
+        out.error_hint(built.error_message());
+        out.error_hint("You can pass --gradle <command> if Gradle is not in PATH.");
+        return 1;
+      }
+
+      const int install_result = run_system_command(
+          "adb install -r " + shell_quote(built.value().string()));
+      if (install_result != 0)
       {
         out.error("Android mobile install failed.");
-        out.error_hint("Make sure Gradle, Android SDK, and adb are installed.");
-        out.error_hint("Make sure an Android device or emulator is connected.");
-        out.error_hint("You can pass --gradle <command> if Gradle is not in PATH.");
-        return installResult;
+        out.error_hint("Make sure adb is installed and a device or emulator is connected.");
+        return install_result;
       }
     }
 
@@ -1484,6 +1492,7 @@ namespace
     return 0;
   }
 
+#if defined(__APPLE__)
   bool resolve_ios_bundle_identifier(
       const fs::path &directory,
       std::string &bundle,
@@ -1520,6 +1529,7 @@ namespace
     error = "cannot resolve iOS bundle identifier from generated Xcode project";
     return false;
   }
+#endif
 
   int run_build_ios(const std::vector<std::string> &args)
   {
@@ -1976,8 +1986,8 @@ namespace
 
     out.success("Android mobile shell generated.");
 
-    out.hint("Next: cd " + options.outputDirectory.string() + " && gradle :app:assembleDebug");
-    out.hint("Later this will be wrapped by: vix mobile build android");
+    out.hint("Next: vix mobile build android --project " +
+             options.outputDirectory.string());
 
     return 0;
   }

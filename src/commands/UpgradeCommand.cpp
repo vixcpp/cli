@@ -18,12 +18,14 @@
 #include <vix/cli/Style.hpp>
 #include <vix/cli/sdk/SdkProfiles.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/requests/Client.hpp>
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -31,7 +33,9 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -1115,153 +1119,55 @@ namespace vix::commands
     {
       const std::string api = "https://api.github.com/repos/" + repoStr + "/releases/latest";
 
-      std::string body;
+      try
+      {
+        vix::requests::RequestOptions options;
+        options.set_user_agent("vix-upgrade");
+        options.follow_redirects = true;
 
-      if (have_cmd("curl"))
-      {
-        body = exec_capture("curl -fsSL -H " + shell_quote("User-Agent: vix-upgrade") + " " + shell_quote(api) + stderr_null_suffix());
-      }
-#ifndef _WIN32
-      else if (have_cmd("wget"))
-      {
-        body = exec_capture("wget -qO- --header=" + shell_quote("User-Agent: vix-upgrade") + " " + shell_quote(api) + stderr_null_suffix());
-      }
-#else
-      else
-      {
-        const std::string ps =
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-            "\"$r=Invoke-RestMethod -Uri '" +
-            api + "' -Headers @{ 'User-Agent'='vix-upgrade' }; "
-                  "if($null -eq $r.tag_name){ exit 1 } "
-                  "Write-Output $r.tag_name\"";
-        body = exec_capture(ps);
-      }
-#endif
-
-      body = trim_copy(body);
-
-      if (!body.empty() && body.front() == '{')
-      {
-        try
+        vix::requests::Client client;
+        const auto response = client.get(api, options);
+        if (response.ok())
         {
-          const json j = json::parse(body);
-          const std::string tag = j.value("tag_name", "");
+          const json payload = json::parse(response.text());
+          const std::string tag = payload.value("tag_name", "");
           if (!tag.empty())
             return tag;
         }
-        catch (...)
-        {
-          const std::string key = "\"tag_name\"";
-          const std::size_t k = body.find(key);
-          if (k != std::string::npos)
-          {
-            const std::size_t colon = body.find(':', k + key.size());
-            const std::size_t q1 = colon == std::string::npos ? std::string::npos : body.find('"', colon);
-            const std::size_t q2 = q1 == std::string::npos ? std::string::npos : body.find('"', q1 + 1);
-            if (q1 != std::string::npos && q2 != std::string::npos)
-            {
-              const std::string tag = body.substr(q1 + 1, q2 - (q1 + 1));
-              if (!tag.empty())
-                return tag;
-            }
-          }
-        }
-
-        throw std::runtime_error("could not resolve latest tag");
       }
-
-      if (starts_with(body, "v"))
-        return body;
+      catch (const std::exception &)
+      {
+      }
 
       throw std::runtime_error("could not resolve latest tag. Use: vix upgrade --version vX.Y.Z");
     }
 
     std::optional<long long> remote_content_length(const std::string &url)
     {
-      if (have_cmd("curl"))
+      try
       {
-        const std::string headers = exec_capture("curl -fsSLI " + shell_quote(url) + stderr_null_suffix());
-        long long lastLen = -1;
+        vix::requests::RequestOptions options;
+        options.follow_redirects = true;
 
-        std::string line;
-        line.reserve(256);
+        vix::requests::Client client;
+        const auto response = client.head(url, options);
+        const int status = response.status_code();
+        if (status < 200 || status >= 400)
+          return std::nullopt;
 
-        auto flush_line = [&](std::string &ln)
+        const auto length = response.content_length();
+        if (!length.has_value() || *length == 0U ||
+            *length > static_cast<std::size_t>(std::numeric_limits<long long>::max()))
         {
-          if (!ln.empty() && ln.back() == '\r')
-            ln.pop_back();
-
-          std::string low = ln;
-          std::transform(
-              low.begin(),
-              low.end(),
-              low.begin(),
-              [](unsigned char c)
-              { return static_cast<char>(std::tolower(c)); });
-
-          const std::string key = "content-length:";
-          if (low.rfind(key, 0) == 0)
-          {
-            std::string v = trim_copy(ln.substr(key.size()));
-            if (!v.empty())
-            {
-              try
-              {
-                const long long n = std::stoll(v);
-                if (n > 0)
-                  lastLen = n;
-              }
-              catch (...)
-              {
-              }
-            }
-          }
-
-          ln.clear();
-        };
-
-        for (char c : headers)
-        {
-          if (c == '\n')
-          {
-            flush_line(line);
-            continue;
-          }
-          line.push_back(c);
+          return std::nullopt;
         }
 
-        if (!line.empty())
-          flush_line(line);
-
-        if (lastLen > 0)
-          return lastLen;
+        return static_cast<long long>(*length);
       }
-
-#ifdef _WIN32
-      const std::string ps =
-          "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-          "\"try{ $r=[System.Net.HttpWebRequest]::Create('" +
-          url + "'); "
-                "$r.Method='HEAD'; $r.AllowAutoRedirect=$true; $resp=$r.GetResponse(); "
-                "$len=$resp.ContentLength; $resp.Close(); if($len -gt 0){ Write-Output $len } }catch{}\"";
-
-      const std::string out = trim_copy(exec_capture(ps));
-      if (!out.empty())
+      catch (const std::exception &)
       {
-        try
-        {
-          const long long n = std::stoll(out);
-          if (n > 0)
-            return n;
-        }
-        catch (...)
-        {
-        }
+        return std::nullopt;
       }
-#endif
-
-      return std::nullopt;
     }
 
     bool remote_url_exists(const std::string &url)
@@ -1269,42 +1175,20 @@ namespace vix::commands
       if (url.empty())
         return false;
 
-      if (have_cmd("curl"))
+      try
       {
-        const std::string cmd =
-            "curl -fsSLI " + shell_quote(url) + quiet_suffix();
+        vix::requests::RequestOptions options;
+        options.follow_redirects = true;
 
-        return exec_status(cmd) == 0;
+        vix::requests::Client client;
+        const auto response = client.head(url, options);
+        const int status = response.status_code();
+        return status >= 200 && status < 400;
       }
-
-#ifndef _WIN32
-      if (have_cmd("wget"))
+      catch (const std::exception &)
       {
-        const std::string cmd =
-            "wget --spider -q " + shell_quote(url) + quiet_suffix();
-
-        return exec_status(cmd) == 0;
+        return false;
       }
-#else
-      const std::string ps =
-          "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-          "\"try{"
-          "$r=[System.Net.HttpWebRequest]::Create('" +
-          url +
-          "');"
-          "$r.Method='HEAD';"
-          "$r.AllowAutoRedirect=$true;"
-          "$resp=$r.GetResponse();"
-          "$code=[int]$resp.StatusCode;"
-          "$resp.Close();"
-          "if($code -ge 200 -and $code -lt 400){ exit 0 }"
-          "exit 1"
-          "}catch{ exit 1 }\"";
-
-      return exec_status(ps + quiet_suffix()) == 0;
-#endif
-
-      return false;
     }
 
     std::string human_bytes(long long bytes)
@@ -1333,38 +1217,43 @@ namespace vix::commands
     {
       std::error_code ec;
       fs::create_directories(out.parent_path(), ec);
+      static_cast<void>(verbose);
 
-      const std::string o = out.string();
-
-      if (have_cmd("curl"))
-      {
-        const std::string cmd = "curl -fSsL " + shell_quote(url) + " -o " + shell_quote(o);
-        if (run_quiet_or_verbose(cmd, verbose) != 0)
-          throw std::runtime_error("download failed");
-        return;
-      }
-
-#ifndef _WIN32
-      if (have_cmd("wget"))
-      {
-        const std::string cmd = "wget -qO " + shell_quote(o) + " " + shell_quote(url);
-        if (run_quiet_or_verbose(cmd, verbose) != 0)
-          throw std::runtime_error("download failed");
-        return;
-      }
-#else
-      const std::string ps =
-          "powershell -NoProfile -ExecutionPolicy Bypass -Command "
-          "\"Invoke-WebRequest -Uri '" +
-          url + "' -OutFile '" + o + "' -Headers @{ 'User-Agent'='vix-upgrade' }\"";
-
-      if (run_quiet_or_verbose(ps, verbose) != 0)
+      std::ofstream file(out, std::ios::binary | std::ios::trunc);
+      if (!file)
         throw std::runtime_error("download failed");
 
-      return;
-#endif
+      try
+      {
+        vix::requests::RequestOptions options;
+        options.follow_redirects = true;
+        options.body_sink = [&file](std::span<const std::byte> chunk)
+        {
+          file.write(
+              reinterpret_cast<const char *>(chunk.data()),
+              static_cast<std::streamsize>(chunk.size()));
+          if (!file)
+            throw std::runtime_error("download failed");
+        };
 
-      throw std::runtime_error("need curl (or wget on Unix) to download");
+        vix::requests::Client client;
+        const auto response = client.get(url, options);
+        if (!response.ok())
+          throw std::runtime_error("download failed");
+
+        file.flush();
+        if (!file)
+          throw std::runtime_error("download failed");
+
+        file.close();
+        if (file.fail())
+          throw std::runtime_error("download failed");
+      }
+      catch (...)
+      {
+        file.close();
+        throw std::runtime_error("download failed");
+      }
     }
 
     std::string read_first_line(const fs::path &p)

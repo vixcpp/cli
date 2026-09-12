@@ -15,6 +15,7 @@
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/requests/Client.hpp>
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
@@ -305,97 +306,27 @@ namespace vix::commands
 
     std::optional<std::string> github_latest_tag(const std::string &repo)
     {
-      // Uses best available tool:
-      // - Linux/macOS: curl or wget
-      // - Windows: PowerShell Invoke-RestMethod
-#ifdef _WIN32
-      // Note: keep it single-line friendly for _popen.
-      const std::string ps =
-          "powershell -NoProfile -Command \""
-          "$r=Invoke-RestMethod -Headers @{ 'User-Agent'='vix-doctor' } "
-          "-Uri 'https://api.github.com/repos/" +
-          repo +
-          "/releases/latest'; "
-          "if($r.tag_name){Write-Output $r.tag_name}\"";
-      auto out = run_capture(ps + " 2>nul");
-      if (!out)
-        return std::nullopt;
-      auto tag = trim_copy(*out);
-      if (tag.empty())
-        return std::nullopt;
-      return tag;
-#else
-      if (have_cmd("curl"))
+      try
       {
-        auto out = run_capture(
-            "curl -fSsL -H 'User-Agent: vix-doctor' "
-            "'https://api.github.com/repos/" +
-            repo +
-            "/releases/latest' 2>/dev/null");
-        if (!out)
+        vix::requests::RequestOptions options;
+        options.set_user_agent("vix-doctor");
+        options.follow_redirects = true;
+
+        vix::requests::Client client;
+        const auto response = client.get(
+            "https://api.github.com/repos/" + repo + "/releases/latest",
+            options);
+        if (!response.ok())
           return std::nullopt;
 
-        // Extract "tag_name":"vX.Y.Z" without jq
-        const std::string &body = *out;
-        const std::string key = "\"tag_name\"";
-        const auto pos = body.find(key);
-        if (pos == std::string::npos)
-          return std::nullopt;
-
-        const auto colon = body.find(':', pos);
-        if (colon == std::string::npos)
-          return std::nullopt;
-
-        const auto q1 = body.find('"', colon);
-        if (q1 == std::string::npos)
-          return std::nullopt;
-
-        const auto q2 = body.find('"', q1 + 1);
-        if (q2 == std::string::npos || q2 <= q1 + 1)
-          return std::nullopt;
-
-        const std::string tag = body.substr(q1 + 1, q2 - (q1 + 1));
-        if (tag.empty())
-          return std::nullopt;
-        return tag;
+        const auto payload = json::parse(response.text());
+        const auto tag = payload.value("tag_name", std::string{});
+        return tag.empty() ? std::nullopt : std::optional<std::string>{tag};
       }
-
-      if (have_cmd("wget"))
+      catch (const std::exception &)
       {
-        auto out = run_capture(
-            "wget -qO- "
-            "'https://api.github.com/repos/" +
-            repo +
-            "/releases/latest' 2>/dev/null");
-        if (!out)
-          return std::nullopt;
-
-        const std::string &body = *out;
-        const std::string key = "\"tag_name\"";
-        const auto pos = body.find(key);
-        if (pos == std::string::npos)
-          return std::nullopt;
-
-        const auto colon = body.find(':', pos);
-        if (colon == std::string::npos)
-          return std::nullopt;
-
-        const auto q1 = body.find('"', colon);
-        if (q1 == std::string::npos)
-          return std::nullopt;
-
-        const auto q2 = body.find('"', q1 + 1);
-        if (q2 == std::string::npos || q2 <= q1 + 1)
-          return std::nullopt;
-
-        const std::string tag = body.substr(q1 + 1, q2 - (q1 + 1));
-        if (tag.empty())
-          return std::nullopt;
-        return tag;
+        return std::nullopt;
       }
-
-      return std::nullopt;
-#endif
     }
 
     struct Options
@@ -1106,13 +1037,19 @@ namespace vix::commands
       if (port.empty())
         return false;
 
-      if (!have_cmd("curl"))
+      try
+      {
+        vix::requests::RequestOptions options;
+        options.follow_redirects = false;
+        options.timeout.set_total(vix::requests::Timeout::Duration{3000});
+
+        vix::requests::Client client;
+        return client.get("http://127.0.0.1:" + port + "/", options).ok();
+      }
+      catch (const std::exception &)
+      {
         return false;
-
-      const std::string cmd =
-          "curl -fsS --max-time 3 http://127.0.0.1:" + port + "/ >/dev/null 2>&1";
-
-      return std::system(cmd.c_str()) == 0;
+      }
     }
 
     bool public_health_ok(const std::string &domain)
@@ -1120,13 +1057,19 @@ namespace vix::commands
       if (domain.empty())
         return false;
 
-      if (!have_cmd("curl"))
+      try
+      {
+        vix::requests::RequestOptions options;
+        options.follow_redirects = false;
+        options.timeout.set_total(vix::requests::Timeout::Duration{5000});
+
+        vix::requests::Client client;
+        return client.get("https://" + domain + "/", options).ok();
+      }
+      catch (const std::exception &)
+      {
         return false;
-
-      const std::string cmd =
-          "curl -fsS --max-time 5 https://" + domain + "/ >/dev/null 2>&1";
-
-      return std::system(cmd.c_str()) == 0;
+      }
     }
 
     enum class ReadinessStatus
@@ -1756,8 +1699,6 @@ namespace vix::commands
     print_dep_status("Get-FileHash", true, "");
     print_dep_status("Expand-Archive", true, "");
 #else
-    print_dep_status("curl or wget", have_cmd("curl") || have_cmd("wget"),
-                     "Install curl (recommended) or wget.");
     print_dep_status("tar", have_cmd("tar"), "Install tar (usually preinstalled).");
     print_dep_status("sha256sum or shasum", have_cmd("sha256sum") || have_cmd("shasum"),
                      "Install sha256sum (Linux coreutils) or shasum (macOS).");
@@ -1802,7 +1743,7 @@ namespace vix::commands
       }
       else
       {
-        vix::cli::util::warn_line(std::cerr, "failed to resolve latest tag (missing curl/wget, no network, or API rate limit)");
+        vix::cli::util::warn_line(std::cerr, "failed to resolve latest tag (network unavailable, GitHub API unavailable, or API rate limit)");
       }
     }
 
@@ -1844,10 +1785,9 @@ namespace vix::commands
     int rc = 0;
 
 #ifndef _WIN32
-    const bool haveNet = have_cmd("curl") || have_cmd("wget");
     const bool haveTar = have_cmd("tar");
     const bool haveSha = have_cmd("sha256sum") || have_cmd("shasum");
-    if (!haveNet || !haveTar || !haveSha)
+    if (!haveTar || !haveSha)
       rc = 1;
 #endif
 

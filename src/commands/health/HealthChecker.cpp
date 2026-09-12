@@ -14,12 +14,11 @@
 #include <vix/cli/commands/health/HealthConfig.hpp>
 #include <vix/cli/commands/health/HealthOutput.hpp>
 
-#include <vix/net/http/ClientRequest.hpp>
-#include <vix/net/http/CurlClient.hpp>
-#include <vix/net/http/Method.hpp>
+#include <vix/requests/Client.hpp>
 
 #include <chrono>
 #include <cstdlib>
+#include <exception>
 #include <iostream>
 #include <string>
 
@@ -78,35 +77,48 @@ namespace vix::commands::health::checker
       result.expectedStatus = endpoint.expectedStatus;
       result.maxResponseMs = endpoint.maxResponseMs;
 
-      vix::net::http::CurlClient client;
-
-      vix::net::http::ClientRequest request;
-      request.set_method(vix::net::http::Method::Head)
-          .set_url(websocket_http_url(endpoint.url))
-          .set_timeout_ms(endpoint.timeoutMs);
-
       const auto start = std::chrono::steady_clock::now();
-      auto response = client.send(request);
-      const auto end = std::chrono::steady_clock::now();
-
-      result.responseMs =
-          static_cast<std::uint64_t>(
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  end - start)
-                  .count());
-
-      if (!response)
+      try
       {
+        vix::requests::RequestOptions options;
+        options.follow_redirects = false;
+
+        if (endpoint.timeoutMs != 0)
+        {
+          const std::uint64_t timeoutSeconds = endpoint.timeoutMs / 1000;
+          const std::uint64_t effectiveSeconds =
+              timeoutSeconds == 0 ? 1 : timeoutSeconds;
+          options.timeout.set_total(vix::requests::Timeout::Duration{
+              static_cast<vix::requests::Timeout::Duration::rep>(
+                  effectiveSeconds * 1000)});
+        }
+
+        vix::requests::Client client;
+        const auto response = client.head(
+            websocket_http_url(endpoint.url), options);
+        const auto end = std::chrono::steady_clock::now();
+
+        result.responseMs =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end - start)
+                    .count());
+        result.actualStatus = response.status_code();
+      }
+      catch (const std::exception &ex)
+      {
+        const auto end = std::chrono::steady_clock::now();
+
+        result.responseMs =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end - start)
+                    .count());
         result.actualStatus = 0;
         result.healthy = false;
-        result.error = response.error().message();
+        result.error = ex.what();
         return result;
       }
-
-      result.actualStatus = response.value().status_code;
-
-      if (response.value().has_error())
-        result.error = response.value().error;
 
       if (result.actualStatus != result.expectedStatus)
       {
@@ -138,39 +150,52 @@ namespace vix::commands::health::checker
       result.expectedStatus = endpoint.expectedStatus;
       result.maxResponseMs = endpoint.maxResponseMs;
 
-      vix::net::http::CurlClient client;
-
-      vix::net::http::ClientRequest request;
-      request.set_method(vix::net::http::Method::Get)
-          .set_url(websocket_http_url(endpoint.url))
-          .set_timeout_ms(endpoint.timeoutMs)
-          .set_header("Connection", "Upgrade")
-          .set_header("Upgrade", "websocket")
-          .set_header("Sec-WebSocket-Key", "SGVsbG8sIHdvcmxkIQ==")
-          .set_header("Sec-WebSocket-Version", "13");
-
       const auto start = std::chrono::steady_clock::now();
-      auto response = client.send(request);
-      const auto end = std::chrono::steady_clock::now();
-
-      result.responseMs =
-          static_cast<std::uint64_t>(
-              std::chrono::duration_cast<std::chrono::milliseconds>(
-                  end - start)
-                  .count());
-
-      if (!response)
+      try
       {
+        vix::requests::RequestOptions options;
+        options.follow_redirects = false;
+        options.headers.set("Connection", "Upgrade");
+        options.headers.set("Upgrade", "websocket");
+        options.headers.set("Sec-WebSocket-Key", "SGVsbG8sIHdvcmxkIQ==");
+        options.headers.set("Sec-WebSocket-Version", "13");
+
+        if (endpoint.timeoutMs != 0)
+        {
+          const std::uint64_t timeoutSeconds = endpoint.timeoutMs / 1000;
+          const std::uint64_t effectiveSeconds =
+              timeoutSeconds == 0 ? 1 : timeoutSeconds;
+          options.timeout.set_total(vix::requests::Timeout::Duration{
+              static_cast<vix::requests::Timeout::Duration::rep>(
+                  effectiveSeconds * 1000)});
+        }
+
+        vix::requests::Client client;
+        const auto response = client.get(
+            websocket_http_url(endpoint.url), options);
+        const auto end = std::chrono::steady_clock::now();
+
+        result.responseMs =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end - start)
+                    .count());
+        result.actualStatus = response.status_code();
+      }
+      catch (const std::exception &ex)
+      {
+        const auto end = std::chrono::steady_clock::now();
+
+        result.responseMs =
+            static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    end - start)
+                    .count());
         result.actualStatus = 0;
         result.healthy = false;
-        result.error = response.error().message();
+        result.error = ex.what();
         return result;
       }
-
-      result.actualStatus = response.value().status_code;
-
-      if (response.value().has_error())
-        result.error = response.value().error;
 
       if (result.actualStatus != result.expectedStatus)
       {

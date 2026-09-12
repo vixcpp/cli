@@ -35,9 +35,9 @@ namespace vix::cli::sdk
         "default", "web", "data", "desktop", "p2p", "game", "agent", "all"};
 
     const std::vector<std::string> kBaseModules{
-        "cli", "core", "json", "error", "path", "fs", "io", "env", "os",
+        "core", "json", "error", "path", "fs", "io", "env", "os",
         "utils", "log", "async", "time", "process", "threadpool", "template",
-        "ui", "note", "net", "sync", "crypto", "cache", "requests"};
+        "ui", "note", "reply", "net", "sync", "conversion"};
 
     std::string lower_copy(std::string s)
     {
@@ -406,16 +406,20 @@ namespace vix::cli::sdk
 
     const std::vector<std::string> baseLinuxDeps{
         "build-essential", "cmake", "ninja-build", "pkg-config",
-        "ca-certificates", "git", "curl", "tar", "unzip", "zip",
-        "nlohmann-json3-dev", "libssl-dev", "zlib1g-dev",
-        "libsqlite3-dev", "libbrotli-dev", "libspdlog-dev", "libfmt-dev"};
+        "ca-certificates", "git", "tar", "unzip", "zip"};
     const std::vector<std::string> baseMacosDeps{
         "xcode-select --install",
-        "brew install cmake ninja pkg-config openssl@3 nlohmann-json spdlog fmt"};
+        "brew install cmake ninja pkg-config"};
     const std::vector<std::string> baseWindowsDeps{
         "Visual Studio 2022 Build Tools", "CMake", "Ninja", "Git",
-        "WebView2 Runtime",
-        "vcpkg install openssl sqlite3 zlib brotli nlohmann-json spdlog fmt --triplet x64-windows"};
+        "WebView2 Runtime"};
+
+    std::vector<std::string> opensslLinuxDeps = baseLinuxDeps;
+    opensslLinuxDeps.emplace_back("libssl-dev");
+    std::vector<std::string> opensslMacosDeps = baseMacosDeps;
+    opensslMacosDeps.emplace_back("brew install openssl@3");
+    std::vector<std::string> opensslWindowsDeps = baseWindowsDeps;
+    opensslWindowsDeps.emplace_back("vcpkg install openssl --triplet x64-windows");
 
     if (profile == "default")
       return make_info(profile, "Default SDK",
@@ -426,21 +430,22 @@ namespace vix::cli::sdk
     if (profile == "web")
       return make_info(profile, "Web SDK",
                        "SDK for HTTP, middleware, WebSocket, Realtime, validation, crypto, WebRPC and requests.",
-                       {"websocket", "realtime", "middleware", "validation", "webrpc"},
-                       baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
+                       {"websocket", "realtime", "middleware", "validation", "webrpc",
+                        "crypto", "requests"},
+                       opensslLinuxDeps, opensslMacosDeps, opensslWindowsDeps,
                        {"Use this for APIs, realtime apps and backend services."});
 
     if (profile == "data")
       return make_info(profile, "Data SDK",
                        "SDK for database, ORM, key-value storage and cache workflows.",
-                       {"db", "orm", "kv"},
+                       {"db", "orm", "kv", "cache"},
                        baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
-                       {"SQLite is the default lightweight local database dependency."});
+                       {"SQLite is supplied by Vix in bundled SDK builds."});
 
     if (profile == "desktop")
       return make_info(profile, "Desktop SDK",
                        "SDK for desktop apps using the Vix UI desktop shell.",
-                       {"desktop", "ui-webview"},
+                       {},
                        sorted_unique(std::vector<std::string>(baseLinuxDeps.begin(), baseLinuxDeps.end())),
                        baseMacosDeps, baseWindowsDeps,
                        {"On Linux, WebKitGTK is required for the desktop WebView backend."});
@@ -448,7 +453,8 @@ namespace vix::cli::sdk
     if (profile == "p2p")
       return make_info(profile, "P2P SDK",
                        "SDK for peer-to-peer networking, crypto and local-first sync systems.",
-                       {"p2p", "p2p_http"}, baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
+                       {"p2p", "p2p_http", "crypto", "cache"},
+                       opensslLinuxDeps, opensslMacosDeps, opensslWindowsDeps,
                        {"Use this for node, discovery, replication and local network workflows."});
 
     if (profile == "game")
@@ -460,15 +466,17 @@ namespace vix::cli::sdk
     if (profile == "agent")
       return make_info(profile, "Agent SDK",
                        "SDK for AI agent tooling and controlled automation workflows.",
-                       {"agent"}, baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
+                       {"agent", "crypto", "cache"},
+                       opensslLinuxDeps, opensslMacosDeps, opensslWindowsDeps,
                        {"Use this for agent-oriented tooling, local state and runtime orchestration."});
 
     if (profile == "all")
       return make_info(profile, "Full SDK",
                        "Complete SDK with web, data, desktop, p2p, game and agent modules.",
                        {"websocket", "realtime", "middleware", "validation", "webrpc",
-                        "db", "orm", "kv", "p2p", "p2p_http", "game", "agent"},
-                       baseLinuxDeps, baseMacosDeps, baseWindowsDeps,
+                        "requests", "crypto", "db", "orm", "kv", "cache", "p2p",
+                        "p2p_http", "game", "agent", "tests"},
+                       opensslLinuxDeps, opensslMacosDeps, opensslWindowsDeps,
                        {"This profile is heavier. Prefer a smaller profile when possible."});
 
     return std::nullopt;

@@ -12,11 +12,9 @@
  *
  */
 #include <vix/cli/commands/ServiceCommand.hpp>
-#include <vix/net/http/CurlClient.hpp>
-#include <vix/net/http/ClientRequest.hpp>
-#include <vix/net/http/Method.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/utils/Env.hpp>
+#include <vix/requests/Client.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -88,26 +86,31 @@ namespace vix::commands
     {
       HealthResult result;
 
-      vix::net::http::CurlClient client;
-
-      vix::net::http::ClientRequest request;
-      request.set_method(vix::net::http::Method::Get)
-          .set_url(url)
-          .set_timeout_ms(timeoutMs);
-
-      auto response = client.send(request);
-
-      if (!response)
+      try
       {
-        result.error = std::string(response.error().message());
-        return result;
+        vix::requests::RequestOptions options;
+        options.follow_redirects = false;
+
+        if (timeoutMs != 0)
+        {
+          const std::uint64_t timeoutSeconds = timeoutMs / 1000;
+          const std::uint64_t effectiveSeconds =
+              timeoutSeconds == 0 ? 1 : timeoutSeconds;
+          options.timeout.set_total(vix::requests::Timeout::Duration{
+              static_cast<vix::requests::Timeout::Duration::rep>(
+                  effectiveSeconds * 1000)});
+        }
+
+        vix::requests::Client client;
+        const auto response = client.get(url, options);
+
+        result.statusCode = response.status_code();
+        result.ok = response.ok();
       }
-
-      result.statusCode = response.value().status_code;
-      result.ok = response.value().success();
-
-      if (!response.value().error.empty())
-        result.error = response.value().error;
+      catch (const std::exception &ex)
+      {
+        result.error = ex.what();
+      }
 
       return result;
     }

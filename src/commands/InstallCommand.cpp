@@ -28,6 +28,9 @@
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/util/GitProgress.hpp>
 #include <vix/cli/util/ProjectMutation.hpp>
+#include <vix/cli/util/Lockfile.hpp>
+#include <vix/cli/util/Manifest.hpp>
+#include <vix/cli/util/Resolver.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -513,10 +516,10 @@ namespace vix::commands
         if (visible_ && event.phase == lastPhase_ && now - lastRender_ < std::chrono::milliseconds(100))
           return;
         std::ostringstream line;
-        line << "  " << CYAN << "•" << RESET << " " << CYAN << BOLD << dependency_ << RESET;
+        line << "  " << ACCENT << "•" << RESET << " " << ACCENT << BOLD << dependency_ << RESET;
         if (packageCount_ > 1)
-          line << " " << GRAY << "(" << (packageIndex_ + 1) << "/" << packageCount_ << " packages)" << RESET;
-        line << "  " << GRAY << event.phase;
+          line << " " << MUTED << "(" << (packageIndex_ + 1) << "/" << packageCount_ << " packages)" << RESET;
+        line << "  " << MUTED << event.phase;
         if (event.percent)
           line << " " << *event.percent << "%";
         if (!event.transferred.empty())
@@ -937,8 +940,9 @@ namespace vix::commands
 
       if (!printedRefreshLine)
       {
-        std::cout << "  " << CYAN << "•" << RESET << " "
-                  << GRAY << "refreshing obsolete integrity metadata" << RESET << "\n";
+        vix::cli::util::info_line(
+            std::cout,
+            "refreshing obsolete integrity metadata");
         printedRefreshLine = true;
       }
 
@@ -950,13 +954,9 @@ namespace vix::commands
       lockEntry["hash_algorithm"] = dep.hashAlgorithm;
       lockEntry["hash_version"] = dep.hashVersion;
 
-      std::cout << "  " << CYAN << "•" << RESET << " "
-                << CYAN << BOLD << dep.id << RESET
-                << GRAY << "@" << RESET
-                << YELLOW << BOLD << dep.version << RESET
-                << "  "
-                << GRAY << "metadata updated" << RESET
-                << "\n";
+      vix::cli::util::info_line(
+          std::cout,
+          dep.id + "@" + dep.version + "  metadata updated");
 
       return true;
     }
@@ -1991,10 +1991,8 @@ namespace vix::commands
       return out;
     }
 
-    static void generate_cmake(const std::vector<DepResolved> &deps)
+    static std::string render_cmake(const std::vector<DepResolved> &deps)
     {
-      fs::create_directories(project_vix_dir());
-
       std::ostringstream out;
 
       out << "cmake_minimum_required(VERSION 3.20)\n";
@@ -2342,7 +2340,14 @@ namespace vix::commands
 
       out << "\n";
 
-      const std::string generated = out.str();
+      return out.str();
+    }
+
+    static void generate_cmake(const std::vector<DepResolved> &deps)
+    {
+      fs::create_directories(project_vix_dir());
+
+      const std::string generated = render_cmake(deps);
       std::ifstream existing(project_deps_cmake(), std::ios::binary);
       std::ostringstream existingContents;
       if (existing)
@@ -2356,6 +2361,93 @@ namespace vix::commands
       file << generated;
       if (!file)
         throw std::runtime_error("cannot write: " + project_deps_cmake().string());
+    }
+
+    static bool lock_satisfies_manifest(
+        const json &lock,
+        const std::vector<vix::cli::util::manifest::Dependency> &manifestDependencies)
+    {
+      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
+        return false;
+
+      for (const auto &requested : manifestDependencies)
+      {
+        const json *locked = nullptr;
+        for (const auto &entry : lock["dependencies"])
+        {
+          if (entry.is_object() && entry.value("id", "") == requested.id)
+          {
+            locked = &entry;
+            break;
+          }
+        }
+
+        if (locked == nullptr || !locked->contains("version") || !(*locked)["version"].is_string() ||
+            !vix::cli::util::semver::satisfies((*locked)["version"].get<std::string>(), requested.requested))
+          return false;
+      }
+
+      return true;
+    }
+
+    static std::vector<vix::cli::util::lockfile::LockedDependency>
+    registry_locked_dependencies(const json &lock)
+    {
+      std::vector<vix::cli::util::lockfile::LockedDependency> dependencies;
+      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
+        return dependencies;
+
+      for (const auto &entry : lock["dependencies"])
+      {
+        if (!entry.is_object() || entry.value("source", "") == "git")
+          continue;
+
+        dependencies.push_back({
+            entry.value("id", ""),
+            entry.value("requested", ""),
+            entry.value("version", ""),
+            entry.value("repo", ""),
+            entry.value("tag", ""),
+            entry.value("commit", ""),
+            entry.value("hash", ""),
+            entry.value("hash_algorithm", ""),
+            entry.value("hash_version", 0)});
+      }
+
+      return dependencies;
+    }
+
+    static json reconcile_registry_lock_if_needed(
+        const json &currentLock,
+        bool &changed)
+    {
+      const auto manifestDependencies =
+          vix::cli::util::manifest::read_manifest_dependencies_or_throw(
+              fs::current_path() / "vix.json");
+
+      if (manifestDependencies.empty() ||
+          lock_satisfies_manifest(currentLock, manifestDependencies))
+        return currentLock;
+
+      const auto resolved =
+          vix::cli::util::resolver::resolve_project_dependencies_or_throw(
+              manifestDependencies);
+      const auto preserved = vix::cli::util::lockfile::preserve_valid_resolutions(
+          resolved, registry_locked_dependencies(currentLock));
+      json reconciled = json::parse(
+          vix::cli::util::lockfile::serialize_lockfile(preserved));
+
+      if (currentLock.contains("dependencies") && currentLock["dependencies"].is_array())
+      {
+        for (const auto &existing : currentLock["dependencies"])
+        {
+          if (existing.is_object() && existing.value("source", "") == "git")
+            reconciled["dependencies"].push_back(existing);
+        }
+      }
+
+      changed = true;
+      return reconciled;
     }
 
     struct GlobalExecutableDecl
@@ -4464,6 +4556,19 @@ namespace vix::commands
 
       const fs::path lp = lock_path();
 
+      std::vector<vix::cli::util::manifest::Dependency> manifestDependencies;
+      try
+      {
+        manifestDependencies =
+            vix::cli::util::manifest::read_manifest_dependencies_or_throw(
+                fs::current_path() / "vix.json");
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("failed to read vix.json: ") + ex.what());
+        return 1;
+      }
+
       // vix.app is the desired state for Git dependencies. Reconcile it
       // before reading the exact state to materialize, without touching
       // unchanged locked entries.
@@ -4492,28 +4597,60 @@ namespace vix::commands
         didWork = true;
       }
 
-      if (!fs::exists(lp))
-      {
-        vix::cli::util::err_line(std::cerr, "missing vix.lock");
-        vix::cli::util::warn_line(std::cerr, "Run: vix add @namespace/name[@version] or vix install <git-url>");
-        return 1;
-      }
-
       json lock;
-      try
+      if (fs::exists(lp))
       {
-        lock = read_json_or_throw(lp);
+        try
+        {
+          lock = read_json_or_throw(lp);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("failed to read vix.lock: ") + ex.what());
+          return 1;
+        }
       }
-      catch (const std::exception &ex)
+      else
       {
-        vix::cli::util::err_line(std::cerr, std::string("failed to read vix.lock: ") + ex.what());
-        return 1;
+        if (manifestDependencies.empty())
+        {
+          vix::cli::util::err_line(std::cerr, "missing vix.lock");
+          vix::cli::util::warn_line(std::cerr, "Run: vix add @namespace/name[@version] or vix install <git-url>");
+          return 1;
+        }
+        lock["lockVersion"] = 1;
+        lock["dependencies"] = json::array();
       }
 
       if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
       {
         vix::cli::util::err_line(std::cerr, "invalid vix.lock: missing dependencies[]");
         return 1;
+      }
+
+      try
+      {
+        lock = reconcile_registry_lock_if_needed(lock, lockChanged);
+      }
+      catch (const std::exception &ex)
+      {
+        vix::cli::util::err_line(std::cerr, std::string("failed to reconcile registry dependencies: ") + ex.what());
+        return 1;
+      }
+
+      if (lockChanged)
+      {
+        try
+        {
+          save_lock_json(lock);
+        }
+        catch (const std::exception &ex)
+        {
+          vix::cli::util::err_line(std::cerr, std::string("failed to write vix.lock: ") + ex.what());
+          return 1;
+        }
+        didWork = true;
+        lockChanged = false;
       }
 
       auto &depsArr = lock["dependencies"];
@@ -4636,13 +4773,9 @@ namespace vix::commands
             printedHeader = true;
           }
 
-          std::cout << "  " << CYAN << "•" << RESET << " "
-                    << CYAN << BOLD << dep.id << RESET
-                    << GRAY << "@" << RESET
-                    << YELLOW << BOLD << dep.version << RESET
-                    << "  "
-                    << GRAY << "installed" << RESET
-                    << "\n";
+          vix::cli::util::info_line(
+              std::cout,
+              dep.id + "@" + dep.version + "  installed");
         }
       }
 
@@ -4691,6 +4824,38 @@ namespace vix::commands
     }
 
   } // namespace
+
+  bool InstallCommand::render_project_cmake_from_lock(
+      const std::string &lockContents,
+      std::string &cmakeContents,
+      std::string &error)
+  {
+    try
+    {
+      const json lock = json::parse(lockContents);
+      if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
+        throw std::runtime_error("invalid vix.lock: missing dependencies[]");
+
+      std::vector<DepResolved> resolved;
+      resolved.reserve(lock["dependencies"].size());
+      for (const auto &entry : lock["dependencies"])
+      {
+        DepResolved dep = resolve_dep_from_lock_entry(entry);
+        if (dep.source != "git")
+          load_dep_manifest(dep);
+        dep.linkDir = project_deps_dir() / sanitize_id_dot(dep.id);
+        resolved.push_back(std::move(dep));
+      }
+
+      cmakeContents = render_cmake(sort_deps_topologically(resolved));
+      return true;
+    }
+    catch (const std::exception &ex)
+    {
+      error = ex.what();
+      return false;
+    }
+  }
 
   int InstallCommand::run(const std::vector<std::string> &args)
   {

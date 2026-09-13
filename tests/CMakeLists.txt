@@ -359,6 +359,14 @@ add_test(
 )
 
 add_test(
+  NAME vix_cli_registry_dependency_lifecycle
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/RegistryDependencyLifecycleTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
   NAME vix_cli_sdk_profile_composition
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/SdkProfileCompositionTest.sh

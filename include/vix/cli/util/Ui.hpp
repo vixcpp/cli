@@ -41,7 +41,7 @@ namespace vix::cli::util
     os << "    " << ACCENT << "•" << RESET << " "
        << LABEL << k << RESET
        << ": "
-       << WARNING << value << RESET << "\n";
+       << value << "\n";
   }
 
   inline void section(std::ostream &os, std::string_view title)
@@ -92,7 +92,7 @@ namespace vix::cli::util
 
   inline std::string faint_sep()
   {
-    return std::string(GRAY) + "────────────────────────────────────────" + RESET;
+    return std::string(MUTED) + "────────────────────────────────────────" + RESET;
   }
 
   inline void one_line_spacer(std::ostream &os)
@@ -107,29 +107,24 @@ namespace vix::cli::util
       std::string_view desc,
       std::string_view repo)
   {
-    os << "  " << CYAN << BOLD << id << RESET;
+    os << "  " << LABEL << id << RESET;
 
     if (!latest.empty())
     {
-      os << "  "
-         << GRAY << "(" << RESET
-         << YELLOW << "latest" << RESET
-         << GRAY << ": " << RESET
-         << YELLOW << BOLD << latest << RESET
-         << GRAY << ")" << RESET;
+      os << "  ("
+         << LABEL << "latest" << RESET
+         << ": " << latest << ")";
     }
 
     os << "\n";
 
     if (!desc.empty())
-      os << "    " << GRAY << desc << RESET << "\n";
+      os << "    " << MUTED << desc << RESET << "\n";
 
     if (!repo.empty())
     {
-      os << "    "
-         << GRAY << "repo: " << RESET
-         << CYAN << UNDERLINE << repo << RESET
-         << "\n";
+      os << "    " << LABEL << "repo" << RESET << ": "
+         << link(std::string(repo)) << "\n";
     }
   }
 
@@ -140,31 +135,28 @@ namespace vix::cli::util
       std::string_view commit,
       std::string_view repo)
   {
-    os << "  " << CYAN << BOLD << id << RESET;
+    os << "  " << LABEL << id << RESET;
 
     // Secondary: version
     if (!version.empty())
     {
-      os << "  "
-         << GRAY << "(" << RESET
-         << YELLOW << "version" << RESET
-         << GRAY << ": " << RESET
-         << YELLOW << BOLD << version << RESET
-         << GRAY << ")" << RESET;
+      os << "  ("
+         << LABEL << "version" << RESET
+         << ": " << version << ")";
     }
 
     os << "\n";
 
     if (!commit.empty())
     {
-      os << "    " << GRAY << "commit: " << RESET
-         << YELLOW << commit << RESET << "\n";
+      os << "    " << LABEL << "commit" << RESET << ": "
+         << commit << "\n";
     }
 
     if (!repo.empty())
     {
-      os << "    " << GRAY << "repo: " << RESET
-         << CYAN << UNDERLINE << repo << RESET << "\n";
+      os << "    " << LABEL << "repo" << RESET << ": "
+         << link(std::string(repo)) << "\n";
     }
   }
 

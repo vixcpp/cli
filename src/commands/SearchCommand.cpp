@@ -486,7 +486,7 @@ namespace vix::commands
       if (!h.capabilities.empty())
         std::cout << "Capabilities: " << join_strings(h.capabilities) << "\n";
       if (!h.repo.empty())
-        std::cout << GRAY << h.repo << RESET << "\n";
+        std::cout << link(h.repo) << "\n";
       std::cout << "\n";
     }
     vix::cli::util::ok_line(std::cout, "Showing " + std::to_string(start + 1) + "-" + std::to_string(end) + " of " + std::to_string(total) + " result(s).");

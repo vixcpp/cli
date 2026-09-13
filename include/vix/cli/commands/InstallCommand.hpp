@@ -23,6 +23,14 @@ namespace vix::commands
   {
     static int run(const std::vector<std::string> &args);
     static int help();
+
+    // Renders the same project dependency loader written by `vix install`
+    // from already-resolved lockfile contents. No dependency is resolved or
+    // materialized by this helper.
+    static bool render_project_cmake_from_lock(
+        const std::string &lockContents,
+        std::string &cmakeContents,
+        std::string &error);
   };
 }
 

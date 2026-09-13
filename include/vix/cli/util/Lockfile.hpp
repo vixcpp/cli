@@ -32,6 +32,13 @@ namespace vix::cli::util::lockfile
     int hashVersion{0};
   };
 
+  std::string serialize_lockfile(
+      const std::vector<LockedDependency> &dependencies);
+
+  std::vector<LockedDependency> preserve_valid_resolutions(
+      const std::vector<LockedDependency> &resolved,
+      const std::vector<LockedDependency> &existing);
+
   void write_lockfile_replace_all_or_throw(
       const std::filesystem::path &lockPath,
       const std::vector<LockedDependency> &dependencies);

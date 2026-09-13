@@ -34,7 +34,7 @@ namespace vix::cli::style
   inline constexpr const char *PATH = ACCENT;
   inline constexpr const char *CODE = RESET;
   inline constexpr const char *LINE_NUMBER = RESET;
-  inline constexpr const char *LABEL = BOLD;
+  inline constexpr const char *LABEL = RESET;
 
   // Compatibility aliases for existing callers.  New diagnostic code should
   // prefer the semantic names above.

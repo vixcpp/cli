@@ -12,6 +12,9 @@
  *
  */
 #include <vix/cli/commands/RemoveCommand.hpp>
+#include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/util/Lockfile.hpp>
+#include <vix/cli/util/Resolver.hpp>
 #include <vix/cli/util/ProjectMutation.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
@@ -109,6 +112,16 @@ namespace vix::commands
       return fs::current_path() / "vix.lock";
     }
 
+    static fs::path manifest_path()
+    {
+      return fs::current_path() / "vix.json";
+    }
+
+    static fs::path deps_cmake_path()
+    {
+      return fs::current_path() / ".vix" / "vix_deps.cmake";
+    }
+
     static json read_json_or_throw(const fs::path &p)
     {
       std::ifstream in(p);
@@ -117,14 +130,6 @@ namespace vix::commands
       json j;
       in >> j;
       return j;
-    }
-
-    static void write_json_or_throw(const fs::path &p, const json &j)
-    {
-      std::ofstream out(p);
-      if (!out)
-        throw std::runtime_error("cannot write: " + p.string());
-      out << j.dump(2) << "\n";
     }
 
     static bool matches_id(const std::string &depId, const std::string &targetId)
@@ -149,6 +154,71 @@ namespace vix::commands
       }
 
       return false;
+    }
+
+    static std::vector<vix::cli::util::manifest::Dependency>
+    manifest_dependencies_or_throw(const json &manifest)
+    {
+      if (!manifest.contains("deps") || !manifest["deps"].is_array())
+        throw std::runtime_error("invalid vix.json: missing 'deps' array");
+
+      std::vector<vix::cli::util::manifest::Dependency> dependencies;
+      for (const auto &dependency : manifest["deps"])
+      {
+        if (!dependency.is_object())
+          throw std::runtime_error("invalid vix.json: dependency entry must be an object");
+
+        const std::string id = dependency.value("id", "");
+        const std::string requested = dependency.value("version", "");
+        if (id.empty() || requested.empty())
+          throw std::runtime_error("invalid vix.json: dependency id and version are required");
+
+        dependencies.push_back({id, requested});
+      }
+
+      return dependencies;
+    }
+
+    static json lock_for_resolved_registry_dependencies(
+        const std::vector<vix::cli::util::lockfile::LockedDependency> &resolved,
+        const json &previousLock)
+    {
+      std::vector<vix::cli::util::lockfile::LockedDependency> existing;
+      if (previousLock.contains("dependencies") && previousLock["dependencies"].is_array())
+      {
+        for (const auto &dependency : previousLock["dependencies"])
+        {
+          if (!dependency.is_object() || dependency.value("source", "") == "git")
+            continue;
+
+          existing.push_back({
+              dependency.value("id", ""),
+              dependency.value("requested", ""),
+              dependency.value("version", ""),
+              dependency.value("repo", ""),
+              dependency.value("tag", ""),
+              dependency.value("commit", ""),
+              dependency.value("hash", ""),
+              dependency.value("hash_algorithm", ""),
+              dependency.value("hash_version", 0)});
+        }
+      }
+
+      json lock = json::parse(
+          vix::cli::util::lockfile::serialize_lockfile(
+              vix::cli::util::lockfile::preserve_valid_resolutions(
+                  resolved, existing)));
+
+      if (previousLock.contains("dependencies") && previousLock["dependencies"].is_array())
+      {
+        for (const auto &dependency : previousLock["dependencies"])
+        {
+          if (dependency.is_object() && dependency.value("source", "") == "git")
+            lock["dependencies"].push_back(dependency);
+        }
+      }
+
+      return lock;
     }
 
     static std::optional<std::pair<std::string, std::string>> split_pkg_id(const std::string &id)
@@ -264,29 +334,38 @@ namespace vix::commands
     if (!opt.target.version.empty())
       vix::cli::util::kv(std::cout, "version", opt.target.version);
 
-    const fs::path p = lock_path();
-    if (!fs::exists(p))
+    const fs::path manifestPath = manifest_path();
+    if (!fs::exists(manifestPath))
     {
-      vix::cli::util::err_line(std::cerr, "missing lock file: " + p.string());
+      vix::cli::util::err_line(std::cerr, "missing manifest: " + manifestPath.string());
       vix::cli::util::warn_line(std::cerr, "Run: vix add <pkg>@<version> first");
       return 1;
     }
 
+    json manifest;
     json lock;
     try
     {
-      lock = read_json_or_throw(p);
+      manifest = read_json_or_throw(manifestPath);
+      if (fs::exists(lock_path()))
+        lock = read_json_or_throw(lock_path());
+      else
+      {
+        lock["lockVersion"] = 1;
+        lock["dependencies"] = json::array();
+      }
     }
     catch (const std::exception &ex)
     {
-      vix::cli::util::err_line(std::cerr, std::string("failed to read lock: ") + ex.what());
+      vix::cli::util::err_line(std::cerr, std::string("failed to read project dependency state: ") + ex.what());
       return 1;
     }
 
-    if (!lock.contains("dependencies") || !lock["dependencies"].is_array())
+    if (!manifest.is_object() || !lock.is_object() ||
+        !manifest.contains("deps") || !manifest["deps"].is_array() ||
+        !lock.contains("dependencies") || !lock["dependencies"].is_array())
     {
-      vix::cli::util::err_line(std::cerr, "invalid lock: missing 'dependencies' array");
-      vix::cli::util::warn_line(std::cerr, "Tip: regenerate lock by re-adding dependencies");
+      vix::cli::util::err_line(std::cerr, "invalid project dependency state");
       return 1;
     }
 
@@ -298,12 +377,10 @@ namespace vix::commands
       return 0;
     }
 
-    auto &deps = lock["dependencies"];
-
-    json newDeps = json::array();
+    json newManifestDeps = json::array();
     bool removed = false;
 
-    for (const auto &d : deps)
+    for (const auto &d : manifest["deps"])
     {
       const std::string depId = d.value("id", "");
       if (!removed && matches_id(depId, opt.target.id) && matches_version_if_given(d, opt.target.version))
@@ -311,25 +388,68 @@ namespace vix::commands
         removed = true;
         continue;
       }
-      newDeps.push_back(d);
+      newManifestDeps.push_back(d);
     }
 
     if (!removed)
     {
-      vix::cli::util::err_line(std::cerr, "dependency not found in lock: " + opt.target.id);
+      vix::cli::util::err_line(std::cerr, "dependency not found in vix.json: " + opt.target.id);
       vix::cli::util::warn_line(std::cerr, "Tip: use 'vix list' to check current deps");
       return 1;
     }
 
-    lock["dependencies"] = std::move(newDeps);
+    manifest["deps"] = std::move(newManifestDeps);
 
+    std::vector<vix::cli::util::manifest::Dependency> remaining;
     try
     {
-      write_json_or_throw(p, lock);
+      remaining = manifest_dependencies_or_throw(manifest);
     }
     catch (const std::exception &ex)
     {
-      vix::cli::util::err_line(std::cerr, std::string("failed to write lock: ") + ex.what());
+      vix::cli::util::err_line(std::cerr, ex.what());
+      return 1;
+    }
+
+    json newLock;
+    try
+    {
+      const auto resolved = remaining.empty()
+                                ? std::vector<vix::cli::util::lockfile::LockedDependency>{}
+                                : vix::cli::util::resolver::resolve_project_dependencies_or_throw(remaining);
+      newLock = lock_for_resolved_registry_dependencies(resolved, lock);
+    }
+    catch (const std::exception &ex)
+    {
+      vix::cli::util::err_line(std::cerr, std::string("failed to resolve remaining dependencies: ") + ex.what());
+      return 1;
+    }
+
+    std::string loaderContents;
+    if (fs::exists(deps_cmake_path()))
+    {
+      std::string loaderError;
+      if (!InstallCommand::render_project_cmake_from_lock(
+              newLock.dump(2) + "\n", loaderContents, loaderError))
+      {
+        vix::cli::util::err_line(std::cerr, std::string("failed to regenerate CMake integration: ") + loaderError);
+        return 1;
+      }
+    }
+
+    std::string transactionError;
+    try
+    {
+      vix::cli::util::ProjectMutationTransaction transaction(fs::current_path());
+      if (!transaction.stage_write(manifestPath, manifest.dump(2) + "\n", transactionError) ||
+          !transaction.stage_write(lock_path(), newLock.dump(2) + "\n", transactionError) ||
+          (!loaderContents.empty() && !transaction.stage_write(deps_cmake_path(), loaderContents, transactionError)) ||
+          !transaction.commit(transactionError))
+        throw std::runtime_error(transactionError);
+    }
+    catch (const std::exception &ex)
+    {
+      vix::cli::util::err_line(std::cerr, std::string("failed to publish dependency removal: ") + ex.what());
       return 1;
     }
 
@@ -343,10 +463,11 @@ namespace vix::commands
         vix::cli::util::ok_line(std::cout, "deleted: " + depDir.string());
     }
 
-    vix::cli::util::ok_line(std::cout, "removed from vix.lock: " + opt.target.id);
-    vix::cli::util::ok_line(std::cout, "lock:  " + p.string());
-
-    vix::cli::util::warn_line(std::cout, "Tip: run 'vix deps' to regenerate .vix/vix_deps.cmake if needed.");
+    vix::cli::util::ok_line(std::cout, "removed: " + opt.target.id);
+    vix::cli::util::ok_line(std::cout, "manifest:  " + manifestPath.string());
+    vix::cli::util::ok_line(std::cout, "lock:      " + lock_path().string());
+    if (!loaderContents.empty())
+      vix::cli::util::ok_line(std::cout, "generated: " + deps_cmake_path().string());
     return 0;
   }
 
@@ -368,8 +489,8 @@ namespace vix::commands
         << "  vix remove @gk/jwt --purge -y\n\n"
 
         << "What happens\n"
-        << "  • Removes the dependency from vix.lock\n"
-        << "  • Updates project dependency links\n"
+        << "  • Removes the dependency from vix.json and vix.lock\n"
+        << "  • Regenerates existing project CMake integration\n"
         << "  • Keeps cached packages unless --purge is used\n\n"
 
         << "Options\n"

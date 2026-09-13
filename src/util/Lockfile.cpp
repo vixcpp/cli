@@ -13,6 +13,7 @@
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Hash.hpp>
+#include <vix/cli/util/Semver.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -48,8 +49,7 @@ namespace vix::cli::util::lockfile
     }
   }
 
-  void write_lockfile_replace_all_or_throw(
-      const fs::path &lockPath,
+  std::string serialize_lockfile(
       const std::vector<LockedDependency> &dependencies)
   {
     json root = json::object();
@@ -79,7 +79,37 @@ namespace vix::cli::util::lockfile
       root["dependencies"].push_back(dependency_to_json(dependency));
     }
 
-    const std::string content = root.dump(2) + "\n";
+    return root.dump(2) + "\n";
+  }
+
+  std::vector<LockedDependency> preserve_valid_resolutions(
+      const std::vector<LockedDependency> &resolved,
+      const std::vector<LockedDependency> &existing)
+  {
+    std::vector<LockedDependency> preserved = resolved;
+
+    for (auto &candidate : preserved)
+    {
+      for (const auto &locked : existing)
+      {
+        if (locked.id != candidate.id)
+          continue;
+
+        if (!locked.version.empty() && !candidate.requested.empty() &&
+            vix::cli::util::semver::satisfies(locked.version, candidate.requested))
+          candidate = locked;
+        break;
+      }
+    }
+
+    return preserved;
+  }
+
+  void write_lockfile_replace_all_or_throw(
+      const fs::path &lockPath,
+      const std::vector<LockedDependency> &dependencies)
+  {
+    const std::string content = serialize_lockfile(dependencies);
 
     if (vix::cli::util::file_exists(lockPath) &&
         vix::cli::util::read_text_file_or_empty(lockPath) == content)

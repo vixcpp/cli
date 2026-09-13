@@ -1312,11 +1312,7 @@ namespace vix::commands
           vix::cli::util::section(std::cout, "Available versions");
           for (const auto &version : allVersions)
           {
-            std::cout
-                << "  "
-                << GRAY << "• " << RESET
-                << BOLD << version << RESET
-                << "\n";
+            vix::cli::util::info_line(std::cout, version);
           }
           std::cout << "\n";
         }

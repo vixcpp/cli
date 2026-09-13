@@ -518,14 +518,14 @@ namespace vix::commands
 
       if (totalPages > 1)
       {
-        std::cout << "  " << GRAY
+        std::cout << "  " << MUTED
                   << "Page " << parsed.page << "/" << totalPages
                   << RESET << "\n";
 
         if (parsed.page < totalPages)
         {
-          std::cout << "  " << GRAY
-                    << "Next: vix list ";
+          std::cout << "  " << MUTED
+                    << "Next: " << CODE << "vix list ";
 
           if (globalMode)
             std::cout << "-g ";

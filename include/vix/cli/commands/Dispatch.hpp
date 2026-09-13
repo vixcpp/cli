@@ -10,8 +10,8 @@
  *
  *  Vix.cpp
  */
-#ifndef VIX_DISPATCH_HPP
-#define VIX_DISPATCH_HPP
+#ifndef VIX_CLI_COMMANDS_DISPATCH_HPP
+#define VIX_CLI_COMMANDS_DISPATCH_HPP
 
 #include <string>
 #include <vector>

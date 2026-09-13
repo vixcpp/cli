@@ -10,8 +10,8 @@
  *
  *  Vix.cpp
  */
-#ifndef VIX_UTILS_HPP
-#define VIX_UTILS_HPP
+#ifndef VIX_CLI_UTILS_HPP
+#define VIX_CLI_UTILS_HPP
 
 #include <filesystem>
 #include <fstream>

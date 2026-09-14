@@ -435,7 +435,7 @@ namespace vix::cli::sdk
       return make_info(profile, "Web SDK",
                        "SDK for HTTP, middleware, WebSocket, Realtime, validation, crypto, WebRPC and requests.",
                        {"websocket", "realtime", "middleware", "validation", "webrpc",
-                        "crypto", "requests"},
+                        "crypto", "requests", "cache"},
                        opensslLinuxDeps, opensslMacosDeps, opensslWindowsDeps,
                        {"Use this for APIs, realtime apps and backend services."});
 

@@ -37,7 +37,7 @@ namespace vix::cli::sdk
     const std::vector<std::string> kBaseModules{
         "core", "json", "error", "path", "fs", "io", "env", "os",
         "utils", "log", "async", "time", "process", "threadpool", "template",
-        "ui", "note", "reply", "net", "sync", "conversion"};
+        "ui", "note", "reply", "net", "sync", "engine", "conversion"};
 
     std::string lower_copy(std::string s)
     {
@@ -411,8 +411,10 @@ namespace vix::cli::sdk
         "xcode-select --install",
         "brew install cmake ninja pkg-config"};
     const std::vector<std::string> baseWindowsDeps{
-        "Visual Studio 2022 Build Tools", "CMake", "Ninja", "Git",
-        "WebView2 Runtime"};
+        "Visual Studio 2022 Build Tools", "CMake", "Ninja", "Git"};
+
+    std::vector<std::string> webviewWindowsDeps = baseWindowsDeps;
+    webviewWindowsDeps.emplace_back("WebView2 Runtime");
 
     std::vector<std::string> opensslLinuxDeps = baseLinuxDeps;
     opensslLinuxDeps.emplace_back("libssl-dev");
@@ -420,6 +422,8 @@ namespace vix::cli::sdk
     opensslMacosDeps.emplace_back("brew install openssl@3");
     std::vector<std::string> opensslWindowsDeps = baseWindowsDeps;
     opensslWindowsDeps.emplace_back("vcpkg install openssl --triplet x64-windows");
+    std::vector<std::string> opensslWebviewWindowsDeps = opensslWindowsDeps;
+    opensslWebviewWindowsDeps.emplace_back("WebView2 Runtime");
 
     if (profile == "default")
       return make_info(profile, "Default SDK",
@@ -447,7 +451,7 @@ namespace vix::cli::sdk
                        "SDK for desktop apps using the Vix UI desktop shell.",
                        {},
                        sorted_unique(std::vector<std::string>(baseLinuxDeps.begin(), baseLinuxDeps.end())),
-                       baseMacosDeps, baseWindowsDeps,
+                       baseMacosDeps, webviewWindowsDeps,
                        {"On Linux, WebKitGTK is required for the desktop WebView backend."});
 
     if (profile == "p2p")
@@ -476,7 +480,7 @@ namespace vix::cli::sdk
                        {"websocket", "realtime", "middleware", "validation", "webrpc",
                         "requests", "crypto", "db", "orm", "kv", "cache", "p2p",
                         "p2p_http", "game", "agent", "tests"},
-                       opensslLinuxDeps, opensslMacosDeps, opensslWindowsDeps,
+                       opensslLinuxDeps, opensslMacosDeps, opensslWebviewWindowsDeps,
                        {"This profile is heavier. Prefer a smaller profile when possible."});
 
     return std::nullopt;

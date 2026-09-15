@@ -26,8 +26,17 @@ run_build() {
     "$VIX_BIN" build --verbose --dir "$PROJECT" "$@"
 }
 
+require_configured() {
+  local output="$1"
+  if ! printf '%s\n' "$output" | grep -q '\* configured in '; then
+    printf '%s\n' "$output" >&2
+    echo "expected configuration output" >&2
+    exit 1
+  fi
+}
+
 first_output="$(run_build --launcher none --linker default)"
-printf '%s\n' "$first_output" | grep -q "Configuring project (dev)"
+require_configured "$first_output"
 test -d "$PROJECT/build-ninja"
 test -f "$PROJECT/build-ninja/.vix-config.sig"
 test -f "$PROJECT/build-ninja/CMakeCache.txt"
@@ -54,26 +63,26 @@ HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --quiet --dir "$PROJECT" \
 test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
 
 second_output="$(run_build --launcher none --linker default)"
-if printf '%s\n' "$second_output" | grep -q "Configuring project (dev)"; then
+if printf '%s\n' "$second_output" | grep -q '\* configured in '; then
   echo "same signature unexpectedly configured" >&2
   exit 1
 fi
 
 nocache_output="$(run_build --no-cache --launcher none --linker default)"
-printf '%s\n' "$nocache_output" | grep -q "Configuring project (dev)"
+require_configured "$nocache_output"
 test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
 
 clean_output="$(run_build --clean --launcher none --linker default)"
-printf '%s\n' "$clean_output" | grep -q "Configuring project (dev)"
+require_configured "$clean_output"
 
 warning_output="$(run_build --warning-check --launcher none --linker default)"
-printf '%s\n' "$warning_output" | grep -q "Configuring project (dev)"
+require_configured "$warning_output"
 warning_sig="$(cat "$PROJECT/build-ninja/.vix-config.sig")"
 test "$warning_sig" != "$first_sig"
 printf '%s\n' "$warning_sig" | grep -q "warningCheck=1"
 
 release_output="$(run_build --preset release --launcher none --linker default)"
-printf '%s\n' "$release_output" | grep -q "Configuring project (release)"
+require_configured "$release_output"
 test -d "$PROJECT/build-release"
 test -f "$PROJECT/build-release/.vix-config.sig"
 

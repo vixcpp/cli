@@ -541,6 +541,10 @@ endif()
 if (TARGET vix::ui)
   message(STATUS "[cli] UI mobile core enabled")
   target_link_libraries(vix_cli PRIVATE vix::ui)
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/MobileCommandUnavailable.cpp"
+    PROPERTIES HEADER_FILE_ONLY TRUE
+  )
 
   if (VIX_CLI_ENABLE_DESKTOP)
     target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_UI=1)
@@ -550,7 +554,14 @@ if (TARGET vix::ui)
     target_compile_definitions(vix_cli PRIVATE VIX_UI_ENABLE_LINUX_WEBVIEW=1)
   endif()
 else()
-  message(FATAL_ERROR "[cli] vix::ui is required by the mobile command")
+  message(STATUS "[cli] Mobile project generation disabled: vix::ui target not found")
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/MobileCommand.cpp"
+    PROPERTIES HEADER_FILE_ONLY TRUE
+  )
+  target_sources(vix_cli PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/MobileCommandUnavailable.cpp"
+  )
 endif()
 
 # ----------------------------------------------------

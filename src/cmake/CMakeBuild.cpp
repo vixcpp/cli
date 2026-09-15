@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <cstdlib>
 #include <sstream>
@@ -26,12 +27,17 @@
 #include <vix/engine/BuildParallelism.hpp>
 #include <vix/utils/Env.hpp>
 
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 #ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
-#include <unistd.h>
 #endif
 
 #ifndef _WIN32
@@ -64,6 +70,18 @@ namespace
   }
 } // namespace
 #endif
+
+namespace
+{
+  bool stdout_is_tty() noexcept
+  {
+#ifdef _WIN32
+    return ::_isatty(::_fileno(stdout)) != 0;
+#else
+    return ::isatty(STDOUT_FILENO) != 0;
+#endif
+  }
+} // namespace
 
 #ifndef _WIN32
 namespace
@@ -257,7 +275,7 @@ namespace vix::cli::build
     if (!opt.status)
       return env;
 
-    if (plan.preset.generator == "Ninja")
+    if (plan.preset.generator == "Ninja" && stdout_is_tty())
       env.emplace_back("NINJA_STATUS", "[%f/%t] ");
 
     return env;
@@ -307,13 +325,15 @@ namespace vix::cli::build
     process::ExecResult r;
     r.displayCommand = util::join_display_cmd(argv);
 
+    const bool interactiveOutput = stdout_is_tty();
+
     const bool filterCMakeSummary = is_configure_cmd(argv) && !cmakeVerbose;
 
     const bool isConfigure = is_configure_cmd(argv);
 
     const bool heartbeatEnabled = [&]() -> bool
     {
-      if (quiet)
+      if (quiet || !interactiveOutput)
         return false;
 
       if (heartbeat.has_value())
@@ -363,6 +383,12 @@ namespace vix::cli::build
 
       ::close(pipefd[0]);
       ::close(pipefd[1]);
+
+      // The child inherits the parent's environment.  Omitting an override
+      // from ninja_env() therefore does not remove a caller-provided status
+      // format, whose progress renderer uses carriage returns.
+      if (!interactiveOutput)
+        ::unsetenv("NINJA_STATUS");
 
       for (const auto &kv : extraEnv)
         ::setenv(kv.first.c_str(), kv.second.c_str(), 1);
@@ -718,7 +744,27 @@ namespace vix::cli::build
 
         if (!quiet)
         {
-          consoleBuf.append(buf.data(), static_cast<std::size_t>(n));
+          if (interactiveOutput)
+          {
+            consoleBuf.append(buf.data(), static_cast<std::size_t>(n));
+          }
+          else
+          {
+            for (ssize_t i = 0; i < n; ++i)
+            {
+              const char c = buf[static_cast<std::size_t>(i)];
+              if (c == '\r')
+              {
+                if (i + 1 < n && buf[static_cast<std::size_t>(i + 1)] == '\n')
+                  continue;
+                consoleBuf.push_back('\n');
+              }
+              else
+              {
+                consoleBuf.push_back(c);
+              }
+            }
+          }
 
           std::size_t start = 0;
           while (true)
@@ -739,9 +785,13 @@ namespace vix::cli::build
             }
             else if (should_echo_line(line))
             {
+              // Only a rendered heartbeat owns a transient terminal line.
+              // Ordinary child output must not mark one as visible, otherwise
+              // the unconditional completion cleanup emits a stray CR outside
+              // an interactive terminal.
+              finish_heartbeat_line();
               line.push_back('\n');
               write_all_fd(STDOUT_FILENO, line.data(), line.size());
-              heartbeatVisible = true;
             }
 
             start = nl + 1;

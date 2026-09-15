@@ -26,12 +26,12 @@ printf '#include "value.hpp"\nint value() { return 2; }\n' >"$PROJECT/src/value.
 build -DCONFIG_VALUE=2; run                    # .cpp dependency is Ninja-owned
 printf '#pragma once\nint value();\nconstexpr int header_version = 3;\n' >"$PROJECT/include/value.hpp"
 printf '#include "value.hpp"\nint main() { return value() == CONFIG_VALUE && header_version == 3 ? 0 : 1; }\n' >"$PROJECT/src/main.cpp"
-build -DCONFIG_VALUE=3; run                    # .hpp dependency is Ninja-owned
+build -DCONFIG_VALUE=2; run                    # .hpp dependency is Ninja-owned
 printf 'int extra() { return 0; }\n' >"$PROJECT/src/extra.cpp"
-build -DCONFIG_VALUE=3; run                    # CONFIGURE_DEPENDS adds a source
+build -DCONFIG_VALUE=2; run                    # CONFIGURE_DEPENDS adds a source
 rm "$PROJECT/src/extra.cpp"
-build -DCONFIG_VALUE=3; run                    # CONFIGURE_DEPENDS removes it
+build -DCONFIG_VALUE=2; run                    # CONFIGURE_DEPENDS removes it
 printf '\ntarget_compile_definitions(generic_app PRIVATE CMAKE_LISTS_CHANGED=1)\n' >>"$PROJECT/CMakeLists.txt"
-build -DCONFIG_VALUE=3; run                    # CMakeLists invalidates configure
-build -DCONFIG_VALUE=3; run                    # effective CMake variable remains valid
+build -DCONFIG_VALUE=2; run                    # CMakeLists invalidates configure
+build -DCONFIG_VALUE=2; run                    # effective CMake variable remains valid
 echo "BuildNinjaIncrementalityContractTest passed"

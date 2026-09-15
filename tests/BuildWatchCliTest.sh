@@ -258,8 +258,7 @@ cat >"$PROJECT/src/one.cpp" <<'CPP'
 int one() { return 10; }
 CPP
 
-wait_for_output "affected tasks" "$EXPLAIN_OUT"
-wait_for_output "Finished.*src/one.cpp.* in " "$EXPLAIN_OUT"
+wait_for_output "Finished.*src/one.cpp.* in .*full refresh" "$EXPLAIN_OUT"
 reject_output "Change " "$EXPLAIN_OUT"
 reject_output "Classification" "$EXPLAIN_OUT"
 reject_output "Affected tasks" "$EXPLAIN_OUT"
@@ -277,8 +276,9 @@ cat >"$PROJECT/src/three.cpp" <<'CPP'
 int three() { return 30; }
 CPP
 
-wait_for_output "ninja: Entering directory" "$CMAKE_VERBOSE_OUT"
-wait_for_output "Finished.*src/three.cpp.* in " "$CMAKE_VERBOSE_OUT"
+wait_for_output "\\[[0-9]*/[0-9]*\\] Building CXX object.*src/three.cpp" "$CMAKE_VERBOSE_OUT"
+wait_for_output "\\[[0-9]*/[0-9]*\\] Linking CXX executable.*shop" "$CMAKE_VERBOSE_OUT"
+wait_for_output "Finished.*src/three.cpp.* in .*full refresh" "$CMAKE_VERBOSE_OUT"
 reject_output "Rebuilt all" "$CMAKE_VERBOSE_OUT"
 reject_output "Stopped build watcher" "$CMAKE_VERBOSE_OUT"
 kill -INT "$WATCH_PID" 2>/dev/null || true

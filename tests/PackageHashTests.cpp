@@ -46,6 +46,15 @@ static fs::path make_root()
   return root;
 }
 
+static void cleanup_root(const fs::path &root) noexcept
+{
+  // Git may still be finishing background maintenance when the test-owned
+  // repository is torn down.  Cleanup is best-effort and must not turn a
+  // successful hash assertion into an exception from remove_all().
+  std::error_code ec;
+  fs::remove_all(root, ec);
+}
+
 static fs::path make_git_repo(const fs::path &root)
 {
   fs::path repo = root / "repo";
@@ -73,7 +82,7 @@ static void test_reproducible_hash()
   assert(a.has_value());
   assert(b.has_value());
   assert(*a == *b);
-  fs::remove_all(root);
+  cleanup_root(root);
 }
 
 static void test_git_metadata_and_untracked_files_are_excluded()
@@ -91,7 +100,7 @@ static void test_git_metadata_and_untracked_files_are_excluded()
   const auto after = vix::cli::util::sha256_package_directory(repo);
   assert(after.has_value());
   assert(*before == *after);
-  fs::remove_all(root);
+  cleanup_root(root);
 }
 
 static void test_tracked_file_modification_changes_hash()
@@ -106,7 +115,7 @@ static void test_tracked_file_modification_changes_hash()
   const auto after = vix::cli::util::sha256_package_directory(repo);
   assert(after.has_value());
   assert(*before != *after);
-  fs::remove_all(root);
+  cleanup_root(root);
 }
 
 int main()

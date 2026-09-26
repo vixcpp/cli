@@ -20,6 +20,8 @@
 #include <filesystem>
 #include <string>
 
+#include <vix/cli/app/AppManifest.hpp>
+
 namespace vix::cli::app
 {
   namespace fs = std::filesystem;
@@ -85,6 +87,9 @@ namespace vix::cli::app
      */
     std::string targetName;
 
+    /** Prepared application model used for Vix-owned build paths. */
+    AppManifest manifest;
+
     /**
      * @brief True when CMakeLists.txt was generated from vix.app.
      */
@@ -116,9 +121,13 @@ namespace vix::cli::app
    * present.
    *
    * @param base Directory to start from.
+   * @param use_vixc_frontend Whether to prepare vix.app translation units
+   * through the optional VixC frontend before build generation.
    * @return Resolved project result.
    */
-  AppProjectResolveResult resolve_app_project(const fs::path &base);
+  AppProjectResolveResult resolve_app_project(
+      const fs::path &base,
+      bool use_vixc_frontend = false);
 
 } // namespace vix::cli::app
 

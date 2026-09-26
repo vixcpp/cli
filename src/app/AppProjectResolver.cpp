@@ -16,6 +16,7 @@
 #include <vix/cli/app/AppProjectResolver.hpp>
 
 #include <vix/cli/app/AppCMakeGenerator.hpp>
+#include <vix/cli/app/VixcFrontend.hpp>
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/modules/DependencyConstraints.hpp>
 #include <vix/cli/modules/DependencyOwnership.hpp>
@@ -299,7 +300,8 @@ namespace vix::cli::app
     }
 
     AppProjectResolveResult resolve_vix_app_project(
-        const fs::path &projectDir)
+        const fs::path &projectDir,
+        bool use_vixc_frontend)
     {
       AppProjectResolveResult result;
 
@@ -318,6 +320,17 @@ namespace vix::cli::app
       }
 
       AppManifest manifest = loadResult.manifest;
+
+      if (use_vixc_frontend)
+      {
+        const VixcFrontendResult prepared =
+            prepare_vixc_sources(manifest, projectDir);
+        if (!prepared.success)
+        {
+          result.error = prepared.diagnostics;
+          return result;
+        }
+      }
 
       std::string graphError;
       const auto graph =
@@ -389,6 +402,7 @@ namespace vix::cli::app
       result.cmakeSourceDir = generateResult.sourceDir;
       result.cmakeListsPath = generateResult.cmakeListsPath;
       result.targetName = manifest.name;
+      result.manifest = std::move(manifest);
 
       return result;
     }
@@ -417,7 +431,9 @@ namespace vix::cli::app
            !cmakeListsPath.empty();
   }
 
-  AppProjectResolveResult resolve_app_project(const fs::path &base)
+  AppProjectResolveResult resolve_app_project(
+      const fs::path &base,
+      bool use_vixc_frontend)
   {
     AppProjectResolveResult result;
 
@@ -438,7 +454,7 @@ namespace vix::cli::app
       return resolve_cmake_project(projectDir);
 
     if (file_exists_regular(appManifestPath))
-      return resolve_vix_app_project(projectDir);
+      return resolve_vix_app_project(projectDir, use_vixc_frontend);
 
     result.error =
         "Unable to determine the project directory. Missing CMakeLists.txt "

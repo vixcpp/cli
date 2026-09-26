@@ -51,6 +51,7 @@ external service/toolchain and is not relabelled as a passing behavior.
 | run     | `--log-format`           | RunCore                           | A     | PASS        |
 | run     | `--log-color`            | RunCore                           | A     | PASS        |
 | run     | `--no-color`             | RunCore                           | B     | PASS        |
+| run     | `--frontend`             | FrontendOptionContractTest        | A/C   | PASS        |
 | run     | `--help`                 | PublicOptionCoverageTest          | A     | PASS        |
 | build   | `--dir`                  | BuildCore                         | C     | PASS        |
 | build   | `--preset`               | BuildCore                         | C     | PASS        |
@@ -75,6 +76,7 @@ external service/toolchain and is not relabelled as a passing behavior.
 | build   | `--no-up-to-date`        | BuildPlanningCompatTest           | C     | PASS        |
 | build   | `--bin`                  | existing single-file tests        | C     | PASS        |
 | build   | `--out`                  | existing single-file tests        | C     | PASS        |
+| build   | `--frontend`             | FrontendOptionContractTest        | A/C   | PASS        |
 | build   | `--launcher`             | BuildToolCliCompatTest            | A/C   | PASS        |
 | build   | `--linker`               | BuildToolCliCompatTest            | A/C   | PASS        |
 | build   | `--target`               | BuildCore, BuildToolCliCompatTest | C     | PASS        |

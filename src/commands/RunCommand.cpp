@@ -376,6 +376,9 @@ namespace
     if (opt.withMySql)
       cmd << " --with-mysql";
 
+    if (opt.useVixcFrontend)
+      cmd << " --frontend vixc";
+
 #ifdef _WIN32
     cmd << "\"";
 #endif

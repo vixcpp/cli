@@ -474,14 +474,22 @@ namespace vix::commands::RunCommand::detail
           return opt;
         if (value != "vixc")
         {
+          error("--frontend currently supports only 'vixc'.");
           opt.parseFailed = true;
           opt.parseExitCode = 2;
           return opt;
         }
         opt.useVixcFrontend = true;
       }
-      else if (a == "--frontend=vixc")
+      else if (a.rfind("--frontend=", 0) == 0)
       {
+        if (a != "--frontend=vixc")
+        {
+          error("--frontend currently supports only 'vixc'.");
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
         opt.useVixcFrontend = true;
       }
       else if (a == "--local-cache")

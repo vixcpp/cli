@@ -1174,6 +1174,75 @@ namespace vix::commands::BuildCommand
       return util::write_text_file_atomic(path, content);
     }
 
+    static int print_requested_build_log(const fs::path &requested)
+    {
+      const auto print_log = [](const fs::path &path) -> bool
+      {
+        const std::string text = util::read_text_file_or_empty(path);
+        if (text.empty())
+          return false;
+
+        std::cout << "Build log\n\n" << text;
+        if (text.back() != '\n')
+          std::cout << '\n';
+        return true;
+      };
+
+      std::error_code ec;
+      if (!fs::exists(requested, ec) || ec)
+      {
+        error("Build log path not found: " + requested.string());
+        return 1;
+      }
+
+      if (fs::is_regular_file(requested, ec) && !ec)
+      {
+        if (print_log(requested))
+          return 0;
+
+        error("Build log is empty: " + requested.string());
+        return 1;
+      }
+
+      if (!fs::is_directory(requested, ec) || ec)
+      {
+        error("Build log path is neither a file nor a directory: " +
+              requested.string());
+        return 1;
+      }
+
+      const fs::path canonicalBuildLog = requested / "build.log";
+      if (fs::is_regular_file(canonicalBuildLog, ec) && !ec &&
+          print_log(canonicalBuildLog))
+      {
+        return 0;
+      }
+
+      fs::path newest;
+      fs::file_time_type newestTime{};
+      for (const auto &entry : fs::directory_iterator(requested, ec))
+      {
+        if (ec || !entry.is_regular_file(ec) ||
+            entry.path().extension() != ".log")
+        {
+          continue;
+        }
+
+        const auto time = entry.last_write_time(ec);
+        if (!ec && (newest.empty() || time > newestTime))
+        {
+          newest = entry.path();
+          newestTime = time;
+        }
+      }
+
+      if (!newest.empty() && print_log(newest))
+        return 0;
+
+      error("No build logs found in " + requested.string());
+      return 1;
+    }
+
     static bool graph_executor_enabled(const process::Options &opt)
     {
       if (opt.graphExecutor == "on")
@@ -1643,8 +1712,14 @@ namespace vix::commands::BuildCommand
           }
           o.useVixcFrontend = true;
         }
-        else if (a == "--frontend=vixc")
+        else if (a.rfind("--frontend=", 0) == 0)
         {
+          if (a != "--frontend=vixc")
+          {
+            error("--frontend currently supports only 'vixc'.");
+            exitCode = 2;
+            return o;
+          }
           o.useVixcFrontend = true;
         }
         else if (a == "--debug")
@@ -5331,6 +5406,9 @@ namespace vix::commands::BuildCommand
         if (opt_.singleCpp)
           return run_single_cpp_build();
 
+        if (opt_.showLog && !opt_.logPath.empty())
+          return print_requested_build_log(fs::path{opt_.logPath});
+
         {
           fs::path base = cwd;
 
@@ -5338,7 +5416,7 @@ namespace vix::commands::BuildCommand
             base = fs::absolute(fs::path(opt_.dir));
 
           const app::AppProjectResolveResult project =
-              app::resolve_app_project(base);
+              app::resolve_app_project(base, opt_.useVixcFrontend);
 
           if (!project.success() &&
               project.kind == app::AppProjectKind::VixApp)
@@ -5351,23 +5429,15 @@ namespace vix::commands::BuildCommand
           if (project.success() &&
               project.kind == app::AppProjectKind::VixApp)
           {
-            const app::AppManifestLoadResult loadResult =
-                app::load_app_manifest(project.appManifestPath);
-
-            if (!loadResult.success())
-            {
-              error("Failed to load vix.app.");
-              hint(loadResult.error);
-              return 1;
-            }
+            const app::AppManifest &preparedManifest = project.manifest;
 
             if (!opt_.warnings && !opt_.showLog &&
-                can_use_native_vix_app_build(opt_, loadResult.manifest))
+                can_use_native_vix_app_build(opt_, preparedManifest))
             {
               return run_native_vix_app_build(
                   opt_,
                   project.userProjectDir,
-                  loadResult.manifest,
+                  preparedManifest,
                   commandStart);
             }
 
@@ -5414,6 +5484,9 @@ namespace vix::commands::BuildCommand
 
         if (opt_.showLog)
         {
+          if (!opt_.logPath.empty())
+            return print_requested_build_log(fs::path{opt_.logPath});
+
           const auto print_log = [](const fs::path &path, const std::string &label) -> bool
           {
             const std::string text = util::read_text_file_or_empty(path);
@@ -5427,50 +5500,7 @@ namespace vix::commands::BuildCommand
           };
 
           bool found = false;
-          if (!opt_.logPath.empty())
-          {
-            const fs::path requested = opt_.logPath;
-            std::error_code ec;
-            if (!fs::exists(requested, ec) || ec)
-            {
-              error("Build log path not found: " + requested.string());
-              return 1;
-            }
-            if (fs::is_regular_file(requested, ec))
-              found = print_log(requested, "Build");
-            else if (fs::is_directory(requested, ec))
-            {
-              const fs::path canonicalBuildLog = requested / "build.log";
-              if (fs::is_regular_file(canonicalBuildLog, ec) && !ec)
-              {
-                found = print_log(canonicalBuildLog, "Build");
-              }
-              else
-              {
-                fs::path newest;
-                fs::file_time_type newestTime{};
-                for (const auto &entry : fs::directory_iterator(requested, ec))
-                {
-                  if (ec || !entry.is_regular_file(ec) || entry.path().extension() != ".log")
-                    continue;
-                  const auto time = entry.last_write_time(ec);
-                  if (!ec && (newest.empty() || time > newestTime))
-                  {
-                    newest = entry.path();
-                    newestTime = time;
-                  }
-                }
-                if (!newest.empty())
-                  found = print_log(newest, "Build");
-              }
-              if (!found)
-              {
-                error("No build logs found in " + requested.string());
-                return 1;
-              }
-            }
-          }
-          else if (opt_.logScope == "configure" || opt_.logScope == "all")
+          if (opt_.logScope == "configure" || opt_.logScope == "all")
             found = print_log(plan_.configureLog, "Configure") || found;
           if (opt_.logScope.empty() || opt_.logScope == "build" || opt_.logScope == "all")
             found = print_log(plan_.buildLog, "Build") || found;
@@ -6818,25 +6848,15 @@ namespace vix::commands::BuildCommand
         base = fs::absolute(fs::path(opt_.dir));
 
       const app::AppProjectResolveResult project =
-          app::resolve_app_project(base);
+          app::resolve_app_project(base, opt_.useVixcFrontend);
 
       if (project.success() &&
           project.kind == app::AppProjectKind::VixApp)
       {
-        const app::AppManifestLoadResult loadResult =
-            app::load_app_manifest(project.appManifestPath);
-
-        if (!loadResult.success())
-        {
-          error("Failed to load vix.app.");
-          hint(loadResult.error);
-          return 1;
-        }
-
         if (!opt_.warnings &&
-            can_use_native_vix_app_build(opt_, loadResult.manifest))
+            can_use_native_vix_app_build(opt_, project.manifest))
         {
-          app::AppManifest activeManifest = loadResult.manifest;
+          app::AppManifest activeManifest = project.manifest;
           process::Options buildOpt = opt_;
           buildOpt.watch = false;
 
@@ -6994,6 +7014,9 @@ namespace vix::commands::BuildCommand
                 !batchOpt->overflowed &&
                 !sourceTaskIds.empty();
 
+            if (buildOpt.useVixcFrontend)
+              sourceOnlyChange = false;
+
             if (sourceOnlyChange)
             {
               for (const auto &event : batchOpt->events)
@@ -7059,6 +7082,27 @@ namespace vix::commands::BuildCommand
 
                         activeManifest = reloadResult.manifest;
 
+                        if (!can_use_native_vix_app_build(buildOpt, activeManifest))
+                        {
+                          BuildCommand fallback(buildOpt);
+                          return fallback.run();
+                        }
+                      }
+
+                      if (buildOpt.useVixcFrontend)
+                      {
+                        const app::AppProjectResolveResult refreshedProject =
+                            app::resolve_app_project(
+                                project.userProjectDir,
+                                true);
+                        if (!refreshedProject.success())
+                        {
+                          error("Failed to prepare vix.app sources.");
+                          hint(refreshedProject.error);
+                          return 1;
+                        }
+
+                        activeManifest = refreshedProject.manifest;
                         if (!can_use_native_vix_app_build(buildOpt, activeManifest))
                         {
                           BuildCommand fallback(buildOpt);
@@ -7667,7 +7711,7 @@ namespace vix::commands::BuildCommand
     out << "Build options:\n";
     out << "  --preset <name>           Build preset: dev, dev-ninja, release\n";
     out << "  --build-target <name>     Build a specific CMake target\n";
-    out << "  --frontend vixc           Experimentally process a single source through VixC\n";
+    out << "  --frontend vixc           Experimentally process application sources through VixC\n";
     out << "  -j, --jobs <n>            Number of parallel build jobs\n";
     out << "  --clean                   Remove local build directories and configure again\n";
     out << "  --watch                   Watch project files and rebuild incrementally\n";

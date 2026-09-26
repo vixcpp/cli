@@ -191,6 +191,9 @@ namespace vix::cli::process
     bool singleCpp = false;
     fs::path cppFile;
 
+    /** Selects the opt-in experimental VixC frontend for source units. */
+    bool useVixcFrontend = false;
+
     bool warnings{false};
     std::size_t warningsPage{1};
     std::size_t warningsLimit{10};

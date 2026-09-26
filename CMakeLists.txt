@@ -32,6 +32,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VIX_ENABLE_LTO "Enable LTO in Release builds" OFF)
 option(VIX_CLI_ENABLE_DESKTOP "Enable vix desktop support through vix::ui" OFF)
+option(VIX_ENABLE_VIXC_FRONTEND "Enable the experimental VixC frontend for vix build and run" OFF)
+set(VIXC_SOURCE_DIR "" CACHE PATH "Path to a VixC source checkout for the experimental frontend")
 
 # ----------------------------------------------------
 # CLI test isolation
@@ -77,6 +79,22 @@ add_executable(vix::cli ALIAS vix_cli)
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+
+if (VIX_ENABLE_VIXC_FRONTEND)
+  if (NOT TARGET vixc::vixc)
+    if (VIXC_SOURCE_DIR)
+      if (NOT EXISTS "${VIXC_SOURCE_DIR}/CMakeLists.txt")
+        message(FATAL_ERROR "VIXC_SOURCE_DIR does not contain a VixC CMake project: ${VIXC_SOURCE_DIR}")
+      endif()
+      add_subdirectory("${VIXC_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/_vixc")
+    else()
+      find_package(vixc CONFIG REQUIRED)
+    endif()
+  endif()
+
+  target_link_libraries(vix_cli PRIVATE vixc::vixc)
+  target_compile_definitions(vix_cli PRIVATE VIX_CLI_ENABLE_VIXC_FRONTEND=1)
+endif()
 
 function(vix_add_flag_if_supported tgt flag)
   string(REGEX REPLACE "[^A-Za-z0-9]" "_" flag_var "${flag}")

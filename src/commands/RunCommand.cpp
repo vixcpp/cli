@@ -14,6 +14,7 @@
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/cli/app/VixcFrontend.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
@@ -1638,6 +1639,23 @@ namespace vix::commands::RunCommand
 
     if (opt.singleCpp)
     {
+      if (opt.useVixcFrontend)
+      {
+        const fs::path originalSource = fs::absolute(opt.cppFile).lexically_normal();
+        const vix::cli::app::VixcFrontendResult vixcResult =
+            vix::cli::app::process_with_vixc(originalSource);
+        if (!vixcResult.success)
+        {
+          error("VixC frontend failed for " + originalSource.string());
+          if (!vixcResult.diagnostics.empty())
+            std::cerr << vixcResult.diagnostics;
+          return 1;
+        }
+
+        opt.cppFile = vixcResult.generated_source;
+        opt.scriptFlags.push_back("-I" + originalSource.parent_path().string());
+      }
+
       if (!opt.tempDeps.empty())
         return run_with_temporary_deps(opt);
       return run_script_mode(opt);

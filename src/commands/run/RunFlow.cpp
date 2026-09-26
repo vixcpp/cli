@@ -467,6 +467,23 @@ namespace vix::commands::RunCommand::detail
       {
         opt.verbose = true;
       }
+      else if (a == "--frontend")
+      {
+        const std::string value = take_value(args, i, "--frontend", opt);
+        if (opt.parseFailed)
+          return opt;
+        if (value != "vixc")
+        {
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
+        opt.useVixcFrontend = true;
+      }
+      else if (a == "--frontend=vixc")
+      {
+        opt.useVixcFrontend = true;
+      }
       else if (a == "--local-cache")
       {
         opt.localCache = true;

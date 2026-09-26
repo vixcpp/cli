@@ -28,6 +28,7 @@
 #include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/AppProjectResolver.hpp>
+#include <vix/cli/app/VixcFrontend.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -1630,6 +1631,21 @@ namespace vix::commands::BuildCommand
         else if (a == "--verbose" || a == "-v")
         {
           o.verbose = true;
+        }
+        else if (a == "--frontend")
+        {
+          auto v = util::take_value(args, i);
+          if (!v || *v != "vixc")
+          {
+            error("--frontend currently supports only 'vixc'.");
+            exitCode = 2;
+            return o;
+          }
+          o.useVixcFrontend = true;
+        }
+        else if (a == "--frontend=vixc")
+        {
+          o.useVixcFrontend = true;
         }
         else if (a == "--debug")
         {
@@ -6539,9 +6555,29 @@ namespace vix::commands::BuildCommand
       return 1;
     }
 
+    const fs::path originalSource = fs::absolute(opt_.cppFile).lexically_normal();
+    fs::path sourceForCompilation = originalSource;
+
+    if (opt_.useVixcFrontend)
+    {
+      const app::VixcFrontendResult vixcResult =
+          app::process_with_vixc(originalSource);
+      if (!vixcResult.success)
+      {
+        error("VixC frontend failed for " + originalSource.string());
+        if (!vixcResult.diagnostics.empty())
+          std::cerr << vixcResult.diagnostics;
+        return 1;
+      }
+
+      sourceForCompilation = vixcResult.generated_source;
+      if (!opt_.quiet)
+        info("VixC generated: " + sourceForCompilation.string());
+    }
+
     run_detail::Options runOpt{};
     runOpt.singleCpp = true;
-    runOpt.cppFile = fs::absolute(opt_.cppFile);
+    runOpt.cppFile = sourceForCompilation;
 
     runOpt.preset = opt_.preset;
     runOpt.dir = opt_.dir;
@@ -6582,6 +6618,8 @@ namespace vix::commands::BuildCommand
     runOpt.runArgs.clear();
     runOpt.runEnv.clear();
     runOpt.scriptFlags = opt_.cmakeArgs;
+    if (opt_.useVixcFrontend)
+      runOpt.scriptFlags.push_back("-I" + originalSource.parent_path().string());
 
     fs::path exePath;
     const int code = run_detail::build_script_executable(runOpt, exePath);
@@ -7629,6 +7667,7 @@ namespace vix::commands::BuildCommand
     out << "Build options:\n";
     out << "  --preset <name>           Build preset: dev, dev-ninja, release\n";
     out << "  --build-target <name>     Build a specific CMake target\n";
+    out << "  --frontend vixc           Experimentally process a single source through VixC\n";
     out << "  -j, --jobs <n>            Number of parallel build jobs\n";
     out << "  --clean                   Remove local build directories and configure again\n";
     out << "  --watch                   Watch project files and rebuild incrementally\n";

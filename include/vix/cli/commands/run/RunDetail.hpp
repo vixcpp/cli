@@ -104,6 +104,7 @@ namespace vix::commands::RunCommand::detail
 
     bool singleCpp = false;
     fs::path cppFile;
+    bool useVixcFrontend = false;
 
     bool manifestMode = false;
     fs::path manifestFile;

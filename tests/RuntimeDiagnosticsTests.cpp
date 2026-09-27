@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
+#include <csignal>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -14,15 +15,19 @@ namespace
 {
   std::string diagnose(
       const std::string &log,
-      const std::filesystem::path &source = {})
+      const std::filesystem::path &source = {},
+      const vix::cli::errors::RuntimeCrashEvidence &evidence =
+          {true, SIGABRT})
   {
     std::ostringstream captured;
     auto *const previous = std::cerr.rdbuf(captured.rdbuf());
 
     const bool handled =
-        vix::cli::errors::RawLogDetectors::handleKnownRunFailure(
+        vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
-            source);
+            source,
+            "runtime diagnostic test",
+            evidence);
 
     std::cerr.rdbuf(previous);
 
@@ -134,6 +139,33 @@ int main()
       output << "int main() { return 0; }\n";
       output << "int value = 1;\n";
     }
+
+    const std::string ordinaryDivisionText =
+        "error: division by zero\n";
+    std::ostringstream ordinaryCapture;
+    auto *const ordinaryPrevious = std::cerr.rdbuf(ordinaryCapture.rdbuf());
+    const bool ordinaryHandled =
+        vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
+            ordinaryDivisionText,
+            source,
+            "ordinary process exit",
+            {});
+    std::cerr.rdbuf(ordinaryPrevious);
+    if (ordinaryHandled)
+      throw std::runtime_error("ordinary division text was classified as a runtime crash");
+    expect_not_contains(ordinaryCapture.str(), "runtime error: division by zero");
+
+    const std::string sigfpeDivision = diagnose(
+        "",
+        source,
+        {true, SIGFPE});
+    expect_contains(sigfpeDivision, "runtime error: division by zero");
+
+    const std::string ubsanDivision = diagnose(
+        source.string() + ":2:7: runtime error: division by zero\n",
+        source,
+        {});
+    expect_contains(ubsanDivision, "runtime error: division by zero");
 
     const std::string sanitizer = diagnose(
         "ERROR: AddressSanitizer: heap-buffer-overflow\n"

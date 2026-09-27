@@ -1624,14 +1624,23 @@ namespace vix::commands::RunCommand::detail
     {
       std::string runtimeLog = run.stderrText;
       runtimeLog += run.stdoutText;
+      const vix::cli::errors::RuntimeCrashEvidence evidence{
+          run.terminatedBySignal,
+          run.termSignal};
 
-      if (!runtimeLog.empty())
+      if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+              runtimeLog,
+              evidence))
       {
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             runtimeLog,
             plan.scriptPath,
-            "run");
+            "run",
+            evidence);
       }
+
+      if (!handled && !runtimeLog.empty() && !run.printed_live)
+        std::cerr << runtimeLog << "\n";
     }
 
     handle_runtime_exit_code(run.exitCode, "run", handled);

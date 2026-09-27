@@ -781,16 +781,6 @@ namespace vix::commands::RunCommand::detail
 #endif
 
 #ifndef _WIN32
-    bool log_looks_like_sanitizer_or_ub(const std::string &log)
-    {
-      return log.find("runtime error:") != std::string::npos ||
-             log.find("UndefinedBehaviorSanitizer") != std::string::npos ||
-             log.find("AddressSanitizer") != std::string::npos ||
-             log.find("LeakSanitizer") != std::string::npos ||
-             log.find("ThreadSanitizer") != std::string::npos ||
-             log.find("MemorySanitizer") != std::string::npos;
-    }
-
     bool handle_error_tip_block_vix(const std::string &log)
     {
       const auto epos = log.find("error:");
@@ -849,27 +839,6 @@ namespace vix::commands::RunCommand::detail
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
 
       return (s == "debug" || s == "trace");
-    }
-#endif
-
-#ifndef _WIN32
-    bool log_looks_like_runtime_crash(const LiveRunResult &rr, const std::string &log)
-    {
-      if (rr.terminatedBySignal)
-        return true;
-
-      if (log_looks_like_sanitizer_or_ub(log))
-        return true;
-
-      return log.find("Segmentation fault") != std::string::npos ||
-             log.find("segmentation fault") != std::string::npos ||
-             log.find("core dumped") != std::string::npos ||
-             log.find("Aborted") != std::string::npos ||
-             log.find("terminate called") != std::string::npos ||
-             log.find("std::terminate") != std::string::npos ||
-             log.find("double free") != std::string::npos ||
-             log.find("invalid pointer") != std::string::npos ||
-             log.find("stack smashing detected") != std::string::npos;
     }
 #endif
 
@@ -1553,14 +1522,19 @@ namespace vix::commands::RunCommand::detail
       {
         return 0;
       }
-      const bool looksSanOrUb =
-          !runtimeLog.empty() && log_looks_like_sanitizer_or_ub(runtimeLog);
+      const vix::cli::errors::RuntimeCrashEvidence evidence{
+          rr.terminatedBySignal,
+          rr.termSignal};
+      const bool hasRuntimeEvidence =
+          vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+              runtimeLog,
+              evidence);
 
       const bool noOutput =
           trim_copy(rr.stdoutText).empty() &&
           trim_copy(rr.stderrText).empty();
 
-      if (runCode == 0 && !looksSanOrUb && noOutput)
+      if (runCode == 0 && !hasRuntimeEvidence && noOutput)
       {
         if (!opt.quiet || ::isatty(STDOUT_FILENO) != 0)
           vix::cli::style::hint("Program exited successfully (code 0) but produced no output.");
@@ -1568,26 +1542,31 @@ namespace vix::commands::RunCommand::detail
         return 0;
       }
 
-      if (runCode != 0 || looksSanOrUb)
+      if (runCode != 0 || hasRuntimeEvidence)
       {
-        if (runCode == 0 && looksSanOrUb)
+        if (runCode == 0 && hasRuntimeEvidence)
           runCode = 1;
 
         bool handled = false;
 
         if (!runtimeLog.empty())
         {
-          handled = handle_error_tip_block_vix(runtimeLog);
+          if (hasRuntimeEvidence)
+            handled = handle_error_tip_block_vix(runtimeLog);
 
           const bool maybeRuntimeCrash =
-              !handled && log_looks_like_runtime_crash(rr, runtimeLog);
+              !handled &&
+              vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+                  runtimeLog,
+                  evidence);
 
           if (maybeRuntimeCrash)
           {
             handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
                 runtimeLog,
                 state.script,
-                "Script execution failed");
+                "Script execution failed",
+                evidence);
 
             if (!handled &&
                 vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, state.script))
@@ -1642,13 +1621,19 @@ namespace vix::commands::RunCommand::detail
           log += rr.stdoutText;
 
         bool handled = false;
+        const vix::cli::errors::RuntimeCrashEvidence evidence{
+            rr.terminatedBySignal,
+            rr.termSignal};
 
-        if (!log.empty())
+        if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+                log,
+                evidence))
         {
           handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
               log,
               state.script,
-              "Script execution failed");
+              "Script execution failed",
+              evidence);
 
           if (!handled &&
               vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, state.script))
@@ -2518,13 +2503,19 @@ namespace vix::commands::RunCommand::detail
           if (exitCode != 0)
           {
             bool handled = false;
+            const vix::cli::errors::RuntimeCrashEvidence evidence{
+                WIFSIGNALED(status),
+                WIFSIGNALED(status) ? WTERMSIG(status) : 0};
 
-            if (!runtimeLog.empty())
+            if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+                    runtimeLog,
+                    evidence))
             {
               handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
                   runtimeLog,
                   script,
-                  label + " exited with code " + std::to_string(exitCode));
+                  label + " exited with code " + std::to_string(exitCode),
+                  evidence);
 
               if (!handled &&
                   vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))

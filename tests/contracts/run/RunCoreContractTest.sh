@@ -7,6 +7,7 @@ export HOME="$ROOT/home"
 mkdir -p "$HOME"
 fail() { echo "RunCoreContractTest: $*" >&2; exit 1; }
 expect_failure() { local expected="$1"; shift; set +e; local out; out="$("$@" 2>&1)"; local rc=$?; set -e; [[ $rc -ne 0 ]] || fail "unexpected success: $*"; grep -Fq -- "$expected" <<<"$out" || { printf '%s\n' "$out" >&2; fail "missing: $expected"; }; }
+expect_failure_without() { local expected="$1"; local forbidden="$2"; shift 2; set +e; local out; out="$("$@" 2>&1)"; local rc=$?; set -e; [[ $rc -ne 0 ]] || fail "unexpected success: $*"; grep -Fq -- "$expected" <<<"$out" || { printf '%s\n' "$out" >&2; fail "missing: $expected"; }; ! grep -Fq -- "$forbidden" <<<"$out" || { printf '%s\n' "$out" >&2; fail "unexpected: $forbidden"; }; }
 cat >"$PROJECT/include/value.hpp" <<'CPP'
 #pragma once
 inline int value() { return 7; }
@@ -24,7 +25,24 @@ out="$("$VIX_BIN" run "$PROJECT/main.cpp" --no-san --run alpha -- -I"$PROJECT/in
 grep -Fq 'hello 7 argc=2 arg=alpha env=' <<<"$out" || fail "hello/--run contract"
 out="$("$VIX_BIN" run "$PROJECT/main.cpp" --no-san --cwd "$PROJECT/cwd" --env RUN_CONTRACT=yes --args beta -- -I"$PROJECT/include")"
 grep -Fq 'hello 7 argc=2 arg=beta env=yes' <<<"$out" || fail "--cwd/--env/--args contract"
-expect_failure 'runtime error: program reported an error' "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --run one two -- -I"$PROJECT/include"
+expect_failure_without 'run (exit code 19)' 'runtime error:' "$VIX_BIN" run "$PROJECT/main.cpp" --no-san --run one two -- -I"$PROJECT/include"
+cat >"$PROJECT/ordinary-exit.cpp" <<'CPP'
+int main() { return 1; }
+CPP
+expect_failure_without 'run (exit code 1)' 'runtime error:' "$VIX_BIN" run "$PROJECT/ordinary-exit.cpp" --no-san
+cat >"$PROJECT/ordinary-division-text.cpp" <<'CPP'
+#include <iostream>
+int divide(int a, int b) {
+  if (b == 0) return 1;
+  return a / b;
+}
+int main() {
+  std::cerr << "error: division by zero\n";
+  return divide(10, 0);
+}
+CPP
+expect_failure_without 'error: division by zero' 'runtime error: division by zero' "$VIX_BIN" run "$PROJECT/ordinary-division-text.cpp" --no-san
+expect_failure_without 'run (exit code 1)' 'runtime error: division by zero' "$VIX_BIN" run "$PROJECT/ordinary-division-text.cpp" --no-san
 cat >"$PROJECT/broken.cpp" <<'CPP'
 int main() { does_not_compile }
 CPP

@@ -506,13 +506,19 @@ namespace vix::commands::CheckCommand::detail
         }
 
         bool handled = false;
+        const vix::cli::errors::RuntimeCrashEvidence evidence{
+            rr.terminatedBySignal,
+            rr.termSignal};
 
-        if (!runtimeLog.empty())
+        if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+                runtimeLog,
+                evidence))
         {
           handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
               runtimeLog,
               script,
-              "Script check failed (runtime sanitizers)");
+              "Script check failed (runtime sanitizers)",
+              evidence);
 
           if (!handled &&
               vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, script))

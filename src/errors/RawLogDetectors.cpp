@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -81,6 +82,96 @@ namespace vix::cli::errors
              icontains(log, "ThreadSanitizer") ||
              icontains(log, "MemorySanitizer") ||
              (icontains(log, "==") && icontains(log, "==ABORTING"));
+    }
+
+    bool has_source_style_runtime_diagnostic(const std::string &log) noexcept
+    {
+      const std::string marker = "runtime error:";
+      std::size_t search = 0;
+
+      while (true)
+      {
+        const std::size_t markerPos = log.find(marker, search);
+        if (markerPos == std::string::npos)
+          return false;
+
+        const std::size_t lineStart = log.rfind('\n', markerPos);
+        const std::size_t prefixStart =
+            lineStart == std::string::npos ? 0 : lineStart + 1;
+        std::string_view prefix(
+            log.data() + prefixStart,
+            markerPos - prefixStart);
+
+        while (!prefix.empty() &&
+               std::isspace(static_cast<unsigned char>(prefix.back())) != 0)
+        {
+          prefix.remove_suffix(1);
+        }
+
+        if (!prefix.empty() && prefix.back() == ':')
+          prefix.remove_suffix(1);
+
+        const std::size_t columnSeparator = prefix.rfind(':');
+        if (columnSeparator != std::string_view::npos)
+        {
+          const std::string_view column =
+              prefix.substr(columnSeparator + 1);
+          const std::string_view beforeColumn =
+              prefix.substr(0, columnSeparator);
+          const std::size_t lineSeparator = beforeColumn.rfind(':');
+
+          if (lineSeparator != std::string_view::npos)
+          {
+            const std::string_view line =
+                beforeColumn.substr(lineSeparator + 1);
+            const bool lineIsNumeric =
+                !line.empty() &&
+                std::all_of(
+                    line.begin(),
+                    line.end(),
+                    [](unsigned char character)
+                    {
+                      return std::isdigit(character) != 0;
+                    });
+            const bool columnIsNumeric =
+                !column.empty() &&
+                std::all_of(
+                    column.begin(),
+                    column.end(),
+                    [](unsigned char character)
+                    {
+                      return std::isdigit(character) != 0;
+                    });
+
+            if (lineIsNumeric && columnIsNumeric)
+              return true;
+          }
+        }
+
+        search = markerPos + marker.size();
+      }
+    }
+
+    bool has_recognized_sanitizer_runtime_diagnostic(
+        const std::string &log) noexcept
+    {
+      return log_looks_sanitized(log) ||
+             has_source_style_runtime_diagnostic(log);
+    }
+
+    bool has_authoritative_division_by_zero_evidence(
+        const std::string &log,
+        const RuntimeCrashEvidence &evidence) noexcept
+    {
+      if (evidence.terminatedBySignal && evidence.termSignal == SIGFPE)
+        return true;
+
+      if (!has_recognized_sanitizer_runtime_diagnostic(log))
+        return false;
+
+      return icontains(log, "division by zero") ||
+             icontains(log, "divide by zero") ||
+             icontains(log, "integer division by zero");
     }
 
     bool runtime_technical_details_enabled()
@@ -636,7 +727,6 @@ namespace vix::cli::errors
 
       // Pointer / arithmetic / undefined behavior
       rules.push_back(runtime::makeNullPointerRule());
-      rules.push_back(runtime::makeDivisionByZeroRule());
       rules.push_back(runtime::makeIntegerOverflowRule());
       rules.push_back(runtime::makeUninitializedMemoryRule());
       rules.push_back(runtime::makeMisalignedAccessRule());
@@ -668,8 +758,20 @@ namespace vix::cli::errors
 
     bool handle_runtime_rules(
         const std::string &log,
-        const std::filesystem::path &sourceFile)
+        const std::filesystem::path &sourceFile,
+        const RuntimeCrashEvidence &evidence)
     {
+      if (has_authoritative_division_by_zero_evidence(log, evidence))
+      {
+        const auto divisionByZero = runtime::makeDivisionByZeroRule();
+
+        if (evidence.terminatedBySignal && evidence.termSignal == SIGFPE)
+          return divisionByZero->handle(log, sourceFile);
+
+        if (divisionByZero->match(log, sourceFile))
+          return divisionByZero->handle(log, sourceFile);
+      }
+
       const auto rules = make_runtime_rules();
 
       for (const auto &rule : rules)
@@ -856,9 +958,10 @@ namespace vix::cli::errors
 
     bool handle_runtime_anything(
         const std::string &log,
-        const std::filesystem::path &sourceFile)
+        const std::filesystem::path &sourceFile,
+        const RuntimeCrashEvidence &evidence)
     {
-      if (handle_runtime_rules(log, sourceFile))
+      if (handle_runtime_rules(log, sourceFile, evidence))
         return true;
 
       return handleGenericRuntimeFallback(log, sourceFile);
@@ -866,19 +969,36 @@ namespace vix::cli::errors
 
   } // namespace
 
+  bool RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+      const std::string &runtimeLog,
+      const RuntimeCrashEvidence &evidence)
+  {
+    return evidence.terminatedBySignal ||
+           has_recognized_sanitizer_runtime_diagnostic(runtimeLog);
+  }
+
   bool RawLogDetectors::handleKnownRunFailure(
       const std::string &log,
       const std::filesystem::path &ctx)
   {
-    return handle_runtime_anything(log, ctx);
+    const RuntimeCrashEvidence evidence{};
+
+    if (!hasAuthoritativeRuntimeEvidence(log, evidence))
+      return false;
+
+    return handle_runtime_anything(log, ctx, evidence);
   }
 
   bool RawLogDetectors::handleRuntimeCrash(
       const std::string &runtimeLog,
       const std::filesystem::path &sourceFile,
-      [[maybe_unused]] const std::string &contextMessage)
+      [[maybe_unused]] const std::string &contextMessage,
+      const RuntimeCrashEvidence &evidence)
   {
-    return handle_runtime_anything(runtimeLog, sourceFile);
+    if (!hasAuthoritativeRuntimeEvidence(runtimeLog, evidence))
+      return false;
+
+    return handle_runtime_anything(runtimeLog, sourceFile, evidence);
   }
 
   bool RawLogDetectors::handleLinkerOrSanitizer(
@@ -909,8 +1029,11 @@ namespace vix::cli::errors
         icontains(buildLog, "terminate called after") ||
         icontains(buildLog, "what():");
 
-    if (looksRuntime)
-      return handle_runtime_anything(buildLog, sourceFile);
+    if (looksRuntime &&
+        hasAuthoritativeRuntimeEvidence(buildLog, {}))
+    {
+      return handle_runtime_anything(buildLog, sourceFile, {});
+    }
 
     return false;
   }

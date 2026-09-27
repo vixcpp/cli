@@ -18,9 +18,30 @@
 
 namespace vix::cli::errors
 {
+  /**
+   * @brief Structured evidence captured from a completed runtime process.
+   *
+   * Text emitted by the application is not, by itself, evidence of a runtime
+   * fault. Signal termination and recognized sanitizer diagnostics provide
+   * the provenance required before runtime error rules may classify a run.
+   */
+  struct RuntimeCrashEvidence final
+  {
+    bool terminatedBySignal{false};
+    int termSignal{0};
+  };
+
   class RawLogDetectors
   {
   public:
+    /**
+     * @brief Returns whether a process result and its log establish a runtime event.
+     */
+    [[nodiscard]]
+    static bool hasAuthoritativeRuntimeEvidence(
+        const std::string &runtimeLog,
+        const RuntimeCrashEvidence &evidence);
+
     static bool handleLinkerOrSanitizer(
         const std::string &buildLog,
         const std::filesystem::path &sourceFile,
@@ -29,7 +50,8 @@ namespace vix::cli::errors
     static bool handleRuntimeCrash(
         const std::string &runtimeLog,
         const std::filesystem::path &sourceFile,
-        const std::string &contextMessage);
+        const std::string &contextMessage,
+        const RuntimeCrashEvidence &evidence = {});
 
     static bool handleKnownRunFailure(const std::string &log, const std::filesystem::path &ctx);
   };

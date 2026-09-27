@@ -658,12 +658,18 @@ namespace vix::commands::CheckCommand::detail
       }
 
       bool handled = false;
-      if (!runtimeLog.empty())
+      const vix::cli::errors::RuntimeCrashEvidence evidence{
+          rr.terminatedBySignal,
+          rr.termSignal};
+      if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+              runtimeLog,
+              evidence))
       {
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             runtimeLog,
             projectDir,
-            "Project check failed (runtime)");
+            "Project check failed (runtime)",
+            evidence);
 
         if (!handled &&
             vix::cli::errors::RawLogDetectors::handleKnownRunFailure(runtimeLog, projectDir))

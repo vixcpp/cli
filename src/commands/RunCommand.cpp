@@ -738,15 +738,21 @@ namespace
         log += tr.stdoutText;
 
       bool handled = false;
+      const vix::cli::errors::RuntimeCrashEvidence evidence{
+          tr.terminatedBySignal,
+          tr.termSignal};
 
-      if (!log.empty())
+      if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+              log,
+              evidence))
       {
         const fs::path diagnosticPath{};
 
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
             diagnosticPath,
-            "Test crashed");
+            "Test crashed",
+            evidence);
 
         if (!handled &&
             vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, diagnosticPath))
@@ -882,8 +888,13 @@ namespace
         log += rr.stdoutText;
 
       bool handled = false;
+      const vix::cli::errors::RuntimeCrashEvidence evidence{
+          rr.terminatedBySignal,
+          rr.termSignal};
 
-      if (!log.empty())
+      if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+              log,
+              evidence))
       {
         const fs::path diagnosticPath =
             opt.singleCpp
@@ -893,7 +904,8 @@ namespace
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             log,
             diagnosticPath,
-            failureContext);
+            failureContext,
+            evidence);
 
         if (!handled &&
             vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, diagnosticPath))

@@ -1005,13 +1005,19 @@ namespace vix::commands::RunCommand::dev
         if (exitCode != 0)
         {
           bool handled = false;
+          const vix::cli::errors::RuntimeCrashEvidence evidence{
+              WIFSIGNALED(status),
+              WIFSIGNALED(status) ? WTERMSIG(status) : 0};
 
-          if (!runtimeLog.empty())
+          if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+                  runtimeLog,
+                  evidence))
           {
             handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
                 runtimeLog,
                 exePath,
-                "Dev server exited with code " + std::to_string(exitCode));
+                "Dev server exited with code " + std::to_string(exitCode),
+                evidence);
           }
 
           if (!handled)

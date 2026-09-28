@@ -523,8 +523,17 @@ namespace vix::cli::build
       if (width < 45)
         barWidth = 0;
 
+      const int percent =
+          total > 0
+              ? std::clamp(
+                    static_cast<int>(
+                        (static_cast<double>(current) / static_cast<double>(total)) *
+                        100.0),
+                    0,
+                    100)
+              : 0;
       const std::string progress =
-          std::to_string(current) + "/" + std::to_string(total);
+          std::to_string(percent) + "%";
       const std::size_t fixedWidth =
           2 + std::string("build ").size() + progress.size();
       const std::size_t availableBarWidth =
@@ -547,13 +556,12 @@ namespace vix::cli::build
 
       if (barWidth > 0)
       {
-        bar += style::MUTED;
-        bar += "[";
         bar += style::ACCENT;
-        bar.append(static_cast<std::size_t>(filled), '=');
+        for (int i = 0; i < filled; ++i)
+          bar += "█";
         bar += style::MUTED;
-        bar.append(static_cast<std::size_t>(barWidth - filled), '-');
-        bar += "]";
+        for (int i = filled; i < barWidth; ++i)
+          bar += "░";
         bar += style::RESET;
       }
 
@@ -561,7 +569,7 @@ namespace vix::cli::build
       lineOut << "  " << style::ACCENT << "build " << style::RESET;
 
       if (!bar.empty())
-        lineOut << bar << " ";
+        lineOut << bar << "    ";
 
       lineOut << style::ACCENT << progress << style::RESET;
 
@@ -612,9 +620,9 @@ namespace vix::cli::build
       out += "build ";
       if (barWidth > 0)
       {
-        out += "[";
-        out.append(static_cast<std::size_t>(barWidth), '=');
-        out += "] ";
+        for (int i = 0; i < barWidth; ++i)
+          out += "█";
+        out += "    ";
       }
 
       out += "done";

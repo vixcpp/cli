@@ -138,7 +138,7 @@ SH
   wait "$WATCH_PID"
   WATCH_PID=""
 
-  require_output "build .*\\[============================\\].*done" "$NORMAL_TTY_OUT"
+  require_output "build .*████.*done" "$NORMAL_TTY_OUT"
   require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$NORMAL_TTY_OUT"
   reject_output "launcher:\|linker:\|jobs:" "$NORMAL_TTY_OUT"
   reject_output "› Building CXX object\|› Building C object\|› .*CMakeFiles/" "$NORMAL_TTY_OUT"
@@ -165,8 +165,8 @@ SH
   wait "$WATCH_PID"
   WATCH_PID=""
 
-  require_output "build .*\\[" "$TTY_OUT"
-  require_output "build .*\[============================\].*done" "$TTY_OUT"
+  require_output "build .*█" "$TTY_OUT"
+  require_output "build .*████.*done" "$TTY_OUT"
   require_output "Finished.*dev \[unoptimized + debuginfo\].* in " "$TTY_OUT"
   reject_output "Configuring.*progress-app\|Configured in" "$TTY_OUT"
   reject_output "› Building CXX object\|› Building C object\|› .*CMakeFiles/" "$TTY_OUT"
@@ -181,7 +181,7 @@ SH
     >"$CMAKE_VERBOSE_OUT" 2>&1
 
   require_output "Building CXX object\|CMakeFiles/" "$CMAKE_VERBOSE_OUT"
-  reject_output "build .*\[============================\].*done" "$CMAKE_VERBOSE_OUT"
+  reject_output "build .*████.*done" "$CMAKE_VERBOSE_OUT"
 
   WATCH_OUT="$ROOT/tty-watch.out"
   script -q -f "$WATCH_OUT" -c "env HOME='$HOME_DIR' CCACHE_DISABLE=1 PATH='$ROOT/bin:$PATH' '$VIX_BIN' build --watch --build-target progress_app --verbose --launcher none --linker default --dir '$PROJECT'" >/dev/null 2>&1 &

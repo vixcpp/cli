@@ -65,9 +65,9 @@
 #include <vix/cli/commands/AgentCommand.hpp>
 #include <vix/cli/commands/GameExportCommand.hpp>
 #include <vix/cli/commands/CloudCommand.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Logger.hpp>
+#include <vix/log/Logger.hpp>
 #include <vix/cli/util/Ui.hpp>
 
 #include <iostream>
@@ -84,7 +84,7 @@
 
 namespace vix
 {
-  using Logger = vix::utils::Logger;
+  using Logger = vix::log::Logger;
   using namespace vix::cli::style;
 
   namespace
@@ -223,7 +223,7 @@ namespace vix
 
     void apply_log_level_from_env(Logger &logger)
     {
-      if (const char *env = vix::utils::vix_getenv("VIX_LOG_LEVEL"))
+      if (const char *env = vix::env::legacy::getenv("VIX_LOG_LEVEL"))
       {
         std::string value(env);
 

@@ -24,7 +24,7 @@
 #include <vix/cli/util/Hash.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/process/Process.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/cli/util/GitProgress.hpp>
 #include <vix/cli/util/ProjectMutation.hpp>
@@ -139,9 +139,9 @@ namespace vix::commands
     static std::string home_dir()
     {
 #ifdef _WIN32
-      const char *home = vix::utils::vix_getenv("USERPROFILE");
+      const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-      const char *home = vix::utils::vix_getenv("HOME");
+      const char *home = vix::env::legacy::getenv("HOME");
 #endif
       return home ? std::string(home) : std::string();
     }
@@ -196,7 +196,7 @@ namespace vix::commands
 
     static fs::path global_root_dir()
     {
-      if (const char *p = vix::utils::vix_getenv("VIX_GLOBAL_PREFIX"); p && *p)
+      if (const char *p = vix::env::legacy::getenv("VIX_GLOBAL_PREFIX"); p && *p)
         return fs::path(p);
 
       return vix_root() / "global";
@@ -2979,7 +2979,7 @@ namespace vix::commands
 
     static bool path_has_dir(const fs::path &dir)
     {
-      const char *env = vix::utils::vix_getenv("PATH");
+      const char *env = vix::env::legacy::getenv("PATH");
       if (!env)
         return false;
 
@@ -3006,7 +3006,7 @@ namespace vix::commands
     static std::vector<fs::path> current_path_dirs()
     {
       std::vector<fs::path> dirs;
-      const char *env = vix::utils::vix_getenv("PATH");
+      const char *env = vix::env::legacy::getenv("PATH");
       if (!env)
         return dirs;
 
@@ -3196,7 +3196,7 @@ namespace vix::commands
     {
       const std::string h = home_dir();
       const fs::path home = h.empty() ? fs::current_path() : fs::path(h);
-      const char *shellEnv = vix::utils::vix_getenv("SHELL");
+      const char *shellEnv = vix::env::legacy::getenv("SHELL");
       const std::string shell = shellEnv ? fs::path(shellEnv).filename().string() : std::string();
 
       if (shell == "zsh")
@@ -3267,7 +3267,7 @@ namespace vix::commands
       const fs::path expectedDefault = h.empty() ? fs::path() : (fs::path(h) / ".vix" / "global" / "bin");
       const bool defaultPrefix = !h.empty() && bin == fs::absolute(expectedDefault).lexically_normal();
 
-      const char *shellEnv = vix::utils::vix_getenv("SHELL");
+      const char *shellEnv = vix::env::legacy::getenv("SHELL");
       const std::string shell = shellEnv ? fs::path(shellEnv).filename().string() : std::string();
       const fs::path config = default_shell_config_file();
 

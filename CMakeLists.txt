@@ -50,7 +50,6 @@ if (VIX_CLI_BUILD_TESTS)
   set(TEMPLATE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
   set(TEMPLATE_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
 
-  set(VIX_UTILS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_JSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_CORE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_NET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -221,7 +220,6 @@ else()
   get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
   set(_VIX_CORE_DIR     "${_VIX_MODULES_DIR}/core")
-  set(_VIX_UTILS_DIR    "${_VIX_MODULES_DIR}/utils")
   set(_VIX_ASYNC_DIR    "${_VIX_MODULES_DIR}/async")
   set(_VIX_JSON_DIR     "${_VIX_MODULES_DIR}/json")
   set(_VIX_TEMPLATE_DIR "${_VIX_MODULES_DIR}/template")
@@ -239,16 +237,12 @@ else()
   set(_VIX_ENGINE_DIR    "${_VIX_MODULES_DIR}/engine")
 
   set(_LOCAL_LAYOUT_OK FALSE)
-  if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt")
+  if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt")
     set(_LOCAL_LAYOUT_OK TRUE)
   endif()
 
   if (_LOCAL_LAYOUT_OK)
     message(STATUS "[cli] Building inside Vix repo -> resolving local sibling modules")
-
-    if (EXISTS "${_VIX_UTILS_DIR}/CMakeLists.txt" AND NOT TARGET vix::utils)
-      add_subdirectory("${_VIX_UTILS_DIR}" "${CMAKE_BINARY_DIR}/_vix_utils")
-    endif()
 
     if (EXISTS "${_VIX_ASYNC_DIR}/CMakeLists.txt" AND NOT TARGET vix::async)
       add_subdirectory("${_VIX_ASYNC_DIR}" "${CMAKE_BINARY_DIR}/_vix_async")
@@ -334,10 +328,6 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::core)
     endif()
 
-    if (TARGET vix::utils)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::utils)
-    endif()
-
     if (TARGET vix::async)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::async)
     endif()
@@ -404,7 +394,6 @@ else()
 
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UTILS_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ASYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_JSON_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REPLY_DIR}/include")
@@ -470,11 +459,49 @@ else()
         "Missing dependencies for vix_cli.\n"
         "Expected one of:\n"
         "  - umbrella targets vix::vix or vix::core\n"
-        "  - local sibling modules in ../core, ../utils, ../p2p, ../crypto, etc.\n"
+        "  - local sibling modules in ../core, ../p2p, ../crypto, etc.\n"
         "  - installed packages providing vix::vix or vix::core"
       )
     endif()
   endif()
+endif()
+
+# ----------------------------------------------------
+# Canonical environment dependency
+# ----------------------------------------------------
+if (NOT TARGET vix::env AND NOT TARGET vix_env)
+  if (EXISTS "${_VIX_MODULES_DIR}/env/CMakeLists.txt")
+    add_subdirectory("${_VIX_MODULES_DIR}/env" "${CMAKE_BINARY_DIR}/_vix_env")
+  else()
+    find_package(vix_env CONFIG REQUIRED)
+  endif()
+endif()
+
+if (TARGET vix::env)
+  target_link_libraries(vix_cli PRIVATE vix::env)
+elseif (TARGET vix_env)
+  target_link_libraries(vix_cli PRIVATE vix_env)
+else()
+  message(FATAL_ERROR "[cli] Canonical environment access requires vix::env")
+endif()
+
+# ----------------------------------------------------
+# Canonical logging dependency
+# ----------------------------------------------------
+if (NOT TARGET vix::log AND NOT TARGET vix_log)
+  if (EXISTS "${_VIX_MODULES_DIR}/log/CMakeLists.txt")
+    add_subdirectory("${_VIX_MODULES_DIR}/log" "${CMAKE_BINARY_DIR}/_vix_log")
+  else()
+    find_package(vix_log CONFIG REQUIRED)
+  endif()
+endif()
+
+if (TARGET vix::log)
+  target_link_libraries(vix_cli PRIVATE vix::log)
+elseif (TARGET vix_log)
+  target_link_libraries(vix_cli PRIVATE vix_log)
+else()
+  message(FATAL_ERROR "[cli] Canonical logging requires vix::log")
 endif()
 
 # ----------------------------------------------------

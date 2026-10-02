@@ -20,7 +20,7 @@
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -55,7 +55,7 @@ namespace vix::commands::RunCommand::detail
      */
     std::string choose_cxx_compiler()
     {
-      if (const char *env = vix::utils::vix_getenv("CXX"); env && *env)
+      if (const char *env = vix::env::legacy::getenv("CXX"); env && *env)
         return std::string(env);
 
 #ifdef _WIN32
@@ -121,7 +121,7 @@ namespace vix::commands::RunCommand::detail
         return absolute_path_preserving_filename(exePath).string();
       }
 
-      const char *pathEnv = vix::utils::vix_getenv("PATH");
+      const char *pathEnv = vix::env::legacy::getenv("PATH");
       if (!pathEnv || !*pathEnv)
         return exe;
 
@@ -173,7 +173,7 @@ namespace vix::commands::RunCommand::detail
 
     bool direct_perf_trace_enabled()
     {
-      const char *value = vix::utils::vix_getenv("VIX_PERF_TRACE");
+      const char *value = vix::env::legacy::getenv("VIX_PERF_TRACE");
       return value && std::string(value) == "1";
     }
 
@@ -295,7 +295,7 @@ namespace vix::commands::RunCommand::detail
       std::vector<fs::path> prefixes;
       std::error_code ec;
 
-      const char *home = vix::utils::vix_getenv(
+      const char *home = vix::env::legacy::getenv(
 #ifdef _WIN32
           "USERPROFILE"
 #else
@@ -1215,9 +1215,9 @@ namespace vix::commands::RunCommand::detail
       return fs::current_path() / ".vix-scripts";
 
 #ifdef _WIN32
-    const char *home = vix::utils::vix_getenv("USERPROFILE");
+    const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-    const char *home = vix::utils::vix_getenv("HOME");
+    const char *home = vix::env::legacy::getenv("HOME");
 #endif
 
     if (home && *home)

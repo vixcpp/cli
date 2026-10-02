@@ -3,13 +3,13 @@
 
 #include <cstdlib>
 #include <string>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 namespace vix::cli::util
 {
   inline bool debug_enabled()
   {
-    const char *v = vix::utils::vix_getenv("VIX_DEBUG");
+    const char *v = vix::env::legacy::getenv("VIX_DEBUG");
     if (!v)
       return false;
 

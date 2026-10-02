@@ -14,7 +14,7 @@
 
 #include <vix/cli/commands/new/NewTui.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -108,13 +108,13 @@ namespace vix::commands::new_cmd::tui
 
   bool is_noninteractive_env()
   {
-    if (const char *v = vix::utils::vix_getenv("VIX_NONINTERACTIVE"))
+    if (const char *v = vix::env::legacy::getenv("VIX_NONINTERACTIVE"))
     {
       const std::string s = v;
       if (!s.empty() && s != "0" && s != "false" && s != "FALSE")
         return true;
     }
-    return vix::utils::vix_getenv("CI") != nullptr;
+    return vix::env::legacy::getenv("CI") != nullptr;
   }
 
   bool can_interact() { return is_tty_stdin() && !is_noninteractive_env(); }

@@ -14,7 +14,7 @@
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -597,7 +597,7 @@ namespace vix::commands::RunCommand::detail
       {
         static const bool debugMode = []()
         {
-          const char *env = vix::utils::vix_getenv("VIX_DEBUG_FILTER");
+          const char *env = vix::env::legacy::getenv("VIX_DEBUG_FILTER");
           return env && std::strcmp(env, "1") == 0;
         }();
 
@@ -659,7 +659,7 @@ namespace vix::commands::RunCommand::detail
 
       static bool should_clear()
       {
-        const char *mode = vix::utils::vix_getenv("VIX_CLI_CLEAR");
+        const char *mode = vix::env::legacy::getenv("VIX_CLI_CLEAR");
         if (!mode)
           return false;
 
@@ -1402,8 +1402,8 @@ namespace vix::commands::RunCommand::detail
       if (!cmakeConfigure)
         return false;
 
-      const char *runValue = vix::utils::vix_getenv("VIX_RUN_HEARTBEAT");
-      const char *buildValue = vix::utils::vix_getenv("VIX_BUILD_HEARTBEAT");
+      const char *runValue = vix::env::legacy::getenv("VIX_RUN_HEARTBEAT");
+      const char *buildValue = vix::env::legacy::getenv("VIX_BUILD_HEARTBEAT");
 
       const char *value = runValue && *runValue ? runValue : buildValue;
 

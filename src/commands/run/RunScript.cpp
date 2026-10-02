@@ -25,7 +25,7 @@
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Ui.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/commands/run/dev/DevSession.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 
@@ -830,7 +830,7 @@ namespace vix::commands::RunCommand::detail
       if (opt.verbose)
         return true;
 
-      const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
+      const char *lvl = vix::env::legacy::getenv("VIX_LOG_LEVEL");
       if (!lvl || !*lvl)
         return false;
 
@@ -1012,9 +1012,9 @@ namespace vix::commands::RunCommand::detail
       auto home_dir = []() -> std::optional<std::string>
       {
 #ifdef _WIN32
-        const char *home = vix::utils::vix_getenv("USERPROFILE");
+        const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-        const char *home = vix::utils::vix_getenv("HOME");
+        const char *home = vix::env::legacy::getenv("HOME");
 #endif
         if (!home || std::string(home).empty())
           return std::nullopt;
@@ -1207,7 +1207,7 @@ namespace vix::commands::RunCommand::detail
 
       const std::string cmd = oss.str();
 
-      if (vix::utils::vix_getenv("VIX_PROCESS_DEBUG"))
+      if (vix::env::legacy::getenv("VIX_PROCESS_DEBUG"))
       {
         std::cerr << "[vix:process] script configure cmd="
                   << cmd
@@ -1859,7 +1859,7 @@ namespace vix::commands::RunCommand::detail
               0,
               o.enableSanitizers || o.enableUbsanOnly,
               true);
-          if (const char *trace = vix::utils::vix_getenv("VIX_PERF_TRACE");
+          if (const char *trace = vix::env::legacy::getenv("VIX_PERF_TRACE");
               trace && std::string(trace) == "1")
           {
             const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1903,7 +1903,7 @@ namespace vix::commands::RunCommand::detail
           const auto persistenceStart = std::chrono::steady_clock::now();
           if (!persist_direct_script_cache_metadata(directPlan))
             std::cerr << "warning: unable to persist direct script cache metadata\n";
-          if (const char *trace = vix::utils::vix_getenv("VIX_PERF_TRACE");
+          if (const char *trace = vix::env::legacy::getenv("VIX_PERF_TRACE");
               trace && std::string(trace) == "1")
           {
             const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(

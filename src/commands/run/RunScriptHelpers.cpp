@@ -14,7 +14,7 @@
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <iostream>
 #include <cstdlib>
@@ -269,7 +269,7 @@ namespace vix::commands::RunCommand::detail
 
   std::optional<fs::path> find_vix_include_dir()
   {
-    const char *home = vix::utils::vix_getenv(
+    const char *home = vix::env::legacy::getenv(
 #ifdef _WIN32
         "USERPROFILE"
 #else
@@ -301,7 +301,7 @@ namespace vix::commands::RunCommand::detail
   {
     std::vector<fs::path> prefixes;
 
-    const char *home = vix::utils::vix_getenv(
+    const char *home = vix::env::legacy::getenv(
 #ifdef _WIN32
         "USERPROFILE"
 #else
@@ -337,7 +337,7 @@ namespace vix::commands::RunCommand::detail
     std::vector<fs::path> prefixes;
     std::error_code ec;
 
-    const char *home = vix::utils::vix_getenv(
+    const char *home = vix::env::legacy::getenv(
 #ifdef _WIN32
         "USERPROFILE"
 #else
@@ -400,7 +400,7 @@ namespace vix::commands::RunCommand::detail
 
   std::optional<fs::path> find_vix_pch()
   {
-    const char *home = vix::utils::vix_getenv(
+    const char *home = vix::env::legacy::getenv(
 #ifdef _WIN32
         "USERPROFILE"
 #else

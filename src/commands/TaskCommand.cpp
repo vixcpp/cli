@@ -19,7 +19,7 @@
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -170,14 +170,14 @@ namespace
 
   static bool is_noninteractive_env()
   {
-    if (const char *v = vix::utils::vix_getenv("VIX_NONINTERACTIVE"))
+    if (const char *v = vix::env::legacy::getenv("VIX_NONINTERACTIVE"))
     {
       const std::string s = v;
       if (!s.empty() && s != "0" && s != "false" && s != "FALSE")
         return true;
     }
 
-    if (vix::utils::vix_getenv("CI") != nullptr)
+    if (vix::env::legacy::getenv("CI") != nullptr)
       return true;
 
     return false;
@@ -291,7 +291,7 @@ namespace
 
       for (const auto &kv : vars)
       {
-        const char *old = vix::utils::vix_getenv(kv.first.c_str());
+        const char *old = vix::env::legacy::getenv(kv.first.c_str());
         if (old)
           previous[kv.first] = std::string(old);
         else

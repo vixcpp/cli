@@ -31,8 +31,8 @@
 #include <vix/cli/util/Semver.hpp>
 #include <nlohmann/json.hpp>
 
-#include <vix/utils/Logger.hpp>
-#include <vix/utils/ServerPrettyLogs.hpp>
+#include <vix/log/Logger.hpp>
+#include <vix/server/ServerReadyPresentation.hpp>
 
 #ifdef VIX_CLI_HAS_UI
 #include <vix/ui/platform/Platform.hpp>
@@ -56,7 +56,7 @@ namespace fs = std::filesystem;
 
 namespace
 {
-  using Log = vix::utils::Logger;
+  using Log = vix::log::Logger;
 
   // -------------------------------------------------------------------------
   //  Output mode
@@ -989,11 +989,11 @@ namespace
                               std::uint16_t port,
                               int readyMs)
   {
-    vix::utils::ServerReadyInfo info;
+    vix::server::ServerReadyInfo info;
 
     info.app = "Vix Note";
     info.ready_ms = readyMs;
-    info.mode = vix::utils::RuntimeBanner::mode_from_env();
+    info.mode = vix::server::StartupPresentation::mode_from_env();
     info.status = "listening";
 
     info.scheme = "http";
@@ -1004,7 +1004,7 @@ namespace
     info.show_ws = false;
     info.show_hints = true;
 
-    vix::utils::RuntimeBanner::emit_server_ready(info);
+    vix::server::StartupPresentation::emit_server_ready(info);
   }
 
   // -------------------------------------------------------------------------

@@ -17,7 +17,7 @@
 #include <vix/cli/util/Console.hpp>
 #include <vix/cli/util/Ui.hpp>
 
-#include <vix/utils/Logger.hpp>
+#include <vix/log/Logger.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -54,7 +54,7 @@ namespace
   namespace style = vix::cli::style;
   namespace cli_console = vix::cli::util;
 
-  using Logger = vix::utils::Logger;
+  using Logger = vix::log::Logger;
 
   struct SharedLifecycle
   {

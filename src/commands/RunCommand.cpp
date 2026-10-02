@@ -24,7 +24,7 @@
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 #include <vix/engine/SanitizerMode.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <chrono>
 #include <cstdlib>
@@ -602,7 +602,7 @@ namespace
 
   void ensure_mode_env_for_run(const Options &opt)
   {
-    const char *cur = vix::utils::vix_getenv("VIX_MODE");
+    const char *cur = vix::env::legacy::getenv("VIX_MODE");
     if (cur && *cur)
       return;
 

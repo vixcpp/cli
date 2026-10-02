@@ -14,7 +14,7 @@
 #include <vix/cli/commands/ListCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -59,9 +59,9 @@ namespace vix::commands
     std::string home_dir()
     {
 #ifdef _WIN32
-      const char *home = vix::utils::vix_getenv("USERPROFILE");
+      const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-      const char *home = vix::utils::vix_getenv("HOME");
+      const char *home = vix::env::legacy::getenv("HOME");
 #endif
       return home ? std::string(home) : std::string();
     }
@@ -77,7 +77,7 @@ namespace vix::commands
 
     fs::path global_root_dir()
     {
-      if (const char *p = vix::utils::vix_getenv("VIX_GLOBAL_PREFIX"); p && *p)
+      if (const char *p = vix::env::legacy::getenv("VIX_GLOBAL_PREFIX"); p && *p)
         return fs::path(p);
 
       return vix_root() / "global";

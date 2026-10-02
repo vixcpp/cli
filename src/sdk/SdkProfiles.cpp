@@ -15,7 +15,7 @@
 
 #include <vix/cli/util/Fs.hpp>
 #include <vix/cli/util/Strings.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -538,10 +538,10 @@ namespace vix::cli::sdk
   fs::path sdk_root_dir()
   {
 #ifdef _WIN32
-    if (const char *home = vix::utils::vix_getenv("USERPROFILE"))
+    if (const char *home = vix::env::legacy::getenv("USERPROFILE"))
       return fs::path(home) / ".vix" / "sdk";
 #else
-    if (const char *home = vix::utils::vix_getenv("HOME"))
+    if (const char *home = vix::env::legacy::getenv("HOME"))
       return fs::path(home) / ".vix" / "sdk";
 #endif
     return fs::current_path() / ".vix" / "sdk";

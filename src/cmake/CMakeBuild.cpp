@@ -25,7 +25,7 @@
 
 #include <vix/engine/Process.hpp>
 #include <vix/engine/BuildParallelism.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #ifdef _WIN32
 #include <io.h>
@@ -344,7 +344,7 @@ namespace vix::cli::build
        * downloads dependencies. Keep a heartbeat enabled by default for
        * configure, while still allowing explicit control through the env var.
        */
-      const char *v = vix::utils::vix_getenv("VIX_BUILD_HEARTBEAT");
+      const char *v = vix::env::legacy::getenv("VIX_BUILD_HEARTBEAT");
       if (!v || !*v)
         return isConfigure;
 

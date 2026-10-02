@@ -24,7 +24,7 @@
 #include <vix/async/core/thread_pool.hpp>
 #include <vix/async/core/cancel.hpp>
 #include <vix/async/core/signal.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <cctype>
 
 #include <cerrno>
@@ -69,7 +69,7 @@ namespace vix::commands::RunCommand::dev
       if (options.runOptions.verbose)
         return true;
 
-      const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL");
+      const char *lvl = vix::env::legacy::getenv("VIX_LOG_LEVEL");
       if (!lvl || !*lvl)
         return false;
 

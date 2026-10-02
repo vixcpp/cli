@@ -13,7 +13,7 @@
  */
 #include <vix/cli/commands/ServiceCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/requests/Client.hpp>
 
 #include <nlohmann/json.hpp>
@@ -261,7 +261,7 @@ namespace vix::commands
 
     std::string current_user()
     {
-      if (const char *user = vix::utils::vix_getenv("USER"))
+      if (const char *user = vix::env::legacy::getenv("USER"))
       {
         if (*user)
           return user;
@@ -275,13 +275,13 @@ namespace vix::commands
 
     std::optional<fs::path> detect_vix_package_dir()
     {
-      if (const char *vixDir = vix::utils::vix_getenv("Vix_DIR"))
+      if (const char *vixDir = vix::env::legacy::getenv("Vix_DIR"))
       {
         if (*vixDir)
           return fs::path(vixDir);
       }
 
-      if (const char *prefix = vix::utils::vix_getenv("CMAKE_PREFIX_PATH"))
+      if (const char *prefix = vix::env::legacy::getenv("CMAKE_PREFIX_PATH"))
       {
         if (*prefix)
         {
@@ -502,7 +502,7 @@ namespace vix::commands
 
     std::optional<fs::path> current_vix_cli_path()
     {
-      if (const char *path = vix::utils::vix_getenv("VIX_CLI_PATH"))
+      if (const char *path = vix::env::legacy::getenv("VIX_CLI_PATH"))
       {
         if (*path)
           return fs::path(path);

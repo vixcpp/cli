@@ -13,7 +13,7 @@
  */
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -416,9 +416,9 @@ namespace vix::commands
     std::string home_dir()
     {
 #ifdef _WIN32
-      const char *home = vix::utils::vix_getenv("USERPROFILE");
+      const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-      const char *home = vix::utils::vix_getenv("HOME");
+      const char *home = vix::env::legacy::getenv("HOME");
 #endif
       return home ? std::string(home) : std::string();
     }
@@ -434,11 +434,11 @@ namespace vix::commands
     fs::path stats_file()
     {
 #ifdef _WIN32
-      if (const char *p = vix::utils::vix_getenv("LOCALAPPDATA"))
+      if (const char *p = vix::env::legacy::getenv("LOCALAPPDATA"))
         return fs::path(p) / "Vix" / "install.json";
       return fs::current_path() / "install.json";
 #else
-      if (const char *home = vix::utils::vix_getenv("HOME"))
+      if (const char *home = vix::env::legacy::getenv("HOME"))
         return fs::path(home) / ".local" / "share" / "vix" / "install.json";
       return fs::current_path() / "install.json";
 #endif
@@ -447,11 +447,11 @@ namespace vix::commands
     fs::path default_local_bin_path()
     {
 #ifdef _WIN32
-      if (const char *local = vix::utils::vix_getenv("LOCALAPPDATA"))
+      if (const char *local = vix::env::legacy::getenv("LOCALAPPDATA"))
         return fs::path(local) / "Vix" / "bin" / bin_name();
       return fs::current_path() / bin_name();
 #else
-      if (const char *home = vix::utils::vix_getenv("HOME"))
+      if (const char *home = vix::env::legacy::getenv("HOME"))
         return fs::path(home) / ".local" / "bin" / bin_name();
       return fs::current_path() / bin_name();
 #endif
@@ -459,7 +459,7 @@ namespace vix::commands
 
     fs::path global_root_dir()
     {
-      if (const char *p = vix::utils::vix_getenv("VIX_GLOBAL_PREFIX"); p && *p)
+      if (const char *p = vix::env::legacy::getenv("VIX_GLOBAL_PREFIX"); p && *p)
         return fs::path(p);
 
       return vix_root() / "global";
@@ -493,12 +493,12 @@ namespace vix::commands
     fs::path cmake_user_package_registry_dir()
     {
 #ifdef _WIN32
-      if (const char *appdata = vix::utils::vix_getenv("APPDATA"))
+      if (const char *appdata = vix::env::legacy::getenv("APPDATA"))
         return fs::path(appdata) / "CMake" / "packages" / "Vix";
 
       return fs::current_path() / "CMake" / "packages" / "Vix";
 #else
-      if (const char *home = vix::utils::vix_getenv("HOME"))
+      if (const char *home = vix::env::legacy::getenv("HOME"))
         return fs::path(home) / ".cmake" / "packages" / "Vix";
 
       return fs::current_path() / ".cmake" / "packages" / "Vix";
@@ -580,7 +580,7 @@ namespace vix::commands
 
     std::optional<fs::path> resolve_path_from_env()
     {
-      const char *env = vix::utils::vix_getenv("VIX_CLI_PATH");
+      const char *env = vix::env::legacy::getenv("VIX_CLI_PATH");
       if (!env || std::string(env).empty())
         return std::nullopt;
       return fs::absolute(fs::path(env));

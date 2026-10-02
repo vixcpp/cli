@@ -14,7 +14,7 @@
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/Style.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/requests/Client.hpp>
 #include <nlohmann/json.hpp>
 
@@ -56,12 +56,12 @@ namespace vix::commands
     fs::path stats_file()
     {
 #ifdef _WIN32
-      if (const char *p = vix::utils::vix_getenv("LOCALAPPDATA"))
+      if (const char *p = vix::env::legacy::getenv("LOCALAPPDATA"))
         if (*p)
           return fs::path(p) / "Vix" / "install.json";
       return fs::current_path() / "install.json";
 #else
-      if (const char *home = vix::utils::vix_getenv("HOME"))
+      if (const char *home = vix::env::legacy::getenv("HOME"))
         if (*home)
           return fs::path(home) / ".local" / "share" / "vix" / "install.json";
       return fs::current_path() / "install.json";
@@ -70,7 +70,7 @@ namespace vix::commands
 
     fs::path current_exe_path()
     {
-      if (const char *p = vix::utils::vix_getenv("VIX_CLI_PATH"))
+      if (const char *p = vix::env::legacy::getenv("VIX_CLI_PATH"))
         if (*p)
           return fs::path(p);
 #ifdef _WIN32
@@ -268,7 +268,7 @@ namespace vix::commands
 
     bool path_contains_dir(const std::string &dir)
     {
-      const char *p = vix::utils::vix_getenv("PATH");
+      const char *p = vix::env::legacy::getenv("PATH");
       if (!p)
         return false;
 
@@ -348,7 +348,7 @@ namespace vix::commands
 
     std::optional<fs::path> env_path(const char *name)
     {
-      if (const char *value = vix::utils::vix_getenv(name))
+      if (const char *value = vix::env::legacy::getenv(name))
       {
         if (*value)
           return fs::path(value);
@@ -359,7 +359,7 @@ namespace vix::commands
 
     std::optional<fs::path> first_cmake_prefix_path()
     {
-      if (const char *value = vix::utils::vix_getenv("CMAKE_PREFIX_PATH"))
+      if (const char *value = vix::env::legacy::getenv("CMAKE_PREFIX_PATH"))
       {
         if (!*value)
           return std::nullopt;
@@ -1709,7 +1709,7 @@ namespace vix::commands
       vix::cli::util::warn_line(std::cerr, "minisign: missing (optional; sha256 still secures upgrades)");
 #endif
 
-    if (const char *lvl = vix::utils::vix_getenv("VIX_LOG_LEVEL"))
+    if (const char *lvl = vix::env::legacy::getenv("VIX_LOG_LEVEL"))
       vix::cli::util::kv(std::cout, "VIX_LOG_LEVEL", std::string(lvl));
 
     // Online check

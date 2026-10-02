@@ -14,7 +14,7 @@
 #include <vix/cli/cmake/CMakeBuild.hpp>
 #include <vix/cli/util/Hash.hpp>
 #include <vix/requests/requests.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -207,11 +207,11 @@ namespace vix::commands
 
       bool color_enabled(std::ostream &stream)
       {
-        const char *no_color = vix::utils::vix_getenv("NO_COLOR");
+        const char *no_color = vix::env::legacy::getenv("NO_COLOR");
         if (no_color && *no_color)
           return false;
 
-        const char *term = vix::utils::vix_getenv("TERM");
+        const char *term = vix::env::legacy::getenv("TERM");
         if (term && std::string(term) == "dumb")
           return false;
 
@@ -414,9 +414,9 @@ namespace vix::commands
     fs::path home_dir()
     {
 #ifdef _WIN32
-      const char *home = vix::utils::vix_getenv("USERPROFILE");
+      const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-      const char *home = vix::utils::vix_getenv("HOME");
+      const char *home = vix::env::legacy::getenv("HOME");
 #endif
       return home && *home ? fs::path(home) : fs::current_path();
     }
@@ -1271,7 +1271,7 @@ namespace vix::commands
 #elif defined(__APPLE__)
       const auto result = vix::cli::build::run_process_capture({"open", url}, {}, output);
 #else
-      const char *browser = vix::utils::vix_getenv("BROWSER");
+      const char *browser = vix::env::legacy::getenv("BROWSER");
       if (browser && *browser)
       {
         const auto custom = vix::cli::build::run_process_capture({browser, url}, {}, output);

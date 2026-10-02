@@ -22,10 +22,6 @@ if (TARGET vix::core)
   target_link_libraries(vix_cli_cmake_build_errors_tests PRIVATE vix::core)
 endif()
 
-if (TARGET vix::utils)
-  target_link_libraries(vix_cli_cmake_build_errors_tests PRIVATE vix::utils)
-endif()
-
 if (TARGET vix::json)
   target_link_libraries(vix_cli_cmake_build_errors_tests PRIVATE vix::json)
 endif()
@@ -158,8 +154,10 @@ if (TARGET vix::crypto)
   target_link_libraries(vix_cli_package_hash_tests PRIVATE vix::crypto)
 endif()
 
-if (TARGET vix::utils)
-  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix::utils)
+if (TARGET vix::env)
+  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix::env)
+elseif (TARGET vix_env)
+  target_link_libraries(vix_cli_package_hash_tests PRIVATE vix_env)
 endif()
 
 if (TARGET vix_warnings)

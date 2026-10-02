@@ -11,7 +11,6 @@
  *  Vix.cpp
  */
 #include <vix/cli/commands/env/EnvConfig.hpp>
-#include <vix/utils/Env.hpp>
 
 #include <nlohmann/json.hpp>
 

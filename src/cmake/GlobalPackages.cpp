@@ -11,7 +11,7 @@
  *  Vix.cpp
  */
 #include <vix/cli/cmake/GlobalPackages.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <algorithm>
 #include <cstdlib>
@@ -30,9 +30,9 @@ namespace vix::cli::build
     static std::optional<std::string> home_dir()
     {
 #ifdef _WIN32
-      const char *home = vix::utils::vix_getenv("USERPROFILE");
+      const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-      const char *home = vix::utils::vix_getenv("HOME");
+      const char *home = vix::env::legacy::getenv("HOME");
 #endif
       if (!home || std::string(home).empty())
         return std::nullopt;

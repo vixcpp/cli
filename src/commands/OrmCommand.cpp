@@ -16,7 +16,7 @@
 #endif
 
 #include <vix/cli/commands/OrmCommand.hpp>
-#include <vix/utils/Env.hpp>
+#include <vix/env/Legacy.hpp>
 #include <iostream>
 #include <cstdlib>
 #include <filesystem>
@@ -32,7 +32,7 @@ namespace
 {
   static const char *env_or(const char *k, const char *defv)
   {
-    if (const char *v = vix::utils::vix_getenv(k))
+    if (const char *v = vix::env::legacy::getenv(k))
       return v;
     return defv;
   }
@@ -93,11 +93,11 @@ namespace
   static std::string find_migrator_tool()
   {
     // New preferred env var
-    if (const char *t = vix::utils::vix_getenv("VIX_DB_TOOL"))
+    if (const char *t = vix::env::legacy::getenv("VIX_DB_TOOL"))
       return std::string(t);
 
     // Backward compat (old name)
-    if (const char *t = vix::utils::vix_getenv("VIX_ORM_TOOL"))
+    if (const char *t = vix::env::legacy::getenv("VIX_ORM_TOOL"))
       return std::string(t);
 
     const auto try_paths = [](const std::vector<fs::path> &paths) -> std::string

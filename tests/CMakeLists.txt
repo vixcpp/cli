@@ -109,6 +109,15 @@ add_executable(vix_cli_project_mutation_tests ProjectMutationTests.cpp ../src/ut
 target_include_directories(vix_cli_project_mutation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_project_mutation_tests COMMAND vix_cli_project_mutation_tests)
 
+add_executable(vix_cli_project_discovery_tests
+  ProjectDiscoveryTests.cpp
+  ../src/project/ProjectDiscovery.cpp
+)
+target_include_directories(vix_cli_project_discovery_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_project_discovery_tests COMMAND vix_cli_project_discovery_tests)
+
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
 )

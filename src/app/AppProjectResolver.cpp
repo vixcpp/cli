@@ -18,6 +18,7 @@
 #include <vix/cli/app/AppCMakeGenerator.hpp>
 #include <vix/cli/app/VixcFrontend.hpp>
 #include <vix/cli/app/AppManifest.hpp>
+#include <vix/cli/project/ProjectDiscovery.hpp>
 #include <vix/cli/modules/DependencyConstraints.hpp>
 #include <vix/cli/modules/DependencyOwnership.hpp>
 #include <vix/cli/modules/ModuleGraph.hpp>
@@ -40,17 +41,6 @@ namespace vix::cli::app
     {
       std::error_code error;
       return fs::exists(path, error) && fs::is_regular_file(path, error);
-    }
-
-    fs::path normalize_absolute(const fs::path &path)
-    {
-      std::error_code error;
-
-      fs::path absolutePath = fs::absolute(path, error);
-      if (error)
-        absolutePath = path;
-
-      return absolutePath.lexically_normal();
     }
 
     fs::path app_manifest_json_path(const fs::path &projectDir)
@@ -252,32 +242,6 @@ namespace vix::cli::app
       return true;
     }
 
-    fs::path search_project_root(const fs::path &base)
-    {
-      fs::path current = normalize_absolute(base);
-
-      if (file_exists_regular(current))
-        current = current.parent_path();
-
-      while (!current.empty())
-      {
-        if (file_exists_regular(current / "CMakeLists.txt") ||
-            file_exists_regular(current / "vix.app"))
-        {
-          return current;
-        }
-
-        const fs::path parent = current.parent_path();
-
-        if (parent == current)
-          break;
-
-        current = parent;
-      }
-
-      return {};
-    }
-
     AppProjectResolveResult resolve_cmake_project(
         const fs::path &projectDir)
     {
@@ -437,9 +401,10 @@ namespace vix::cli::app
   {
     AppProjectResolveResult result;
 
-    const fs::path projectDir = search_project_root(base);
+    const project::ProjectDiscoveryResult location =
+        project::discover_project(base);
 
-    if (projectDir.empty())
+    if (!location.success())
     {
       result.error =
           "Unable to determine the project directory. Missing "
@@ -447,13 +412,15 @@ namespace vix::cli::app
       return result;
     }
 
+    const fs::path projectDir = location.location->root;
+
     const fs::path cmakeListsPath = projectDir / "CMakeLists.txt";
     const fs::path appManifestPath = projectDir / "vix.app";
 
-    if (file_exists_regular(cmakeListsPath))
+    if (location.location->system == project::ProjectSystem::cmake)
       return resolve_cmake_project(projectDir);
 
-    if (file_exists_regular(appManifestPath))
+    if (location.location->system == project::ProjectSystem::legacy_vix_app)
       return resolve_vix_app_project(projectDir, use_vixc_frontend);
 
     result.error =

@@ -165,6 +165,9 @@ namespace vix::cli::process
      */
     std::string buildTarget;
 
+    /** Internal caller request: ensure a CMake File API snapshot is available. */
+    bool requireProjectMetadata{false};
+
     /**
      * @brief Extra arguments forwarded directly to CMake.
      */

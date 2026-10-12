@@ -24,6 +24,7 @@ namespace vix::cli::project::cmake
   {
     std::string id;
     std::string name;
+    std::string nameOnDisk;
     std::string type;
     bool generatorProvided{false};
     bool imported{false};

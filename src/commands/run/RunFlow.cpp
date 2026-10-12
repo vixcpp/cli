@@ -444,6 +444,23 @@ namespace vix::commands::RunCommand::detail
       {
         opt.runPreset = take_eq_value(a, "--run-preset=");
       }
+      else if (a == "-d" || a == "--dir")
+      {
+        opt.dir = take_value(args, i, a, opt);
+        if (opt.parseFailed)
+          return opt;
+      }
+      else if (a.rfind("--dir=", 0) == 0)
+      {
+        opt.dir = take_eq_value(a, "--dir=");
+        if (opt.dir.empty())
+        {
+          error("Missing value for --dir <path>");
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
+      }
       else if (a == "-j" || a == "--jobs")
       {
         const std::string v = take_value(args, i, a, opt);

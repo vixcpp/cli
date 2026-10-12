@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/RunCommand.hpp>
+#include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/app/VixcFrontend.hpp>
@@ -22,6 +23,11 @@
 #include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/app/AppProjectResolver.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
+#include <vix/cli/project/ProjectDiscovery.hpp>
+#include <vix/cli/project/TargetSelection.hpp>
+#include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/build/BuildContext.hpp>
+#include <vix/engine/ExecutionPlanning.hpp>
 #include <vix/engine/SanitizerMode.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/env/Legacy.hpp>
@@ -53,6 +59,13 @@ namespace
   using vix::commands::RunCommand::detail::Options;
 
   int run_script_mode(Options &opt);
+  int run_executable_direct(
+      const fs::path &exePath,
+      const Options &opt,
+      const std::string &failureContext,
+      int timeoutSec,
+      bool instrumentedBinary = false);
+  bool is_executable_file(const fs::path &p);
 
   enum class RunTargetKind
   {
@@ -437,6 +450,87 @@ namespace
     outExecutable = *exePath;
     return 0;
   }
+
+  static int run_normalized_cmake_project(
+      const fs::path &projectDir,
+      const Options &opt,
+      const std::string &requestedName)
+  {
+    const auto location = vix::cli::project::discover_project(projectDir);
+    if (!location.success() ||
+        location.location->system != vix::cli::project::ProjectSystem::cmake)
+      return -1;
+
+    std::vector<std::string> buildArgs{
+        "--dir", location.location->root.string(),
+        "--preset", opt.preset,
+        "--require-project-metadata"};
+    if (!requestedName.empty())
+    {
+      buildArgs.push_back("--build-target");
+      buildArgs.push_back(requestedName);
+    }
+    if (opt.jobs > 0)
+    {
+      buildArgs.push_back("-j");
+      buildArgs.push_back(std::to_string(opt.jobs));
+    }
+    if (opt.clean)
+      buildArgs.push_back("--clean");
+
+    const int buildCode = vix::commands::BuildCommand::run(buildArgs);
+    if (buildCode != 0)
+      return buildCode;
+
+    const auto preset = vix::cli::build::resolve_builtin_preset(opt.preset);
+    if (!preset)
+      return 1;
+    vix::engine::ExecutionPlanLayoutOptions layoutOptions;
+    layoutOptions.userProjectDir = location.location->root;
+    layoutOptions.cmakeSourceDir = location.location->root;
+    layoutOptions.preset = *preset;
+    const auto layout = vix::engine::make_execution_plan_layout(layoutOptions);
+    if (!layout.success())
+      return 1;
+
+    const auto snapshot = vix::cli::project::cmake::load_cmake_project_snapshot(
+        *location.location, {layout.plan.buildDir, std::nullopt});
+    if (!snapshot.success())
+    {
+      error("Unable to resolve configured run targets (" +
+            std::string(vix::cli::project::to_string(*snapshot.error)) + ").");
+      return 1;
+    }
+
+    const auto selected = requestedName.empty()
+        ? vix::cli::project::select_default_runnable_target(*snapshot.snapshot)
+        : vix::cli::project::select_runnable_target_by_name(*snapshot.snapshot, requestedName);
+    if (!selected.success())
+    {
+      error("Unable to resolve run target" +
+            (requestedName.empty() ? std::string{} : " '" + requestedName + "'") +
+            " (" + std::string(vix::cli::project::to_string(*selected.error)) + ").");
+      return 1;
+    }
+
+    const auto artifact = vix::cli::project::cmake::resolve_runnable_artifact(
+        *location.location, {layout.plan.buildDir, std::nullopt}, selected.target->id);
+    if (!artifact.success())
+    {
+      error("Unable to resolve configured runnable artifact (" +
+            std::string(vix::cli::project::to_string(*artifact.error)) + ").");
+      return 1;
+    }
+    if (!is_executable_file(*artifact.artifact))
+    {
+      error("Configured executable artifact is missing or not executable.");
+      hint(artifact.artifact->string());
+      return 1;
+    }
+    return run_executable_direct(
+        *artifact.artifact, opt, "Execution failed",
+        vix::commands::RunCommand::detail::effective_timeout_sec(opt));
+  }
   void apply_manifest_auto_deps_includes(Options &opt, const fs::path &manifestFile)
   {
     const fs::path manifestDir = manifestFile.parent_path();
@@ -779,7 +873,7 @@ namespace
       const Options &opt,
       const std::string &failureContext,
       int timeoutSec,
-      bool instrumentedBinary = false)
+      bool instrumentedBinary)
   {
 #ifdef _WIN32
     std::string runCmd = "\"" + exePath.string() + "\"";
@@ -1674,6 +1768,25 @@ namespace vix::commands::RunCommand
       if (!opt.tempDeps.empty())
         return run_with_temporary_deps(opt);
       return run_script_mode(opt);
+    }
+
+    fs::path normalizedBase = opt.dir.empty()
+        ? fs::current_path()
+        : fs::absolute(fs::path(opt.dir));
+    std::error_code targetPathError;
+    const bool namedFilesystemTarget =
+        !opt.appName.empty() && fs::exists(fs::path(opt.appName), targetPathError) &&
+        !targetPathError;
+    const auto normalizedProject =
+        namedFilesystemTarget
+            ? vix::cli::project::ProjectDiscoveryResult{}
+            : vix::cli::project::discover_project(normalizedBase);
+    if (normalizedProject.success() &&
+        normalizedProject.location->system ==
+            vix::cli::project::ProjectSystem::cmake)
+    {
+      return run_normalized_cmake_project(
+          normalizedProject.location->root, opt, opt.appName);
     }
 
     const RunTarget target = resolve_target(opt);

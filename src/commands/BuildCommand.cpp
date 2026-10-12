@@ -2102,6 +2102,10 @@ namespace vix::commands::BuildCommand
           }
           o.buildTarget = std::string(*v);
         }
+        else if (a == "--require-project-metadata")
+        {
+          o.requireProjectMetadata = true;
+        }
         else if (a.rfind("--build-target=", 0) == 0)
         {
           o.buildTarget = a.substr(std::string("--build-target=").size());
@@ -5831,6 +5835,9 @@ namespace vix::commands::BuildCommand
 
         bool configuredThisRun = false;
 
+        const bool needsCmakeProjectMetadata =
+            !plan_.generatedFromVixApp &&
+            (opt_.requireProjectMetadata || !opt_.buildTarget.empty());
         const bool explicitCmakeTarget =
             !opt_.buildTarget.empty() && !plan_.generatedFromVixApp;
         std::optional<vix::cli::project::ProjectLocation> targetProject;
@@ -5838,7 +5845,7 @@ namespace vix::commands::BuildCommand
             plan_.buildDir, std::nullopt};
         bool metadataRefreshRequired = false;
 
-        if (explicitCmakeTarget)
+        if (needsCmakeProjectMetadata)
         {
           const auto discovered =
               vix::cli::project::discover_project(plan_.userProjectDir);

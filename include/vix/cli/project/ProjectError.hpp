@@ -18,7 +18,9 @@ namespace vix::cli::project
     target_not_found,
     ambiguous_target,
     target_not_buildable,
-    target_not_runnable
+    target_not_runnable,
+    configuration_required,
+    configuration_not_found
   };
 
   [[nodiscard]] constexpr std::string_view to_string(ProjectError error) noexcept
@@ -33,6 +35,8 @@ namespace vix::cli::project
     case ProjectError::ambiguous_target: return "ambiguous_target";
     case ProjectError::target_not_buildable: return "target_not_buildable";
     case ProjectError::target_not_runnable: return "target_not_runnable";
+    case ProjectError::configuration_required: return "configuration_required";
+    case ProjectError::configuration_not_found: return "configuration_not_found";
     }
     return "unknown_project_error";
   }

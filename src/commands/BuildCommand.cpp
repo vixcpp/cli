@@ -5868,7 +5868,7 @@ namespace vix::commands::BuildCommand
           }
 
           const auto existingSnapshot =
-              vix::cli::project::cmake::load_cmake_project_snapshot(
+              vix::cli::project::cmake::load_cmake_target_snapshot(
                   *targetProject, targetSnapshotRequest);
           metadataRefreshRequired = !existingSnapshot.success();
         }
@@ -5992,7 +5992,7 @@ namespace vix::commands::BuildCommand
         if (explicitCmakeTarget)
         {
           const auto snapshot =
-              vix::cli::project::cmake::load_cmake_project_snapshot(
+              vix::cli::project::cmake::load_cmake_target_snapshot(
                   *targetProject, targetSnapshotRequest);
           if (!snapshot.success())
           {

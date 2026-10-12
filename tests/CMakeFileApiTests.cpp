@@ -1,5 +1,6 @@
 #include <vix/cli/project/cmake/CMakeFileApi.hpp>
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/cmake/CTestDiscovery.hpp>
 #include <vix/cli/project/TargetSelection.hpp>
 
 #include <cassert>
@@ -159,6 +160,12 @@ namespace
     assert(!target(snapshot, "core").capabilities.runnable);
     assert(target(snapshot, "server").id.valid());
     assert(target(snapshot, "server").id.value != target(snapshot, "server").name);
+    assert(snapshot.project.tests.size() == 2);
+    assert(snapshot.project.tests[0].name == "alpha");
+    assert(snapshot.project.tests[1].name == "beta");
+    assert(snapshot.project.tests[0].id != snapshot.project.tests[1].id);
+    assert(!snapshot.project.tests[0].target.has_value());
+    assert(!snapshot.project.tests[1].target.has_value());
 
     const auto server = project::select_target_by_name(snapshot, "server");
     const auto client = project::select_target_by_name(snapshot, "client");

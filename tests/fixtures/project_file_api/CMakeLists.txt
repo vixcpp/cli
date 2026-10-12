@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 project(vix_p3_fixture LANGUAGES CXX)
 
+enable_testing()
+add_test(NAME alpha COMMAND "${CMAKE_COMMAND}" -E true)
+add_test(NAME beta COMMAND "${CMAKE_COMMAND}" -E true)
+
 add_library(core STATIC core.cpp)
 add_library(shared SHARED shared.cpp)
 add_library(objects OBJECT object.cpp)

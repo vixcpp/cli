@@ -130,6 +130,7 @@ add_test(NAME vix_cli_target_selection_tests COMMAND vix_cli_target_selection_te
 add_executable(vix_cli_cmake_file_api_tests
   CMakeFileApiTests.cpp
   ../src/project/cmake/CMakeFileApi.cpp
+  ../src/project/cmake/CTestDiscovery.cpp
   ../src/project/cmake/CMakeProjectAdapter.cpp
   ../src/project/TargetSelection.cpp
 )
@@ -140,7 +141,22 @@ target_compile_definitions(vix_cli_cmake_file_api_tests PRIVATE
   VIX_P3_FIXTURE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api"
   VIX_P3_CMAKE_COMMAND="${CMAKE_COMMAND}"
 )
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_cmake_file_api_tests PRIVATE vix::engine)
+endif()
 add_test(NAME vix_cli_cmake_file_api_tests COMMAND vix_cli_cmake_file_api_tests)
+
+add_executable(vix_cli_ctest_discovery_tests
+  CTestDiscoveryTests.cpp
+  ../src/project/cmake/CTestDiscovery.cpp
+)
+target_include_directories(vix_cli_ctest_discovery_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_ctest_discovery_tests PRIVATE vix::engine)
+endif()
+add_test(NAME vix_cli_ctest_discovery_tests COMMAND vix_cli_ctest_discovery_tests)
 
 add_test(
   NAME vix_cli_targets_command_tests

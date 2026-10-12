@@ -493,7 +493,7 @@ namespace
     if (!layout.success())
       return 1;
 
-    const auto snapshot = vix::cli::project::cmake::load_cmake_project_snapshot(
+    const auto snapshot = vix::cli::project::cmake::load_cmake_target_snapshot(
         *location.location, {layout.plan.buildDir, std::nullopt});
     if (!snapshot.success())
     {

@@ -1,5 +1,6 @@
 /** @file CMakeProjectAdapter.cpp */
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/cmake/CTestDiscovery.hpp>
 
 #include <algorithm>
 
@@ -112,7 +113,7 @@ namespace vix::cli::project::cmake
     return {std::move(snapshot), std::nullopt};
   }
 
-  ProjectSnapshotResult load_cmake_project_snapshot(
+  ProjectSnapshotResult load_cmake_target_snapshot(
       const ProjectLocation &location,
       const SnapshotRequest &request)
   {
@@ -120,6 +121,21 @@ namespace vix::cli::project::cmake
     if (!codemodel.success())
       return {std::nullopt, codemodel.error};
     return make_project_snapshot(location, request, *codemodel.codemodel);
+  }
+
+  ProjectSnapshotResult load_cmake_project_snapshot(
+      const ProjectLocation &location,
+      const SnapshotRequest &request)
+  {
+    auto snapshot = load_cmake_target_snapshot(location, request);
+    if (!snapshot.success())
+      return snapshot;
+
+    const auto tests = discover_ctest_tests(request);
+    if (!tests.success())
+      return {std::nullopt, tests.error};
+    snapshot.snapshot->project.tests = *tests.tests;
+    return snapshot;
   }
 
   NativeBuildTargetResult resolve_native_build_target(

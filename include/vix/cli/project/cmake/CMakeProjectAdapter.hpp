@@ -48,6 +48,11 @@ namespace vix::cli::project::cmake
       const SnapshotRequest &request,
       const CMakeFileApiCodemodel &codemodel);
 
+  /** Loads target/artifact metadata only for target-oriented build resolution. */
+  [[nodiscard]] ProjectSnapshotResult load_cmake_target_snapshot(
+      const ProjectLocation &location,
+      const SnapshotRequest &request);
+
   /** Loads a configured CMake snapshot.  This function never runs CMake. */
   [[nodiscard]] ProjectSnapshotResult load_cmake_project_snapshot(
       const ProjectLocation &location,

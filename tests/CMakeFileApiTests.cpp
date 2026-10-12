@@ -155,6 +155,10 @@ namespace
     assert(client.success() && client.target->id == target(snapshot, "client").id);
     assert(project::select_default_runnable_target(snapshot).error == project::ProjectError::ambiguous_target);
 
+    const auto nativeServer = cmake_adapter::resolve_native_build_target(
+        location, {build, std::nullopt}, server.target->id);
+    assert(nativeServer.success() && *nativeServer.target == "server");
+
     bool serverArtifact = false;
     bool clientArtifact = false;
     for (const auto &artifact : snapshot.artifacts)

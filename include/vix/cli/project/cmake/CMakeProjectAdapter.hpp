@@ -26,6 +26,13 @@ namespace vix::cli::project::cmake
     [[nodiscard]] bool success() const noexcept { return snapshot.has_value(); }
   };
 
+  struct NativeBuildTargetResult
+  {
+    std::optional<std::string> target;
+    std::optional<ProjectError> error;
+    [[nodiscard]] bool success() const noexcept { return target.has_value(); }
+  };
+
   [[nodiscard]] TargetKind target_kind_from_cmake_type(const std::string &type) noexcept;
 
   /** Maps already-read configured CMake metadata into a normalized snapshot. */
@@ -38,6 +45,12 @@ namespace vix::cli::project::cmake
   [[nodiscard]] ProjectSnapshotResult load_cmake_project_snapshot(
       const ProjectLocation &location,
       const SnapshotRequest &request);
+
+  /** Resolves an opaque normalized ID through configured CMake metadata. */
+  [[nodiscard]] NativeBuildTargetResult resolve_native_build_target(
+      const ProjectLocation &location,
+      const SnapshotRequest &request,
+      const TargetId &id);
 } // namespace vix::cli::project::cmake
 
 #endif // VIX_CLI_PROJECT_CMAKE_CMAKE_PROJECT_ADAPTER_HPP

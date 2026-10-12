@@ -61,6 +61,10 @@
 #include <vix/cli/cmake/CMakeBuild.hpp>
 #include <vix/cli/cmake/GlobalPackages.hpp>
 #include <vix/cli/cmake/Toolchain.hpp>
+#include <vix/cli/project/ProjectDiscovery.hpp>
+#include <vix/cli/project/TargetSelection.hpp>
+#include <vix/cli/project/cmake/CMakeFileApi.hpp>
+#include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
 #include <vix/cli/util/Args.hpp>
 #include <vix/cli/util/Console.hpp>
 #include <vix/cli/util/Fs.hpp>
@@ -5657,6 +5661,7 @@ namespace vix::commands::BuildCommand
                   // Project-input and VerifyGlobs scans are Vix's fast
                   // no-op proof; they must not precede a normal Ninja build.
                   return opt_.fast &&
+                         opt_.buildTarget.empty() &&
                          opt_.useCache &&
                          !opt_.clean &&
                          previousState &&
@@ -5826,6 +5831,41 @@ namespace vix::commands::BuildCommand
 
         bool configuredThisRun = false;
 
+        const bool explicitCmakeTarget =
+            !opt_.buildTarget.empty() && !plan_.generatedFromVixApp;
+        std::optional<vix::cli::project::ProjectLocation> targetProject;
+        vix::cli::project::cmake::SnapshotRequest targetSnapshotRequest{
+            plan_.buildDir, std::nullopt};
+        bool metadataRefreshRequired = false;
+
+        if (explicitCmakeTarget)
+        {
+          const auto discovered =
+              vix::cli::project::discover_project(plan_.userProjectDir);
+          if (!discovered.success() ||
+              discovered.location->system !=
+                  vix::cli::project::ProjectSystem::cmake)
+          {
+            error("Unable to resolve the CMake project for --build-target.");
+            return 1;
+          }
+          targetProject = *discovered.location;
+
+          const auto query =
+              vix::cli::project::cmake::prepare_cmake_file_api_query(
+                  plan_.buildDir);
+          if (!query.success())
+          {
+            error("Unable to prepare configured CMake metadata for --build-target.");
+            return 1;
+          }
+
+          const auto existingSnapshot =
+              vix::cli::project::cmake::load_cmake_project_snapshot(
+                  *targetProject, targetSnapshotRequest);
+          metadataRefreshRequired = !existingSnapshot.success();
+        }
+
         const vix::engine::ConfigureDecision configureDecision =
             measurePhase(
                 "configuration check",
@@ -5834,7 +5874,7 @@ namespace vix::commands::BuildCommand
                   return evaluate_configure_decision(opt_, plan_);
                 });
 
-        if (configureDecision.needs_configure())
+        if (configureDecision.needs_configure() || metadataRefreshRequired)
         {
           if (liveBuild)
             liveBuild->begin_configure();
@@ -5940,6 +5980,41 @@ namespace vix::commands::BuildCommand
             out.print("  Using existing configuration (cache-friendly).\n");
             out.print("    • " + plan_.buildDir.string() + "\n\n");
           }
+        }
+
+        if (explicitCmakeTarget)
+        {
+          const auto snapshot =
+              vix::cli::project::cmake::load_cmake_project_snapshot(
+                  *targetProject, targetSnapshotRequest);
+          if (!snapshot.success())
+          {
+            error("Unable to resolve --build-target from configured CMake metadata (" +
+                  std::string(vix::cli::project::to_string(*snapshot.error)) + ").");
+            return 1;
+          }
+
+          const auto selected =
+              vix::cli::project::select_buildable_target_by_name(
+                  *snapshot.snapshot, opt_.buildTarget);
+          if (!selected.success())
+          {
+            error("Unable to resolve --build-target '" + opt_.buildTarget + "' (" +
+                  std::string(vix::cli::project::to_string(*selected.error)) + ").");
+            return 1;
+          }
+
+          const auto native =
+              vix::cli::project::cmake::resolve_native_build_target(
+                  *targetProject, targetSnapshotRequest, selected.target->id);
+          if (!native.success())
+          {
+            error("Unable to translate --build-target '" + opt_.buildTarget + "' (" +
+                  std::string(vix::cli::project::to_string(*native.error)) + ").");
+            return 1;
+          }
+
+          opt_.buildTarget = *native.target;
         }
 
         if (!forceBuildGraph_ &&

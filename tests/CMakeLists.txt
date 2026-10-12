@@ -150,6 +150,14 @@ add_test(
     -P ${CMAKE_CURRENT_SOURCE_DIR}/TargetsCommandTest.cmake
 )
 
+add_test(
+  NAME vix_cli_build_target_migration_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DVIX_CLI_EXECUTABLE=$<TARGET_FILE:vix_cli>
+    -DVIX_P5_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/BuildTargetMigrationTest.cmake
+)
+
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"
 )

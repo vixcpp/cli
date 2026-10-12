@@ -102,4 +102,39 @@ namespace vix::cli::project::cmake
       return {std::nullopt, codemodel.error};
     return make_project_snapshot(location, request, *codemodel.codemodel);
   }
+
+  NativeBuildTargetResult resolve_native_build_target(
+      const ProjectLocation &location,
+      const SnapshotRequest &request,
+      const TargetId &id)
+  {
+    const auto codemodel = load_cmake_file_api_codemodel(request.buildRoot);
+    if (!codemodel.success())
+      return {std::nullopt, codemodel.error};
+
+    const auto snapshot = make_project_snapshot(location, request, *codemodel.codemodel);
+    if (!snapshot.success())
+      return {std::nullopt, snapshot.error};
+
+    const CMakeFileApiConfiguration *configuration = nullptr;
+    if (codemodel.codemodel->configurations.size() == 1)
+      configuration = &codemodel.codemodel->configurations.front();
+    else if (request.configuration)
+    {
+      for (const auto &candidate : codemodel.codemodel->configurations)
+        if (candidate.name == *request.configuration)
+          configuration = &candidate;
+    }
+
+    if (configuration == nullptr)
+      return {std::nullopt, ProjectError::configured_metadata_unavailable};
+
+    for (const auto &target : configuration->targets)
+    {
+      if (target.id == id.value && !target.generatorProvided &&
+          !target.imported && !target.abstract)
+        return {target.name, std::nullopt};
+    }
+    return {std::nullopt, ProjectError::target_not_found};
+  }
 } // namespace vix::cli::project::cmake

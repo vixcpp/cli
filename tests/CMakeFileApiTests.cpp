@@ -1,5 +1,6 @@
 #include <vix/cli/project/cmake/CMakeFileApi.hpp>
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/TargetSelection.hpp>
 
 #include <cassert>
 #include <chrono>
@@ -147,6 +148,12 @@ namespace
     assert(!target(snapshot, "core").capabilities.runnable);
     assert(target(snapshot, "server").id.valid());
     assert(target(snapshot, "server").id.value != target(snapshot, "server").name);
+
+    const auto server = project::select_target_by_name(snapshot, "server");
+    const auto client = project::select_target_by_name(snapshot, "client");
+    assert(server.success() && server.target->id == target(snapshot, "server").id);
+    assert(client.success() && client.target->id == target(snapshot, "client").id);
+    assert(project::select_default_runnable_target(snapshot).error == project::ProjectError::ambiguous_target);
 
     bool serverArtifact = false;
     bool clientArtifact = false;

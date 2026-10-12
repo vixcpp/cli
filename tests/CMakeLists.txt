@@ -118,10 +118,20 @@ target_include_directories(vix_cli_project_discovery_tests PRIVATE
 )
 add_test(NAME vix_cli_project_discovery_tests COMMAND vix_cli_project_discovery_tests)
 
+add_executable(vix_cli_target_selection_tests
+  TargetSelectionTests.cpp
+  ../src/project/TargetSelection.cpp
+)
+target_include_directories(vix_cli_target_selection_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_target_selection_tests COMMAND vix_cli_target_selection_tests)
+
 add_executable(vix_cli_cmake_file_api_tests
   CMakeFileApiTests.cpp
   ../src/project/cmake/CMakeFileApi.cpp
   ../src/project/cmake/CMakeProjectAdapter.cpp
+  ../src/project/TargetSelection.cpp
 )
 target_include_directories(vix_cli_cmake_file_api_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -131,6 +141,14 @@ target_compile_definitions(vix_cli_cmake_file_api_tests PRIVATE
   VIX_P3_CMAKE_COMMAND="${CMAKE_COMMAND}"
 )
 add_test(NAME vix_cli_cmake_file_api_tests COMMAND vix_cli_cmake_file_api_tests)
+
+add_test(
+  NAME vix_cli_targets_command_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DVIX_CLI_EXECUTABLE=$<TARGET_FILE:vix_cli>
+    -DVIX_P4_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/TargetsCommandTest.cmake
+)
 
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/../src/errors/runtime/*.cpp"

@@ -15,6 +15,7 @@
 #include <vix/cli/commands/NewCommand.hpp>
 #include <vix/cli/commands/InitCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
+#include <vix/cli/commands/TargetsCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/ReplayCommand.hpp>
@@ -108,6 +109,14 @@ namespace vix::cli::dispatch
          { return vix::commands::BuildCommand::run(a); },
          []()
          { return vix::commands::BuildCommand::help(); }});
+
+    add({"targets",
+         "Project",
+         "List configured CMake targets",
+         [](const Args &a)
+         { return vix::commands::TargetsCommand::run(a); },
+         []()
+         { return vix::commands::TargetsCommand::help(); }});
 
     add({"run",
          "Project",

@@ -189,6 +189,19 @@ target_include_directories(vix_cli_native_toml_parser_tests SYSTEM PRIVATE
 )
 add_test(NAME vix_cli_native_toml_parser_tests COMMAND vix_cli_native_toml_parser_tests)
 
+add_executable(vix_cli_native_canonical_hash_tests
+  NativeCanonicalHashTests.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+)
+target_include_directories(vix_cli_native_canonical_hash_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_canonical_hash_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_canonical_hash_tests COMMAND vix_cli_native_canonical_hash_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

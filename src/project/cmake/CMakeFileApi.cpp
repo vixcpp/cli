@@ -131,6 +131,8 @@ namespace vix::cli::project::cmake
       CMakeFileApiTarget parsed;
       parsed.id = *id;
       parsed.name = *name;
+      if (const auto nameOnDisk = string_value(*target, "nameOnDisk"))
+        parsed.nameOnDisk = *nameOnDisk;
       parsed.type = *type;
       parsed.generatorProvided = bool_value(*target, "isGeneratorProvided");
       parsed.imported = bool_value(*target, "imported");

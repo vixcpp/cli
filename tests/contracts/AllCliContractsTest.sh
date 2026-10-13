@@ -19,14 +19,12 @@ run run/RunCacheContractTest.sh
 run run/RunVixAppContractTest.sh
 run run/RunExecutionPathsContractTest.sh
 run run/RunCompiledDependencyContractTest.sh
-run FrontendOptionContractTest.sh
 run dev/DevProjectContractTest.sh
 run dev/DevSingleCppContractTest.sh
 run dev/DevSingleCppSignalContractTest.sh
 run build/BuildCoreContractTest.sh
 run build/BuildPassthroughContractTest.sh
 run build/BuildExecutionPathsContractTest.sh
-run install/InstallCMakeCompatibilityContractTest.sh
 run install/InstallReconciliationContractTest.sh
 
 echo "AllCliContractsTest passed"

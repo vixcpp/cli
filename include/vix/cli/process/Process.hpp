@@ -165,6 +165,9 @@ namespace vix::cli::process
      */
     std::string buildTarget;
 
+    /** Internal caller request: ensure a CMake File API snapshot is available. */
+    bool requireProjectMetadata{false};
+
     /**
      * @brief Extra arguments forwarded directly to CMake.
      */
@@ -190,9 +193,6 @@ namespace vix::cli::process
 
     bool singleCpp = false;
     fs::path cppFile;
-
-    /** Selects the opt-in experimental VixC frontend for source units. */
-    bool useVixcFrontend = false;
 
     bool warnings{false};
     std::size_t warningsPage{1};

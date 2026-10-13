@@ -18,17 +18,11 @@
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
-#include <vix/cli/commands/ReplayCommand.hpp>
-#include <vix/cli/commands/OrmCommand.hpp>
-#include <vix/cli/commands/DbCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
-#include <vix/cli/commands/NoteCommand.hpp>
-#include <vix/cli/commands/DesktopCommand.hpp>
-#include <vix/cli/commands/MobileCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
@@ -40,31 +34,17 @@
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
-#include <vix/cli/commands/P2PCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/cli/commands/OutdatedCommand.hpp>
-#include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/commands/CompletionCommand.hpp>
 #include <vix/cli/commands/InfoCommand.hpp>
 #include <vix/cli/commands/FmtCommand.hpp>
 #include <vix/cli/commands/CleanCommand.hpp>
 #include <vix/cli/commands/ResetCommand.hpp>
-#include <vix/cli/commands/TaskCommand.hpp>
-#include <vix/cli/commands/ServiceCommand.hpp>
-#include <vix/cli/commands/ProxyCommand.hpp>
-#include <vix/cli/commands/HealthCommand.hpp>
-#include <vix/cli/commands/DeployCommand.hpp>
-#include <vix/cli/commands/LogsCommand.hpp>
-#include <vix/cli/commands/EnvCommand.hpp>
-#include <vix/cli/commands/ProductionCommand.hpp>
-#include <vix/cli/commands/WsCommand.hpp>
-#include <vix/cli/commands/AgentCommand.hpp>
-#include <vix/cli/commands/GameExportCommand.hpp>
-#include <vix/cli/commands/CloudCommand.hpp>
 #include <vix/env/Legacy.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/log/Logger.hpp>
@@ -254,100 +234,6 @@ namespace vix
 
   CLI::CLI()
   {
-    // Base commands
-    commands_["help"] = [this](auto args)
-    { return help(args); };
-    commands_["version"] = [this](auto args)
-    { return version(args); };
-
-    commands_["new"] = [](auto args)
-    { return commands::NewCommand::run(args); };
-    commands_["run"] = [](auto args)
-    { return commands::RunCommand::run(args); };
-    commands_["build"] = [](auto args)
-    { return commands::BuildCommand::run(args); };
-    commands_["make"] = [](auto args)
-    { return commands::MakeCommand::run(args); };
-    commands_["dev"] = [](auto args)
-    { return commands::DevCommand::run(args); };
-    commands_["replay"] = [](auto args)
-    { return commands::ReplayCommand::run(args); };
-    commands_["orm"] = [](auto args)
-    { return commands::OrmCommand::run(args); };
-    commands_["db"] = [](auto args)
-    { return commands::DbCommand::run(args); };
-    commands_["pack"] = [](auto args)
-    { return commands::PackCommand::run(args); };
-    commands_["verify"] = [](auto args)
-    { return commands::VerifyCommand::run(args); };
-    commands_["check"] = [](auto args)
-    { return commands::CheckCommand::run(args); };
-    commands_["tests"] = [](auto args)
-    { return commands::TestsCommand::run(args); };
-    commands_["test"] = [](auto args)
-    { return commands::TestsCommand::run(args); };
-    commands_["repl"] = [](auto args)
-    { return commands::ReplCommand::run(args); };
-    commands_["note"] = [](auto args)
-    { return commands::NoteCommand::run(args); };
-    commands_["desktop"] = [](auto args)
-    { return commands::DesktopCommand::run(args); };
-    commands_["mobile"] = [](auto args)
-    { return commands::MobileCommand::run(args); };
-    commands_["cache"] = [](auto args)
-    { return commands::CacheCommand::run(args); };
-    commands_["info"] = [](auto args)
-    { return commands::InfoCommand::run(args); };
-    commands_["fmt"] = [](auto args)
-    { return commands::FmtCommand::run(args); };
-    commands_["clean"] = [](auto args)
-    { return commands::CleanCommand::run(args); };
-    commands_["reset"] = [](auto args)
-    { return commands::ResetCommand::run(args); };
-    commands_["task"] = [](auto args)
-    { return commands::TaskCommand::run(args); };
-    commands_["service"] = [](auto args)
-    { return commands::ServiceCommand::run(args); };
-    commands_["proxy"] = [](auto args)
-    { return commands::ProxyCommand::run(args); };
-    commands_["health"] = [](auto args)
-    { return commands::HealthCommand::run(args); };
-    commands_["deploy"] = [](auto args)
-    { return commands::DeployCommand::run(args); };
-    commands_["logs"] = [](auto args)
-    { return commands::LogsCommand::run(args); };
-    commands_["env"] = [](auto args)
-    { return commands::EnvCommand::run(args); };
-    commands_["production"] = [](auto args)
-    { return commands::ProductionCommand{}.run(args); };
-    commands_["ws"] = [](auto args)
-    { return commands::WsCommand::run(args); };
-    commands_["agent"] = [](auto args)
-    { return commands::AgentCommand::run(args); };
-    commands_["game"] = [](auto args)
-    { return commands::GameCommand::run(args); };
-    commands_["login"] = [](auto args)
-    { return commands::CloudCommand::login(args); };
-    commands_["logout"] = [](auto args)
-    { return commands::CloudCommand::logout(args); };
-    commands_["cloud"] = [](auto args)
-    { return commands::CloudCommand::run(args); };
-
-    commands_["-h"] = [this](auto args)
-    { return help(args); };
-    commands_["--help"] = [this](auto args)
-    { return help(args); };
-    commands_["-v"] = [this](auto args)
-    { return version(args); };
-    commands_["--version"] = [this](auto args)
-    { return version(args); };
-
-    commands_["hello"] = [](auto)
-    {
-      auto &logger = Logger::getInstance();
-      logger.logModule("CLI", Logger::Level::Info, "Hello from Vix.cpp 👋");
-      return 0;
-    };
   }
 
   int CLI::run(int argc, char **argv)
@@ -476,11 +362,6 @@ namespace vix
       }
     }
 
-    if (cmd == "doctor" && !args.empty() && args[0] == "--cloud")
-    {
-      return commands::CloudCommand::doctor({});
-    }
-
     if (cmd == "help")
       return help(args);
 
@@ -559,32 +440,18 @@ namespace vix
         return commands::NewCommand::help();
       if (cmd == "init")
         return commands::InitCommand::help();
-      if (cmd == "make")
-        return commands::MakeCommand::help();
       if (cmd == "build")
         return commands::BuildCommand::help();
       if (cmd == "run")
         return commands::RunCommand::help();
       if (cmd == "dev")
         return commands::DevCommand::help();
-      if (cmd == "replay")
-        return commands::ReplayCommand::help();
       if (cmd == "check")
         return commands::CheckCommand::help();
       if (cmd == "tests" || cmd == "test")
         return commands::TestsCommand::help();
       if (cmd == "repl")
         return commands::ReplCommand::help();
-      if (cmd == "note")
-        return commands::NoteCommand::help();
-      if (cmd == "desktop")
-        return commands::DesktopCommand::help();
-      if (cmd == "mobile")
-        return commands::MobileCommand::help();
-      if (cmd == "game")
-        return commands::GameCommand::help();
-      if (cmd == "agent")
-        return commands::AgentCommand::help();
 
       if (cmd == "fmt")
         return commands::FmtCommand::help();
@@ -592,33 +459,11 @@ namespace vix
         return commands::CleanCommand::help();
       if (cmd == "reset")
         return commands::ResetCommand::help();
-      if (cmd == "task")
-        return commands::TaskCommand::help();
       if (cmd == "modules")
         return commands::ModulesCommand::help();
 
-      if (cmd == "service")
-        return commands::ServiceCommand::help();
-      if (cmd == "proxy")
-        return commands::ProxyCommand::help();
-      if (cmd == "health")
-        return commands::HealthCommand::help();
-      if (cmd == "deploy")
-        return commands::DeployCommand::help();
-      if (cmd == "logs")
-        return commands::LogsCommand::help();
-      if (cmd == "env")
-        return commands::EnvCommand::help();
-      if (cmd == "production")
-        return commands::ProductionCommand{}.help();
-      if (cmd == "ws")
-        return commands::WsCommand::help();
-
-      if (cmd == "login" || cmd == "logout" || cmd == "cloud")
-        return commands::CloudCommand::help();
-
-      if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
-        return commands::MakeCommand::help();
+      if (cmd == "login" || cmd == "logout")
+        return vix::cli::dispatch::global().help(cmd);
 
       if (cmd == "pack")
         return commands::PackCommand::help();
@@ -659,13 +504,6 @@ namespace vix
         return commands::InstallCommand::help();
       }
 
-      if (cmd == "p2p")
-        return commands::P2PCommand::help();
-      if (cmd == "orm")
-        return commands::OrmCommand::help();
-      if (cmd == "db")
-        return commands::DbCommand::help();
-
       if (cmd == "completion")
         return commands::CompletionCommand::help();
       if (cmd == "upgrade")
@@ -676,6 +514,9 @@ namespace vix
         return commands::DoctorCommand::help();
       if (cmd == "uninstall")
         return commands::UninstallCommand::help();
+
+      if (vix::cli::dispatch::global().has(cmd))
+        return vix::cli::dispatch::global().help(cmd);
 
       vix::cli::util::err_line(
           std::cerr,
@@ -699,37 +540,20 @@ namespace vix
     out << "  run                        Build and run a project or C++ file\n";
     out << "  dev                        Start development mode\n";
     out << "  build                      Configure and build\n";
+    out << "  targets                    List configured CMake targets\n";
     out << "  test                       Run project tests\n";
-    out << "  deploy                     Deploy the application\n\n";
 
     out << "Project:\n";
-    out << "  make                       Generate C++ scaffolding\n";
     out << "  check                      Validate a project or source file\n";
-    out << "  replay                     Replay a recorded execution\n";
     out << "  repl                       Start the interactive REPL\n";
-    out << "  task                       Run project tasks\n";
     out << "  fmt                        Format C++ source files\n";
     out << "  clean                      Remove local build caches\n";
     out << "  reset                      Reset caches and dependencies\n";
     out << "  modules                    Manage optional project modules\n\n";
 
-    out << "Applications:\n";
-    out << "  note                       Open a Vix Note document\n";
-    out << "  desktop                    Run a web application as desktop\n";
-    out << "  mobile                     Generate mobile WebView shells\n";
-    out << "  game                       Manage Vix game projects\n";
-    out << "  agent                      Run the local-first Vix AI agent\n\n";
-
-    out << "Production:\n";
-    out << "  production                 Show production status\n";
-    out << "  service                    Manage the system service\n";
-    out << "  proxy                      Manage reverse proxy configuration\n";
-    out << "  health                     Check application health\n";
-    out << "  logs                       Show application and proxy logs\n";
-    out << "  env                        Validate environment variables\n";
-    out << "  ws                         Diagnose WebSocket endpoints\n\n";
-
     out << "Dependencies and registry:\n";
+    out << "  login                      Authenticate with the Vix account service\n";
+    out << "  logout                     End the Vix account session\n";
     out << "  registry                   Manage the registry index\n";
     out << "  search <query>             Search registry packages\n";
     out << "  list                       List project dependencies\n";
@@ -744,17 +568,6 @@ namespace vix
     out << "  pack                       Create a distributable package\n";
     out << "  verify                     Verify package integrity\n";
     out << "  cache                      Cache a package locally\n\n";
-
-    out << "Cloud:\n";
-    out << "  login                      Connect to Softadastra Cloud\n";
-    out << "  logout                     Remove the local cloud session\n";
-    out << "  cloud                      Manage Cloud project links\n";
-    out << "  doctor --cloud             Diagnose Cloud connectivity\n\n";
-
-    out << "Data and networking:\n";
-    out << "  db                         Inspect SQLite databases\n";
-    out << "  orm                        Manage database migrations\n";
-    out << "  p2p                        Run P2P tools\n\n";
 
     out << "System:\n";
     out << "  doctor                     Check the installation and toolchain\n";

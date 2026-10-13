@@ -13,11 +13,8 @@
  */
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/check/CheckDetail.hpp>
-#include <vix/cli/app/AppProjectResolver.hpp>
-#include <vix/cli/commands/BuildCommand.hpp>
-#include <vix/cli/commands/TestsCommand.hpp>
-#include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/Style.hpp>
+#include <vix/cli/project/ProjectDiscovery.hpp>
 #include <vix/cli/util/Ui.hpp>
 
 #include <filesystem>
@@ -30,120 +27,11 @@ namespace vix::commands::CheckCommand
   namespace fs = std::filesystem;
   namespace ui = vix::cli::util;
   namespace style = vix::cli::style;
-  namespace app = vix::cli::app;
 
   using namespace detail;
 
   namespace
   {
-    static app::AppProjectResolveResult resolve_project_or_empty(const Options &opt)
-    {
-      fs::path base = fs::current_path();
-
-      if (!opt.dir.empty())
-        base = fs::absolute(fs::path(opt.dir));
-
-      return app::resolve_app_project(base);
-    }
-
-    struct ScopedCurrentPath
-    {
-      fs::path previous;
-      bool changed{false};
-
-      explicit ScopedCurrentPath(const fs::path &next)
-      {
-        std::error_code ec;
-
-        previous = fs::current_path(ec);
-        if (ec)
-          return;
-
-        fs::current_path(next, ec);
-        changed = !ec;
-      }
-
-      ~ScopedCurrentPath()
-      {
-        if (!changed)
-          return;
-
-        std::error_code ec;
-        fs::current_path(previous, ec);
-      }
-    };
-
-    static int check_vix_app_project(
-        const Options &opt,
-        const app::AppProjectResolveResult &project)
-    {
-      std::vector<std::string> buildArgs;
-
-      if (!opt.preset.empty())
-      {
-        buildArgs.push_back("--preset");
-        buildArgs.push_back(opt.preset);
-      }
-
-      if (opt.jobs > 0)
-      {
-        buildArgs.push_back("--jobs");
-        buildArgs.push_back(std::to_string(opt.jobs));
-      }
-
-      if (opt.quiet)
-        buildArgs.push_back("--quiet");
-
-      if (opt.verbose)
-        buildArgs.push_back("--verbose");
-
-      if (opt.withSqlite)
-        buildArgs.push_back("--with-sqlite");
-
-      if (opt.withMySql)
-        buildArgs.push_back("--with-mysql");
-
-      buildArgs.push_back("--dir");
-      buildArgs.push_back(project.userProjectDir.string());
-
-      const int buildCode = vix::commands::BuildCommand::run(buildArgs);
-      if (buildCode != 0)
-        return buildCode;
-
-      if (opt.tests)
-      {
-        std::vector<std::string> testArgs;
-
-        testArgs.push_back(project.userProjectDir.string());
-
-        if (!opt.preset.empty())
-        {
-          testArgs.push_back("--preset");
-          testArgs.push_back(opt.preset);
-        }
-
-        const int testCode = vix::commands::TestsCommand::run(testArgs);
-        if (testCode != 0)
-          return testCode;
-      }
-
-      if (opt.runAfterBuild)
-      {
-        std::vector<std::string> runArgs;
-
-        if (!opt.preset.empty())
-        {
-          runArgs.push_back("--preset");
-          runArgs.push_back(opt.preset);
-        }
-
-        ScopedCurrentPath cwd(project.userProjectDir);
-        return vix::commands::RunCommand::run(runArgs);
-      }
-
-      return 0;
-    }
-
     static void print_project_resolution(const Options &opt, const fs::path &projectDir)
     {
       if (opt.quiet || !opt.verbose)
@@ -182,21 +70,20 @@ namespace vix::commands::CheckCommand
       return detail::check_single_cpp(opt);
     }
 
-    const app::AppProjectResolveResult project = resolve_project_or_empty(opt);
+    fs::path base = fs::current_path();
+    if (!opt.dir.empty())
+      base = fs::absolute(fs::path(opt.dir));
+    const auto project = vix::cli::project::discover_project(base);
 
     if (!project.success())
     {
       style::error("Unable to determine the project folder.");
-      style::hint("Try: vix check --dir <path> or run from a CMake/vix.app project directory.");
+      style::hint("Try: vix check --dir <path> or run from a CMake project directory.");
       return 1;
     }
 
-    print_project_resolution(opt, project.userProjectDir);
-
-    if (project.kind == app::AppProjectKind::VixApp)
-      return check_vix_app_project(opt, project);
-
-    return detail::check_project(opt, project.userProjectDir);
+    print_project_resolution(opt, project.location->root);
+    return detail::check_project(opt, project.location->root);
   }
 
   int help()

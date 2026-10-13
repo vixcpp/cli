@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <string>
 #include <string_view>
 
 namespace vix::commands::TargetsCommand
@@ -121,7 +122,7 @@ namespace vix::commands::TargetsCommand
         vix::cli::style::error("No Vix-recognized project was found for this path.");
         break;
       case ProjectError::unsupported_project_system:
-        vix::cli::style::error("Target listing for legacy vix.app projects is not available yet.");
+        vix::cli::style::error("Target listing is unavailable for this project system.");
         break;
       case ProjectError::configured_metadata_unavailable:
         vix::cli::style::error("Configured CMake metadata is unavailable for this build directory.");
@@ -155,7 +156,9 @@ namespace vix::commands::TargetsCommand
     if (!location.success())
       return report(*location.error);
     if (location.location->system != vix::cli::project::ProjectSystem::cmake)
+    {
       return report(vix::cli::project::ProjectError::unsupported_project_system);
+    }
 
     const auto preset = vix::cli::build::resolve_builtin_preset(options->preset);
     if (!preset)
@@ -184,13 +187,16 @@ namespace vix::commands::TargetsCommand
       buildRoot = layout.plan.buildDir;
     }
 
-    const auto snapshot = vix::cli::project::cmake::load_cmake_project_snapshot(
-        *location.location,
-        {buildRoot, options->configuration});
-    if (!snapshot.success())
-      return report(*snapshot.error);
+    std::optional<vix::cli::project::ProjectSnapshot> loadedSnapshot;
+    std::optional<vix::cli::project::ProjectError> snapshotError;
+    const auto snapshot = vix::cli::project::cmake::load_cmake_target_snapshot(
+        *location.location, {buildRoot, options->configuration});
+    loadedSnapshot = snapshot.snapshot;
+    snapshotError = snapshot.error;
+    if (!loadedSnapshot)
+      return report(*snapshotError);
 
-    const auto targets = vix::cli::project::list_targets(*snapshot.snapshot);
+    const auto targets = vix::cli::project::list_targets(*loadedSnapshot);
     std::cout << "Targets\n\n";
     for (const auto &target : targets)
     {

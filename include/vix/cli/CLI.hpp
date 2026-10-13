@@ -17,8 +17,6 @@
 #define VIX_CLI_HPP
 
 #include <string>
-#include <unordered_map>
-#include <functional>
 #include <iostream>
 #include <vector>
 
@@ -53,19 +51,6 @@ namespace vix
     int run(int argc, char **argv);
 
   private:
-    /**
-     * @brief Function type used by CLI command handlers.
-     *
-     * A command handler receives the arguments that belong to the selected
-     * command and returns the process exit code for that command.
-     */
-    using CommandHandler = std::function<int(const std::vector<std::string> &)>;
-
-    /**
-     * @brief Registered command handlers indexed by command name.
-     */
-    std::unordered_map<std::string, CommandHandler> commands_;
-
     /**
      * @brief Prints CLI help information.
      *

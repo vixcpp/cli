@@ -12,9 +12,18 @@
  *
  */
 #include <vix/cli/commands/TestsCommand.hpp>
+#include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/tests/TestsDetail.hpp>
 #include <vix/cli/Style.hpp>
+
+#include <vix/cli/build/BuildContext.hpp>
+#include <vix/cli/project/ProjectDiscovery.hpp>
+#include <vix/cli/project/TestSelection.hpp>
+#include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/cmake/CTestExecution.hpp>
+#include <vix/engine/ExecutionPlanning.hpp>
+#include <vix/engine/Process.hpp>
 
 #include <vix/cli/process/Process.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
@@ -1280,6 +1289,9 @@ namespace
     if (!opt.ctestArgs.empty())
       return true;
 
+    if (!opt.testPattern.empty())
+      return true;
+
     return false;
   }
 
@@ -2114,6 +2126,12 @@ namespace
       argv.push_back("60");
     }
 
+    if (!opt.testPattern.empty())
+    {
+      argv.push_back("-R");
+      argv.push_back(opt.testPattern);
+    }
+
     for (const auto &a : opt.ctestArgs)
       argv.push_back(a);
 
@@ -2214,8 +2232,137 @@ namespace
 
     return result.code;
   }
+
+  static bool has_native_ctest_name_filter(const std::vector<std::string> &arguments)
+  {
+    for (const std::string &argument : arguments)
+    {
+      if (argument == "-R" || argument == "--tests-regex" ||
+          argument.rfind("--tests-regex=", 0) == 0)
+        return true;
+    }
+    return false;
+  }
+
+  static int run_normalized_cmake_tests(
+      const vix::commands::TestsCommand::detail::Options &opt)
+  {
+    const auto location = vix::cli::project::discover_project(opt.projectDir);
+    if (!location.success() ||
+        location.location->system != vix::cli::project::ProjectSystem::cmake)
+      return -1;
+
+    const std::string presetName = resolve_preset_name(opt);
+    std::vector<std::string> buildArgs{
+        "--dir", location.location->root.string(),
+        "--preset", presetName,
+        "--require-project-metadata",
+        "--", "-DBUILD_TESTING=ON"};
+    const int buildCode = vix::commands::BuildCommand::run(buildArgs);
+    if (buildCode != 0)
+      return buildCode;
+
+    const auto preset = vix::cli::build::resolve_builtin_preset(presetName);
+    if (!preset)
+      return 1;
+    vix::engine::ExecutionPlanLayoutOptions layoutOptions;
+    layoutOptions.userProjectDir = location.location->root;
+    layoutOptions.cmakeSourceDir = location.location->root;
+    layoutOptions.preset = *preset;
+    const auto layout = vix::engine::make_execution_plan_layout(layoutOptions);
+    if (!layout.success())
+      return 1;
+
+    const vix::cli::project::cmake::SnapshotRequest request{
+        layout.plan.buildDir, std::nullopt};
+    const auto snapshot = vix::cli::project::cmake::load_cmake_project_snapshot(
+        *location.location, request);
+    if (!snapshot.success())
+    {
+      error("Unable to discover configured tests (" +
+            std::string(vix::cli::project::to_string(*snapshot.error)) + ").");
+      return 1;
+    }
+
+    std::optional<vix::cli::project::Test> selected;
+    if (opt.exactTestName)
+    {
+      const auto selection = vix::cli::project::select_test_by_name(
+          *snapshot.snapshot, *opt.exactTestName);
+      if (!selection.success())
+      {
+        error("Unable to resolve test '" + *opt.exactTestName + "' (" +
+              std::string(vix::cli::project::to_string(*selection.error)) + ").");
+        return 1;
+      }
+      selected = *selection.test;
+    }
+
+    if (snapshot.snapshot->project.tests.empty())
+    {
+      info("No tests registered.");
+      return 0;
+    }
+
+    if (opt.list && opt.testPattern.empty())
+    {
+      for (const auto &test : snapshot.snapshot->project.tests)
+        if (!selected || test.id == selected->id)
+          std::cout << test.name << "\n";
+      return 0;
+    }
+
+    if (selected &&
+        (!opt.testPattern.empty() || has_native_ctest_name_filter(opt.ctestArgs)))
+    {
+      error("--exact-test cannot be combined with a native CTest name filter.");
+      return 2;
+    }
+
+    const std::optional<std::string> exactName =
+        selected ? std::optional<std::string>{selected->name} : std::nullopt;
+    std::vector<std::string> nativeArguments = opt.ctestArgs;
+    if (!opt.testPattern.empty())
+    {
+      nativeArguments.push_back("-R");
+      nativeArguments.push_back(opt.testPattern);
+    }
+    if (opt.list)
+      nativeArguments.push_back("-N");
+    if (!has_ctest_parallel_arg(nativeArguments))
+    {
+      nativeArguments.push_back("--parallel");
+      nativeArguments.push_back(std::to_string(default_test_jobs()));
+    }
+    if (!has_ctest_timeout_arg(nativeArguments))
+    {
+      nativeArguments.push_back("--timeout");
+      nativeArguments.push_back("60");
+    }
+    const auto argv = vix::cli::project::cmake::ctest_execution_argv(
+        request.buildRoot, request.configuration, exactName, nativeArguments);
+    vix::engine::process::Command command;
+    command.argv = argv;
+    command.mergeStdErr = true;
+    const auto result = vix::engine::process::execute(command);
+
+    if (!result.output.empty())
+      std::cout << result.output;
+    if (!result.success())
+    {
+      if (!result.errorMessage.empty())
+        error(result.errorMessage);
+      return result.exitCode == 0 ? 1 : result.exitCode;
+    }
+    return 0;
+  }
+
   static int run_tests_once(const vix::commands::TestsCommand::detail::Options &opt)
   {
+    const int normalized = run_normalized_cmake_tests(opt);
+    if (normalized != -1)
+      return normalized;
+
     auto run_available_tests = [&]() -> int
     {
       if (should_force_ctest(opt))
@@ -2374,7 +2521,8 @@ namespace vix::commands::TestsCommand
 
     out << "Description:\n";
     out << "  Build, discover, and run project tests.\n";
-    out << "  Vix first tries a native test runner, then falls back to CTest.\n";
+    out << "  CMake projects use configured CTest metadata and CTest execution.\n";
+    out << "  Legacy projects retain native-runner-first compatibility.\n";
     out << "  If test sources exist but tests are not configured yet, Vix can prepare\n";
     out << "  the test build automatically before running them.\n\n";
 
@@ -2384,9 +2532,9 @@ namespace vix::commands::TestsCommand
     out << "Test options:\n";
     out << "  --watch                   Watch files and re-run tests on changes\n";
     out << "  --list                    List discovered tests without running them\n";
-    out << "  --test <name|regex>       Run tests matching a name or regex\n";
-    out << "  --test=<name|regex>       Same as --test <name|regex>\n";
-    out << "  -R <name|regex>           Alias for --test <name|regex>\n";
+    out << "  --exact-test <name>       Select one exact configured CTest name\n";
+    out << "  --exact-test=<name>       Same as --exact-test <name>\n";
+    out << "  --test <regex>, -R <regex>  Historical native CTest regex filter\n";
     out << "  --fail-fast               Stop on first failing test\n";
     out << "  --raw                     Show raw test runner or CTest output\n\n";
 
@@ -2402,6 +2550,7 @@ namespace vix::commands::TestsCommand
     out << "CTest passthrough:\n";
     out << "  -- [args...]              Pass raw arguments to CTest\n";
     out << "                            Passing raw CTest args forces CTest mode\n\n";
+    out << "                            Use `-- -R <regex>` for advanced native filtering.\n\n";
 
     out << "Examples:\n";
     out << "  vix tests\n";
@@ -2410,17 +2559,18 @@ namespace vix::commands::TestsCommand
     out << "  vix tests --run\n";
     out << "  vix tests ./examples/blog\n";
     out << "  vix tests --preset release\n";
-    out << "  vix tests --test tree.basic\n";
-    out << "  vix tests --test=tree.basic\n";
+    out << "  vix tests --exact-test tree.basic\n";
+    out << "  vix tests --exact-test=tree.basic\n";
     out << "  vix tests -R tree.basic\n";
     out << "  vix tests --fail-fast\n";
     out << "  vix tests --raw\n";
     out << "  vix tests -- --output-on-failure\n";
-    out << "  vix tests -- --output-on-failure -R MySuite\n\n";
+    out << "  vix tests -- -R MySuite\n\n";
 
     out << "Behavior:\n";
     out << "  native runner             Preferred when a test executable is found\n";
-    out << "  CTest                     Used as fallback or when CTest args are passed\n";
+    out << "  CMake projects            Use configured CTest metadata and CTest execution\n";
+    out << "  legacy projects           Retain native-runner-first compatibility\n";
     out << "  tests/ directory          Used to detect whether tests should be prepared\n";
     out << "  --list                    Shows clean test names instead of raw CTest paths\n\n";
 

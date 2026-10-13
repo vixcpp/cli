@@ -33,6 +33,13 @@ namespace vix::cli::project::cmake
     [[nodiscard]] bool success() const noexcept { return target.has_value(); }
   };
 
+  struct RunnableArtifactResult
+  {
+    std::optional<Path> artifact;
+    std::optional<ProjectError> error;
+    [[nodiscard]] bool success() const noexcept { return artifact.has_value(); }
+  };
+
   [[nodiscard]] TargetKind target_kind_from_cmake_type(const std::string &type) noexcept;
 
   /** Maps already-read configured CMake metadata into a normalized snapshot. */
@@ -41,6 +48,11 @@ namespace vix::cli::project::cmake
       const SnapshotRequest &request,
       const CMakeFileApiCodemodel &codemodel);
 
+  /** Loads target/artifact metadata only for target-oriented build resolution. */
+  [[nodiscard]] ProjectSnapshotResult load_cmake_target_snapshot(
+      const ProjectLocation &location,
+      const SnapshotRequest &request);
+
   /** Loads a configured CMake snapshot.  This function never runs CMake. */
   [[nodiscard]] ProjectSnapshotResult load_cmake_project_snapshot(
       const ProjectLocation &location,
@@ -48,6 +60,12 @@ namespace vix::cli::project::cmake
 
   /** Resolves an opaque normalized ID through configured CMake metadata. */
   [[nodiscard]] NativeBuildTargetResult resolve_native_build_target(
+      const ProjectLocation &location,
+      const SnapshotRequest &request,
+      const TargetId &id);
+
+  /** Resolves CMake's configured primary executable artifact for an opaque ID. */
+  [[nodiscard]] RunnableArtifactResult resolve_runnable_artifact(
       const ProjectLocation &location,
       const SnapshotRequest &request,
       const TargetId &id);

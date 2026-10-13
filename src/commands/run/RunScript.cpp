@@ -587,7 +587,6 @@ namespace vix::commands::RunCommand::detail
       {
         if (fs::exists(current / "vix.lock") ||
             fs::exists(current / "vix.json") ||
-            fs::exists(current / "vix.app") ||
             fs::exists(current / ".vix" / "vix_deps.cmake") ||
             fs::exists(current / ".vix" / "deps"))
         {

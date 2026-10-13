@@ -14,6 +14,7 @@
 #define VIX_TESTS_DETAIL_HPP
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,9 @@ namespace vix::commands::TestsCommand::detail
     bool failFast = false;
     bool runAfter = false; // --run (tests + runtime)
     bool raw = false;
+    // Exact normalized-CMake selector. testPattern retains historical regex
+    // filtering semantics for the native CTest path.
+    std::optional<std::string> exactTestName;
     std::string testPattern;
 
     fs::path projectDir;

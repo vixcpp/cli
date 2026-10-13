@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
+#include <vix/cli/project/ProjectDiscovery.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/env/Legacy.hpp>
 
@@ -444,6 +445,23 @@ namespace vix::commands::RunCommand::detail
       {
         opt.runPreset = take_eq_value(a, "--run-preset=");
       }
+      else if (a == "-d" || a == "--dir")
+      {
+        opt.dir = take_value(args, i, a, opt);
+        if (opt.parseFailed)
+          return opt;
+      }
+      else if (a.rfind("--dir=", 0) == 0)
+      {
+        opt.dir = take_eq_value(a, "--dir=");
+        if (opt.dir.empty())
+        {
+          error("Missing value for --dir <path>");
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
+      }
       else if (a == "-j" || a == "--jobs")
       {
         const std::string v = take_value(args, i, a, opt);
@@ -466,31 +484,6 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--verbose")
       {
         opt.verbose = true;
-      }
-      else if (a == "--frontend")
-      {
-        const std::string value = take_value(args, i, "--frontend", opt);
-        if (opt.parseFailed)
-          return opt;
-        if (value != "vixc")
-        {
-          error("--frontend currently supports only 'vixc'.");
-          opt.parseFailed = true;
-          opt.parseExitCode = 2;
-          return opt;
-        }
-        opt.useVixcFrontend = true;
-      }
-      else if (a.rfind("--frontend=", 0) == 0)
-      {
-        if (a != "--frontend=vixc")
-        {
-          error("--frontend currently supports only 'vixc'.");
-          opt.parseFailed = true;
-          opt.parseExitCode = 2;
-          return opt;
-        }
-        opt.useVixcFrontend = true;
       }
       else if (a == "--local-cache")
       {
@@ -1116,28 +1109,19 @@ namespace vix::commands::RunCommand::detail
 
   std::optional<fs::path> choose_project_dir(const Options &opt, const fs::path &cwd)
   {
-    auto exists_cml = [](const fs::path &p)
+    fs::path start = cwd;
+    if (!opt.dir.empty())
+      start = fs::path(opt.dir);
+    else if (!opt.appName.empty())
     {
-      std::error_code ec;
-      return fs::exists(p / "CMakeLists.txt", ec);
-    };
-
-    if (!opt.dir.empty() && exists_cml(opt.dir))
-      return fs::path(opt.dir);
-
-    if (exists_cml(cwd))
-      return cwd;
-
-    if (!opt.appName.empty())
-    {
-      fs::path a = opt.appName;
-      if (exists_cml(a))
-        return a;
-      if (exists_cml(cwd / a))
-        return cwd / a;
+      std::error_code error;
+      if (fs::is_directory(fs::path(opt.appName), error) && !error)
+        start = fs::path(opt.appName);
     }
-
-    return cwd;
+    const auto discovered = vix::cli::project::discover_project(start);
+    if (!discovered.success())
+      return std::nullopt;
+    return discovered.location->root;
   }
 
   bool project_has_vue_frontend(const fs::path &projectDir)

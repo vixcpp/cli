@@ -1,5 +1,6 @@
 /** @file CMakeProjectAdapter.cpp */
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/cmake/CTestDiscovery.hpp>
 
 #include <algorithm>
 
@@ -12,6 +13,24 @@ namespace vix::cli::project::cmake
       std::error_code error;
       Path absolute = std::filesystem::absolute(path, error);
       return (error ? path : absolute).lexically_normal();
+    }
+
+    [[nodiscard]] std::optional<Path> primary_runnable_artifact(
+        const CMakeFileApiTarget &target)
+    {
+      if (target.type != "EXECUTABLE" || target.nameOnDisk.empty())
+        return std::nullopt;
+
+      std::optional<Path> primary;
+      for (const Path &artifact : target.artifacts)
+      {
+        if (artifact.filename() != target.nameOnDisk)
+          continue;
+        if (primary)
+          return std::nullopt;
+        primary = artifact;
+      }
+      return primary;
     }
   }
 
@@ -73,7 +92,8 @@ namespace vix::cli::project::cmake
       target.kind = target_kind_from_cmake_type(native.type);
       target.capabilities.buildable = !native.abstract;
       target.capabilities.runnable =
-          target.kind == TargetKind::executable && !native.artifacts.empty();
+          target.kind == TargetKind::executable &&
+          primary_runnable_artifact(native).has_value();
       snapshot.project.targets.push_back(std::move(target));
 
       for (const Path &artifact : native.artifacts)
@@ -93,7 +113,7 @@ namespace vix::cli::project::cmake
     return {std::move(snapshot), std::nullopt};
   }
 
-  ProjectSnapshotResult load_cmake_project_snapshot(
+  ProjectSnapshotResult load_cmake_target_snapshot(
       const ProjectLocation &location,
       const SnapshotRequest &request)
   {
@@ -101,6 +121,21 @@ namespace vix::cli::project::cmake
     if (!codemodel.success())
       return {std::nullopt, codemodel.error};
     return make_project_snapshot(location, request, *codemodel.codemodel);
+  }
+
+  ProjectSnapshotResult load_cmake_project_snapshot(
+      const ProjectLocation &location,
+      const SnapshotRequest &request)
+  {
+    auto snapshot = load_cmake_target_snapshot(location, request);
+    if (!snapshot.success())
+      return snapshot;
+
+    const auto tests = discover_ctest_tests(request);
+    if (!tests.success())
+      return {std::nullopt, tests.error};
+    snapshot.snapshot->project.tests = *tests.tests;
+    return snapshot;
   }
 
   NativeBuildTargetResult resolve_native_build_target(
@@ -135,6 +170,39 @@ namespace vix::cli::project::cmake
           !target.imported && !target.abstract)
         return {target.name, std::nullopt};
     }
+    return {std::nullopt, ProjectError::target_not_found};
+  }
+
+  RunnableArtifactResult resolve_runnable_artifact(
+      const ProjectLocation &location,
+      const SnapshotRequest &request,
+      const TargetId &id)
+  {
+    const auto codemodel = load_cmake_file_api_codemodel(request.buildRoot);
+    if (!codemodel.success())
+      return {std::nullopt, codemodel.error};
+    const auto snapshot = make_project_snapshot(location, request, *codemodel.codemodel);
+    if (!snapshot.success())
+      return {std::nullopt, snapshot.error};
+
+    const CMakeFileApiConfiguration *configuration = nullptr;
+    if (codemodel.codemodel->configurations.size() == 1)
+      configuration = &codemodel.codemodel->configurations.front();
+    else if (request.configuration)
+      for (const auto &candidate : codemodel.codemodel->configurations)
+        if (candidate.name == *request.configuration)
+          configuration = &candidate;
+    if (configuration == nullptr)
+      return {std::nullopt, ProjectError::configured_metadata_unavailable};
+
+    for (const auto &target : configuration->targets)
+      if (target.id == id.value)
+      {
+        const auto artifact = primary_runnable_artifact(target);
+        return artifact
+            ? RunnableArtifactResult{*artifact, std::nullopt}
+            : RunnableArtifactResult{std::nullopt, ProjectError::configured_metadata_unavailable};
+      }
     return {std::nullopt, ProjectError::target_not_found};
   }
 } // namespace vix::cli::project::cmake

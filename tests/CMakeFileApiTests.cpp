@@ -1,5 +1,6 @@
 #include <vix/cli/project/cmake/CMakeFileApi.hpp>
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/cmake/CTestDiscovery.hpp>
 #include <vix/cli/project/TargetSelection.hpp>
 
 #include <cassert>
@@ -58,19 +59,30 @@ namespace
     cmake_adapter::CMakeFileApiConfiguration configuration;
     configuration.name = "";
     configuration.targets = {
-        {"first", "duplicate", "FUTURE_TYPE", false, false, false,
+        {"first", "duplicate", "", "FUTURE_TYPE", false, false, false,
          {build / "one", build / "two"}},
-        {"imported", "dependency", "INTERFACE_LIBRARY", false, true, true, {}},
-        {"generated", "helper", "UTILITY", true, false, false, {}},
-        {"utility", "utility", "UTILITY", false, false, false, {}}};
+        {"imported", "dependency", "", "INTERFACE_LIBRARY", false, true, true, {}},
+        {"generated", "helper", "", "UTILITY", true, false, false, {}},
+        {"utility", "utility", "", "UTILITY", false, false, false, {}},
+        {"one", "one", "one-bin", "EXECUTABLE", false, false, false,
+         {build / "one-bin"}},
+        {"many", "many", "main-bin", "EXECUTABLE", false, false, false,
+         {build / "aux", build / "main-bin"}},
+        {"none", "none", "main-bin", "EXECUTABLE", false, false, false,
+         {build / "aux"}},
+        {"duplicate-primary", "duplicate-primary", "main-bin", "EXECUTABLE", false, false, false,
+         {build / "a" / "main-bin", build / "b" / "main-bin"}}};
     model.configurations = {configuration};
     const project::ProjectLocation location{root, project::ProjectSystem::cmake};
     const auto result = cmake_adapter::make_project_snapshot(location, {build, std::nullopt}, model);
     assert(result.success());
-    assert(result.snapshot->project.targets.size() == 2);
+    assert(result.snapshot->project.targets.size() == 6);
     assert(target(*result.snapshot, "duplicate").kind == project::TargetKind::unknown);
     assert(target(*result.snapshot, "utility").capabilities.buildable);
-    assert(result.snapshot->artifacts.size() == 2);
+    assert(target(*result.snapshot, "one").capabilities.runnable);
+    assert(target(*result.snapshot, "many").capabilities.runnable);
+    assert(!target(*result.snapshot, "none").capabilities.runnable);
+    assert(!target(*result.snapshot, "duplicate-primary").capabilities.runnable);
 
     model.configurations.push_back({"Release", {}});
     const auto required = cmake_adapter::make_project_snapshot(location, {build, std::nullopt}, model);
@@ -148,6 +160,12 @@ namespace
     assert(!target(snapshot, "core").capabilities.runnable);
     assert(target(snapshot, "server").id.valid());
     assert(target(snapshot, "server").id.value != target(snapshot, "server").name);
+    assert(snapshot.project.tests.size() == 2);
+    assert(snapshot.project.tests[0].name == "alpha");
+    assert(snapshot.project.tests[1].name == "beta");
+    assert(snapshot.project.tests[0].id != snapshot.project.tests[1].id);
+    assert(!snapshot.project.tests[0].target.has_value());
+    assert(!snapshot.project.tests[1].target.has_value());
 
     const auto server = project::select_target_by_name(snapshot, "server");
     const auto client = project::select_target_by_name(snapshot, "client");
@@ -158,6 +176,10 @@ namespace
     const auto nativeServer = cmake_adapter::resolve_native_build_target(
         location, {build, std::nullopt}, server.target->id);
     assert(nativeServer.success() && *nativeServer.target == "server");
+    const auto runnableServer = cmake_adapter::resolve_runnable_artifact(
+        location, {build, std::nullopt}, server.target->id);
+    assert(runnableServer.success());
+    assert(!fs::exists(*runnableServer.artifact));
 
     bool serverArtifact = false;
     bool clientArtifact = false;

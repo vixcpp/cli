@@ -130,6 +130,7 @@ add_test(NAME vix_cli_target_selection_tests COMMAND vix_cli_target_selection_te
 add_executable(vix_cli_cmake_file_api_tests
   CMakeFileApiTests.cpp
   ../src/project/cmake/CMakeFileApi.cpp
+  ../src/project/cmake/CTestDiscovery.cpp
   ../src/project/cmake/CMakeProjectAdapter.cpp
   ../src/project/TargetSelection.cpp
 )
@@ -140,7 +141,58 @@ target_compile_definitions(vix_cli_cmake_file_api_tests PRIVATE
   VIX_P3_FIXTURE_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api"
   VIX_P3_CMAKE_COMMAND="${CMAKE_COMMAND}"
 )
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_cmake_file_api_tests PRIVATE vix::engine)
+endif()
 add_test(NAME vix_cli_cmake_file_api_tests COMMAND vix_cli_cmake_file_api_tests)
+
+add_executable(vix_cli_ctest_discovery_tests
+  CTestDiscoveryTests.cpp
+  ../src/project/cmake/CTestDiscovery.cpp
+)
+target_include_directories(vix_cli_ctest_discovery_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_ctest_discovery_tests PRIVATE vix::engine)
+endif()
+add_test(NAME vix_cli_ctest_discovery_tests COMMAND vix_cli_ctest_discovery_tests)
+
+add_executable(vix_cli_test_selection_tests
+  TestSelectionTests.cpp
+  ../src/project/TestSelection.cpp
+)
+target_include_directories(vix_cli_test_selection_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_test_selection_tests COMMAND vix_cli_test_selection_tests)
+
+add_executable(vix_cli_native_semantic_model_tests
+  NativeSemanticModelTests.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_semantic_model_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_native_semantic_model_tests COMMAND vix_cli_native_semantic_model_tests)
+
+add_executable(vix_cli_ctest_execution_tests
+  CTestExecutionTests.cpp
+  ../src/project/cmake/CTestExecution.cpp
+)
+target_include_directories(vix_cli_ctest_execution_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_ctest_execution_tests COMMAND vix_cli_ctest_execution_tests)
+
+add_test(
+  NAME vix_cli_tests_target_migration_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DVIX_CLI_EXECUTABLE=$<TARGET_FILE:vix_cli>
+    -DVIX_P7_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_ctest_execution
+    -DVIX_P7_FAILURE_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_ctest_failure
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/TestsTargetMigrationTest.cmake
+)
 
 add_test(
   NAME vix_cli_targets_command_tests
@@ -156,6 +208,14 @@ add_test(
     -DVIX_CLI_EXECUTABLE=$<TARGET_FILE:vix_cli>
     -DVIX_P5_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api
     -P ${CMAKE_CURRENT_SOURCE_DIR}/BuildTargetMigrationTest.cmake
+)
+
+add_test(
+  NAME vix_cli_run_target_migration_tests
+  COMMAND ${CMAKE_COMMAND}
+    -DVIX_CLI_EXECUTABLE=$<TARGET_FILE:vix_cli>
+    -DVIX_P6_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api
+    -P ${CMAKE_CURRENT_SOURCE_DIR}/RunTargetMigrationTest.cmake
 )
 
 file(GLOB VIX_RUNTIME_DIAGNOSTIC_RULE_SOURCES
@@ -306,21 +366,6 @@ add_test(
   COMMAND vix_cli_build_tool_args_tests
 )
 
-if (VIX_ENABLE_VIXC_FRONTEND AND TARGET vixc::vixc)
-  add_executable(vix_cli_vixc_frontend_tests
-    VixcFrontendTests.cpp
-    ../src/app/VixcFrontend.cpp
-  )
-  target_include_directories(vix_cli_vixc_frontend_tests PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-  )
-  target_compile_definitions(vix_cli_vixc_frontend_tests PRIVATE
-    VIX_CLI_ENABLE_VIXC_FRONTEND=1
-  )
-  target_link_libraries(vix_cli_vixc_frontend_tests PRIVATE vixc::vixc)
-  add_test(NAME vix_cli_vixc_frontend_tests COMMAND vix_cli_vixc_frontend_tests)
-endif()
-
 add_test(
   NAME vix_cli_build_tool_cli_compat
   COMMAND
@@ -463,8 +508,6 @@ add_test(NAME vix_cli_global_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/GlobalCliContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_all_contracts
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/AllCliContractsTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_frontend_option_contract
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/FrontendOptionContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_core_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCoreContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_cache_contract
@@ -477,8 +520,6 @@ add_test(NAME vix_cli_build_execution_paths_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_build_ninja_incrementality_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildNinjaIncrementalityContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_install_cmake_compatibility_contract
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/install/InstallCMakeCompatibilityContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_install_reconciliation_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/install/InstallReconciliationContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_vix_app_contract

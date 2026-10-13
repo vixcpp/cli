@@ -30,6 +30,24 @@ for command in "${commands[@]}"; do
   esac
 done
 
+# These commands are intentionally outside the current generic C++ CLI
+# constitution. Keep this negative surface contract explicit so their removal
+# is not mistaken for a missing coverage row.
+for command in agent game cloud note desktop mobile p2p orm db service proxy health deploy logs production ws make task replay env; do
+  if grep -Fq "add({\"$command\"" "$DISPATCH"; then
+    echo "Non-generic command remains registered: $command" >&2
+    exit 1
+  fi
+  if grep -Fq "out << \"  $command " "$ROOT/src/CLI.cpp"; then
+    echo "Non-generic command remains in top-level help: $command" >&2
+    exit 1
+  fi
+  if grep -Fq "cmd == \"$command\"" "$ROOT/src/CLI.cpp"; then
+    echo "Non-generic command remains in help routing: $command" >&2
+    exit 1
+  fi
+done
+
 # Guard the implicit command form independently from the comprehensive run
 # contracts: adding/removing an extension route changes public dispatch.
 grep -Fq 'ext == ".vix" || ext == ".cpp"' "$ROOT/src/CLI.cpp" || {

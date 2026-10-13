@@ -18,18 +18,12 @@
 #include <vix/cli/commands/TargetsCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
-#include <vix/cli/commands/ReplayCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/PackCommand.hpp>
 #include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
-#include <vix/cli/commands/NoteCommand.hpp>
-#include <vix/cli/commands/DesktopCommand.hpp>
-#include <vix/cli/commands/MobileCommand.hpp>
 #include <vix/cli/commands/CacheCommand.hpp>
-#include <vix/cli/commands/OrmCommand.hpp>
-#include <vix/cli/commands/DbCommand.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/SearchCommand.hpp>
@@ -39,31 +33,18 @@
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/ModulesCommand.hpp>
-#include <vix/cli/commands/P2PCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
 #include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
 #include <vix/cli/commands/OutdatedCommand.hpp>
-#include <vix/cli/commands/MakeCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/commands/CompletionCommand.hpp>
 #include <vix/cli/commands/InfoCommand.hpp>
 #include <vix/cli/commands/FmtCommand.hpp>
 #include <vix/cli/commands/CleanCommand.hpp>
 #include <vix/cli/commands/ResetCommand.hpp>
-#include <vix/cli/commands/TaskCommand.hpp>
-#include <vix/cli/commands/ServiceCommand.hpp>
-#include <vix/cli/commands/ProxyCommand.hpp>
-#include <vix/cli/commands/HealthCommand.hpp>
-#include <vix/cli/commands/DeployCommand.hpp>
-#include <vix/cli/commands/LogsCommand.hpp>
-#include <vix/cli/commands/EnvCommand.hpp>
-#include <vix/cli/commands/ProductionCommand.hpp>
-#include <vix/cli/commands/WsCommand.hpp>
-#include <vix/cli/commands/AgentCommand.hpp>
-#include <vix/cli/commands/GameExportCommand.hpp>
 #include <vix/cli/commands/CloudCommand.hpp>
 
 #include <stdexcept>
@@ -75,6 +56,14 @@ namespace vix::cli::dispatch
     auto add = [&](Entry e)
     {
       map_.emplace(e.name, std::move(e));
+    };
+    auto auth_help = []()
+    {
+      std::cout << "Usage:\n"
+                << "  vix login [options]\n"
+                << "  vix logout\n\n"
+                << "Authenticate with the configured Vix account service.\n";
+      return 0;
     };
 
     // Project
@@ -134,53 +123,19 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::DevCommand::help(); }});
 
-    add({"replay",
-         "Project",
-         "Replay a previously recorded Vix execution",
-         [](const Args &a)
-         { return vix::commands::ReplayCommand::run(a); },
-         []()
-         { return vix::commands::ReplayCommand::help(); }});
-
-    add({"agent",
-         "AI",
-         "Run the local-first Vix AI agent",
-         [](const Args &a)
-         { return vix::commands::AgentCommand::run(a); },
-         []()
-         { return vix::commands::AgentCommand::help(); }});
-
-    add({"game",
-         "Game",
-         "Export and manage Vix game projects",
-         [](const Args &a)
-         { return vix::commands::GameCommand::run(a); },
-         []()
-         { return vix::commands::GameCommand::help(); }});
-
     add({"login",
          "Cloud",
          "Connect to Softadastra Cloud",
          [](const Args &a)
          { return vix::commands::CloudCommand::login(a); },
-         []()
-         { return vix::commands::CloudCommand::help(); }});
+         auth_help});
 
     add({"logout",
          "Cloud",
          "Remove the local Softadastra Cloud session",
          [](const Args &a)
          { return vix::commands::CloudCommand::logout(a); },
-         []()
-         { return vix::commands::CloudCommand::help(); }});
-
-    add({"cloud",
-         "Cloud",
-         "Manage Softadastra Cloud connection and project links",
-         [](const Args &a)
-         { return vix::commands::CloudCommand::run(a); },
-         []()
-         { return vix::commands::CloudCommand::help(); }});
+         auth_help});
 
     add({"check",
          "Project",
@@ -214,54 +169,6 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::ReplCommand::help(); }});
 
-    add({"note",
-         "Project",
-         "Open a Vix Note document in a local UI",
-         [](const Args &a)
-         { return vix::commands::NoteCommand::run(a); },
-         []()
-         { return vix::commands::NoteCommand::help(); }});
-
-    add({"desktop",
-         "Project",
-         "Open a Vix web UI app in a desktop shell",
-         [](const Args &a)
-         { return vix::commands::DesktopCommand::run(a); },
-         []()
-         { return vix::commands::DesktopCommand::help(); }});
-
-    add({"mobile",
-         "Project",
-         "Generate mobile WebView shells for Vix web apps",
-         [](const Args &a)
-         { return vix::commands::MobileCommand::run(a); },
-         []()
-         { return vix::commands::MobileCommand::help(); }});
-
-    add({"p2p",
-         "Network",
-         "Run P2P node (tcp + discovery + bootstrap)",
-         [](const Args &a)
-         { return vix::commands::P2PCommand::run(a); },
-         []()
-         { return vix::commands::P2PCommand::help(); }});
-
-    add({"orm",
-         "Database",
-         "Migrations/status/rollback",
-         [](const Args &a)
-         { return vix::commands::OrmCommand::run(a); },
-         []()
-         { return vix::commands::OrmCommand::help(); }});
-
-    add({"db",
-         "Database",
-         "Inspect SQLite database and storage status",
-         [](const Args &a)
-         { return vix::commands::DbCommand::run(a); },
-         []()
-         { return vix::commands::DbCommand::help(); }});
-
     add({"fmt",
          "Project",
          "Format C++ source files",
@@ -285,78 +192,6 @@ namespace vix::cli::dispatch
          { return vix::commands::ResetCommand::run(a); },
          []()
          { return vix::commands::ResetCommand::help(); }});
-
-    add({"task",
-         "Project",
-         "Run reusable project tasks",
-         [](const Args &a)
-         { return vix::commands::TaskCommand::run(a); },
-         []()
-         { return vix::commands::TaskCommand::help(); }});
-
-    add({"service",
-         "Project",
-         "Install and manage a production systemd service",
-         [](const Args &a)
-         { return vix::commands::ServiceCommand::run(a); },
-         []()
-         { return vix::commands::ServiceCommand::help(); }});
-
-    add({"proxy",
-         "Project",
-         "Generate and validate reverse proxy configs",
-         [](const Args &a)
-         { return vix::commands::ProxyCommand::run(a); },
-         []()
-         { return vix::commands::ProxyCommand::help(); }});
-
-    add({"health",
-         "Project",
-         "Check local, public and WebSocket app health",
-         [](const Args &a)
-         { return vix::commands::HealthCommand::run(a); },
-         []()
-         { return vix::commands::HealthCommand::help(); }});
-
-    add({"deploy",
-         "Project",
-         "Run the production deployment workflow",
-         [](const Args &a)
-         { return vix::commands::DeployCommand::run(a); },
-         []()
-         { return vix::commands::DeployCommand::help(); }});
-
-    add({"logs",
-         "Project",
-         "Show production app and proxy logs",
-         [](const Args &a)
-         { return vix::commands::LogsCommand::run(a); },
-         []()
-         { return vix::commands::LogsCommand::help(); }});
-
-    add({"env",
-         "Project",
-         "Check project and production environment variables",
-         [](const Args &a)
-         { return vix::commands::EnvCommand::run(a); },
-         []()
-         { return vix::commands::EnvCommand::help(); }});
-
-    add({"production",
-         "Project",
-         "Show and validate production status",
-         [](const Args &a)
-         { return vix::commands::ProductionCommand{}.run(a); },
-         []()
-         { return vix::commands::ProductionCommand{}.help(); }});
-
-    add({"ws",
-         "Project",
-         "Check and diagnose WebSocket endpoints",
-         [](const Args &a)
-         { return vix::commands::WsCommand::run(a); },
-         []()
-         { return vix::commands::WsCommand::help(); }});
 
     // Packaging & security
     add({"pack",
@@ -525,11 +360,7 @@ namespace vix::cli::dispatch
          "Info",
          "Check toolchain and install health",
          [](const Args &a)
-         {
-           if (!a.empty() && a[0] == "--cloud")
-             return vix::commands::CloudCommand::doctor({});
-           return vix::commands::DoctorCommand::run(a);
-         },
+         { return vix::commands::DoctorCommand::run(a); },
          []()
          { return vix::commands::DoctorCommand::help(); }});
 
@@ -549,41 +380,15 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::ModulesCommand::help(); }});
 
-    add({"make",
-         "Project",
-         "Generate C++ code scaffolding (class, struct, enum, function, ...)",
-         [](const Args &a)
-         { return vix::commands::MakeCommand::run(a); },
-         []()
-         { return vix::commands::MakeCommand::help(); }});
   }
 
   bool Dispatcher::has(const std::string &cmd) const
   {
-    if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
-      return map_.find("make") != map_.end();
-
     return map_.find(cmd) != map_.end();
   }
 
   int Dispatcher::run(const std::string &cmd, const Args &args) const
   {
-    if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
-    {
-      auto it = map_.find("make");
-      if (it == map_.end())
-        return 127;
-
-      Args forwarded_args;
-      forwarded_args.reserve(args.size() + 1);
-      forwarded_args.push_back(cmd.substr(5));
-
-      for (const auto &arg : args)
-        forwarded_args.push_back(arg);
-
-      return it->second.run(forwarded_args);
-    }
-
     auto it = map_.find(cmd);
     if (it == map_.end())
       return 127;
@@ -593,15 +398,6 @@ namespace vix::cli::dispatch
 
   int Dispatcher::help(const std::string &cmd) const
   {
-    if (cmd.size() > 5 && cmd.rfind("make:", 0) == 0)
-    {
-      auto it = map_.find("make");
-      if (it == map_.end())
-        return 127;
-
-      return it->second.help();
-    }
-
     auto it = map_.find(cmd);
     if (it == map_.end())
       return 127;

@@ -24,14 +24,10 @@ endif()
 include(GNUInstallDirs)
 include(CheckCXXCompilerFlag)
 
-# Prevent accidental ORM auto-pulls in some setups
-set(CMAKE_DISABLE_FIND_PACKAGE_VixOrm ON)
-
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(VIX_ENABLE_LTO "Enable LTO in Release builds" OFF)
-option(VIX_CLI_ENABLE_DESKTOP "Enable vix desktop support through vix::ui" OFF)
 
 # ----------------------------------------------------
 # CLI test isolation
@@ -53,11 +49,6 @@ if (VIX_CLI_BUILD_TESTS)
   set(VIX_CRYPTO_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_SYNC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(VIX_CACHE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_P2P_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_AGENT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_NOTE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_NOTE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(VIX_NOTE_INSTALL OFF CACHE BOOL "" FORCE)
 endif()
 
 file(GLOB_RECURSE CLI_SOURCES
@@ -68,6 +59,10 @@ file(GLOB_RECURSE CLI_SOURCES
 # Keep the historical source available for reference, but do not compile it
 # into the canonical CLI.
 list(FILTER CLI_SOURCES EXCLUDE REGEX "/src/app/AppProjectResolver\\.cpp$")
+# These command implementations remain historical source assets, but are not
+# part of the canonical C++ development CLI.
+list(FILTER CLI_SOURCES EXCLUDE REGEX
+  "/src/commands/(AgentCommand|GameExportCommand|NoteCommand|DesktopCommand|MobileCommand|MobileCommandUnavailable|OrmCommand|DbCommand|P2PCommand|MakeCommand|TaskCommand|ServiceCommand|ProxyCommand|HealthCommand|DeployCommand|LogsCommand|EnvCommand|ProductionCommand|WsCommand)\\.cpp$|/src/commands/replay/ReplayCommand\\.cpp$|/src/commands/(db|ws|env)/.*\\.cpp$")
 list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
@@ -123,8 +118,6 @@ get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUT
 set(_VIX_REPLY_DIR    "${_VIX_MODULES_DIR}/reply")
 set(_VIX_PROCESS_DIR  "${_VIX_MODULES_DIR}/process")
 set(_VIX_ENGINE_DIR   "${_VIX_MODULES_DIR}/engine")
-set(_VIX_NOTE_DIR     "${_VIX_MODULES_DIR}/note")
-set(_VIX_UI_DIR       "${_VIX_MODULES_DIR}/ui")
 set(_VIX_REQUESTS_DIR "${_VIX_MODULES_DIR}/requests")
 
 if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
@@ -162,22 +155,6 @@ else()
   )
 endif()
 
-if (EXISTS "${_VIX_NOTE_DIR}/CMakeLists.txt" AND NOT TARGET vix::note)
-  set(VIX_NOTE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_NOTE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(VIX_NOTE_INSTALL OFF CACHE BOOL "" FORCE)
-
-  add_subdirectory("${_VIX_NOTE_DIR}" "${CMAKE_BINARY_DIR}/_vix_note")
-endif()
-
-if (EXISTS "${_VIX_UI_DIR}/CMakeLists.txt" AND NOT TARGET vix::ui)
-  set(VIX_UI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_UI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-  set(VIX_UI_INSTALL OFF CACHE BOOL "" FORCE)
-
-  add_subdirectory("${_VIX_UI_DIR}" "${CMAKE_BINARY_DIR}/_vix_ui")
-endif()
-
 # ----------------------------------------------------
 # Link dependencies
 # Priority:
@@ -209,14 +186,8 @@ else()
   set(_VIX_JSON_DIR     "${_VIX_MODULES_DIR}/json")
   set(_VIX_TEMPLATE_DIR "${_VIX_MODULES_DIR}/template")
   set(_VIX_CRYPTO_DIR   "${_VIX_MODULES_DIR}/crypto")
-  set(_VIX_P2P_DIR      "${_VIX_MODULES_DIR}/p2p")
   set(_VIX_SYNC_DIR     "${_VIX_MODULES_DIR}/sync")
   set(_VIX_CACHE_DIR    "${_VIX_MODULES_DIR}/cache")
-  set(_VIX_AGENT_DIR     "${_VIX_MODULES_DIR}/agent")
-  set(_VIX_DB_DIR        "${_VIX_MODULES_DIR}/db")
-  set(_VIX_WEBSOCKET_DIR "${_VIX_MODULES_DIR}/websocket")
-  set(_VIX_NOTE_DIR      "${_VIX_MODULES_DIR}/note")
-  set(_VIX_UI_DIR        "${_VIX_MODULES_DIR}/ui")
   set(_VIX_REQUESTS_DIR  "${_VIX_MODULES_DIR}/requests")
   set(_VIX_ENGINE_DIR    "${_VIX_MODULES_DIR}/engine")
 
@@ -279,31 +250,6 @@ else()
       add_subdirectory("${_VIX_ENGINE_DIR}" "${CMAKE_BINARY_DIR}/_vix_engine")
     endif()
 
-    if (EXISTS "${_VIX_AGENT_DIR}/CMakeLists.txt" AND NOT TARGET vix::ai_agent)
-      add_subdirectory("${_VIX_AGENT_DIR}" "${CMAKE_BINARY_DIR}/_vix_ai_agent")
-    endif()
-
-    if (EXISTS "${_VIX_DB_DIR}/CMakeLists.txt" AND NOT TARGET vix::db)
-      set(VIX_DB_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-      set(VIX_DB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-      add_subdirectory("${_VIX_DB_DIR}" "${CMAKE_BINARY_DIR}/_vix_db")
-    endif()
-
-    if (EXISTS "${_VIX_WEBSOCKET_DIR}/CMakeLists.txt" AND NOT TARGET vix::websocket)
-      set(VIX_WEBSOCKET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-      set(VIX_WEBSOCKET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-      set(VIX_WEBSOCKET_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-
-      add_subdirectory(
-        "${_VIX_WEBSOCKET_DIR}"
-        "${CMAKE_BINARY_DIR}/_vix_websocket"
-      )
-    endif()
-
-    if (EXISTS "${_VIX_P2P_DIR}/CMakeLists.txt" AND NOT TARGET vix::p2p)
-      add_subdirectory("${_VIX_P2P_DIR}" "${CMAKE_BINARY_DIR}/_vix_p2p")
-    endif()
-
     if (TARGET vix::core)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::core)
     endif()
@@ -344,30 +290,6 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::engine)
     endif()
 
-    if (TARGET vix::ai_agent)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ai_agent)
-    endif()
-
-    if (TARGET vix::db)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::db)
-    endif()
-
-    if (TARGET vix::websocket)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::websocket)
-    endif()
-
-    if (TARGET vix::p2p)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::p2p)
-    endif()
-
-    if (TARGET vix::note)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::note)
-    endif()
-
-    if (TARGET vix::ui)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::ui)
-    endif()
-
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ASYNC_DIR}/include")
@@ -379,12 +301,6 @@ else()
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ENGINE_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_AGENT_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_DB_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_WEBSOCKET_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_P2P_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_NOTE_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_UI_DIR}/include")
 
     if (_VIX_LOCAL_LINK_TARGETS)
       list(REMOVE_DUPLICATES _VIX_LOCAL_LINK_TARGETS)
@@ -406,8 +322,6 @@ else()
 
     find_package(Vix CONFIG QUIET)
     find_package(vixcrypto CONFIG QUIET)
-    find_package(vixp2p CONFIG QUIET)
-    find_package(vix_note CONFIG QUIET)
     find_package(vix_requests CONFIG QUIET)
     find_package(vix_engine CONFIG QUIET)
 
@@ -422,10 +336,6 @@ else()
         target_link_libraries(vix_cli PRIVATE vix::crypto)
       endif()
 
-      if (TARGET vix::p2p)
-        target_link_libraries(vix_cli PRIVATE vix::p2p)
-      endif()
-
       if (TARGET vix::engine)
         target_link_libraries(vix_cli PRIVATE vix::engine)
       endif()
@@ -434,7 +344,7 @@ else()
         "Missing dependencies for vix_cli.\n"
         "Expected one of:\n"
         "  - umbrella targets vix::vix or vix::core\n"
-        "  - local sibling modules in ../core, ../p2p, ../crypto, etc.\n"
+        "  - local sibling modules in ../core, ../crypto, etc.\n"
         "  - installed packages providing vix::vix or vix::core"
       )
     endif()
@@ -480,25 +390,14 @@ else()
 endif()
 
 # ----------------------------------------------------
-# Cloud command support
+# Account authentication support
 # ----------------------------------------------------
 if (TARGET vix::requests)
-  message(STATUS "[cli] Cloud command enabled")
+  message(STATUS "[cli] Account authentication enabled")
   target_link_libraries(vix_cli PRIVATE vix::requests)
   target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_REQUESTS=1)
 else()
-  message(FATAL_ERROR "[cli] Cloud command requires vix::requests")
-endif()
-
-# ----------------------------------------------------
-# Optional game command support
-# ----------------------------------------------------
-if (TARGET vix::game)
-  message(STATUS "[cli] Game command enabled")
-  target_link_libraries(vix_cli PRIVATE vix::game)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_GAME=1)
-else()
-  message(STATUS "[cli] Game command disabled: vix::game target not found")
+  message(FATAL_ERROR "[cli] Account authentication requires vix::requests")
 endif()
 
 # ----------------------------------------------------
@@ -513,27 +412,6 @@ else()
 endif()
 
 # ----------------------------------------------------
-# Optional db command support
-# ----------------------------------------------------
-if (TARGET vix::db)
-  message(STATUS "[cli] DB command enabled")
-  target_link_libraries(vix_cli PRIVATE vix::db)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_DB=1)
-else()
-  message(STATUS "[cli] DB command disabled: vix::db target not found")
-endif()
-
-# ----------------------------------------------------
-# Optional websocket command support
-# ----------------------------------------------------
-if (TARGET vix::websocket)
-  message(STATUS "[cli] WebSocket command enabled")
-  target_link_libraries(vix_cli PRIVATE vix::websocket)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_WEBSOCKET=1)
-else()
-  message(STATUS "[cli] WebSocket command disabled: vix::websocket target not found")
-endif()
-
 if (TARGET vix_warnings)
   target_link_libraries(vix_cli PRIVATE vix_warnings)
 endif()
@@ -542,46 +420,6 @@ if (COMMAND vix_enable_sanitizers)
   vix_enable_sanitizers(vix_cli)
 elseif (VIX_ENABLE_SANITIZERS AND TARGET vix_sanitizers)
   target_link_libraries(vix_cli PRIVATE vix_sanitizers)
-endif()
-
-# ----------------------------------------------------
-# Optional note command support
-# ----------------------------------------------------
-if (TARGET vix::note)
-  message(STATUS "[cli] Note command enabled")
-  target_link_libraries(vix_cli PRIVATE vix::note)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_NOTE=1)
-else()
-  message(STATUS "[cli] Note command disabled: vix::note target not found")
-endif()
-
-# ----------------------------------------------------
-# Optional UI desktop command support
-# ----------------------------------------------------
-if (TARGET vix::ui)
-  message(STATUS "[cli] UI mobile core enabled")
-  target_link_libraries(vix_cli PRIVATE vix::ui)
-  set_source_files_properties(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/MobileCommandUnavailable.cpp"
-    PROPERTIES HEADER_FILE_ONLY TRUE
-  )
-
-  if (VIX_CLI_ENABLE_DESKTOP)
-    target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_UI=1)
-  endif()
-
-  if (VIX_UI_ENABLE_LINUX_WEBVIEW)
-    target_compile_definitions(vix_cli PRIVATE VIX_UI_ENABLE_LINUX_WEBVIEW=1)
-  endif()
-else()
-  message(STATUS "[cli] Mobile project generation disabled: vix::ui target not found")
-  set_source_files_properties(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/MobileCommand.cpp"
-    PROPERTIES HEADER_FILE_ONLY TRUE
-  )
-  target_sources(vix_cli PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/MobileCommandUnavailable.cpp"
-  )
 endif()
 
 # ----------------------------------------------------

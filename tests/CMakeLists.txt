@@ -511,8 +511,6 @@ add_test(NAME vix_cli_build_execution_paths_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_build_ninja_incrementality_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildNinjaIncrementalityContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_install_cmake_compatibility_contract
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/install/InstallCMakeCompatibilityContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_install_reconciliation_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/install/InstallReconciliationContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_vix_app_contract

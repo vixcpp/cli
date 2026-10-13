@@ -37,9 +37,6 @@ namespace vix::cli::project
       if (marker_is_regular_file(current / "CMakeLists.txt"))
         return {ProjectLocation{current, ProjectSystem::cmake}, std::nullopt};
 
-      if (marker_is_regular_file(current / "vix.app"))
-        return {ProjectLocation{current, ProjectSystem::legacy_vix_app}, std::nullopt};
-
       const Path parent = current.parent_path();
       if (parent == current)
         break;

@@ -21,8 +21,7 @@ namespace vix::cli::project
   };
 
   /**
-   * Finds the nearest recognized project containing input.  At one directory,
-   * CMake takes precedence over legacy vix.app; nearer directories always win.
+   * Finds the nearest currently recognized project containing input.
    */
   [[nodiscard]] ProjectDiscoveryResult discover_project(const Path &input);
 } // namespace vix::cli::project

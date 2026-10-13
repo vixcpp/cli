@@ -54,6 +54,7 @@ explicitly classified until its real-effect contract is added.
 | `search`     | main | yes               | SearchCommand        | —                        | NETWORK          | UNCOVERED | —                           |
 | `service`    | main | yes               | ServiceCommand       | —                        | SYSTEM           | UNCOVERED | —                           |
 | `store`      | main | yes               | StoreCommand         | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
+| `targets`    | main | yes               | TargetsCommand       | —                        | READ_ONLY_LOCAL  | PASS      | vix_cli_targets_command_tests |
 | `task`       | main | yes               | TaskCommand          | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
 | `test`       | main | yes               | TestsCommand         | tests                    | LOCAL_WRITE      | UNCOVERED | —                           |
 | `tests`      | no   | yes               | TestsCommand         | test                     | LOCAL_WRITE      | UNCOVERED | —                           |

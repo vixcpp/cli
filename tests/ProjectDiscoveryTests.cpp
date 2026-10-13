@@ -81,31 +81,22 @@ namespace
     assert(cmakeResult.location->root == cmake);
     assert(cmakeResult.location->system == project::ProjectSystem::cmake);
 
-    const fs::path app = root / "app";
-    fs::create_directories(app / "src");
-    touch(app / "vix.app");
-    const auto appResult = project::discover_project(app / "src");
-    assert(appResult.success());
-    assert(appResult.location->root == app);
-    assert(appResult.location->system == project::ProjectSystem::legacy_vix_app);
-
-    const fs::path both = root / "both";
-    fs::create_directories(both);
-    touch(both / "CMakeLists.txt");
-    touch(both / "vix.app");
-    const auto bothResult = project::discover_project(both);
-    assert(bothResult.success());
-    assert(bothResult.location->system == project::ProjectSystem::cmake);
-
     const fs::path outer = root / "outer";
     const fs::path inner = outer / "inner";
     fs::create_directories(inner / "src" / "deep");
     touch(outer / "CMakeLists.txt");
-    touch(inner / "vix.app");
+    touch(inner / "CMakeLists.txt");
     const auto nearest = project::discover_project(inner / "src" / "deep");
     assert(nearest.success());
     assert(nearest.location->root == inner);
-    assert(nearest.location->system == project::ProjectSystem::legacy_vix_app);
+    assert(nearest.location->system == project::ProjectSystem::cmake);
+
+    const fs::path obsoleteMarker = root / "obsolete-marker";
+    fs::create_directories(obsoleteMarker / "nested");
+    touch(obsoleteMarker / "vix.app");
+    const auto ignoredLegacyMarker = project::discover_project(obsoleteMarker / "nested");
+    assert(!ignoredLegacyMarker.success());
+    assert(ignoredLegacyMarker.error == project::ProjectError::project_not_found);
 
     const fs::path source = inner / "src" / "main.cpp";
     touch(source);

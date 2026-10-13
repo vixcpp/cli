@@ -19,6 +19,8 @@ namespace vix::cli::project
     ambiguous_target,
     target_not_buildable,
     target_not_runnable,
+    test_not_found,
+    ambiguous_test,
     configuration_required,
     configuration_not_found
   };
@@ -35,6 +37,8 @@ namespace vix::cli::project
     case ProjectError::ambiguous_target: return "ambiguous_target";
     case ProjectError::target_not_buildable: return "target_not_buildable";
     case ProjectError::target_not_runnable: return "target_not_runnable";
+    case ProjectError::test_not_found: return "test_not_found";
+    case ProjectError::ambiguous_test: return "ambiguous_test";
     case ProjectError::configuration_required: return "configuration_required";
     case ProjectError::configuration_not_found: return "configuration_not_found";
     }

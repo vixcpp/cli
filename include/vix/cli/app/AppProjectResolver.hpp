@@ -121,13 +121,9 @@ namespace vix::cli::app
    * present.
    *
    * @param base Directory to start from.
-   * @param use_vixc_frontend Whether to prepare vix.app translation units
-   * through the optional VixC frontend before build generation.
    * @return Resolved project result.
    */
-  AppProjectResolveResult resolve_app_project(
-      const fs::path &base,
-      bool use_vixc_frontend = false);
+  AppProjectResolveResult resolve_app_project(const fs::path &base);
 
 } // namespace vix::cli::app
 

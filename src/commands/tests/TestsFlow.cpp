@@ -110,11 +110,11 @@ namespace vix::commands::TestsCommand::detail
         opt.raw = true;
         continue;
       }
-      if (a == "--test" || a == "-R")
+      if (a == "--exact-test")
       {
         if (i + 1 < left.size())
         {
-          opt.testPattern = left[++i];
+          opt.exactTestName = left[++i];
           continue;
         }
 
@@ -126,6 +126,25 @@ namespace vix::commands::TestsCommand::detail
       if (a.rfind(testPrefix, 0) == 0)
       {
         opt.testPattern = a.substr(sizeof(testPrefix) - 1);
+        continue;
+      }
+
+      constexpr const char exactTestPrefix[] = "--exact-test=";
+      if (a.rfind(exactTestPrefix, 0) == 0)
+      {
+        opt.exactTestName = a.substr(sizeof(exactTestPrefix) - 1);
+        continue;
+      }
+
+      if (a == "--test" || a == "-R")
+      {
+        if (i + 1 < left.size())
+        {
+          opt.testPattern = left[++i];
+          continue;
+        }
+
+        opt.forwarded.push_back(a);
         continue;
       }
 
@@ -142,17 +161,8 @@ namespace vix::commands::TestsCommand::detail
     if (!projectSet)
       opt.projectDir = normalize_project_dir(fs::current_path());
 
-    if (opt.list)
-      opt.ctestArgs.insert(opt.ctestArgs.begin(), "--show-only");
-
     if (opt.failFast)
       opt.ctestArgs.push_back("--stop-on-failure");
-
-    if (!opt.testPattern.empty())
-    {
-      opt.ctestArgs.push_back("-R");
-      opt.ctestArgs.push_back(opt.testPattern);
-    }
 
     if (opt.runAfter)
       opt.forwarded.push_back("--run");

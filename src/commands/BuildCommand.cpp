@@ -25,10 +25,6 @@
 #include <vix/cli/build/BuildTaskProcessExecutor.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/build/BuildContext.hpp>
-#include <vix/cli/app/AppManifest.hpp>
-#include <vix/cli/app/AppCMakeGenerator.hpp>
-#include <vix/cli/app/AppProjectResolver.hpp>
-#include <vix/cli/app/VixcFrontend.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -92,7 +88,6 @@ namespace util = vix::cli::util;
 namespace build = vix::cli::build;
 namespace artifact_cache = vix::cli::cache;
 namespace run_detail = vix::commands::RunCommand::detail;
-namespace app = vix::cli::app;
 
 namespace vix::commands::BuildCommand
 {
@@ -124,9 +119,6 @@ namespace vix::commands::BuildCommand
     {
       process::Plan plan;
       std::string sdkResolutionError;
-      std::optional<fs::path> vixDepsLoader;
-      std::optional<fs::path> vixDepsProjectInclude;
-      bool clearLegacyVixTopLevelInclude{false};
       std::string toolchainContent;
     };
 
@@ -168,7 +160,6 @@ namespace vix::commands::BuildCommand
       return name == "CMakeLists.txt" ||
              name == "CMakePresets.json" ||
              name == "CMakeUserPresets.json" ||
-             name == "vix.app" ||
              name == "vix.json" ||
              name == "vix.toml" ||
              name == "vix.lock" ||
@@ -1705,27 +1696,6 @@ namespace vix::commands::BuildCommand
         {
           o.verbose = true;
         }
-        else if (a == "--frontend")
-        {
-          auto v = util::take_value(args, i);
-          if (!v || *v != "vixc")
-          {
-            error("--frontend currently supports only 'vixc'.");
-            exitCode = 2;
-            return o;
-          }
-          o.useVixcFrontend = true;
-        }
-        else if (a.rfind("--frontend=", 0) == 0)
-        {
-          if (a != "--frontend=vixc")
-          {
-            error("--frontend currently supports only 'vixc'.");
-            exitCode = 2;
-            return o;
-          }
-          o.useVixcFrontend = true;
-        }
         else if (a == "--debug")
         {
           o.debug = true;
@@ -2380,8 +2350,6 @@ namespace vix::commands::BuildCommand
         const std::optional<std::string> &launcher,
         const std::optional<std::string> &fastLinkerFlag,
         const fs::path &globalPackagesFile,
-        const std::optional<fs::path> &vixDepsLoader,
-        const bool clearLegacyVixTopLevelInclude,
         vix::engine::DependencyEnvironmentMode dependencyEnvironmentMode,
         const fs::path &sdkConfigDir)
     {
@@ -2412,23 +2380,12 @@ namespace vix::commands::BuildCommand
                     opt.sanitizerMode)));
       }
 
-      // CMAKE_PROJECT_INCLUDE runs as the final step of project(), after
-      // languages are enabled.  The bridge guards nested project() calls,
-      // while keeping the user's CMakeLists.txt entirely untouched.
-      if (vixDepsLoader)
-      {
-        // Migrate only the legacy value written by Vix.  Do not disturb a
-        // caller's unrelated top-level include configuration.
-        if (clearLegacyVixTopLevelInclude)
-          variables.emplace_back("CMAKE_PROJECT_TOP_LEVEL_INCLUDES", "");
-        variables.emplace_back(
-            "CMAKE_PROJECT_INCLUDE",
-            vixDepsLoader->string());
-      }
-
       return variables;
     }
 
+    // Historical dependency-manifest implementation retained as source
+    // material, but excluded from the canonical CLI build.
+#if 0
     static std::optional<fs::path> cmake_vix_deps_loader(
         const fs::path &projectDir,
         const bool hasCMakeLists,
@@ -2504,6 +2461,7 @@ namespace vix::commands::BuildCommand
       }
       return false;
     }
+#endif
 
     static vix::engine::ConfigurationSignatureOptions
     configuration_signature_options(
@@ -2622,16 +2580,12 @@ namespace vix::commands::BuildCommand
         base = fs::absolute(fs::path(opt.dir));
 
       fs::path userProjectDir;
-      const auto root = util::find_project_root(base);
+      // Logical project identity comes only from canonical discovery.
+      const auto discovered = vix::cli::project::discover_project(base);
 
-      if (root)
+      if (discovered.success())
       {
-        userProjectDir = *root;
-      }
-      else if (util::file_exists(base / "CMakeLists.txt") ||
-               util::file_exists(base / "vix.app"))
-      {
-        userProjectDir = base;
+        userProjectDir = discovered.location->root;
       }
       else
       {
@@ -2640,40 +2594,8 @@ namespace vix::commands::BuildCommand
 
       userProjectDir = fs::absolute(userProjectDir).lexically_normal();
 
-      fs::path cmakeSourceDir = userProjectDir;
-      std::string defaultTargetName = userProjectDir.filename().string();
-      bool generatedFromVixApp = false;
-
-      const fs::path cmakeListsPath = userProjectDir / "CMakeLists.txt";
-      const fs::path appManifestPath = userProjectDir / "vix.app";
-
-      const bool hasCMakeLists = util::file_exists(cmakeListsPath);
-      const bool hasVixApp = util::file_exists(appManifestPath);
-      std::string dependencyManifestError;
-      const auto vixDepsLoader = cmake_vix_deps_loader(
-          userProjectDir, hasCMakeLists, dependencyManifestError);
-      if (!dependencyManifestError.empty())
-      {
-        error(dependencyManifestError);
-        return std::nullopt;
-      }
-
-      if (!hasCMakeLists && hasVixApp)
-      {
-        const app::AppProjectResolveResult resolved =
-            app::resolve_app_project(userProjectDir);
-
-        if (!resolved.success())
-        {
-          error("Failed to resolve vix.app project.");
-          hint(resolved.error);
-          return std::nullopt;
-        }
-
-        cmakeSourceDir = resolved.cmakeSourceDir;
-        defaultTargetName = resolved.targetName;
-        generatedFromVixApp = true;
-      }
+      const fs::path cmakeSourceDir = userProjectDir;
+      const std::string defaultTargetName = userProjectDir.filename().string();
 
       const auto presetOpt = build::resolve_builtin_preset(opt.preset);
 
@@ -2684,7 +2606,6 @@ namespace vix::commands::BuildCommand
       layoutOptions.userProjectDir = userProjectDir;
       layoutOptions.cmakeSourceDir = cmakeSourceDir;
       layoutOptions.defaultTargetName = defaultTargetName;
-      layoutOptions.generatedFromVixApp = generatedFromVixApp;
       layoutOptions.preset = *presetOpt;
       layoutOptions.targetTriple = opt.targetTriple;
       layoutOptions.sanitizerMode = opt.sanitizerMode;
@@ -2716,19 +2637,6 @@ namespace vix::commands::BuildCommand
         }
       }
 
-      const auto vixDepsProjectInclude =
-          write_cmake_vix_deps_project_bridge(
-              vixDepsLoader,
-              plan.buildDir,
-              dependencyManifestError);
-      if (!dependencyManifestError.empty())
-      {
-        error(dependencyManifestError);
-        return std::nullopt;
-      }
-      const bool clearLegacyVixTopLevelInclude =
-          has_legacy_vix_top_level_include(plan.buildDir, vixDepsLoader);
-
       const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
 
       std::string sdkResolutionError;
@@ -2749,8 +2657,6 @@ namespace vix::commands::BuildCommand
           plan.launcher,
           plan.fastLinkerFlag,
           globalPackagesFile,
-          vixDepsProjectInclude,
-          clearLegacyVixTopLevelInclude,
           plan.dependencyEnvironmentMode,
           plan.sdkConfigDir);
 
@@ -2759,9 +2665,6 @@ namespace vix::commands::BuildCommand
       return ResolvedBuildPlan{
           std::move(plan),
           std::move(sdkResolutionError),
-          vixDepsLoader,
-          vixDepsProjectInclude,
-          clearLegacyVixTopLevelInclude,
           std::move(toolchainContent)};
     }
     static vix::engine::ConfigureDecision
@@ -3038,7 +2941,7 @@ namespace vix::commands::BuildCommand
     static bool sdk_scan_file_name(const fs::path &path)
     {
       const std::string name = path.filename().string();
-      return name == "CMakeLists.txt" || name == "vix.app" ||
+      return name == "CMakeLists.txt" ||
              name == "vix.module" || path.extension() == ".cmake";
     }
 
@@ -4660,6 +4563,9 @@ namespace vix::commands::BuildCommand
           milliseconds);
     }
 
+    // Historical vix.app native build implementation is intentionally not
+    // part of the new CLI architecture.
+#if 0
     static bool can_use_native_vix_app_build(
         const process::Options &opt,
         const app::AppManifest &manifest)
@@ -4685,7 +4591,13 @@ namespace vix::commands::BuildCommand
       if (opt.linkStatic)
         return false;
 
-      if (!opt.buildTarget.empty() && opt.buildTarget != manifest.name)
+      // Explicit target requests must be validated against configured CMake
+      // metadata.  The native shortcut has no ProjectSnapshot and therefore
+      // remains a no-target compatibility fast path only.
+      if (!opt.buildTarget.empty())
+        return false;
+
+      if (opt.requireProjectMetadata)
         return false;
 
       if (manifest.type != app::AppTargetType::Executable)
@@ -5382,6 +5294,7 @@ namespace vix::commands::BuildCommand
 
       return 0;
     }
+#endif
 
     class BuildCommand
     {
@@ -5417,43 +5330,6 @@ namespace vix::commands::BuildCommand
         if (opt_.showLog && !opt_.logPath.empty())
           return print_requested_build_log(fs::path{opt_.logPath});
 
-        {
-          fs::path base = cwd;
-
-          if (!opt_.dir.empty())
-            base = fs::absolute(fs::path(opt_.dir));
-
-          const app::AppProjectResolveResult project =
-              app::resolve_app_project(base, opt_.useVixcFrontend);
-
-          if (!project.success() &&
-              project.kind == app::AppProjectKind::VixApp)
-          {
-            error("Failed to resolve vix.app project.");
-            hint(project.error);
-            return 1;
-          }
-
-          if (project.success() &&
-              project.kind == app::AppProjectKind::VixApp)
-          {
-            const app::AppManifest &preparedManifest = project.manifest;
-
-            if (!opt_.warnings && !opt_.showLog &&
-                can_use_native_vix_app_build(opt_, preparedManifest))
-            {
-              return run_native_vix_app_build(
-                  opt_,
-                  project.userProjectDir,
-                  preparedManifest,
-                  commandStart);
-            }
-
-            if (debug_build_details_enabled(opt_) && !opt_.quiet)
-              hint("Native vix.app fallback: generated CMake path");
-          }
-        }
-
         const auto resolvedPlanOpt =
             measurePhase(
                 "resolve project",
@@ -5469,12 +5345,6 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = resolvedPlanOpt->plan;
-        const std::optional<fs::path> vixDepsLoader =
-            resolvedPlanOpt->vixDepsLoader;
-        const std::optional<fs::path> vixDepsProjectInclude =
-            resolvedPlanOpt->vixDepsProjectInclude;
-        const bool clearLegacyVixTopLevelInclude =
-            resolvedPlanOpt->clearLegacyVixTopLevelInclude;
         std::string tc = resolvedPlanOpt->toolchainContent;
 
         if (!resolvedPlanOpt->sdkResolutionError.empty())
@@ -5606,8 +5476,6 @@ namespace vix::commands::BuildCommand
             plan_.launcher,
             plan_.fastLinkerFlag,
             globalPackagesFile,
-            vixDepsProjectInclude,
-            clearLegacyVixTopLevelInclude,
             plan_.dependencyEnvironmentMode,
             plan_.sdkConfigDir);
 
@@ -5799,12 +5667,6 @@ namespace vix::commands::BuildCommand
           out.print("  Using project directory:\n");
           out.print("    • " + plan_.userProjectDir.string() + "\n");
 
-          if (plan_.generatedFromVixApp)
-          {
-            out.print("  Using generated CMake source:\n");
-            out.print("    • " + plan_.cmakeSourceDir.string() + "\n");
-          }
-
           out.print("\n");
         }
 
@@ -5835,11 +5697,15 @@ namespace vix::commands::BuildCommand
 
         bool configuredThisRun = false;
 
-        const bool needsCmakeProjectMetadata =
-            !plan_.generatedFromVixApp &&
-            (opt_.requireProjectMetadata || !opt_.buildTarget.empty());
+        // `all` is the longstanding backend meta-target spelling.  It is not
+        // a configured project target and therefore must retain the same
+        // default-build path as an omitted target.  Only an actual project
+        // target participates in normalized TargetSelection.
+        const bool backendDefaultTarget = opt_.buildTarget == "all";
         const bool explicitCmakeTarget =
-            !opt_.buildTarget.empty() && !plan_.generatedFromVixApp;
+            !opt_.buildTarget.empty() && !backendDefaultTarget;
+        const bool needsCmakeProjectMetadata =
+            explicitCmakeTarget || opt_.requireProjectMetadata;
         std::optional<vix::cli::project::ProjectLocation> targetProject;
         vix::cli::project::cmake::SnapshotRequest targetSnapshotRequest{
             plan_.buildDir, std::nullopt};
@@ -5849,9 +5715,7 @@ namespace vix::commands::BuildCommand
         {
           const auto discovered =
               vix::cli::project::discover_project(plan_.userProjectDir);
-          if (!discovered.success() ||
-              discovered.location->system !=
-                  vix::cli::project::ProjectSystem::cmake)
+          if (!discovered.success())
           {
             error("Unable to resolve the CMake project for --build-target.");
             return 1;
@@ -6667,25 +6531,8 @@ namespace vix::commands::BuildCommand
       return 1;
     }
 
-    const fs::path originalSource = fs::absolute(opt_.cppFile).lexically_normal();
-    fs::path sourceForCompilation = originalSource;
-
-    if (opt_.useVixcFrontend)
-    {
-      const app::VixcFrontendResult vixcResult =
-          app::process_with_vixc(originalSource);
-      if (!vixcResult.success)
-      {
-        error("VixC frontend failed for " + originalSource.string());
-        if (!vixcResult.diagnostics.empty())
-          std::cerr << vixcResult.diagnostics;
-        return 1;
-      }
-
-      sourceForCompilation = vixcResult.generated_source;
-      if (!opt_.quiet)
-        info("VixC generated: " + sourceForCompilation.string());
-    }
+    const fs::path sourceForCompilation =
+        fs::absolute(opt_.cppFile).lexically_normal();
 
     run_detail::Options runOpt{};
     runOpt.singleCpp = true;
@@ -6716,7 +6563,7 @@ namespace vix::commands::BuildCommand
     {
       error("The address-only sanitizer is not supported for single-file builds.");
       hint("Use `vix build file.cpp --sanitize` for address and undefined checks.");
-      hint("`--asan` remains available for CMake and vix.app projects.");
+      hint("`--asan` remains available for CMake projects.");
       return 2;
     }
 
@@ -6730,9 +6577,6 @@ namespace vix::commands::BuildCommand
     runOpt.runArgs.clear();
     runOpt.runEnv.clear();
     runOpt.scriptFlags = opt_.cmakeArgs;
-    if (opt_.useVixcFrontend)
-      runOpt.scriptFlags.push_back("-I" + originalSource.parent_path().string());
-
     fs::path exePath;
     const int code = run_detail::build_script_executable(runOpt, exePath);
     if (code != 0)
@@ -6921,16 +6765,18 @@ namespace vix::commands::BuildCommand
       if (structuredWatchOutput)
         watch_finish_terminal(display);
 
-      return 130;
+    return 130;
     }
 
+    // Historical native vix.app watch path is not part of canonical Vix.
+#if 0
     {
       fs::path base = fs::current_path();
       if (!opt_.dir.empty())
         base = fs::absolute(fs::path(opt_.dir));
 
       const app::AppProjectResolveResult project =
-          app::resolve_app_project(base, opt_.useVixcFrontend);
+          app::resolve_app_project(base);
 
       if (project.success() &&
           project.kind == app::AppProjectKind::VixApp)
@@ -7096,9 +6942,6 @@ namespace vix::commands::BuildCommand
                 !batchOpt->overflowed &&
                 !sourceTaskIds.empty();
 
-            if (buildOpt.useVixcFrontend)
-              sourceOnlyChange = false;
-
             if (sourceOnlyChange)
             {
               for (const auto &event : batchOpt->events)
@@ -7164,27 +7007,6 @@ namespace vix::commands::BuildCommand
 
                         activeManifest = reloadResult.manifest;
 
-                        if (!can_use_native_vix_app_build(buildOpt, activeManifest))
-                        {
-                          BuildCommand fallback(buildOpt);
-                          return fallback.run();
-                        }
-                      }
-
-                      if (buildOpt.useVixcFrontend)
-                      {
-                        const app::AppProjectResolveResult refreshedProject =
-                            app::resolve_app_project(
-                                project.userProjectDir,
-                                true);
-                        if (!refreshedProject.success())
-                        {
-                          error("Failed to prepare vix.app sources.");
-                          hint(refreshedProject.error);
-                          return 1;
-                        }
-
-                        activeManifest = refreshedProject.manifest;
                         if (!can_use_native_vix_app_build(buildOpt, activeManifest))
                         {
                           BuildCommand fallback(buildOpt);
@@ -7265,6 +7087,7 @@ namespace vix::commands::BuildCommand
         }
       }
     }
+#endif
 
     process::Options initialOpt = opt_;
     initialOpt.watch = false;
@@ -7793,7 +7616,6 @@ namespace vix::commands::BuildCommand
     out << "Build options:\n";
     out << "  --preset <name>           Build preset: dev, dev-ninja, release\n";
     out << "  --build-target <name>     Build a specific CMake target\n";
-    out << "  --frontend vixc           Experimentally process application sources through VixC\n";
     out << "  -j, --jobs <n>            Number of parallel build jobs\n";
     out << "  --clean                   Remove local build directories and configure again\n";
     out << "  --watch                   Watch project files and rebuild incrementally\n";

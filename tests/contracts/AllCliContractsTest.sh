@@ -19,7 +19,6 @@ run run/RunCacheContractTest.sh
 run run/RunVixAppContractTest.sh
 run run/RunExecutionPathsContractTest.sh
 run run/RunCompiledDependencyContractTest.sh
-run FrontendOptionContractTest.sh
 run dev/DevProjectContractTest.sh
 run dev/DevSingleCppContractTest.sh
 run dev/DevSingleCppSignalContractTest.sh

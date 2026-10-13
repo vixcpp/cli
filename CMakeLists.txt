@@ -74,6 +74,9 @@ add_executable(vix::cli ALIAS vix_cli)
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
+target_include_directories(vix_cli SYSTEM PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus>
+)
 
 function(vix_add_flag_if_supported tgt flag)
   string(REGEX REPLACE "[^A-Za-z0-9]" "_" flag_var "${flag}")

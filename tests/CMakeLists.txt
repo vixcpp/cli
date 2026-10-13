@@ -167,6 +167,15 @@ target_include_directories(vix_cli_test_selection_tests PRIVATE
 )
 add_test(NAME vix_cli_test_selection_tests COMMAND vix_cli_test_selection_tests)
 
+add_executable(vix_cli_native_semantic_model_tests
+  NativeSemanticModelTests.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_semantic_model_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_native_semantic_model_tests COMMAND vix_cli_native_semantic_model_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

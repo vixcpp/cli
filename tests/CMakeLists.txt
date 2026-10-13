@@ -217,6 +217,21 @@ target_include_directories(vix_cli_native_lockfile_tests SYSTEM PRIVATE
 )
 add_test(NAME vix_cli_native_lockfile_tests COMMAND vix_cli_native_lockfile_tests)
 
+add_executable(vix_cli_native_project_lock_state_tests
+  NativeProjectLockStateTests.cpp
+  ../src/project/native/ProjectLockState.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_project_lock_state_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_project_lock_state_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_project_lock_state_tests COMMAND vix_cli_native_project_lock_state_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

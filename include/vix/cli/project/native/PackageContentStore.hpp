@@ -29,10 +29,10 @@ namespace vix::cli::project::native
     std::string digest_;
   };
 
-  // Candidate representation is deliberately opaque: archive/tree/Git bytes
-  // and their canonical digest representation belong to a later contract.
-  // A verifier must bind a stable candidate handle; callers must not mutate
-  // candidate state after verification.
+  // Candidate representation is deliberately opaque. Source-specific archive,
+  // filesystem, or Git forms are adapted to the canonical logical-tree model
+  // before verification; transport readers remain outside this store contract.
+  // A verifier binds a stable candidate handle; callers must not mutate it.
   class PackageContentCandidate
   {
   public:
@@ -88,9 +88,8 @@ namespace vix::cli::project::native
       std::shared_ptr<const PackageContentCandidate> candidate,
       const PackageContentId &expected) const = 0;
   protected:
-    // Concrete verification policy is supplied by a later acquisition layer.
-    // This factory lets that verifier mint the internal capability without
-    // making VerifiedPackageContent publicly constructible.
+    // Lets a concrete verifier mint the internal capability without making
+    // VerifiedPackageContent publicly constructible.
     [[nodiscard]] PackageContentVerificationResult verified_content(
       std::shared_ptr<const PackageContentCandidate> candidate,
       const PackageContentId &id, std::string equivalenceKey) const;

@@ -19,6 +19,13 @@ using namespace vix::cli::project::native;
 
 namespace
 {
+  static_assert(!std::is_same_v<RegistryLocation, RegistryContentLocation>);
+  static_assert(!std::is_convertible_v<RegistryLocation, RegistryContentLocation>);
+  static_assert(!std::is_convertible_v<RegistryContentLocation, RegistryLocation>);
+  static_assert(std::is_same_v<decltype(&RegistryObservationLocationSource::registry_observation_at),
+    UnverifiedRegistryLocationResult (RegistryObservationLocationSource::*)(
+      const RegistryLocation &, const RegistryPackageIdentity &)>);
+
   constexpr const char *digest_a = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   constexpr const char *commit_git = "0123456789abcdef0123456789abcdef01234567";
 
@@ -197,6 +204,58 @@ namespace
     auto orderTwo = build_registry_directory({{"vix", {{"A"}, {"B"}}}, {"company", {{"X"}}}});
     assert(orderOne.valid() && orderTwo.valid());
     assert(orderOne.value->find("vix")->locations == orderTwo.value->find("vix")->locations);
+
+    RegistryDefinition separated;
+    separated.id = "separated";
+    separated.locations = {{"metadata-A"}, {"metadata-B"}};
+    separated.contentLocations = {{"content-Z"}, {"content-A"}, {"content-M"}};
+    auto distinctRouting = build_registry_directory({separated});
+    assert(distinctRouting.valid());
+    const auto *configured = distinctRouting.value->find("separated");
+    assert(configured->locations == separated.locations);
+    assert((configured->contentLocations == std::vector<RegistryContentLocation>{
+      {"content-Z"}, {"content-A"}, {"content-M"}}));
+
+    RegistryDefinition metadataRoute;
+    metadataRoute.id = "vix";
+    metadataRoute.locations = {{"metadata-first"}, {"metadata-second"}};
+    metadataRoute.contentLocations = {{"content-only"}};
+    auto metadataAndContent = build_registry_directory({metadataRoute});
+    assert(metadataAndContent.valid());
+    MemoryLocations metadataSource;
+    metadataSource.replies.push_back({"metadata-first", logical,
+      {false, std::nullopt, "first unavailable"}});
+    metadataSource.replies.push_back({"metadata-second", logical,
+      {true, make_observation(logical, {}), {}}});
+    TestVerifier metadataVerifier;
+    const auto metadataResult = route_verified_registry_observation(
+      *metadataAndContent.value, authority_directory(), metadataSource, metadataVerifier, logical);
+    assert(metadataResult.valid());
+    assert((metadataSource.calls == std::vector<std::pair<std::string, RegistryPackageIdentity>>{
+      {"metadata-first", logical}, {"metadata-second", logical}}));
+
+    RegistryDefinition metadataOnly;
+    metadataOnly.id = "metadata-only";
+    metadataOnly.locations = {{"metadata"}};
+    auto noContent = build_registry_directory({metadataOnly});
+    assert(noContent.valid());
+    assert(noContent.value->find("metadata-only")->contentLocations.empty());
+
+    RegistryDefinition emptyContentLocation;
+    emptyContentLocation.id = "empty-content-location";
+    emptyContentLocation.locations = {{"metadata"}};
+    emptyContentLocation.contentLocations = {{""}};
+    auto invalidContentLocation = build_registry_directory({emptyContentLocation});
+    assert(!invalidContentLocation.valid());
+    assert(invalidContentLocation.issues.front().code == RegistryDirectoryErrorCode::invalid_content_location);
+
+    RegistryDefinition duplicateContentLocations;
+    duplicateContentLocations.id = "duplicate-content-location";
+    duplicateContentLocations.locations = {{"metadata"}};
+    duplicateContentLocations.contentLocations = {{"content"}, {"content"}};
+    auto duplicateContentLocation = build_registry_directory({duplicateContentLocations});
+    assert(!duplicateContentLocation.valid());
+    assert(duplicateContentLocation.issues.front().code == RegistryDirectoryErrorCode::duplicate_content_location);
   }
 
   void fallback_empty_and_no_merge_tests()

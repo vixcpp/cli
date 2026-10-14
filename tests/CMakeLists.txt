@@ -450,6 +450,7 @@ add_test(NAME vix_cli_native_filesystem_package_content_store_tests
 add_executable(vix_cli_native_package_content_acquisition_tests
   NativePackageContentAcquisitionTests.cpp
   ../src/project/native/PackageContentAcquisition.cpp
+  ../src/project/native/RegistryContentTransport.cpp
   ../src/project/native/FilesystemPackageContentStore.cpp
   ../src/project/native/PackageContentDigest.cpp
   ../src/project/native/PackageContentStore.cpp

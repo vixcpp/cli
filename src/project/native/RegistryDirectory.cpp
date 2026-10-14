@@ -57,6 +57,16 @@ namespace vix::cli::project::native
             result.issues.push_back(directory_issue(RegistryDirectoryErrorCode::duplicate_location, definition.id,
               "Registry definition contains a duplicate location descriptor"));
       }
+      for (std::size_t location = 0; location < definition.contentLocations.size(); ++location)
+      {
+        if (definition.contentLocations[location].descriptor.empty())
+          result.issues.push_back(directory_issue(RegistryDirectoryErrorCode::invalid_content_location, definition.id,
+            "Registry content location descriptor must be nonempty"));
+        for (std::size_t prior = 0; prior < location; ++prior)
+          if (definition.contentLocations[prior] == definition.contentLocations[location])
+            result.issues.push_back(directory_issue(RegistryDirectoryErrorCode::duplicate_content_location, definition.id,
+              "Registry definition contains a duplicate content location descriptor"));
+      }
       if (i > 0 && definitions[i - 1].id == definition.id)
         result.issues.push_back(directory_issue(RegistryDirectoryErrorCode::duplicate_registry_id, definition.id,
           "Registry IDs must have exactly one directory definition"));

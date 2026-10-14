@@ -137,7 +137,7 @@ namespace
   class NoRegistrySource final : public RegistryPackageContentSource
   {
   public:
-    RegistryPackageContentSourceResult acquire(const RegistryLocation &,
+    RegistryPackageContentSourceResult acquire(const RegistryContentLocation &,
       const RegistryPackageContentRequest &) override
     {
       ++calls;

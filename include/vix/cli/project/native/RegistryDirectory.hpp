@@ -21,11 +21,22 @@ namespace vix::cli::project::native
     friend bool operator==(const RegistryLocation &, const RegistryLocation &) = default;
   };
 
+  // Opaque transport configuration for immutable Registry package content.
+  // This is deliberately distinct from metadata-observation routing.
+  struct RegistryContentLocation
+  {
+    std::string descriptor;
+    friend bool operator==(const RegistryContentLocation &, const RegistryContentLocation &) = default;
+  };
+
   struct RegistryDefinition
   {
     std::string id;
     // Declaration order is fallback preference, not package semantics.
     std::vector<RegistryLocation> locations;
+    // Independent content mirrors; declaration order is fallback preference.
+    // Empty is valid when this Registry serves metadata but no content mirrors.
+    std::vector<RegistryContentLocation> contentLocations;
   };
 
   enum class RegistryDirectoryErrorCode
@@ -34,7 +45,9 @@ namespace vix::cli::project::native
     duplicate_registry_id,
     no_registry_locations,
     invalid_location,
-    duplicate_location
+    duplicate_location,
+    invalid_content_location,
+    duplicate_content_location
   };
 
   struct RegistryDirectoryIssue

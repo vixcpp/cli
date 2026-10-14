@@ -86,16 +86,33 @@ namespace vix::cli::project::native
         return failure(acquisition_issue(PackageContentAcquisitionIssueCode::unknown_registry,
           required, "locked Registry ID has no routing definition"));
 
+      if (definition->contentLocations.empty())
+        return failure(acquisition_issue(PackageContentAcquisitionIssueCode::package_content_source_unavailable,
+          required, "registry has no package content locations configured"));
+
       const RegistryPackageContentRequest request{node.identity, node.version, required.id};
       std::vector<RegistryLocationAcquisitionDiagnostic> diagnostics;
       bool sawTransportFailure = false;
-      for (const auto &location : definition->locations)
+      for (const auto &location : definition->contentLocations)
       {
         const auto response = source.acquire(location, request);
-        if (response.status != PackageContentSourceStatus::available)
+        if (response.status == RegistryPackageContentSourceStatus::configuration_error ||
+            response.status == RegistryPackageContentSourceStatus::payload_too_large)
+        {
+          diagnostics.push_back({location.descriptor, response.status, response.diagnostic});
+          const auto code = response.status == RegistryPackageContentSourceStatus::configuration_error
+            ? PackageContentAcquisitionIssueCode::package_content_source_configuration_error
+            : PackageContentAcquisitionIssueCode::package_content_payload_too_large;
+          auto issue = acquisition_issue(code, required,
+            response.diagnostic.empty() ? "Registry content transport failed terminally" : response.diagnostic);
+          issue.registryLocations = std::move(diagnostics);
+          return failure(std::move(issue));
+        }
+        if (response.status != RegistryPackageContentSourceStatus::available)
         {
           sawTransportFailure = sawTransportFailure ||
-            response.status == PackageContentSourceStatus::transport_failure;
+            response.status == RegistryPackageContentSourceStatus::transport_failure ||
+            response.status == RegistryPackageContentSourceStatus::permission_denied;
           diagnostics.push_back({location.descriptor, response.status, response.diagnostic});
           continue;
         }

@@ -1,12 +1,16 @@
 #include <vix/cli/project/native/CanonicalHash.hpp>
 #include <vix/cli/project/native/FilesystemPackageContentStore.hpp>
 #include <vix/cli/project/native/PackageContentAcquisition.hpp>
+#include <vix/cli/project/native/RegistryContentLayout.hpp>
+#include <vix/cli/project/native/RegistryContentTransport.hpp>
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -20,6 +24,15 @@ namespace fs = std::filesystem;
 
 namespace
 {
+  static_assert(!std::is_same_v<RegistryLocation, RegistryContentLocation>);
+  static_assert(!std::is_convertible_v<RegistryLocation, RegistryContentLocation>);
+  static_assert(!std::is_convertible_v<RegistryContentLocation, RegistryLocation>);
+  static_assert(std::is_same_v<decltype(&RegistryPackageContentSource::acquire),
+    RegistryPackageContentSourceResult (RegistryPackageContentSource::*)(
+      const RegistryContentLocation &, const RegistryPackageContentRequest &)>);
+  static_assert(std::is_same_v<decltype(&registry_format1_content_object_path),
+    std::string (*)(const PackageContentId &)>);
+
   class TestRoot
   {
   public:
@@ -34,6 +47,66 @@ namespace
     [[nodiscard]] const fs::path &path() const noexcept { return path_; }
   private:
     fs::path path_;
+  };
+
+  std::string file_location(const fs::path &root)
+  {
+    const auto pathBytes = fs::absolute(root).lexically_normal().generic_u8string();
+    const std::string path{reinterpret_cast<const char *>(pathBytes.data()), pathBytes.size()};
+#ifdef _WIN32
+    return "file:///" + path;
+#else
+    return "file://" + path;
+#endif
+  }
+
+  fs::path mirror_object_path(const fs::path &root, const PackageContentId &id)
+  {
+    const auto relative = registry_format1_content_object_path(id);
+    return root / fs::path(relative);
+  }
+
+  void write_bytes(const fs::path &path, std::string_view bytes)
+  {
+    fs::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    assert(output);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    assert(output.good());
+  }
+
+  std::string read_bytes(const fs::path &path)
+  {
+    std::ifstream input(path, std::ios::binary);
+    assert(input);
+    return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+  }
+
+  class RecordingTransport final : public RegistryContentTransport
+  {
+  public:
+    explicit RecordingTransport(RegistryContentTransport &inner) : inner_(inner) {}
+    std::vector<std::string> calls;
+    RegistryContentTransportResult fetch(const RegistryContentLocation &location,
+      std::string_view path, std::uint64_t maximumBytes) override
+    {
+      calls.push_back(location.descriptor + "|" + std::string{path});
+      return inner_.fetch(location, path, maximumBytes);
+    }
+  private:
+    RegistryContentTransport &inner_;
+  };
+
+  class CountingTransport final : public RegistryContentTransport
+  {
+  public:
+    std::size_t calls{0};
+    RegistryContentTransportResult fetch(const RegistryContentLocation &,
+      std::string_view, std::uint64_t) override
+    {
+      ++calls;
+      return {RegistryContentTransportStatus::transport_failure, std::nullopt, "unexpected transport invocation"};
+    }
   };
 
   CanonicalPackageEntry file(std::string path, std::string_view bytes)
@@ -112,7 +185,7 @@ namespace
     std::vector<std::pair<std::string, RegistryPackageContentSourceResult>> responses;
     std::vector<std::string> *events{nullptr};
 
-    RegistryPackageContentSourceResult acquire(const RegistryLocation &location,
+    RegistryPackageContentSourceResult acquire(const RegistryContentLocation &location,
       const RegistryPackageContentRequest &request) override
     {
       calls.push_back(location.descriptor);
@@ -152,7 +225,7 @@ namespace
   };
 
   PackageContentAcquisitionResult acquire(const Lockfile &lock, const RegistryDirectory &directory,
-    FakeRegistrySource &registry, FakeGitSource &git, PackageContentStore &store)
+    RegistryPackageContentSource &registry, GitPackageContentSource &git, PackageContentStore &store)
   { return acquire_locked_package_content(lock, directory, registry, git, store); }
 
   void reuse_and_registry_acquisition_test()
@@ -163,7 +236,7 @@ namespace
     const auto lock = lock_from_nodes({registry_node("vix", "sqlite", *object.contentId)});
     const auto lockBefore = serialize_lockfile(lock);
     assert(lockBefore.valid());
-    const auto directory = registry_directory({{"vix", {{"mirror-A"}}}});
+    const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"mirror-A"}}}});
     InMemoryPackageContentStore store;
     CanonicalPackageContentVerifier verifier;
     const auto token = verifier.verify(std::make_shared<CanonicalPackageContentCandidate>(contentTree), *object.contentId);
@@ -176,7 +249,7 @@ namespace
     assert(registry.calls.empty() && git.requests.empty());
 
     InMemoryPackageContentStore empty;
-    registry.responses.push_back({"mirror-A", {PackageContentSourceStatus::available,
+    registry.responses.push_back({"mirror-A", {RegistryPackageContentSourceStatus::available,
       *object.canonicalBytes, {}}});
     const auto fetched = acquire(lock, directory, registry, git, empty);
     assert(fetched.valid() && fetched.entries.size() == 1);
@@ -221,10 +294,10 @@ namespace
     const auto lock = lock_from_nodes({registry_node("vix", "mismatch", *expected.contentId)});
     const auto before = serialize_lockfile(lock);
     assert(before.valid());
-    const auto directory = registry_directory({{"vix", {{"A"}, {"B"}}}});
+    const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}, {"B"}}}});
     FakeRegistrySource registry;
-    registry.responses.push_back({"A", {PackageContentSourceStatus::available, *wrong.canonicalBytes, {}}});
-    registry.responses.push_back({"B", {PackageContentSourceStatus::available, *expected.canonicalBytes, {}}});
+    registry.responses.push_back({"A", {RegistryPackageContentSourceStatus::available, *wrong.canonicalBytes, {}}});
+    registry.responses.push_back({"B", {RegistryPackageContentSourceStatus::available, *expected.canonicalBytes, {}}});
     FakeGitSource git;
     InMemoryPackageContentStore store;
     const auto result = acquire(lock, directory, registry, git, store);
@@ -276,22 +349,22 @@ namespace
     const auto lock = lock_from_nodes({registry_node("vix", "routing", *object.contentId)});
 
     {
-      const auto directory = registry_directory({{"vix", {{"A"}, {"B"}, {"C"}}}});
+      const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}, {"B"}, {"C"}}}});
       FakeRegistrySource registry;
-      registry.responses.push_back({"A", {PackageContentSourceStatus::unavailable, std::nullopt, "offline"}});
-      registry.responses.push_back({"B", {PackageContentSourceStatus::available, *object.canonicalBytes, {}}});
-      registry.responses.push_back({"C", {PackageContentSourceStatus::available, *object.canonicalBytes, {}}});
+      registry.responses.push_back({"A", {RegistryPackageContentSourceStatus::not_found, std::nullopt, "offline"}});
+      registry.responses.push_back({"B", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}});
+      registry.responses.push_back({"C", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}});
       FakeGitSource git;
       InMemoryPackageContentStore store;
       const auto result = acquire(lock, directory, registry, git, store);
       assert(result.valid() && registry.calls == std::vector<std::string>({"A", "B"}));
     }
     {
-      const auto directory = registry_directory({{"vix", {{"A"}, {"B"}}}});
+      const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}, {"B"}}}});
       FakeRegistrySource registry;
-      registry.responses.push_back({"A", {PackageContentSourceStatus::available,
+      registry.responses.push_back({"A", {RegistryPackageContentSourceStatus::available,
         std::string{"not canonical"}, {}}});
-      registry.responses.push_back({"B", {PackageContentSourceStatus::available, *object.canonicalBytes, {}}});
+      registry.responses.push_back({"B", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}});
       FakeGitSource git;
       InMemoryPackageContentStore store;
       const auto result = acquire(lock, directory, registry, git, store);
@@ -301,15 +374,88 @@ namespace
       assert(store.inspect(*object.contentId).value == PackageContentAvailability::missing);
     }
     {
-      const auto directory = registry_directory({{"vix", {{"A"}, {"B"}}}});
+      const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}, {"B"}}}});
       FakeRegistrySource registry;
-      registry.responses.push_back({"A", {PackageContentSourceStatus::available, *object.canonicalBytes, {}}});
-      registry.responses.push_back({"B", {PackageContentSourceStatus::available, *object.canonicalBytes, {}}});
+      registry.responses.push_back({"A", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}});
+      registry.responses.push_back({"B", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}});
       FakeGitSource git;
       InMemoryPackageContentStore store;
       const auto result = acquire(lock, directory, registry, git, store);
       assert(result.valid() && registry.calls == std::vector<std::string>{"A"});
     }
+  }
+
+  void registry_content_routing_separation_and_empty_test()
+  {
+    const auto contentTree = tree("content", "payload");
+    const auto object = encoded(contentTree);
+    assert(object.valid());
+    const auto lock = lock_from_nodes({registry_node("vix", "routing-separation", *object.contentId)});
+    const auto lockBefore = serialize_lockfile(lock);
+    assert(lockBefore.valid());
+
+    RegistryDefinition definition;
+    definition.id = "vix";
+    definition.locations = {{"metadata-A"}, {"metadata-B"}};
+    definition.contentLocations = {{"content-Z"}, {"content-A"}, {"content-M"}};
+    const auto directory = registry_directory({definition});
+    FakeRegistrySource registry;
+    registry.responses = {
+      {"content-Z", {RegistryPackageContentSourceStatus::not_found, std::nullopt, "not here"}},
+      {"content-A", {RegistryPackageContentSourceStatus::transport_failure, std::nullopt, "offline"}},
+      {"content-M", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}},
+      {"metadata-A", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}},
+      {"metadata-B", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}},
+    };
+    FakeGitSource git;
+    InMemoryPackageContentStore store;
+    const auto result = acquire(lock, directory, registry, git, store);
+    assert(result.valid());
+    assert((registry.calls == std::vector<std::string>{"content-Z", "content-A", "content-M"}));
+    assert(std::find(registry.calls.begin(), registry.calls.end(), "metadata-A") == registry.calls.end());
+    assert(std::find(registry.calls.begin(), registry.calls.end(), "metadata-B") == registry.calls.end());
+    assert(serialize_lockfile(lock).text == lockBefore.text);
+
+    RegistryDefinition metadataOnly;
+    metadataOnly.id = "vix";
+    metadataOnly.locations = {{"metadata-A"}, {"metadata-B"}};
+    const auto metadataOnlyDirectory = registry_directory({metadataOnly});
+    FakeRegistrySource unusedSource;
+    FakeGitSource unusedGit;
+    InMemoryPackageContentStore emptyStore;
+    const auto unavailable = acquire(lock, metadataOnlyDirectory, unusedSource, unusedGit, emptyStore);
+    assert(!unavailable.valid());
+    assert(unavailable.issues.front().code ==
+      PackageContentAcquisitionIssueCode::package_content_source_unavailable);
+    assert(unavailable.issues.front().message == "registry has no package content locations configured");
+    assert(unusedSource.calls.empty());
+    assert(emptyStore.inspect(*object.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(lock).text == lockBefore.text);
+  }
+
+  void registry_content_object_path_tests()
+  {
+    const auto zero = PackageContentId::parse("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+    const auto alpha = PackageContentId::parse("sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
+    assert(zero && alpha);
+    const std::string zeroPath = registry_format1_content_object_path(*zero);
+    const std::string alphaPath = registry_format1_content_object_path(*alpha);
+    assert(zeroPath == "objects/sha256/00/00000000000000000000000000000000000000000000000000000000000000");
+    assert(alphaPath == "objects/sha256/ab/cdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789");
+    assert(zeroPath.size() == 80 && alphaPath.size() == 80);
+
+    const RegistryPackageIdentity contextA{"vix", "publisher-a", "package-a"};
+    const RegistryPackageIdentity contextB{"other", "publisher-b", "package-b"};
+    const Version versionA{1, 0, 0, std::nullopt};
+    const Version versionB{99, 2, 3, std::nullopt};
+    const RegistryContentLocation locationA{"https://mirror-a.invalid"};
+    const RegistryContentLocation locationB{"file:///mirror-b"};
+    assert(contextA != contextB && versionA != versionB && locationA != locationB);
+    const RegistryPackageContentRequest requestA{contextA, versionA, *zero};
+    const RegistryPackageContentRequest requestB{contextB, versionB, *zero};
+    assert(registry_format1_content_object_path(requestA.expectedContent) ==
+      registry_format1_content_object_path(requestB.expectedContent));
+    assert(zeroPath != alphaPath);
   }
 
   void local_corruption_and_all_transport_failure_test()
@@ -318,7 +464,7 @@ namespace
     const auto object = encoded(contentTree);
     assert(object.valid());
     const auto lock = lock_from_nodes({registry_node("vix", "unavailable", *object.contentId)});
-    const auto directory = registry_directory({{"vix", {{"A"}, {"B"}}}});
+    const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}, {"B"}}}});
     FakeRegistrySource registry;
     FakeGitSource git;
     CorruptStore corrupt;
@@ -327,8 +473,8 @@ namespace
     assert(corruptResult.issues.front().code == PackageContentAcquisitionIssueCode::package_content_store_failure);
 
     InMemoryPackageContentStore empty;
-    registry.responses.push_back({"A", {PackageContentSourceStatus::unavailable, std::nullopt, "absent"}});
-    registry.responses.push_back({"B", {PackageContentSourceStatus::transport_failure, std::nullopt, "temporary"}});
+    registry.responses.push_back({"A", {RegistryPackageContentSourceStatus::not_found, std::nullopt, "absent"}});
+    registry.responses.push_back({"B", {RegistryPackageContentSourceStatus::transport_failure, std::nullopt, "temporary"}});
     const auto unavailable = acquire(lock, directory, registry, git, empty);
     assert(!unavailable.valid());
     assert(unavailable.issues.front().code == PackageContentAcquisitionIssueCode::package_content_transport_failure);
@@ -359,14 +505,14 @@ namespace
     const auto regC = registry_node("acme", "c", *objectC.contentId);
     auto lockA = lock_from_nodes({regA, gitB, regC});
     auto lockB = lock_from_nodes({regC, regA, gitB});
-    const auto dir = registry_directory({{"acme", {{"C"}}}, {"vix", {{"A"}}}});
+    const auto dir = registry_directory({{"acme", {{"metadata-C"}}, {{"C"}}}, {"vix", {{"metadata-A"}}, {{"A"}}}});
 
     const auto run = [&](const Lockfile &lock, std::vector<std::string> &events)
     {
       FakeRegistrySource registry;
       registry.events = &events;
-      registry.responses = {{"A", {PackageContentSourceStatus::available, *objectA.canonicalBytes, {}}},
-        {"C", {PackageContentSourceStatus::available, *objectC.canonicalBytes, {}}}};
+      registry.responses = {{"A", {RegistryPackageContentSourceStatus::available, *objectA.canonicalBytes, {}}},
+        {"C", {RegistryPackageContentSourceStatus::available, *objectC.canonicalBytes, {}}}};
       FakeGitSource git;
       git.events = &events;
       git.response = {PackageContentSourceStatus::available,
@@ -388,10 +534,10 @@ namespace
     auto sharedLock = lock_from_nodes({registry_node("vix", "first", *objectA.contentId),
       registry_node("acme", "second", *objectA.contentId)});
     FakeRegistrySource sharedRegistry;
-    sharedRegistry.responses = {{"A", {PackageContentSourceStatus::available, *objectA.canonicalBytes, {}}}};
+    sharedRegistry.responses = {{"A", {RegistryPackageContentSourceStatus::available, *objectA.canonicalBytes, {}}}};
     FakeGitSource sharedGit;
     InMemoryPackageContentStore sharedStore;
-    const auto sharedDir = registry_directory({{"vix", {{"A"}}}, {"acme", {{"A"}}}});
+    const auto sharedDir = registry_directory({{"vix", {{"metadata-vix"}}, {{"A"}}}, {"acme", {{"metadata-acme"}}, {{"A"}}}});
     const auto sharedResult = acquire(sharedLock, sharedDir, sharedRegistry, sharedGit, sharedStore);
     assert(sharedResult.valid() && sharedResult.entries.size() == 1);
     assert(sharedRegistry.calls.size() == 1 && sharedGit.requests.empty());
@@ -407,12 +553,12 @@ namespace
       { return std::visit([&](const auto &value) { return value.id == crossPlan.required.front().nodeIds.front(); }, node); });
     assert(selected != crossLock.nodes.end());
     FakeRegistrySource crossRegistry;
-    crossRegistry.responses = {{"A", {PackageContentSourceStatus::available, *objectA.canonicalBytes, {}}}};
+    crossRegistry.responses = {{"A", {RegistryPackageContentSourceStatus::available, *objectA.canonicalBytes, {}}}};
     FakeGitSource crossGit;
     crossGit.response = {PackageContentSourceStatus::available,
       std::make_shared<CanonicalPackageContentCandidate>(treeA), {}};
     InMemoryPackageContentStore crossStore;
-    const auto crossDir = registry_directory({{"vix", {{"A"}}}});
+    const auto crossDir = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}}}});
     const auto crossResult = acquire(crossLock, crossDir, crossRegistry, crossGit, crossStore);
     assert(crossResult.valid() && crossResult.entries.size() == 1);
     const bool selectedRegistry = std::holds_alternative<RegistryLockNode>(*selected);
@@ -420,7 +566,7 @@ namespace
     assert((crossGit.requests.size() == 1) == !selectedRegistry);
 
     FakeRegistrySource failedRegistry;
-    failedRegistry.responses = {{"A", {PackageContentSourceStatus::transport_failure, std::nullopt, "failed"}}};
+    failedRegistry.responses = {{"A", {RegistryPackageContentSourceStatus::transport_failure, std::nullopt, "failed"}}};
     FakeGitSource failedGit;
     failedGit.response = {PackageContentSourceStatus::transport_failure, nullptr, "failed"};
     InMemoryPackageContentStore failedStore;
@@ -437,12 +583,12 @@ namespace
     const auto object = encoded(contentTree);
     assert(object.valid());
     const auto lock = lock_from_nodes({registry_node("vix", "restart", *object.contentId)});
-    const auto directory = registry_directory({{"vix", {{"A"}}}});
+    const auto directory = registry_directory({{"vix", {{"metadata-A"}}, {{"A"}}}});
     TestRoot root;
     {
       FilesystemPackageContentStore first{root.path()};
       FakeRegistrySource registry;
-      registry.responses = {{"A", {PackageContentSourceStatus::available, *object.canonicalBytes, {}}}};
+      registry.responses = {{"A", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}}};
       FakeGitSource git;
       const auto result = acquire(lock, directory, registry, git, first);
       assert(result.valid() && result.entries.front().state == PackageContentAcquisitionState::acquired);
@@ -460,6 +606,239 @@ namespace
     static_assert(std::is_same_v<decltype(GitPackageContentSourceResult::candidate),
       std::shared_ptr<const CanonicalPackageContentCandidate>>);
   }
+
+  void file_transport_contract_tests()
+  {
+    FileRegistryContentTransport fileTransport;
+    const auto id = PackageContentId::parse(
+      "sha256:0000000000000000000000000000000000000000000000000000000000000000");
+    assert(id);
+    TestRoot root;
+    const std::string binaryBytes{"\0\xff\n\r", 4};
+    write_bytes(mirror_object_path(root.path(), *id), binaryBytes);
+    const RegistryContentLocation location{file_location(root.path())};
+    const auto hit = fileTransport.fetch(location, registry_format1_content_object_path(*id), 32);
+    assert(hit.status == RegistryContentTransportStatus::available);
+    assert(hit.bytes && *hit.bytes == binaryBytes);
+
+    const auto missing = fileTransport.fetch({file_location(root.path() / "absent")},
+      registry_format1_content_object_path(*id), 32);
+    assert(missing.status == RegistryContentTransportStatus::not_found);
+
+    for (const auto &descriptor : {std::string{}, std::string{"file:relative"},
+        std::string{"file://relative/path"}, std::string{"file://host/path"},
+        std::string{"file:/tmp/malformed"}, std::string{"https://example.invalid/mirror"}})
+    {
+      const auto rejected = fileTransport.fetch({descriptor}, registry_format1_content_object_path(*id), 32);
+      assert(rejected.status == RegistryContentTransportStatus::configuration_error);
+    }
+
+    const auto oversized = fileTransport.fetch(location, registry_format1_content_object_path(*id), 3);
+    assert(oversized.status == RegistryContentTransportStatus::payload_too_large);
+
+    const auto directoryObject = mirror_object_path(root.path(), *PackageContentId::parse(
+      "sha256:1111111111111111111111111111111111111111111111111111111111111111"));
+    fs::create_directories(directoryObject);
+    const auto directoryResult = fileTransport.fetch(location,
+      "objects/sha256/11/11111111111111111111111111111111111111111111111111111111111111", 32);
+    assert(directoryResult.status == RegistryContentTransportStatus::configuration_error);
+
+#ifndef _WIN32
+    const auto external = root.path() / "external";
+    write_bytes(external, "must not be followed");
+    const auto finalLinkId = PackageContentId::parse(
+      "sha256:2222222222222222222222222222222222222222222222222222222222222222");
+    assert(finalLinkId);
+    fs::create_directories(mirror_object_path(root.path(), *finalLinkId).parent_path());
+    fs::create_symlink(external, mirror_object_path(root.path(), *finalLinkId));
+    const auto finalLink = fileTransport.fetch(location,
+      registry_format1_content_object_path(*finalLinkId), 128);
+    assert(finalLink.status == RegistryContentTransportStatus::configuration_error);
+    assert(!finalLink.bytes);
+
+    TestRoot intermediateRoot;
+    fs::create_directories(intermediateRoot.path() / "elsewhere" / "sha256" / "33");
+    fs::create_symlink(intermediateRoot.path() / "elsewhere",
+      intermediateRoot.path() / "objects");
+    const auto intermediate = fileTransport.fetch({file_location(intermediateRoot.path())},
+      "objects/sha256/33/33333333333333333333333333333333333333333333333333333333333333", 128);
+    assert(intermediate.status == RegistryContentTransportStatus::configuration_error);
+#endif
+  }
+
+  void file_transport_acquisition_and_fallback_tests()
+  {
+    CanonicalPackageTree packageTree;
+    auto manifest = file("vix.package.toml", "name = 'demo'\n");
+    auto binary = file("binary.dat", std::string_view{"\0\xff\n", 3});
+    auto crlf = file("line.txt", "a\r\n");
+    auto script = file("script.sh", "echo hi\n");
+    script.executable = true;
+    CanonicalPackageEntry link;
+    link.path = "link.hpp";
+    link.kind = CanonicalPackageEntryKind::symlink;
+    link.target = "vix.package.toml";
+    packageTree.entries = {manifest, binary, crlf, script, link};
+    const auto canonical = encoded(packageTree);
+    assert(canonical.valid());
+
+    TestRoot mirrorA;
+    TestRoot mirrorB;
+    write_bytes(mirror_object_path(mirrorB.path(), *canonical.contentId), *canonical.canonicalBytes);
+    const auto mirrorAUri = file_location(mirrorA.path());
+    const auto mirrorBUri = file_location(mirrorB.path());
+    const auto lock = lock_from_nodes({registry_node("vix", "file-mirror", *canonical.contentId)});
+    const auto lockBefore = serialize_lockfile(lock);
+    assert(lockBefore.valid());
+    const auto directory = registry_directory({RegistryDefinition{
+      "vix", {{"metadata-only"}}, {{mirrorAUri}, {mirrorBUri}}}});
+
+    FileRegistryContentTransport concreteTransport;
+    RecordingTransport recording{concreteTransport};
+    TransportRegistryPackageContentSource source{recording};
+    FakeGitSource git;
+    TestRoot storeRoot;
+    {
+      FilesystemPackageContentStore store{storeRoot.path()};
+      const auto result = acquire(lock, directory, source, git, store);
+      assert(result.valid() && result.entries.size() == 1);
+      assert(result.entries.front().state == PackageContentAcquisitionState::acquired);
+      assert(recording.calls.size() == 2);
+      assert(recording.calls[0] == mirrorAUri + "|" + registry_format1_content_object_path(*canonical.contentId));
+      assert(recording.calls[1] == mirrorBUri + "|" + registry_format1_content_object_path(*canonical.contentId));
+      assert(store.inspect(*canonical.contentId).value == PackageContentAvailability::available);
+      const auto digest = canonical.contentId->digest().substr(7);
+      const auto stored = storeRoot.path() / "objects" / "sha256" / digest.substr(0, 2) / digest.substr(2);
+      assert(read_bytes(stored) == *canonical.canonicalBytes);
+      assert(serialize_lockfile(lock).text == lockBefore.text);
+    }
+
+    FilesystemPackageContentStore reopened{storeRoot.path()};
+    CountingTransport mustNotRun;
+    TransportRegistryPackageContentSource reusedSource{mustNotRun};
+    const auto reused = acquire(lock, directory, reusedSource, git, reopened);
+    assert(reused.valid() && reused.entries.front().state == PackageContentAcquisitionState::reused);
+    assert(mustNotRun.calls == 0);
+
+    // The same digest addresses identical bytes independently of mirror root.
+    TestRoot mirrorC;
+    write_bytes(mirror_object_path(mirrorC.path(), *canonical.contentId), *canonical.canonicalBytes);
+    assert(mirror_object_path(mirrorB.path(), *canonical.contentId).lexically_relative(mirrorB.path()) ==
+      mirror_object_path(mirrorC.path(), *canonical.contentId).lexically_relative(mirrorC.path()));
+    TestRoot otherStoreRoot;
+    FilesystemPackageContentStore otherMirrorStore{otherStoreRoot.path()};
+    const auto otherMirrorDirectory = registry_directory({RegistryDefinition{
+      "vix", {{"metadata-only"}}, {{file_location(mirrorC.path())}}}});
+    RecordingTransport otherMirrorRecording{concreteTransport};
+    TransportRegistryPackageContentSource otherMirrorSource{otherMirrorRecording};
+    const auto otherMirrorResult = acquire(lock, otherMirrorDirectory, otherMirrorSource, git, otherMirrorStore);
+    assert(otherMirrorResult.valid() && otherMirrorResult.entries.front().content == *canonical.contentId);
+    assert(otherMirrorStore.inspect(*canonical.contentId).value == PackageContentAvailability::available);
+    const auto digest = canonical.contentId->digest().substr(7);
+    const auto otherStored = otherStoreRoot.path() / "objects" / "sha256" / digest.substr(0, 2) / digest.substr(2);
+    assert(read_bytes(otherStored) == *canonical.canonicalBytes);
+
+    // A missing first mirror falls through in declaration order to the exact object.
+    TestRoot fallbackA;
+    const auto fallbackDirectory = registry_directory({RegistryDefinition{
+      "vix", {{"metadata"}}, {{file_location(fallbackA.path())}, {mirrorBUri}}}});
+    TestRoot fallbackStoreRoot;
+    FilesystemPackageContentStore fallbackStore{fallbackStoreRoot.path()};
+    RecordingTransport fallbackRecording{concreteTransport};
+    TransportRegistryPackageContentSource fallbackSource{fallbackRecording};
+    const auto fallbackResult = acquire(lock, fallbackDirectory, fallbackSource, git, fallbackStore);
+    assert(fallbackResult.valid());
+    assert(fallbackRecording.calls.size() == 2);
+    assert(fallbackRecording.calls[0].starts_with(file_location(fallbackA.path())));
+    assert(fallbackRecording.calls[1].starts_with(mirrorBUri));
+    assert(serialize_lockfile(lock).text == lockBefore.text);
+  }
+
+  void file_transport_terminal_failure_tests()
+  {
+    const auto expectedTree = tree("expected", "locked");
+    const auto wrongTree = tree("wrong", "content");
+    const auto expected = encoded(expectedTree);
+    const auto wrong = encoded(wrongTree);
+    assert(expected.valid() && wrong.valid() && expected.contentId != wrong.contentId);
+    const auto lock = lock_from_nodes({registry_node("vix", "file-failure", *expected.contentId)});
+    const auto before = serialize_lockfile(lock);
+    assert(before.valid());
+    TestRoot first;
+    TestRoot second;
+    write_bytes(mirror_object_path(first.path(), *expected.contentId), "malformed canonical object");
+    write_bytes(mirror_object_path(second.path(), *expected.contentId), *expected.canonicalBytes);
+    const auto directory = registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{file_location(first.path())}, {file_location(second.path())}}}});
+    FileRegistryContentTransport concrete;
+    RecordingTransport recording{concrete};
+    TransportRegistryPackageContentSource source{recording};
+    FakeGitSource git;
+    TestRoot storeRoot;
+    FilesystemPackageContentStore store{storeRoot.path()};
+    const auto malformed = acquire(lock, directory, source, git, store);
+    assert(!malformed.valid());
+    assert(malformed.issues.front().code == PackageContentAcquisitionIssueCode::package_content_integrity_failure);
+    assert(recording.calls.size() == 1);
+    assert(store.inspect(*expected.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(lock).text == before.text);
+
+    write_bytes(mirror_object_path(first.path(), *expected.contentId), *wrong.canonicalBytes);
+    recording.calls.clear();
+    const auto mismatch = acquire(lock, directory, source, git, store);
+    assert(!mismatch.valid());
+    assert(mismatch.issues.front().code == PackageContentAcquisitionIssueCode::package_content_digest_mismatch);
+    assert(recording.calls.size() == 1);
+    assert(store.inspect(*expected.contentId).value == PackageContentAvailability::missing);
+    assert(store.inspect(*wrong.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(lock).text == before.text);
+
+    // Oversize is a terminal transport result, even if the next mirror has the object.
+    write_bytes(mirror_object_path(first.path(), *expected.contentId), *expected.canonicalBytes);
+    RecordingTransport oversizedRecording{concrete};
+    TransportRegistryPackageContentSource oversizedSource{oversizedRecording, 1};
+    const auto oversized = acquire(lock, directory, oversizedSource, git, store);
+    assert(!oversized.valid());
+    assert(oversized.issues.front().code == PackageContentAcquisitionIssueCode::package_content_payload_too_large);
+    assert(oversizedRecording.calls.size() == 1);
+    assert(store.inspect(*expected.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(lock).text == before.text);
+  }
+
+  void registry_transport_failure_classification_test()
+  {
+    const auto object = encoded(tree("classification", "payload"));
+    assert(object.valid());
+    const auto lock = lock_from_nodes({registry_node("vix", "classification", *object.contentId)});
+    const auto before = serialize_lockfile(lock);
+    assert(before.valid());
+    const auto directory = registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"permission-A"}, {"available-B"}}}});
+    FakeRegistrySource source;
+    source.responses = {
+      {"permission-A", {RegistryPackageContentSourceStatus::permission_denied, std::nullopt, "denied"}},
+      {"available-B", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}},
+    };
+    FakeGitSource git;
+    InMemoryPackageContentStore store;
+    const auto acquired = acquire(lock, directory, source, git, store);
+    assert(acquired.valid() && source.calls == std::vector<std::string>({"permission-A", "available-B"}));
+    assert(serialize_lockfile(lock).text == before.text);
+
+    FakeRegistrySource malformedLocation;
+    malformedLocation.responses = {
+      {"permission-A", {RegistryPackageContentSourceStatus::configuration_error, std::nullopt, "bad descriptor"}},
+      {"available-B", {RegistryPackageContentSourceStatus::available, *object.canonicalBytes, {}}},
+    };
+    InMemoryPackageContentStore empty;
+    const auto rejected = acquire(lock, directory, malformedLocation, git, empty);
+    assert(!rejected.valid());
+    assert(rejected.issues.front().code ==
+      PackageContentAcquisitionIssueCode::package_content_source_configuration_error);
+    assert(malformedLocation.calls == std::vector<std::string>{"permission-A"});
+    assert(empty.inspect(*object.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(lock).text == before.text);
+  }
 }
 
 int main()
@@ -469,8 +848,14 @@ int main()
   digest_mismatch_and_lock_immutability_test();
   unsafe_git_symlink_rejected_by_p10o_test();
   registry_integrity_and_mirror_routing_test();
+  registry_content_routing_separation_and_empty_test();
+  registry_content_object_path_tests();
   local_corruption_and_all_transport_failure_test();
   mixed_sources_dedup_and_order_test();
   restart_reuse_and_provider_boundary_test();
+  file_transport_contract_tests();
+  file_transport_acquisition_and_fallback_tests();
+  file_transport_terminal_failure_tests();
+  registry_transport_failure_classification_test();
   return 0;
 }

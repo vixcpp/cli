@@ -23,11 +23,21 @@ namespace vix::cli::project::native
 
   enum class PackageContentSourceStatus { available, unavailable, transport_failure };
 
+  enum class RegistryPackageContentSourceStatus
+  {
+    available,
+    not_found,
+    transport_failure,
+    permission_denied,
+    configuration_error,
+    payload_too_large
+  };
+
   // `available` carries untrusted exact P10O canonical bytes. The provider
   // cannot mint a VerifiedPackageContent token.
   struct RegistryPackageContentSourceResult
   {
-    PackageContentSourceStatus status{PackageContentSourceStatus::unavailable};
+    RegistryPackageContentSourceStatus status{RegistryPackageContentSourceStatus::not_found};
     std::optional<std::string> canonicalBytes;
     std::string diagnostic;
   };
@@ -37,7 +47,7 @@ namespace vix::cli::project::native
   public:
     virtual ~RegistryPackageContentSource() = default;
     [[nodiscard]] virtual RegistryPackageContentSourceResult acquire(
-      const RegistryLocation &location,
+      const RegistryContentLocation &location,
       const RegistryPackageContentRequest &request) = 0;
   };
 
@@ -83,6 +93,8 @@ namespace vix::cli::project::native
     package_content_transport_failure,
     package_content_integrity_failure,
     package_content_digest_mismatch,
+    package_content_source_configuration_error,
+    package_content_payload_too_large,
     package_content_git_source_failure,
     package_content_store_failure,
   };
@@ -90,7 +102,7 @@ namespace vix::cli::project::native
   struct RegistryLocationAcquisitionDiagnostic
   {
     std::string locationDescriptor;
-    PackageContentSourceStatus status{PackageContentSourceStatus::unavailable};
+    RegistryPackageContentSourceStatus status{RegistryPackageContentSourceStatus::not_found};
     std::string message;
   };
 

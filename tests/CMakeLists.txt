@@ -390,6 +390,26 @@ target_include_directories(vix_cli_native_filesystem_metadata_storage_tests SYST
 add_test(NAME vix_cli_native_filesystem_metadata_storage_tests
   COMMAND vix_cli_native_filesystem_metadata_storage_tests)
 
+add_executable(vix_cli_native_package_content_store_tests
+  NativePackageContentStoreTests.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_package_content_store_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_package_content_store_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_package_content_store_tests
+  COMMAND vix_cli_native_package_content_store_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

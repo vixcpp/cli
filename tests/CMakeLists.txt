@@ -466,6 +466,9 @@ target_include_directories(vix_cli_native_package_content_acquisition_tests PRIV
 target_include_directories(vix_cli_native_package_content_acquisition_tests SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
 )
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_native_package_content_acquisition_tests PRIVATE vix::requests)
+endif()
 add_test(NAME vix_cli_native_package_content_acquisition_tests
   COMMAND vix_cli_native_package_content_acquisition_tests)
 

@@ -3,6 +3,7 @@
 #include <vix/cli/project/native/PackageContentAcquisition.hpp>
 #include <vix/cli/project/native/RegistryContentLayout.hpp>
 #include <vix/cli/project/native/RegistryContentTransport.hpp>
+#include <vix/requests/Url.hpp>
 
 #include <algorithm>
 #include <cassert>
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -108,6 +110,88 @@ namespace
       return {RegistryContentTransportStatus::transport_failure, std::nullopt, "unexpected transport invocation"};
     }
   };
+
+  class ScriptedHttpsExecutor final : public RegistryHttpsRequestExecutor
+  {
+  public:
+    struct Reply
+    {
+      bool completed{true};
+      RegistryHttpsResponseHead head;
+      std::string bytes;
+      std::string diagnostic;
+      std::size_t chunkSize{3};
+    };
+    std::vector<std::string> urls;
+    std::vector<Reply> replies;
+    std::size_t next{0};
+    std::size_t bodyChunksDelivered{0};
+
+    RegistryHttpsExecutionResult get(std::string_view url, const HeadSink &headSink,
+      const BodySink &bodySink) override
+    {
+      urls.emplace_back(url);
+      if (next >= replies.size())
+        return {false, "unexpected HTTPS request"};
+      const auto reply = replies[next++];
+      if (reply.completed)
+      {
+        headSink(reply.head);
+        for (std::size_t offset = 0; offset < reply.bytes.size(); offset += reply.chunkSize)
+        {
+          const auto count = std::min(reply.chunkSize, reply.bytes.size() - offset);
+          ++bodyChunksDelivered;
+          bodySink(std::span<const std::byte>{
+            reinterpret_cast<const std::byte *>(reply.bytes.data() + offset), count});
+        }
+      }
+      return {reply.completed, reply.diagnostic};
+    }
+  };
+
+  ScriptedHttpsExecutor::Reply https_reply(int status, std::string bytes = {},
+    std::optional<std::string> location = std::nullopt,
+    std::optional<std::uint64_t> contentLength = std::nullopt)
+  {
+    ScriptedHttpsExecutor::Reply reply;
+    reply.head = {status, contentLength, std::move(location), std::nullopt};
+    reply.bytes = std::move(bytes);
+    return reply;
+  }
+
+  void diagnose_content_length_accounting(const ScriptedHttpsExecutor &executor,
+    std::size_t beforeUrls, std::size_t beforeScript, std::size_t beforeChunks,
+    RegistryContentTransportStatus status)
+  {
+    const auto afterUrls = executor.urls.size();
+    const auto afterScript = executor.next;
+    const auto afterChunks = executor.bodyChunksDelivered;
+    const char *statusName = "other";
+    if (status == RegistryContentTransportStatus::available) statusName = "available";
+    else if (status == RegistryContentTransportStatus::not_found) statusName = "not_found";
+    else if (status == RegistryContentTransportStatus::transport_failure) statusName = "transport_failure";
+    else if (status == RegistryContentTransportStatus::permission_denied) statusName = "permission_denied";
+    else if (status == RegistryContentTransportStatus::configuration_error) statusName = "configuration_error";
+    else if (status == RegistryContentTransportStatus::payload_too_large) statusName = "payload_too_large";
+    if (status == RegistryContentTransportStatus::payload_too_large &&
+        afterUrls == beforeUrls + 1 && afterScript == beforeScript + 1 &&
+        afterChunks == beforeChunks)
+      return;
+
+    std::cerr << "Content-Length limit request accounting: before=" << beforeUrls
+      << " after=" << afterUrls << " delta=" << (afterUrls - beforeUrls)
+      << " status=" << statusName
+      << " script-before=" << beforeScript << " script-after=" << afterScript
+      << " body-chunks-before=" << beforeChunks << " body-chunks-after=" << afterChunks
+      << " urls=[";
+    for (std::size_t index = 0; index < executor.urls.size(); ++index)
+    {
+      if (index != 0)
+        std::cerr << ", ";
+      std::cerr << executor.urls[index];
+    }
+    std::cerr << "]\n";
+  }
 
   CanonicalPackageEntry file(std::string path, std::string_view bytes)
   {
@@ -839,6 +923,279 @@ namespace
     assert(empty.inspect(*object.contentId).value == PackageContentAvailability::missing);
     assert(serialize_lockfile(lock).text == before.text);
   }
+
+  void https_transport_url_status_redirect_and_limit_tests()
+  {
+    const std::string digest = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const auto parsedId = PackageContentId::parse(digest);
+    assert(parsedId);
+    const auto objectPath = registry_format1_content_object_path(*parsedId);
+    const std::string expectedSuffix = "/base/" + objectPath;
+
+    ScriptedHttpsExecutor executor;
+    HttpsRegistryContentTransport https{executor};
+    const std::string binary{"\0\xff\n\r", 4};
+    executor.replies.push_back(https_reply(200, binary, std::nullopt, binary.size()));
+    auto result = https.fetch({"https://registry.example.org/base"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::available && result.bytes == binary);
+    assert(executor.urls.back() == "https://registry.example.org" + expectedSuffix);
+
+    executor.replies.push_back(https_reply(200, binary));
+    result = https.fetch({"https://registry.example.org/base/"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::available);
+    assert(executor.urls.back() == executor.urls[0]);
+
+    for (const auto &bad : {"http://registry.example.org", "ftp://registry.example.org",
+         "https://user:secret@example.org", "https://example.org/base?x=1",
+         "https://example.org/base#fragment", "https://example.org/base?",
+         "https://example.org/base#"})
+    {
+      const auto callsBefore = executor.urls.size();
+      result = https.fetch({bad}, objectPath, 16);
+      assert(result.status == RegistryContentTransportStatus::configuration_error);
+      assert(result.diagnostic.find("secret") == std::string::npos);
+      assert(executor.urls.size() == callsBefore);
+    }
+
+    executor.replies.push_back(https_reply(404));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::not_found);
+    executor.replies.push_back(https_reply(410));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::not_found);
+    executor.replies.push_back(https_reply(403));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::permission_denied);
+    executor.replies.push_back(https_reply(503));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+    executor.replies.push_back(https_reply(206, binary));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+
+    executor.replies.push_back(https_reply(302, "ignored", "https://cdn.example.org/object"));
+    executor.replies.push_back(https_reply(200, binary));
+    const auto beforeRedirect = executor.urls.size();
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::available && result.bytes == binary);
+    assert(executor.urls.size() == beforeRedirect + 2);
+    assert(executor.urls.back() == "https://cdn.example.org/object");
+
+    executor.replies.push_back(https_reply(301, {}, "/relative/object"));
+    executor.replies.push_back(https_reply(200, binary));
+    result = https.fetch({"https://registry.example.org/base/"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::available);
+    assert(executor.urls.back() == "https://registry.example.org/relative/object");
+
+    executor.replies.push_back(https_reply(302, {}, "next"));
+    executor.replies.push_back(https_reply(200, binary));
+    result = https.fetch({"https://registry.example.org/base/"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::available);
+    assert(executor.urls.back() == "https://registry.example.org/base/objects/sha256/ab/next");
+
+    executor.replies.push_back(https_reply(302, {}, "http://downgrade.example.org/object"));
+    const auto beforeDowngrade = executor.urls.size();
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+    assert(executor.urls.size() == beforeDowngrade + 1);
+
+    executor.replies.push_back(https_reply(302));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+
+    executor.replies.push_back(https_reply(200, binary));
+    executor.replies.back().head.contentEncoding = "gzip";
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+
+    for (int redirect = 0; redirect < 6; ++redirect)
+      executor.replies.push_back(https_reply(302, {}, "https://redirect.example.org/" + std::to_string(redirect)));
+    const auto beforeCap = executor.urls.size();
+    result = https.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+    assert(executor.urls.size() == beforeCap + 6); // initial plus five followed redirects
+
+    executor.replies.push_back(https_reply(200, std::string(33, 'x'), std::nullopt, 33));
+    const auto beforeLengthLimit = executor.urls.size();
+    const auto scriptBeforeLengthLimit = executor.next;
+    const auto chunksBeforeLengthLimit = executor.bodyChunksDelivered;
+    result = https.fetch({"https://registry.example.org"}, objectPath, 32);
+    assert(result.status == RegistryContentTransportStatus::payload_too_large);
+    diagnose_content_length_accounting(executor, beforeLengthLimit,
+      scriptBeforeLengthLimit, chunksBeforeLengthLimit, result.status);
+    assert(executor.urls.size() == beforeLengthLimit + 1);
+    assert(executor.next == scriptBeforeLengthLimit + 1);
+    assert(executor.bodyChunksDelivered == chunksBeforeLengthLimit);
+
+    auto deceptiveLength = https_reply(200, std::string(40, 'x'), std::nullopt, 1);
+    deceptiveLength.chunkSize = 10;
+    executor.replies.push_back(std::move(deceptiveLength));
+    const auto beforeDeceptiveLength = executor.urls.size();
+    const auto scriptBeforeDeceptiveLength = executor.next;
+    const auto chunksBeforeDeceptiveLength = executor.bodyChunksDelivered;
+    result = https.fetch({"https://registry.example.org"}, objectPath, 32);
+    assert(result.status == RegistryContentTransportStatus::payload_too_large);
+    diagnose_content_length_accounting(executor, beforeDeceptiveLength,
+      scriptBeforeDeceptiveLength, chunksBeforeDeceptiveLength, result.status);
+    assert(executor.urls.size() == beforeDeceptiveLength + 1);
+    assert(executor.next == scriptBeforeDeceptiveLength + 1);
+
+    auto streamed = https_reply(200, std::string(40, 'x'));
+    streamed.chunkSize = 10;
+    executor.replies.push_back(std::move(streamed));
+    result = https.fetch({"https://registry.example.org"}, objectPath, 32);
+    assert(result.status == RegistryContentTransportStatus::payload_too_large);
+
+    ScriptedHttpsExecutor unavailable;
+    unavailable.replies.push_back({false, {}, {}, "TLS/connection failure"});
+    HttpsRegistryContentTransport failingHttps{unavailable};
+    result = failingHttps.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+
+    ScriptedHttpsExecutor unsupportedRedirect;
+    unsupportedRedirect.replies.push_back(https_reply(302, {}, "file:///tmp/object"));
+    HttpsRegistryContentTransport noOtherScheme{unsupportedRedirect};
+    result = noOtherScheme.fetch({"https://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::transport_failure);
+    assert(unsupportedRedirect.urls.size() == 1);
+
+    ScriptedHttpsExecutor unknownScheme;
+    SchemeRegistryContentTransport dispatcher{unknownScheme};
+    result = dispatcher.fetch({"http://registry.example.org"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::configuration_error);
+    result = dispatcher.fetch({"custom:descriptor"}, objectPath, 16);
+    assert(result.status == RegistryContentTransportStatus::configuration_error);
+    assert(unknownScheme.urls.empty());
+  }
+
+  void https_acquisition_end_to_end_tests()
+  {
+    const auto packageTree = tree("vix.package.toml", "name = \"demo\"\n");
+    const auto object = encoded(packageTree);
+    assert(object.valid());
+    const auto lock = lock_from_nodes({registry_node("vix", "https-demo", *object.contentId)});
+    const auto lockBefore = serialize_lockfile(lock);
+    assert(lockBefore.valid());
+    const auto directory = registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"https://mirror-a.example/base"}}}});
+    ScriptedHttpsExecutor executor;
+    executor.replies.push_back(https_reply(200, *object.canonicalBytes, std::nullopt,
+      object.canonicalBytes->size()));
+    SchemeRegistryContentTransport transport{executor};
+    TransportRegistryPackageContentSource source{transport};
+    FakeGitSource git;
+    TestRoot storeRoot;
+    {
+      FilesystemPackageContentStore store{storeRoot.path()};
+      const auto acquired = acquire(lock, directory, source, git, store);
+      assert(acquired.valid() && acquired.entries.front().state == PackageContentAcquisitionState::acquired);
+      assert(store.inspect(*object.contentId).value == PackageContentAvailability::available);
+      const auto digest = object.contentId->digest().substr(7);
+      const auto stored = storeRoot.path() / "objects" / "sha256" / digest.substr(0, 2) / digest.substr(2);
+      assert(read_bytes(stored) == *object.canonicalBytes);
+      assert(serialize_lockfile(lock).text == lockBefore.text);
+    }
+    const auto requestCount = executor.urls.size();
+    FilesystemPackageContentStore reopened{storeRoot.path()};
+    const auto reused = acquire(lock, directory, source, git, reopened);
+    assert(reused.valid() && reused.entries.front().state == PackageContentAcquisitionState::reused);
+    assert(executor.urls.size() == requestCount);
+
+    const auto wrongTree = tree("vix.package.toml", "name = \"other\"\n");
+    const auto wrong = encoded(wrongTree);
+    assert(wrong.valid() && wrong.contentId != object.contentId);
+    const auto expectedWrongLock = lock_from_nodes({registry_node("vix", "https-mismatch", *wrong.contentId)});
+    const auto wrongBefore = serialize_lockfile(expectedWrongLock);
+    assert(wrongBefore.valid());
+    // Return the canonical object whose ID differs from the locked ID; P10O must stop admission.
+    ScriptedHttpsExecutor mismatchExecutor;
+    mismatchExecutor.replies.push_back(https_reply(200, *object.canonicalBytes));
+    SchemeRegistryContentTransport mismatchTransport{mismatchExecutor};
+    TransportRegistryPackageContentSource mismatchSource{mismatchTransport};
+    TestRoot mismatchRoot;
+    FilesystemPackageContentStore mismatchStore{mismatchRoot.path()};
+    const auto mismatchDirectory = registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"https://mirror-a.example"}, {"https://mirror-b.example"}}}});
+    const auto mismatch = acquire(expectedWrongLock, mismatchDirectory, mismatchSource, git, mismatchStore);
+    assert(!mismatch.valid());
+    assert(mismatch.issues.front().code == PackageContentAcquisitionIssueCode::package_content_digest_mismatch);
+    assert(mismatchExecutor.urls.size() == 1);
+    assert(mismatchStore.inspect(*wrong.contentId).value == PackageContentAvailability::missing);
+    assert(mismatchStore.inspect(*object.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(expectedWrongLock).text == wrongBefore.text);
+
+    // Availability fallback across HTTPS mirrors remains owned by P10Q-A.
+    ScriptedHttpsExecutor fallbackExecutor;
+    fallbackExecutor.replies.push_back(https_reply(404));
+    fallbackExecutor.replies.push_back(https_reply(200, *object.canonicalBytes));
+    SchemeRegistryContentTransport fallbackTransport{fallbackExecutor};
+    TransportRegistryPackageContentSource fallbackSource{fallbackTransport};
+    TestRoot fallbackRoot;
+    FilesystemPackageContentStore fallbackStore{fallbackRoot.path()};
+    const auto fallback = acquire(lock, registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"https://mirror-a.example"}, {"https://mirror-b.example"}}}}), fallbackSource, git, fallbackStore);
+    assert(fallback.valid() && fallback.entries.front().state == PackageContentAcquisitionState::acquired);
+    assert(fallbackExecutor.urls.size() == 2);
+    assert(serialize_lockfile(lock).text == lockBefore.text);
+
+    for (const int firstStatus : {404, 410, 401, 403, 408, 425, 429, 503, 0})
+    {
+      ScriptedHttpsExecutor statusFallback;
+      if (firstStatus == 0)
+        statusFallback.replies.push_back({false, {}, {}, "TLS/connection failure"});
+      else
+        statusFallback.replies.push_back(https_reply(firstStatus));
+      statusFallback.replies.push_back(https_reply(200, *object.canonicalBytes));
+      SchemeRegistryContentTransport statusTransport{statusFallback};
+      TransportRegistryPackageContentSource statusSource{statusTransport};
+      TestRoot statusRoot;
+      FilesystemPackageContentStore statusStore{statusRoot.path()};
+      const auto statusResult = acquire(lock, registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+        {{"https://mirror-a.example"}, {"https://mirror-b.example"}}}}), statusSource, git, statusStore);
+      assert(statusResult.valid() && statusFallback.urls.size() == 2);
+      assert(serialize_lockfile(lock).text == lockBefore.text);
+    }
+
+    TestRoot mixedFileRoot;
+    write_bytes(mirror_object_path(mixedFileRoot.path(), *object.contentId), *object.canonicalBytes);
+    ScriptedHttpsExecutor mixedExecutor;
+    mixedExecutor.replies.push_back(https_reply(503));
+    SchemeRegistryContentTransport mixedTransport{mixedExecutor};
+    TransportRegistryPackageContentSource mixedSource{mixedTransport};
+    TestRoot mixedStoreRoot;
+    FilesystemPackageContentStore mixedStore{mixedStoreRoot.path()};
+    const auto mixedDirectory = registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"https://mirror-a.example"}, {file_location(mixedFileRoot.path())}}}});
+    const auto mixedResult = acquire(lock, mixedDirectory, mixedSource, git, mixedStore);
+    assert(mixedResult.valid() && mixedResult.entries.front().state == PackageContentAcquisitionState::acquired);
+    assert(mixedExecutor.urls.size() == 1);
+    assert(mixedStore.inspect(*object.contentId).value == PackageContentAvailability::available);
+
+    // A malformed object from mirror A is an integrity failure, not a fallback condition.
+    ScriptedHttpsExecutor malformedExecutor;
+    malformedExecutor.replies.push_back(https_reply(200, "not a canonical P10O object"));
+    SchemeRegistryContentTransport malformedTransport{malformedExecutor};
+    TransportRegistryPackageContentSource malformedSource{malformedTransport};
+    TestRoot malformedRoot;
+    FilesystemPackageContentStore malformedStore{malformedRoot.path()};
+    const auto malformed = acquire(lock, registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"https://mirror-a.example"}, {"https://mirror-b.example"}}}}), malformedSource, git, malformedStore);
+    assert(!malformed.valid() && malformedExecutor.urls.size() == 1);
+    assert(serialize_lockfile(lock).text == lockBefore.text);
+
+    // Payload limits are terminal and cannot be bypassed at another mirror.
+    ScriptedHttpsExecutor largeExecutor;
+    largeExecutor.replies.push_back(https_reply(200, *object.canonicalBytes));
+    SchemeRegistryContentTransport largeTransport{largeExecutor};
+    TransportRegistryPackageContentSource smallLimitSource{largeTransport, 1};
+    TestRoot largeRoot;
+    FilesystemPackageContentStore largeStore{largeRoot.path()};
+    const auto tooLarge = acquire(lock, registry_directory({RegistryDefinition{"vix", {{"metadata"}},
+      {{"https://mirror-a.example"}, {"https://mirror-b.example"}}}}), smallLimitSource, git, largeStore);
+    assert(!tooLarge.valid() && largeExecutor.urls.size() == 1);
+    assert(tooLarge.issues.front().code == PackageContentAcquisitionIssueCode::package_content_payload_too_large);
+    assert(serialize_lockfile(lock).text == lockBefore.text);
+  }
 }
 
 int main()
@@ -857,5 +1214,7 @@ int main()
   file_transport_acquisition_and_fallback_tests();
   file_transport_terminal_failure_tests();
   registry_transport_failure_classification_test();
+  https_transport_url_status_redirect_and_limit_tests();
+  https_acquisition_end_to_end_tests();
   return 0;
 }

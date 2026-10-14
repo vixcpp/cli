@@ -4,12 +4,17 @@
 
 #include <array>
 #include <cerrno>
+#include <charconv>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <system_error>
 #include <utility>
+
+#include <vix/requests/Client.hpp>
+#include <vix/requests/Url.hpp>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -202,6 +207,64 @@ namespace vix::cli::project::native
         return configuration_error(std::move(operation) + " is not a non-symlink directory");
       return {RegistryContentTransportStatus::available, std::string{}, {}};
     }
+
+    struct PayloadLimitExceeded final {};
+
+    [[nodiscard]] bool redirect_status(int status) noexcept
+    {
+      return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
+
+    [[nodiscard]] bool absolute_uri_reference(std::string_view value) noexcept
+    {
+      const auto colon = value.find(':');
+      const auto delimiter = value.find_first_of("/?#");
+      if (colon == std::string_view::npos ||
+          (delimiter != std::string_view::npos && delimiter < colon) || colon == 0)
+        return false;
+      for (std::size_t index = 0; index < colon; ++index)
+      {
+        const unsigned char ch = static_cast<unsigned char>(value[index]);
+        const bool valid = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+          (index > 0 && ((ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.'));
+        if (!valid)
+          return false;
+      }
+      return true;
+    }
+
+    [[nodiscard]] std::string lower_ascii(std::string_view value)
+    {
+      std::string result;
+      result.reserve(value.size());
+      for (const char raw : value)
+      {
+        const auto ch = static_cast<unsigned char>(raw);
+        result.push_back(static_cast<char>(ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch));
+      }
+      return result;
+    }
+
+    [[nodiscard]] std::optional<std::string> https_object_url(
+      std::string_view descriptor, std::string_view objectPath)
+    {
+      if (descriptor.find_first_of("?#") != std::string_view::npos)
+        return std::nullopt;
+      try
+      {
+        const auto base = vix::requests::Url::parse(descriptor);
+        if (!base.is_https() || !base.query().empty() || !base.fragment().empty())
+          return std::nullopt;
+        std::string basePath = base.path();
+        while (!basePath.empty() && basePath.back() == '/')
+          basePath.pop_back();
+        return base.origin() + basePath + "/" + std::string{objectPath};
+      }
+      catch (const std::exception &)
+      {
+        return std::nullopt;
+      }
+    }
   } // namespace
 
   RegistryContentTransportResult FileRegistryContentTransport::fetch(
@@ -303,5 +366,165 @@ namespace vix::cli::project::native
     const std::string objectPath = registry_format1_content_object_path(request.expectedContent);
     auto result = transport_.fetch(location, objectPath, maximumBytes_);
     return {result.status, std::move(result.bytes), std::move(result.diagnostic)};
+  }
+
+  RegistryHttpsExecutionResult RequestsRegistryHttpsRequestExecutor::get(
+    std::string_view url, const HeadSink &headSink, const BodySink &bodySink)
+  {
+    try
+    {
+      vix::requests::RequestOptions options;
+      options.follow_redirects = false;
+      options.max_redirects = 0;
+      options.verify_tls = true;
+      options.set_timeout(std::chrono::seconds(30));
+      options.headers.set("Accept-Encoding", "identity");
+      options.response_head_sink = [&](int status, const vix::requests::Headers &headers)
+      {
+        RegistryHttpsResponseHead head;
+        head.statusCode = status;
+        if (const auto length = headers.get("Content-Length"))
+        {
+          std::uint64_t parsed = 0;
+          const auto conversion = std::from_chars(length->data(),
+            length->data() + length->size(), parsed);
+          if (conversion.ec == std::errc{} && conversion.ptr == length->data() + length->size())
+            head.contentLength = parsed;
+        }
+        head.location = headers.get("Location");
+        head.contentEncoding = headers.get("Content-Encoding");
+        headSink(head);
+      };
+      options.body_sink = [&](std::span<const std::byte> bytes) { bodySink(bytes); };
+      vix::requests::Client client;
+      static_cast<void>(client.get(url, std::move(options)));
+      return {true, {}};
+    }
+    catch (const PayloadLimitExceeded &)
+    {
+      throw;
+    }
+    catch (const std::exception &)
+    {
+      return {false, "HTTPS Registry request failed"};
+    }
+  }
+
+  RegistryContentTransportResult HttpsRegistryContentTransport::fetch(
+    const RegistryContentLocation &location,
+    std::string_view relativeObjectPath,
+    std::uint64_t maximumBytes)
+  {
+    if (!valid_object_path(relativeObjectPath))
+      return configuration_error("Registry content object path is not a format-1 digest path");
+    const auto initialUrl = https_object_url(location.descriptor, relativeObjectPath);
+    if (!initialUrl)
+      return configuration_error("HTTPS Registry content location is malformed or unsupported");
+
+    std::string currentUrl = *initialUrl;
+    std::string bytes;
+    for (std::size_t redirects = 0; ; )
+    {
+      std::optional<RegistryHttpsResponseHead> responseHead;
+      bytes.clear();
+      const auto headSink = [&](const RegistryHttpsResponseHead &head)
+      {
+        responseHead = head;
+        if (head.statusCode == 200 && head.contentLength && *head.contentLength > maximumBytes)
+          throw PayloadLimitExceeded{};
+        if (head.statusCode == 200 && head.contentEncoding &&
+            lower_ascii(*head.contentEncoding) != "identity")
+          throw std::runtime_error("unsupported HTTP content encoding");
+      };
+      const auto bodySink = [&](std::span<const std::byte> chunk)
+      {
+        if (!responseHead || responseHead->statusCode != 200)
+          return;
+        const auto currentSize = static_cast<std::uint64_t>(bytes.size());
+        const auto chunkSize = static_cast<std::uint64_t>(chunk.size());
+        if (currentSize > maximumBytes || chunkSize > maximumBytes - currentSize ||
+            chunk.size() > bytes.max_size() - bytes.size())
+          throw PayloadLimitExceeded{};
+        bytes.append(reinterpret_cast<const char *>(chunk.data()), chunk.size());
+      };
+
+      RegistryHttpsExecutionResult execution;
+      try
+      {
+        execution = executor_.get(currentUrl, headSink, bodySink);
+      }
+      catch (const PayloadLimitExceeded &)
+      {
+        return {RegistryContentTransportStatus::payload_too_large, std::nullopt,
+          "HTTPS Registry object exceeds the configured byte limit"};
+      }
+      catch (const std::exception &)
+      {
+        return transport_failure("HTTPS Registry response could not be processed safely");
+      }
+      if (!execution.completed || !responseHead)
+        return transport_failure(execution.diagnostic.empty() ?
+          "HTTPS Registry request failed" : std::move(execution.diagnostic));
+
+      const int status = responseHead->statusCode;
+      if (redirect_status(status))
+      {
+        if (!responseHead->location || responseHead->location->empty())
+          return transport_failure("HTTPS Registry redirect omitted Location");
+        if (redirects >= 5)
+          return transport_failure("HTTPS Registry redirect limit exceeded");
+        try
+        {
+          const auto base = vix::requests::Url::parse(currentUrl);
+          if (absolute_uri_reference(*responseHead->location))
+          {
+            const auto absoluteTarget = vix::requests::Url::parse(*responseHead->location);
+            if (!absoluteTarget.is_https())
+              return transport_failure("HTTPS Registry redirect was not HTTPS");
+            currentUrl = absoluteTarget.without_fragment();
+          }
+          else
+          {
+            const std::string target = vix::requests::resolve_url_reference(base, *responseHead->location);
+            const auto parsedTarget = vix::requests::Url::parse(target);
+            if (!parsedTarget.is_https())
+              return transport_failure("HTTPS Registry redirect was not HTTPS");
+            currentUrl = parsedTarget.without_fragment();
+          }
+        }
+        catch (const std::exception &)
+        {
+          return transport_failure("HTTPS Registry redirect target is invalid");
+        }
+        ++redirects;
+        continue;
+      }
+      if (status == 404 || status == 410)
+        return {RegistryContentTransportStatus::not_found, std::nullopt,
+          "HTTPS Registry object was not found"};
+      if (status == 401 || status == 403)
+        return {RegistryContentTransportStatus::permission_denied, std::nullopt,
+          "HTTPS Registry denied access to the content object"};
+      if (status != 200)
+        return transport_failure("HTTPS Registry returned an unsuccessful response");
+      return {RegistryContentTransportStatus::available, std::move(bytes), {}};
+    }
+  }
+
+  RegistryContentTransportResult SchemeRegistryContentTransport::fetch(
+    const RegistryContentLocation &location,
+    std::string_view relativeObjectPath,
+    std::uint64_t maximumBytes)
+  {
+    if (location.descriptor.starts_with("file://"))
+      return file_.fetch(location, relativeObjectPath, maximumBytes);
+    try
+    {
+      const auto parsed = vix::requests::Url::parse(location.descriptor);
+      if (parsed.is_https())
+        return https_.fetch(location, relativeObjectPath, maximumBytes);
+    }
+    catch (const std::exception &) {}
+    return configuration_error("unsupported Registry content location scheme");
   }
 } // namespace vix::cli::project::native

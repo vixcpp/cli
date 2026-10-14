@@ -2,6 +2,7 @@
 #include <vix/cli/project/native/Lockfile.hpp>
 #include <vix/cli/project/native/MetadataAcquisition.hpp>
 #include <vix/cli/project/native/RegistryDirectory.hpp>
+#include <vix/cli/project/native/RegistryAuthority.hpp>
 #include <vix/cli/project/native/Resolver.hpp>
 #include <vix/cli/project/native/Validation.hpp>
 
@@ -55,6 +56,40 @@ namespace
     return {identity, std::move(version), digest_a, std::move(contract)};
   }
 
+  UnverifiedRegistryObservation make_observation(const RegistryPackageIdentity &identity,
+      std::vector<RegistryCandidate> releases)
+  {
+    UnverifiedRegistryObservation value{{identity.registry, 1, digest_a}, identity, std::move(releases), {}};
+    value.authorityEvidence = identity.registry + ":" + identity.publisher + ":" + identity.name + ":" + digest_a;
+    for (const auto &item : value.releases)
+      value.authorityEvidence += ":" + std::to_string(item.version.major) + "." +
+        std::to_string(item.version.minor) + "." + std::to_string(item.version.patch) + ":" + item.contentDigest;
+    return value;
+  }
+
+  struct TestVerifier final : RegistryAuthorityVerifier
+  {
+    bool verify_evidence(const RegistryAuthorityDefinition &authority,
+        const UnverifiedRegistryObservation &value, std::string &diagnostic) const override
+    {
+      std::string expected = value.query.registry + ":" + value.query.publisher + ":" + value.query.name + ":" +
+        value.snapshot.digest;
+      for (const auto &item : value.releases)
+        expected += ":" + std::to_string(item.version.major) + "." + std::to_string(item.version.minor) + "." +
+          std::to_string(item.version.patch) + ":" + item.contentDigest;
+      if (authority.authorityId == "test-authority" && value.authorityEvidence == expected) return true;
+      diagnostic = "invalid test evidence";
+      return false;
+    }
+  };
+
+  RegistryAuthorityDirectory authority_directory()
+  {
+    auto result = build_registry_authority_directory({{"vix", "test-authority"}, {"company", "test-authority"}});
+    assert(result.valid());
+    return std::move(*result.value);
+  }
+
   bool same_revision(const GitRevisionRequirement &left, const GitRevisionRequirement &right)
   {
     if (left.index() != right.index()) return false;
@@ -70,21 +105,21 @@ namespace
   {
     std::string location;
     RegistryPackageIdentity identity;
-    RegistryQueryResult result;
+    UnverifiedRegistryLocationResult result;
   };
 
-  struct MemoryLocations final : RegistryMetadataLocationSource
+  struct MemoryLocations final : RegistryObservationLocationSource
   {
     std::vector<LocationReply> replies;
     std::vector<std::pair<std::string, RegistryPackageIdentity>> calls;
 
-    RegistryQueryResult registry_releases_at(const RegistryLocation &location,
+    UnverifiedRegistryLocationResult registry_observation_at(const RegistryLocation &location,
                                               const RegistryPackageIdentity &identity) override
     {
       calls.emplace_back(location.descriptor, identity);
       for (const auto &reply : replies)
         if (reply.location == location.descriptor && reply.identity == identity) return reply.result;
-      return {false, {}, "no in-memory observation configured"};
+      return {false, std::nullopt, "no in-memory observation configured"};
     }
   };
 
@@ -125,7 +160,9 @@ namespace
                            const PackageRequirement &requirement)
   {
     GitOnlyMemorySource git;
-    RoutedPackageMetadataSource routed(directory, locations, git);
+    TestVerifier verifier;
+    auto authorities = authority_directory();
+    VerifiedRoutedPackageMetadataSource routed(directory, authorities, locations, verifier, git);
     const auto acquired = acquire_resolution_catalog({requirement}, routed);
     assert(acquired.valid());
     const auto graph = resolve_packages({requirement}, *acquired.catalog);
@@ -170,29 +207,31 @@ namespace
 
     auto routedDirectory = directory("vix", {"location-A", "location-B"});
     MemoryLocations fallback;
-    fallback.replies.push_back({"location-A", identity, {false, {}, "A unavailable"}});
-    fallback.replies.push_back({"location-B", identity, {true, {versionOne}, {}}});
-    const auto result = route_registry_releases(routedDirectory, fallback, identity);
-    assert(result.valid() && result.observation->releases.size() == 1);
+    fallback.replies.push_back({"location-A", identity, {false, std::nullopt, "A unavailable"}});
+    fallback.replies.push_back({"location-B", identity, {true, make_observation(identity, {versionOne}), {}}});
+    TestVerifier verifier;
+    auto authorities = authority_directory();
+    const auto result = route_verified_registry_observation(routedDirectory, authorities, fallback, verifier, identity);
+    assert(result.valid() && result.observation->releases().size() == 1);
     assert(fallback.calls.size() == 2 && fallback.calls[0].first == "location-A" && fallback.calls[1].first == "location-B");
 
     MemoryLocations noMerge;
-    noMerge.replies.push_back({"location-A", identity, {true, {versionOne}, {}}});
-    noMerge.replies.push_back({"location-B", identity, {true, {versionTwo}, {}}});
-    const auto observation = route_registry_releases(routedDirectory, noMerge, identity);
-    assert(observation.valid() && observation.observation->releases.size() == 1);
-    assert(observation.observation->releases.front().version == versionOne.version);
+    noMerge.replies.push_back({"location-A", identity, {true, make_observation(identity, {versionOne}), {}}});
+    noMerge.replies.push_back({"location-B", identity, {true, make_observation(identity, {versionTwo}), {}}});
+    const auto routedObservation = route_verified_registry_observation(routedDirectory, authorities, noMerge, verifier, identity);
+    assert(routedObservation.valid() && routedObservation.observation->releases().size() == 1);
+    assert(routedObservation.observation->releases().front().version == versionOne.version);
     assert(noMerge.calls.size() == 1 && noMerge.calls.front().first == "location-A");
 
     auto emptyDirectory = directory("vix", {"empty", "would-have-release"});
     MemoryLocations empty;
-    empty.replies.push_back({"empty", identity, {true, {}, {}}});
-    empty.replies.push_back({"would-have-release", identity, {true, {versionOne}, {}}});
-    const auto emptyObservation = route_registry_releases(emptyDirectory, empty, identity);
-    assert(emptyObservation.valid() && emptyObservation.observation->releases.empty());
+    empty.replies.push_back({"empty", identity, {true, make_observation(identity, {}), {}}});
+    empty.replies.push_back({"would-have-release", identity, {true, make_observation(identity, {versionOne}), {}}});
+    const auto emptyObservation = route_verified_registry_observation(emptyDirectory, authorities, empty, verifier, identity);
+    assert(emptyObservation.valid() && emptyObservation.observation->releases().empty());
     assert(empty.calls.size() == 1);
     GitOnlyMemorySource git;
-    RoutedPackageMetadataSource routed(emptyDirectory, empty, git);
+    VerifiedRoutedPackageMetadataSource routed(emptyDirectory, authorities, empty, verifier, git);
     const auto acquired = acquire_resolution_catalog({exact("pkg", identity, {1, 0, 0, std::nullopt})}, routed);
     assert(acquired.valid());
     const auto unresolved = resolve_packages({exact("pkg", identity, {1, 0, 0, std::nullopt})}, *acquired.catalog);
@@ -204,23 +243,32 @@ namespace
     auto known = directory("vix", {"A", "B"});
     MemoryLocations source;
     const RegistryPackageIdentity unknown{"missing", "example", "pkg"};
-    const auto unknownResult = route_registry_releases(known, source, unknown);
-    assert(!unknownResult.valid() && unknownResult.issues.front().code == RegistryRoutingErrorCode::unknown_registry);
+    TestVerifier verifier;
+    auto authorities = authority_directory();
+    const auto unknownResult = route_verified_registry_observation(known, authorities, source, verifier, unknown);
+    assert(!unknownResult.valid() && unknownResult.issues.front().code == VerifiedRegistryRoutingErrorCode::unknown_registry);
     assert(source.calls.empty());
 
     const RegistryPackageIdentity identity{"vix", "example", "pkg"};
-    source.replies = {{"A", identity, {false, {}, "offline"}}, {"B", identity, {false, {}, "unavailable"}}};
-    const auto failed = route_registry_releases(known, source, identity);
-    assert(!failed.valid() && failed.issues.size() == 2);
-    assert(std::all_of(failed.issues.begin(), failed.issues.end(), [](const auto &issue)
-      { return issue.code == RegistryRoutingErrorCode::location_failure; }));
+    source.replies = {{"A", identity, {false, std::nullopt, "offline"}}, {"B", identity, {false, std::nullopt, "unavailable"}}};
+    const auto failed = route_verified_registry_observation(known, authorities, source, verifier, identity);
+    assert(!failed.valid());
+    const auto locationFailures = std::count_if(failed.issues.begin(), failed.issues.end(), [](const auto &issue)
+      { return issue.code == VerifiedRegistryRoutingErrorCode::location_or_verification_failure; });
+    const auto terminalFailures = std::count_if(failed.issues.begin(), failed.issues.end(), [](const auto &issue)
+      { return issue.code == VerifiedRegistryRoutingErrorCode::all_registry_locations_untrusted_or_failed; });
+    assert(locationFailures == 2 && terminalFailures == 1);
+    assert(std::any_of(failed.issues.begin(), failed.issues.end(), [](const auto &issue) { return issue.location == "A"; }));
+    assert(std::any_of(failed.issues.begin(), failed.issues.end(), [](const auto &issue) { return issue.location == "B"; }));
 
     GitOnlyMemorySource git;
-    RoutedPackageMetadataSource routed(known, source, git);
+    VerifiedRoutedPackageMetadataSource routed(known, authorities, source, verifier, git);
     const auto acquisition = acquire_resolution_catalog({exact("pkg", identity, {1, 0, 0, std::nullopt})}, routed);
     assert(!acquisition.valid());
     assert(acquisition.issues.front().code == MetadataAcquisitionErrorCode::registry_source_failure);
-    assert(acquisition.issues.front().message.find("registry_location_failure") != std::string::npos);
+    assert(acquisition.issues.front().message.find("registry_authentication_or_location_failure") != std::string::npos);
+    assert(acquisition.issues.front().message.find("all_registry_locations_untrusted_or_failed") != std::string::npos);
+    assert(acquisition.issues.front().message.find("no_candidate") == std::string::npos);
   }
 
   void relocation_and_mirror_order_lock_invariance_tests()
@@ -230,9 +278,9 @@ namespace
     auto directoryA = directory("vix", {"https://host-a.invalid/registry"});
     auto directoryB = directory("vix", {"https://host-b.invalid/registry"});
     MemoryLocations sourceA;
-    sourceA.replies.push_back({"https://host-a.invalid/registry", identity, {true, {candidate}, {}}});
+    sourceA.replies.push_back({"https://host-a.invalid/registry", identity, {true, make_observation(identity, {candidate}), {}}});
     MemoryLocations sourceB;
-    sourceB.replies.push_back({"https://host-b.invalid/registry", identity, {true, {candidate}, {}}});
+    sourceB.replies.push_back({"https://host-b.invalid/registry", identity, {true, make_observation(identity, {candidate}), {}}});
     const auto lockA = resolve_through(directoryA, sourceA, exact("db", identity, {1, 2, 0, std::nullopt}));
     const auto lockB = resolve_through(directoryB, sourceB, exact("db", identity, {1, 2, 0, std::nullopt}));
     assert(locks_equal(lockA, lockB));
@@ -242,11 +290,14 @@ namespace
     auto mirrorsAB = directory("vix", {"A", "B"});
     auto mirrorsBA = directory("vix", {"B", "A"});
     MemoryLocations sourceAB;
-    sourceAB.replies = {{"A", identity, {true, {candidate}, {}}}, {"B", identity, {true, {candidate}, {}}}};
+    sourceAB.replies = {{"A", identity, {true, make_observation(identity, {candidate}), {}}},
+      {"B", identity, {true, make_observation(identity, {candidate}), {}}}};
     MemoryLocations sourceBA;
     sourceBA.replies = sourceAB.replies;
-    const auto routeAB = route_registry_releases(mirrorsAB, sourceAB, identity);
-    const auto routeBA = route_registry_releases(mirrorsBA, sourceBA, identity);
+    TestVerifier verifier;
+    auto authorities = authority_directory();
+    const auto routeAB = route_verified_registry_observation(mirrorsAB, authorities, sourceAB, verifier, identity);
+    const auto routeBA = route_verified_registry_observation(mirrorsBA, authorities, sourceBA, verifier, identity);
     assert(routeAB.valid() && routeBA.valid());
     assert(sourceAB.calls.front().first == "A" && sourceBA.calls.front().first == "B");
     const auto mirrorLockAB = resolve_through(mirrorsAB, sourceAB, exact("db", identity, {1, 2, 0, std::nullopt}));
@@ -261,10 +312,12 @@ namespace
     auto registryDirectory = directory("vix", {"git://metadata-host.invalid/registry"});
     MemoryLocations locationSource;
     locationSource.replies.push_back({"git://metadata-host.invalid/registry", registryIdentity,
-      {true, {release(registryIdentity, {1, 0, 0, std::nullopt})}, {}}});
+      {true, make_observation(registryIdentity, {release(registryIdentity, {1, 0, 0, std::nullopt})}), {}}});
     GitOnlyMemorySource gitSource;
     gitSource.records.push_back({gitRepository, TagRevision{"v1"}, commit_git, digest_a, git_contract()});
-    RoutedPackageMetadataSource routed(registryDirectory, locationSource, gitSource);
+    TestVerifier verifier;
+    auto authorities = authority_directory();
+    VerifiedRoutedPackageMetadataSource routed(registryDirectory, authorities, locationSource, verifier, gitSource);
     const auto registryRequirement = exact("registry-pkg", registryIdentity, {1, 0, 0, std::nullopt});
     const auto gitRequirement = git_req("git-pkg", gitRepository, TagRevision{"v1"});
     const auto acquired = acquire_resolution_catalog({registryRequirement, gitRequirement}, routed);

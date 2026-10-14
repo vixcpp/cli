@@ -286,6 +286,7 @@ add_test(NAME vix_cli_native_metadata_acquisition_tests COMMAND vix_cli_native_m
 add_executable(vix_cli_native_registry_directory_tests
   NativeRegistryDirectoryTests.cpp
   ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/RegistryAuthority.cpp
   ../src/project/native/MetadataAcquisition.cpp
   ../src/project/native/ResolutionCatalog.cpp
   ../src/project/native/Resolver.cpp
@@ -300,6 +301,25 @@ target_include_directories(vix_cli_native_registry_directory_tests SYSTEM PRIVAT
   ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
 )
 add_test(NAME vix_cli_native_registry_directory_tests COMMAND vix_cli_native_registry_directory_tests)
+
+add_executable(vix_cli_native_registry_authority_tests
+  NativeRegistryAuthorityTests.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_authority_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_authority_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_registry_authority_tests COMMAND vix_cli_native_registry_authority_tests)
 
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp

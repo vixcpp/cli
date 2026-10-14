@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-#include <vix/cli/project/native/MetadataAcquisition.hpp>
+#include <vix/cli/project/native/Models.hpp>
 
 namespace vix::cli::project::native
 {
@@ -66,65 +66,6 @@ namespace vix::cli::project::native
     [[nodiscard]] bool valid() const noexcept { return value.has_value() && issues.empty(); }
   };
 
-  class RegistryMetadataLocationSource
-  {
-  public:
-    virtual ~RegistryMetadataLocationSource() = default;
-    [[nodiscard]] virtual RegistryQueryResult registry_releases_at(
-      const RegistryLocation &location,
-      const RegistryPackageIdentity &identity) = 0;
-  };
-
-  enum class RegistryRoutingErrorCode
-  {
-    unknown_registry,
-    location_failure,
-    invalid_location_response
-  };
-
-  struct RegistryRoutingIssue
-  {
-    RegistryRoutingErrorCode code{RegistryRoutingErrorCode::location_failure};
-    std::string registryId;
-    std::string location;
-    std::string message;
-  };
-
-  struct RegistryRoutingResult
-  {
-    std::optional<RegistryQueryResult> observation;
-    std::vector<RegistryRoutingIssue> issues;
-    [[nodiscard]] bool valid() const noexcept { return observation.has_value() && issues.empty(); }
-  };
-
-  // Tries configured alternatives in declaration order and returns the first
-  // successful observation. A successful empty response is final; mirrors are
-  // never unioned. The returned observation remains bound to the logical ID.
-  [[nodiscard]] RegistryRoutingResult route_registry_releases(
-    const RegistryDirectory &directory,
-    RegistryMetadataLocationSource &source,
-    const RegistryPackageIdentity &identity);
-
-  // Adapts Registry routing plus an existing metadata source for Git queries
-  // to P10H's source interface. No transport or authentication is implemented.
-  class RoutedPackageMetadataSource final : public PackageMetadataSource
-  {
-  public:
-    RoutedPackageMetadataSource(const RegistryDirectory &directory,
-                                RegistryMetadataLocationSource &registrySource,
-                                PackageMetadataSource &gitSource);
-
-    [[nodiscard]] RegistryQueryResult registry_releases(
-      const RegistryPackageIdentity &identity) override;
-    [[nodiscard]] GitQueryResult resolve_git(
-      const GitPackageIdentity &identity,
-      const GitRevisionRequirement &revision) override;
-
-  private:
-    const RegistryDirectory &directory_;
-    RegistryMetadataLocationSource &registrySource_;
-    PackageMetadataSource &gitSource_;
-  };
 } // namespace vix::cli::project::native
 
 #endif // VIX_CLI_PROJECT_NATIVE_REGISTRY_DIRECTORY_HPP

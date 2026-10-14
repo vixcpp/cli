@@ -447,6 +447,26 @@ target_include_directories(vix_cli_native_filesystem_package_content_store_tests
 add_test(NAME vix_cli_native_filesystem_package_content_store_tests
   COMMAND vix_cli_native_filesystem_package_content_store_tests)
 
+add_executable(vix_cli_native_package_materialization_tests
+  NativePackageMaterializationTests.cpp
+  ../src/project/native/PackageMaterialization.cpp
+  ../src/project/native/FilesystemPackageContentStore.cpp
+  ../src/project/native/PackageContentDigest.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_package_materialization_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_package_materialization_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_package_materialization_tests
+  COMMAND vix_cli_native_package_materialization_tests)
+
 add_executable(vix_cli_native_package_content_acquisition_tests
   NativePackageContentAcquisitionTests.cpp
   ../src/project/native/PackageContentAcquisition.cpp

@@ -5,12 +5,22 @@
 #define VIX_CLI_PROJECT_NATIVE_FILESYSTEM_PACKAGE_CONTENT_STORE_HPP
 
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <vix/cli/project/native/PackageContentDigest.hpp>
 
 namespace vix::cli::project::native
 {
+  struct PersistentPackageContentReadResult
+  {
+    std::optional<std::string> canonicalBytes;
+    std::vector<PackageContentIssue> issues;
+    [[nodiscard]] bool valid() const noexcept { return canonicalBytes.has_value() && issues.empty(); }
+  };
+
   // The root is explicit; user-home or project-local location policy belongs
   // to a higher-level integration layer. Integrity assumes the root remains
   // inside the local OS/user trust boundary and does not defend against a
@@ -22,6 +32,7 @@ namespace vix::cli::project::native
 
     [[nodiscard]] PackageContentStoreResult inspect(const PackageContentId &id) const override;
     [[nodiscard]] PackageContentAdmissionResult admit(const VerifiedPackageContent &content) override;
+    [[nodiscard]] PersistentPackageContentReadResult read_canonical_object(const PackageContentId &id) const;
 
   private:
     std::filesystem::path root_;

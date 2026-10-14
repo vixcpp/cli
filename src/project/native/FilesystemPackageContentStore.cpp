@@ -404,6 +404,39 @@ namespace vix::cli::project::native
     return inspect_path(path, id);
   }
 
+  PersistentPackageContentReadResult FilesystemPackageContentStore::read_canonical_object(
+    const PackageContentId &id) const
+  {
+    if (!is_sha256_id(id))
+      return {std::nullopt, {store_issue(PackageContentIssueCode::invalid_content_id, id,
+        "persistent P10O objects require a SHA-256 content ID")}};
+    std::string error;
+    fs::path root;
+    if (!prepare_root(root_, root, error))
+      return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_store_io_error, id, std::move(error))}};
+    ContentFileLock lock{root / "content.lock"};
+    if (!lock.valid())
+      return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_store_lock_error, id, lock.error())}};
+    const auto path = object_path(root, id);
+    if (!prepare_managed_directory(root, path.parent_path(), error))
+      return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_store_io_error, id, std::move(error))}};
+    const auto read = read_object(path, id);
+    switch (read.state)
+    {
+    case ObjectReadState::valid:
+      return {read.bytes, {}};
+    case ObjectReadState::missing:
+      return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_unavailable, id,
+        "verified package content is missing from P10P")}};
+    case ObjectReadState::corrupt:
+      return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_store_corrupt, id, read.message)}};
+    case ObjectReadState::io_error:
+      return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_store_io_error, id, read.message)}};
+    }
+    return {std::nullopt, {store_issue(PackageContentIssueCode::package_content_store_io_error, id,
+      "unknown package content read state")}};
+  }
+
   PackageContentAdmissionResult FilesystemPackageContentStore::admit(const VerifiedPackageContent &content)
   {
     const auto id = content.id_;

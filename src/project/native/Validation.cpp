@@ -335,6 +335,7 @@ namespace vix::cli::project::native
   bool valid_registry_id(std::string_view value) noexcept { return valid_registry(value); }
   bool valid_registry_name(std::string_view value) noexcept { return valid_dashed_identifier(value); }
   bool valid_semver(const Version &version) noexcept { return valid_version(version); }
+  bool valid_package_content_digest(std::string_view value) noexcept { return valid_content_digest(value); }
   bool valid_requirement(const VersionRequirement &requirement) noexcept
   {
     return std::visit([](const auto &mode)

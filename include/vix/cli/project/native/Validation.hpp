@@ -78,6 +78,7 @@ namespace vix::cli::project::native
   [[nodiscard]] bool valid_registry_name(std::string_view value) noexcept;
   [[nodiscard]] bool valid_semver(const Version &version) noexcept;
   [[nodiscard]] bool valid_requirement(const VersionRequirement &requirement) noexcept;
+  [[nodiscard]] bool valid_package_content_digest(std::string_view value) noexcept;
   [[nodiscard]] std::string normalize_project_relative_path(std::string_view path);
 
   [[nodiscard]] ValidationResult validate_native_project(const NativeProject &project);

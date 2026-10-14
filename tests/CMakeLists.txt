@@ -283,6 +283,133 @@ target_include_directories(vix_cli_native_metadata_acquisition_tests SYSTEM PRIV
 )
 add_test(NAME vix_cli_native_metadata_acquisition_tests COMMAND vix_cli_native_metadata_acquisition_tests)
 
+add_executable(vix_cli_native_registry_directory_tests
+  NativeRegistryDirectoryTests.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_directory_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_directory_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_registry_directory_tests COMMAND vix_cli_native_registry_directory_tests)
+
+add_executable(vix_cli_native_registry_authority_tests
+  NativeRegistryAuthorityTests.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_authority_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_authority_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_registry_authority_tests COMMAND vix_cli_native_registry_authority_tests)
+
+add_executable(vix_cli_native_registry_snapshot_state_tests
+  NativeRegistrySnapshotStateTests.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_snapshot_state_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_snapshot_state_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_registry_snapshot_state_tests
+  COMMAND vix_cli_native_registry_snapshot_state_tests)
+
+add_executable(vix_cli_native_registry_offline_metadata_tests
+  NativeRegistryOfflineMetadataTests.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_offline_metadata_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_offline_metadata_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_registry_offline_metadata_tests
+  COMMAND vix_cli_native_registry_offline_metadata_tests)
+
+add_executable(vix_cli_native_filesystem_metadata_storage_tests
+  NativeFilesystemMetadataStorageTests.cpp
+  ../src/project/native/FilesystemMetadataStorage.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_filesystem_metadata_storage_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_filesystem_metadata_storage_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_filesystem_metadata_storage_tests
+  COMMAND vix_cli_native_filesystem_metadata_storage_tests)
+
+add_executable(vix_cli_native_package_content_store_tests
+  NativePackageContentStoreTests.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_package_content_store_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_package_content_store_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_package_content_store_tests
+  COMMAND vix_cli_native_package_content_store_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

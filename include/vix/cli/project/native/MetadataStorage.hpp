@@ -4,6 +4,7 @@
 #ifndef VIX_CLI_PROJECT_NATIVE_METADATA_STORAGE_HPP
 #define VIX_CLI_PROJECT_NATIVE_METADATA_STORAGE_HPP
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,7 +14,8 @@
 
 namespace vix::cli::project::native
 {
-  enum class TrustedStateStoreErrorCode { trusted_state_concurrent_update, invalid_trusted_snapshot_state };
+  enum class TrustedStateStoreErrorCode
+  { trusted_state_concurrent_update, invalid_trusted_snapshot_state, trusted_state_storage_corrupt, trusted_state_storage_failure };
   struct TrustedStateStoreIssue
   {
     TrustedStateStoreErrorCode code{TrustedStateStoreErrorCode::invalid_trusted_snapshot_state};
@@ -66,7 +68,9 @@ namespace vix::cli::project::native
     offline_git_metadata_unavailable,
     offline_cached_metadata_trust_failure,
     online_registry_observation_rejected,
-    registry_snapshot_changed_during_acquisition
+    registry_snapshot_changed_during_acquisition,
+    metadata_cache_corrupt,
+    metadata_cache_storage_failure
   };
   struct MetadataCacheIssue
   {
@@ -187,6 +191,32 @@ namespace vix::cli::project::native
     const RegistryAuthorityVerifier &verifier_;
     std::vector<RegistrySnapshotPin> pins_;
     std::vector<MetadataCacheIssue> lastIssues_;
+  };
+
+  // Durable metadata-only backend. The caller injects the storage root; user
+  // home/XDG/AppData selection belongs to a later integration layer. Local
+  // file permissions and OS integrity are part of the trust boundary: this
+  // backend does not claim protection from a malicious local administrator.
+  class FilesystemMetadataStorage final : public TrustedRegistryStateStore, public PackageMetadataCache
+  {
+  public:
+    explicit FilesystemMetadataStorage(std::filesystem::path root);
+    [[nodiscard]] TrustedStateLoadResult load(std::string_view registryId) const override;
+    [[nodiscard]] TrustedStateCommitResult compare_and_advance(
+      const std::optional<TrustedRegistrySnapshotState> &expected,
+      const TrustedRegistrySnapshotState &next) override;
+    [[nodiscard]] MetadataStorageResult<UnverifiedRegistryObservation> read_registry(
+      const RegistrySnapshotIdentity &snapshot, const RegistryPackageIdentity &query) const override;
+    [[nodiscard]] MetadataStorageResult<bool> write_registry(
+      const RegistryObservationCacheAdmission &admission) override;
+    [[nodiscard]] MetadataStorageResult<GitResolution> read_git(
+      const GitPackageIdentity &identity, const GitRevisionRequirement &revision) const override;
+    [[nodiscard]] MetadataStorageResult<bool> write_git(const GitPackageIdentity &identity,
+      const GitRevisionRequirement &revision, const GitResolution &resolution) override;
+    [[nodiscard]] MetadataStorageResult<bool> clear_cache();
+    [[nodiscard]] const std::filesystem::path &root() const noexcept { return root_; }
+  private:
+    std::filesystem::path root_;
   };
 } // namespace vix::cli::project::native
 

@@ -134,7 +134,7 @@ namespace vix::cli::project::native
 
     CanonicalPackageContentParseResult invalid_encoding(std::string message)
     {
-      return {std::nullopt, {make_issue(CanonicalPackageContentIssueCode::invalid_canonical_encoding,
+      return {std::nullopt, std::nullopt, {make_issue(CanonicalPackageContentIssueCode::invalid_canonical_encoding,
         {}, std::move(message))}};
     }
 
@@ -366,10 +366,10 @@ namespace vix::cli::project::native
     if (!reader.finished()) return invalid_encoding("canonical package content has trailing bytes");
 
     auto canonical = canonicalize_package_content_tree(tree);
-    if (!canonical.valid()) return {std::nullopt, std::move(canonical.issues)};
+    if (!canonical.valid()) return {std::nullopt, std::nullopt, std::move(canonical.issues)};
     if (*canonical.canonicalBytes != bytes)
       return invalid_encoding("package content bytes are valid data but not in canonical encoding/order");
-    return {std::move(tree), {}};
+    return {std::move(tree), std::move(canonical.contentId), {}};
   }
 
   PackageContentVerificationResult CanonicalPackageContentVerifier::verify(

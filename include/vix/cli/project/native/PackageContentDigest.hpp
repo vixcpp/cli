@@ -74,8 +74,10 @@ namespace vix::cli::project::native
   struct CanonicalPackageContentParseResult
   {
     std::optional<CanonicalPackageTree> tree;
+    std::optional<PackageContentId> contentId;
     std::vector<CanonicalPackageContentIssue> issues;
-    [[nodiscard]] bool valid() const noexcept { return tree.has_value() && issues.empty(); }
+    [[nodiscard]] bool valid() const noexcept
+    { return tree.has_value() && contentId.has_value() && issues.empty(); }
   };
 
   // Strict inverse of the P10O canonical encoding. Successful parses are

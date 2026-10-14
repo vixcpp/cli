@@ -185,12 +185,24 @@ namespace
     std::string text;
   };
 
+  struct NeverMetadataSource final : PackageMetadataSource
+  {
+    unsigned registryCalls{0};
+    unsigned gitCalls{0};
+    RegistryQueryResult registry_releases(const RegistryPackageIdentity &) override
+    { ++registryCalls; return {false, {}, "offline path called online Registry source"}; }
+    GitQueryResult resolve_git(const GitPackageIdentity &, const GitRevisionRequirement &) override
+    { ++gitCalls; return {GitQueryStatus::failed, std::nullopt, "offline path called online Git source"}; }
+  };
+
   Pipeline offline_pipeline(FilesystemMetadataStorage &storage, const RegistryAuthorityDirectory &authority,
     const std::vector<PackageRequirement> &roots)
   {
     TestVerifier verifier;
     OfflineCachedPackageMetadataSource source(storage, storage, authority, verifier);
-    auto acquired = acquire_resolution_catalog(roots, source);
+    NeverMetadataSource online;
+    auto acquired = acquire_resolution_catalog(roots, AcquisitionMode::offline, online, source);
+    assert(online.registryCalls == 0 && online.gitCalls == 0);
     assert(acquired.valid() && acquired.catalog);
     auto resolved = resolve_packages(roots, *acquired.catalog);
     assert(resolved.valid());

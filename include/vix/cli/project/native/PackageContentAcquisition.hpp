@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <vix/cli/project/native/PackageContentDigest.hpp>
+#include <vix/cli/project/native/AcquisitionMode.hpp>
 #include <vix/cli/project/native/RegistryDirectory.hpp>
 
 namespace vix::cli::project::native
@@ -77,10 +78,6 @@ namespace vix::cli::project::native
   };
 
   enum class PackageContentAcquisitionState { reused, acquired };
-
-  // Source policy for exact locked-content acquisition. This is operation
-  // policy; source implementations remain unaware of online/offline mode.
-  enum class AcquisitionMode { online, offline };
 
   struct PackageContentAcquisitionEntry
   {

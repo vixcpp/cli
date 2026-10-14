@@ -9,9 +9,12 @@
 #include <vector>
 
 #include <vix/cli/project/native/ResolutionCatalog.hpp>
+#include <vix/cli/project/native/AcquisitionMode.hpp>
 
 namespace vix::cli::project::native
 {
+  class OfflineCachedPackageMetadataSource;
+
   struct RegistryQueryResult
   {
     bool succeeded{true};
@@ -72,6 +75,14 @@ namespace vix::cli::project::native
   [[nodiscard]] MetadataAcquisitionResult acquire_resolution_catalog(
     const std::vector<PackageRequirement> &rootRequirements,
     PackageMetadataSource &source);
+
+  // Operation-policy entry point. Online uses the supplied existing online
+  // source path; offline is restricted to P10L's cached/trusted adapter.
+  [[nodiscard]] MetadataAcquisitionResult acquire_resolution_catalog(
+    const std::vector<PackageRequirement> &rootRequirements,
+    AcquisitionMode mode,
+    PackageMetadataSource &onlineSource,
+    OfflineCachedPackageMetadataSource &offlineSource);
 } // namespace vix::cli::project::native
 
 #endif // VIX_CLI_PROJECT_NATIVE_METADATA_ACQUISITION_HPP

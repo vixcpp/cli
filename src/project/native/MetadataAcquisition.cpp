@@ -1,4 +1,5 @@
 #include <vix/cli/project/native/MetadataAcquisition.hpp>
+#include <vix/cli/project/native/MetadataStorage.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -200,5 +201,17 @@ namespace vix::cli::project::native
     }
     result.catalog = std::move(built.value);
     return result;
+  }
+
+  MetadataAcquisitionResult acquire_resolution_catalog(
+    const std::vector<PackageRequirement> &rootRequirements,
+    AcquisitionMode mode,
+    PackageMetadataSource &onlineSource,
+    OfflineCachedPackageMetadataSource &offlineSource)
+  {
+    PackageMetadataSource &selectedSource = mode == AcquisitionMode::offline
+      ? static_cast<PackageMetadataSource &>(offlineSource)
+      : onlineSource;
+    return acquire_resolution_catalog(rootRequirements, selectedSource);
   }
 } // namespace vix::cli::project::native

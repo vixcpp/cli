@@ -65,6 +65,15 @@ namespace
     return {identity, version, std::move(contentDigest), contract(identity, version, std::move(packages))};
   }
 
+  PackageContract git_contract()
+  {
+    PackageContract value;
+    value.identity = GitPackageContractIdentity{};
+    value.integration = NativeVixIntegration{};
+    value.exports.push_back({"api", NativeExportMapping{"api"}});
+    return value;
+  }
+
   UnverifiedRegistryObservation observation(std::uint64_t sequence, std::string snapshotDigest,
     RegistryPackageIdentity query = xIdentity, std::vector<RegistryCandidate> releases = {})
   {
@@ -76,6 +85,10 @@ namespace
 
   PackageRequirement registry_requirement(std::string alias, RegistryPackageIdentity identity)
   { return {std::move(alias), RegistryRequirement{std::move(identity), ExactVersion{{1, 0, 0, std::nullopt}}}}; }
+
+  PackageRequirement git_requirement(std::string alias, const GitPackageIdentity &identity,
+    GitRevisionRequirement revision)
+  { return {std::move(alias), GitRequirement{identity.normalizedRepository, identity.repositoryRoot, std::move(revision)}}; }
 
   struct NeverExternalSource final : PackageMetadataSource
   {
@@ -130,7 +143,9 @@ namespace
     const RegistryAuthorityVerifier &verifier, const std::vector<PackageRequirement> &roots)
   {
     OfflineCachedPackageMetadataSource offline(trusted, cache, authorities, verifier);
-    auto acquired = acquire_resolution_catalog(roots, offline);
+    NeverExternalSource online;
+    auto acquired = acquire_resolution_catalog(roots, AcquisitionMode::offline, online, offline);
+    assert(online.registryCalls == 0 && online.gitCalls == 0);
     assert(acquired.valid() && acquired.catalog);
     auto graph = resolve_packages(roots, *acquired.catalog);
     assert(graph.valid());
@@ -209,10 +224,15 @@ namespace
     // Newer cache entries do not replace the persisted baseline.
     NeverExternalSource external;
     OfflineCachedPackageMetadataSource offline(trusted, cache, *authorityResult.value, verifier);
+    NeverExternalSource online;
     auto read50 = offline.registry_releases(xIdentity);
     assert(read50.succeeded && read50.releases.size() == 1 && read50.releases.front().contentDigest == digestA);
     assert(trusted.load("vix").state == fifty);
     assert(external.registryCalls == 0 && external.gitCalls == 0);
+    auto catalogHit = acquire_resolution_catalog({registry_requirement("x", xIdentity)},
+      AcquisitionMode::offline, online, offline);
+    assert(catalogHit.valid() && catalogHit.catalog);
+    assert(online.registryCalls == 0 && online.gitCalls == 0);
 
     // A second query at the exact trusted snapshot can be an authenticated empty result.
     const RegistryPackageIdentity emptyIdentity{"vix", "example", "empty"};
@@ -221,7 +241,8 @@ namespace
     assert(admittedEmpty.valid());
     auto empty = offline.registry_releases(emptyIdentity);
     assert(empty.succeeded && empty.releases.empty());
-    auto emptyCatalog = acquire_resolution_catalog({registry_requirement("empty", emptyIdentity)}, offline);
+    auto emptyCatalog = acquire_resolution_catalog({registry_requirement("empty", emptyIdentity)},
+      AcquisitionMode::offline, online, offline);
     assert(emptyCatalog.valid() && emptyCatalog.catalog);
     auto noCandidate = resolve_packages({registry_requirement("empty", emptyIdentity)}, *emptyCatalog.catalog);
     assert(!noCandidate.valid() && noCandidate.issues.front().code == ResolverErrorCode::no_candidate);
@@ -231,6 +252,10 @@ namespace
     auto miss = offline.registry_releases(xIdentity);
     assert(!miss.succeeded && offline.last_issues().front().code == MetadataCacheErrorCode::offline_registry_metadata_unavailable);
     assert(miss.diagnostic.find("no_candidate") == std::string::npos);
+    auto catalogMiss = acquire_resolution_catalog({registry_requirement("x", xIdentity)},
+      AcquisitionMode::offline, online, offline);
+    assert(!catalogMiss.valid() && !catalogMiss.catalog);
+    assert(online.registryCalls == 0 && online.gitCalls == 0);
 
     // Repopulate only 50/A, then advance trust: offline lookup must not select it.
     auto repopulated = admit_online_registry_observation(*authorityResult.value, verifier, fifty,
@@ -277,15 +302,23 @@ namespace
     GitPackageIdentity identity{"https://example.invalid/org/repo.git", true};
     GitRevisionRequirement branch = BranchRevision{"main"};
     GitResolution resolution{identity.normalizedRepository, branch,
-      "0123456789abcdef0123456789abcdef01234567", digestA, PackageContract{}};
+      "0123456789abcdef0123456789abcdef01234567", digestA, git_contract()};
     assert(cache.write_git(identity, branch, resolution).valid());
     OfflineCachedPackageMetadataSource offline(trusted, cache, *authorities.value, verifier);
     auto hit = offline.resolve_git(identity, branch);
     assert(hit.status == GitQueryStatus::found && hit.resolution->commit == resolution.commit);
+    NeverExternalSource online;
+    auto catalogHit = acquire_resolution_catalog({git_requirement("git", identity, branch)},
+      AcquisitionMode::offline, online, offline);
+    assert(catalogHit.valid() && catalogHit.catalog);
     auto miss = offline.resolve_git(identity, TagRevision{"missing"});
     assert(miss.status == GitQueryStatus::failed &&
       miss.diagnostic.find("offline_git_metadata_unavailable") != std::string::npos);
     assert(miss.diagnostic.find("git_revision_unresolved") == std::string::npos);
+    auto catalogMiss = acquire_resolution_catalog({git_requirement("git-missing", identity, TagRevision{"missing"})},
+      AcquisitionMode::offline, online, offline);
+    assert(!catalogMiss.valid() && !catalogMiss.catalog);
+    assert(online.registryCalls == 0 && online.gitCalls == 0);
     // Branch/tag mappings are cached observations; no freshness is asserted offline.
   }
 
@@ -304,7 +337,9 @@ namespace
     assert(committed.valid());
     assert(trusted.load("vix").state == admission.proposedState);
     OfflineCachedPackageMetadataSource source(trusted, cache, *authorities.value, verifier);
-    auto acquired = acquire_resolution_catalog({registry_requirement("x", xIdentity)}, source);
+    NeverExternalSource unusedOnline;
+    auto acquired = acquire_resolution_catalog({registry_requirement("x", xIdentity)},
+      AcquisitionMode::offline, unusedOnline, source);
     assert(acquired.valid() && acquired.catalog);
     auto graph = resolve_packages({registry_requirement("x", xIdentity)}, *acquired.catalog);
     assert(graph.valid());
@@ -336,12 +371,24 @@ namespace
     NeverExternalSource gitSource;
     VerifiedRoutedPackageMetadataSource online(*locations.value, *authorities.value,
       failing, verifier, gitSource);
-    const auto acquired = acquire_resolution_catalog({registry_requirement("x", xIdentity)}, online);
+    OfflineCachedPackageMetadataSource offline(trusted, cache, *authorities.value, verifier);
+    const auto acquired = acquire_resolution_catalog({registry_requirement("x", xIdentity)},
+      AcquisitionMode::online, online, offline);
     assert(!acquired.valid() && !acquired.catalog);
     assert(acquired.issues.size() == 1);
     assert(acquired.issues.front().code == MetadataAcquisitionErrorCode::registry_source_failure);
     assert(acquired.issues.front().message.find("all_registry_locations_untrusted_or_failed") != std::string::npos);
     assert(failing.locations.size() == 1 && failing.locations.front() == "online-origin");
+    assert(cache.registryReads == 0 && cache.gitReads == 0);
+
+    FixedLocationSource successful;
+    successful.value = observation(50, digestA, xIdentity, {release(xIdentity)});
+    VerifiedRoutedPackageMetadataSource routed(*locations.value, *authorities.value,
+      successful, verifier, gitSource);
+    const auto onlineCatalog = acquire_resolution_catalog({registry_requirement("x", xIdentity)},
+      AcquisitionMode::online, routed, offline);
+    assert(onlineCatalog.valid() && onlineCatalog.catalog);
+    assert(successful.locations == std::vector<std::string>{"online-origin"});
     assert(cache.registryReads == 0 && cache.gitReads == 0);
   }
 

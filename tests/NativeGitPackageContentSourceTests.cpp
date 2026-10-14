@@ -581,7 +581,7 @@ namespace
       GitCliPackageContentSource source(root.path() / "work-success", runner);
       FilesystemPackageContentStore store(objectRoot);
       NoRegistrySource registry;
-      const auto result = acquire_locked_package_content(repositoryLock, *emptyRegistryDirectory.value,
+      const auto result = acquire_locked_package_content(repositoryLock, AcquisitionMode::online, *emptyRegistryDirectory.value,
         registry, source, store);
       assert(result.valid() && result.entries.size() == 1);
       assert(result.entries.front().state == PackageContentAcquisitionState::acquired);
@@ -616,12 +616,25 @@ namespace
       GitCliPackageContentSource source(root.path() / "work-reuse", forbiddenGit);
       FilesystemPackageContentStore reopenedStore(objectRoot);
       NoRegistrySource registry;
-      const auto reused = acquire_locked_package_content(repositoryLock, *emptyRegistryDirectory.value,
+      const auto reused = acquire_locked_package_content(repositoryLock, AcquisitionMode::online, *emptyRegistryDirectory.value,
         registry, source, reopenedStore);
       assert(reused.valid() && reused.entries.size() == 1);
       assert(reused.entries.front().state == PackageContentAcquisitionState::reused);
       assert(forbiddenGit.calls == 0 && registry.calls == 0);
       assert(serialize_lockfile(repositoryLock).text == lockBefore.text);
+    }
+    {
+      CountingFailGitRunner forbiddenGit;
+      GitCliPackageContentSource source(root.path() / "work-offline", forbiddenGit);
+      FilesystemPackageContentStore emptyStore(objectRoot / "offline-miss");
+      NoRegistrySource registry;
+      const auto before = serialize_lockfile(repositoryLock);
+      const auto offlineMiss = acquire_locked_package_content(repositoryLock, AcquisitionMode::offline,
+        *emptyRegistryDirectory.value, registry, source, emptyStore);
+      assert(!offlineMiss.valid() && offlineMiss.issues.front().code ==
+        PackageContentAcquisitionIssueCode::offline_package_content_unavailable);
+      assert(forbiddenGit.calls == 0 && registry.calls == 0);
+      assert(serialize_lockfile(repositoryLock).text == before.text);
     }
     {
       const auto mismatchLock = git_lock(remote, commitA, *canonicalB.contentId);
@@ -630,7 +643,7 @@ namespace
       FilesystemPackageContentStore mismatchStore(root.path() / "content-store-mismatch");
       GitCliPackageContentSource source(root.path() / "work-mismatch", runner);
       NoRegistrySource registry;
-      const auto mismatch = acquire_locked_package_content(mismatchLock, *emptyRegistryDirectory.value,
+      const auto mismatch = acquire_locked_package_content(mismatchLock, AcquisitionMode::online, *emptyRegistryDirectory.value,
         registry, source, mismatchStore);
       assert(!mismatch.valid() && mismatch.entries.empty());
       assert(mismatch.issues.front().code == PackageContentAcquisitionIssueCode::package_content_digest_mismatch);

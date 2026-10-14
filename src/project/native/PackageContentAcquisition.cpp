@@ -1,6 +1,7 @@
 #include <vix/cli/project/native/PackageContentAcquisition.hpp>
 
 #include <algorithm>
+#include <iterator>
 #include <type_traits>
 #include <utility>
 
@@ -189,6 +190,7 @@ namespace vix::cli::project::native
 
   PackageContentAcquisitionResult acquire_locked_package_content(
     const Lockfile &lockfile,
+    AcquisitionMode mode,
     const RegistryDirectory &registries,
     RegistryPackageContentSource &registrySource,
     GitPackageContentSource &gitSource,
@@ -206,15 +208,40 @@ namespace vix::cli::project::native
 
     std::vector<bool> missing;
     missing.reserve(plan.required.size());
+    std::optional<PackageContentAcquisitionIssue> preflightFailure;
     // Preflight the full plan so corrupt/unreadable local objects fail before
     // any source is called or any new content is admitted.
     for (const auto &required : plan.required)
     {
       const auto inspected = store.inspect(required.id);
       if (!inspected.valid() || !inspected.value || *inspected.value == PackageContentAvailability::corrupt)
-        return failure(store_failure(required, inspected.issues,
-          "local package content store inspection failed closed"));
-      missing.push_back(*inspected.value == PackageContentAvailability::missing);
+      {
+        if (!preflightFailure)
+          preflightFailure = store_failure(required, inspected.issues,
+            "local package content store inspection failed closed");
+        missing.push_back(false);
+      }
+      else
+        missing.push_back(*inspected.value == PackageContentAvailability::missing);
+    }
+    if (preflightFailure)
+      return failure(std::move(*preflightFailure));
+
+    // Offline policy is intentionally applied only after inspecting the whole
+    // deterministic plan. This keeps corruption stronger than absence and
+    // lets a complete durable P10P store be reused without source access.
+    if (mode == AcquisitionMode::offline)
+    {
+      const auto firstMissing = std::find(missing.begin(), missing.end(), true);
+      if (firstMissing != missing.end())
+      {
+        const auto index = static_cast<std::size_t>(std::distance(missing.begin(), firstMissing));
+        return failure(acquisition_issue(
+          PackageContentAcquisitionIssueCode::offline_package_content_unavailable,
+          plan.required[index],
+          "content required by the lock is not available locally; offline mode prohibits package source acquisition (" +
+            plan.required[index].id.digest() + ")"));
+      }
     }
 
     PackageContentAcquisitionResult result;

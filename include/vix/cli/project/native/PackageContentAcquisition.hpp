@@ -78,6 +78,10 @@ namespace vix::cli::project::native
 
   enum class PackageContentAcquisitionState { reused, acquired };
 
+  // Source policy for exact locked-content acquisition. This is operation
+  // policy; source implementations remain unaware of online/offline mode.
+  enum class AcquisitionMode { online, offline };
+
   struct PackageContentAcquisitionEntry
   {
     PackageContentId content;
@@ -96,6 +100,7 @@ namespace vix::cli::project::native
     package_content_source_configuration_error,
     package_content_payload_too_large,
     package_content_git_source_failure,
+    offline_package_content_unavailable,
     package_content_store_failure,
   };
 
@@ -130,6 +135,7 @@ namespace vix::cli::project::native
   // source, with no cross-source fallback.
   [[nodiscard]] PackageContentAcquisitionResult acquire_locked_package_content(
     const Lockfile &lockfile,
+    AcquisitionMode mode,
     const RegistryDirectory &registries,
     RegistryPackageContentSource &registrySource,
     GitPackageContentSource &gitSource,

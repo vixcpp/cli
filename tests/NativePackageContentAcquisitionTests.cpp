@@ -308,9 +308,30 @@ namespace
     { assert(false); return {}; }
   };
 
+  class MixedAvailabilityStore final : public PackageContentStore
+  {
+  public:
+    std::vector<std::string> inspected;
+    std::vector<std::pair<std::string, PackageContentAvailability>> states;
+
+    PackageContentStoreResult inspect(const PackageContentId &id) const override
+    {
+      const_cast<MixedAvailabilityStore *>(this)->inspected.push_back(id.digest());
+      const auto found = std::find_if(states.begin(), states.end(), [&](const auto &entry)
+        { return entry.first == id.digest(); });
+      const auto state = found == states.end() ? PackageContentAvailability::missing : found->second;
+      if (state == PackageContentAvailability::corrupt)
+        return {state, {{PackageContentIssueCode::package_content_store_corrupt,
+          id.digest(), {}, "fixture corruption"}}};
+      return {state, {}};
+    }
+    PackageContentAdmissionResult admit(const VerifiedPackageContent &) override
+    { assert(false); return {}; }
+  };
+
   PackageContentAcquisitionResult acquire(const Lockfile &lock, const RegistryDirectory &directory,
     RegistryPackageContentSource &registry, GitPackageContentSource &git, PackageContentStore &store)
-  { return acquire_locked_package_content(lock, directory, registry, git, store); }
+  { return acquire_locked_package_content(lock, AcquisitionMode::online, directory, registry, git, store); }
 
   void reuse_and_registry_acquisition_test()
   {
@@ -924,6 +945,168 @@ namespace
     assert(serialize_lockfile(lock).text == before.text);
   }
 
+  void locked_content_acquisition_mode_tests()
+  {
+    const auto registryTree = tree("offline/registry.hpp", "registry package\n");
+    const auto gitTree = tree("offline/git.hpp", "git package\n");
+    const auto registryObject = encoded(registryTree);
+    const auto gitObject = encoded(gitTree);
+    assert(registryObject.valid() && gitObject.valid());
+    const auto registryLock = lock_from_nodes({registry_node("vix", "offline-registry", *registryObject.contentId)});
+    const auto gitLock = lock_from_nodes({git_node("file:///local/repository", std::string(40, 'c'), *gitObject.contentId)});
+    const auto directory = registry_directory({{"vix", {{"metadata"}}, {{"file:///mirror"}, {"https://mirror.invalid"}}}});
+    const auto registryBefore = serialize_lockfile(registryLock);
+    const auto gitBefore = serialize_lockfile(gitLock);
+    assert(registryBefore.valid() && gitBefore.valid());
+
+    // Offline complete content and online complete content both reuse P10P.
+    InMemoryPackageContentStore complete;
+    CanonicalPackageContentVerifier verifier;
+    for (const auto &item : {std::pair{registryTree, *registryObject.contentId},
+           std::pair{gitTree, *gitObject.contentId}})
+    {
+      const auto verified = verifier.verify(std::make_shared<CanonicalPackageContentCandidate>(item.first), item.second);
+      assert(verified.valid() && complete.admit(*verified.value).valid());
+    }
+    FakeRegistrySource registry;
+    FakeGitSource git;
+    auto reusedRegistry = acquire_locked_package_content(registryLock, AcquisitionMode::offline,
+      directory, registry, git, complete);
+    auto reusedGit = acquire_locked_package_content(gitLock, AcquisitionMode::offline,
+      directory, registry, git, complete);
+    assert(reusedRegistry.valid() && reusedRegistry.entries.front().state == PackageContentAcquisitionState::reused);
+    assert(reusedGit.valid() && reusedGit.entries.front().state == PackageContentAcquisitionState::reused);
+    auto onlineReuse = acquire_locked_package_content(registryLock, AcquisitionMode::online,
+      directory, registry, git, complete);
+    assert(onlineReuse.valid() && onlineReuse.entries.front().state == PackageContentAcquisitionState::reused);
+    assert(registry.calls.empty() && git.requests.empty());
+    assert(serialize_lockfile(registryLock).text == registryBefore.text);
+    assert(serialize_lockfile(gitLock).text == gitBefore.text);
+
+    // Missing content has a distinct offline policy result for both source kinds.
+    InMemoryPackageContentStore empty;
+    const auto registryMiss = acquire_locked_package_content(registryLock, AcquisitionMode::offline,
+      directory, registry, git, empty);
+    const auto gitMiss = acquire_locked_package_content(gitLock, AcquisitionMode::offline,
+      directory, registry, git, empty);
+    assert(!registryMiss.valid() && registryMiss.issues.front().code ==
+      PackageContentAcquisitionIssueCode::offline_package_content_unavailable);
+    assert(!gitMiss.valid() && gitMiss.issues.front().code ==
+      PackageContentAcquisitionIssueCode::offline_package_content_unavailable);
+    assert(registryMiss.issues.front().digest == registryObject.contentId->digest());
+    assert(registryMiss.issues.front().message.find("not available locally") != std::string::npos);
+    assert(registryMiss.issues.front().message.find("offline mode prohibits package source acquisition") != std::string::npos);
+    assert(registryMiss.issues.front().message.find(registryObject.contentId->digest()) != std::string::npos);
+    assert(registry.calls.empty() && git.requests.empty());
+    assert(empty.inspect(*registryObject.contentId).value == PackageContentAvailability::missing);
+    assert(empty.inspect(*gitObject.contentId).value == PackageContentAvailability::missing);
+    assert(serialize_lockfile(registryLock).text == registryBefore.text);
+    assert(serialize_lockfile(gitLock).text == gitBefore.text);
+
+    // Offline policy blocks the complete file/HTTPS transport stack before it
+    // can inspect a file mirror or start an HTTPS request.
+    ScriptedHttpsExecutor httpsExecutor;
+    SchemeRegistryContentTransport schemeTransport{httpsExecutor};
+    RecordingTransport recording{schemeTransport};
+    TransportRegistryPackageContentSource transportSource{recording};
+    const auto transportMiss = acquire_locked_package_content(registryLock, AcquisitionMode::offline,
+      directory, transportSource, git, empty);
+    assert(!transportMiss.valid() && transportMiss.issues.front().code ==
+      PackageContentAcquisitionIssueCode::offline_package_content_unavailable);
+    assert(recording.calls.empty() && httpsExecutor.urls.empty());
+
+    // A corrupt entry wins over an earlier missing ID in deterministic plan
+    // order and all required objects are inspected before policy is applied.
+    auto low = PackageContentId::parse("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+    auto middle = PackageContentId::parse("sha256:8888888888888888888888888888888888888888888888888888888888888888");
+    auto high = PackageContentId::parse("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+    assert(low && middle && high);
+    const auto precedenceLock = lock_from_nodes({
+      registry_node("vix", "missing-first", *low),
+      git_node("file:///local/corrupt-repository", std::string(40, 'd'), *middle),
+      registry_node("vix", "missing-after-corrupt", *high)});
+    MixedAvailabilityStore mixed;
+    mixed.states = {{middle->digest(), PackageContentAvailability::corrupt}};
+    FakeRegistrySource neverRegistry;
+    FakeGitSource neverGit;
+    const auto precedence = acquire_locked_package_content(precedenceLock, AcquisitionMode::offline,
+      directory, neverRegistry, neverGit, mixed);
+    assert(!precedence.valid() && precedence.issues.front().code ==
+      PackageContentAcquisitionIssueCode::package_content_store_failure);
+    assert(mixed.inspected == std::vector<std::string>({low->digest(), middle->digest(), high->digest()}));
+    assert(neverRegistry.calls.empty() && neverGit.requests.empty());
+
+    // Corruption is fail-closed in both modes; it is never repaired from a source.
+    CorruptStore corrupt;
+    const auto offlineCorrupt = acquire_locked_package_content(registryLock, AcquisitionMode::offline,
+      directory, neverRegistry, neverGit, corrupt);
+    const auto onlineCorrupt = acquire_locked_package_content(registryLock, AcquisitionMode::online,
+      directory, neverRegistry, neverGit, corrupt);
+    assert(!offlineCorrupt.valid() && !onlineCorrupt.valid());
+    assert(offlineCorrupt.issues.front().code == PackageContentAcquisitionIssueCode::package_content_store_failure);
+    assert(onlineCorrupt.issues.front().code == PackageContentAcquisitionIssueCode::package_content_store_failure);
+    assert(neverRegistry.calls.empty() && neverGit.requests.empty());
+    assert(serialize_lockfile(registryLock).text == registryBefore.text);
+    assert(serialize_lockfile(gitLock).text == gitBefore.text);
+
+    // A shared digest referenced by Registry and Git lock nodes remains one
+    // required P10P object and is reused without selecting either source.
+    const auto sharedLock = lock_from_nodes({
+      registry_node("vix", "shared-registry", *registryObject.contentId),
+      git_node("file:///local/shared", std::string(40, 'e'), *registryObject.contentId)});
+    const auto sharedBefore = serialize_lockfile(sharedLock);
+    auto shared = acquire_locked_package_content(sharedLock, AcquisitionMode::offline,
+      directory, registry, git, complete);
+    assert(shared.valid() && shared.entries.size() == 1);
+    assert(shared.entries.front().state == PackageContentAcquisitionState::reused);
+    assert(registry.calls.empty() && git.requests.empty());
+    assert(serialize_lockfile(sharedLock).text == sharedBefore.text);
+  }
+
+  void offline_restart_and_multi_project_reuse_test()
+  {
+    const auto packageTree = tree("include/shared.hpp", "shared durable package\n");
+    const auto object = encoded(packageTree);
+    assert(object.valid());
+    const auto projectALock = lock_from_nodes({registry_node("vix", "project-a", *object.contentId)});
+    const auto projectBLock = lock_from_nodes({registry_node("vix", "project-b", *object.contentId)});
+    const auto projectABefore = serialize_lockfile(projectALock);
+    const auto projectBBefore = serialize_lockfile(projectBLock);
+    assert(projectABefore.valid() && projectBBefore.valid());
+    TestRoot mirror;
+    write_bytes(mirror_object_path(mirror.path(), *object.contentId), *object.canonicalBytes);
+    const auto directory = registry_directory({{"vix", {{"metadata"}}, {{file_location(mirror.path())}}}});
+    TestRoot sharedStoreRoot;
+    FileRegistryContentTransport fileTransport;
+    RecordingTransport onlineRecording{fileTransport};
+    TransportRegistryPackageContentSource onlineSource{onlineRecording};
+    FakeGitSource git;
+    {
+      FilesystemPackageContentStore firstStore{sharedStoreRoot.path()};
+      FakeRegistrySource unused;
+      assert(firstStore.inspect(*object.contentId).value == PackageContentAvailability::missing);
+      const auto acquired = acquire_locked_package_content(projectALock, AcquisitionMode::online,
+        directory, onlineSource, git, firstStore);
+      assert(acquired.valid() && acquired.entries.front().state == PackageContentAcquisitionState::acquired);
+      assert(onlineRecording.calls.size() == 1);
+      assert(firstStore.inspect(*object.contentId).value == PackageContentAvailability::available);
+      assert(serialize_lockfile(projectALock).text == projectABefore.text);
+    }
+
+    CountingTransport forbiddenTransport;
+    TransportRegistryPackageContentSource offlineSource{forbiddenTransport};
+    {
+      // Different project identity, reopened durable store, and offline mode.
+      FilesystemPackageContentStore reopenedStore{sharedStoreRoot.path()};
+      FakeRegistrySource forbiddenRegistry;
+      const auto reused = acquire_locked_package_content(projectBLock, AcquisitionMode::offline,
+        directory, offlineSource, git, reopenedStore);
+      assert(reused.valid() && reused.entries.front().state == PackageContentAcquisitionState::reused);
+      assert(forbiddenTransport.calls == 0 && forbiddenRegistry.calls.empty() && git.requests.empty());
+      assert(serialize_lockfile(projectBLock).text == projectBBefore.text);
+    }
+  }
+
   void https_transport_url_status_redirect_and_limit_tests()
   {
     const std::string digest = "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
@@ -1216,5 +1399,7 @@ int main()
   registry_transport_failure_classification_test();
   https_transport_url_status_redirect_and_limit_tests();
   https_acquisition_end_to_end_tests();
+  locked_content_acquisition_mode_tests();
+  offline_restart_and_multi_project_reuse_test();
   return 0;
 }

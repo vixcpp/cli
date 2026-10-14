@@ -189,6 +189,100 @@ target_include_directories(vix_cli_native_toml_parser_tests SYSTEM PRIVATE
 )
 add_test(NAME vix_cli_native_toml_parser_tests COMMAND vix_cli_native_toml_parser_tests)
 
+add_executable(vix_cli_native_canonical_hash_tests
+  NativeCanonicalHashTests.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+)
+target_include_directories(vix_cli_native_canonical_hash_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_canonical_hash_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_canonical_hash_tests COMMAND vix_cli_native_canonical_hash_tests)
+
+add_executable(vix_cli_native_lockfile_tests
+  NativeLockfileTests.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_lockfile_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_lockfile_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_lockfile_tests COMMAND vix_cli_native_lockfile_tests)
+
+add_executable(vix_cli_native_project_lock_state_tests
+  NativeProjectLockStateTests.cpp
+  ../src/project/native/ProjectLockState.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_project_lock_state_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_project_lock_state_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_project_lock_state_tests COMMAND vix_cli_native_project_lock_state_tests)
+
+add_executable(vix_cli_native_resolver_tests
+  NativeResolverTests.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_resolver_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_resolver_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_resolver_tests COMMAND vix_cli_native_resolver_tests)
+
+add_executable(vix_cli_native_resolution_catalog_tests
+  NativeResolutionCatalogTests.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_resolution_catalog_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_resolution_catalog_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_resolution_catalog_tests COMMAND vix_cli_native_resolution_catalog_tests)
+
+add_executable(vix_cli_native_metadata_acquisition_tests
+  NativeMetadataAcquisitionTests.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_metadata_acquisition_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_metadata_acquisition_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_metadata_acquisition_tests COMMAND vix_cli_native_metadata_acquisition_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

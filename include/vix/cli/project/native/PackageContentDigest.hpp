@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -45,6 +46,7 @@ namespace vix::cli::project::native
     package_content_tree_conflict,
     invalid_symlink_target,
     unsupported_package_content_entry,
+    invalid_canonical_encoding,
   };
 
   struct CanonicalPackageContentIssue
@@ -68,6 +70,18 @@ namespace vix::cli::project::native
   // acquisition may stream the same canonical byte domain.
   [[nodiscard]] CanonicalPackageContentResult canonicalize_package_content_tree(
     const CanonicalPackageTree &tree);
+
+  struct CanonicalPackageContentParseResult
+  {
+    std::optional<CanonicalPackageTree> tree;
+    std::vector<CanonicalPackageContentIssue> issues;
+    [[nodiscard]] bool valid() const noexcept { return tree.has_value() && issues.empty(); }
+  };
+
+  // Strict inverse of the P10O canonical encoding. Successful parses are
+  // required to serialize back to the exact input bytes.
+  [[nodiscard]] CanonicalPackageContentParseResult parse_canonical_package_content(
+    std::string_view bytes);
 
   // Candidate adapter for the P10N verified-token boundary. Its immutable
   // logical tree is hashed before the verifier can mint a token.

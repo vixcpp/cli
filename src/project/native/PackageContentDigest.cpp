@@ -1,7 +1,7 @@
 #include <vix/cli/project/native/PackageContentDigest.hpp>
 
 #include <algorithm>
-#include <cstdint>
+#include <charconv>
 #include <cstring>
 #include <set>
 #include <string_view>
@@ -76,6 +76,67 @@ namespace vix::cli::project::native
     CanonicalPackageContentIssue make_issue(CanonicalPackageContentIssueCode code,
       std::string path, std::string message)
     { return {code, std::move(path), std::move(message)}; }
+
+    class CanonicalReader
+    {
+    public:
+      explicit CanonicalReader(std::string_view input) : input_(input) {}
+
+      bool consume(std::string_view expected)
+      {
+        if (input_.substr(position_, expected.size()) != expected) return false;
+        position_ += expected.size();
+        return true;
+      }
+
+      bool decimal(char delimiter, std::size_t &value)
+      {
+        const auto end = input_.find(delimiter, position_);
+        if (end == std::string_view::npos || end == position_) return false;
+        const auto digits = input_.substr(position_, end - position_);
+        if (digits.size() > 1 && digits.front() == '0') return false;
+        std::size_t parsed = 0;
+        const auto conversion = std::from_chars(digits.data(), digits.data() + digits.size(), parsed);
+        if (conversion.ec != std::errc{} || conversion.ptr != digits.data() + digits.size()) return false;
+        value = parsed;
+        position_ = end + 1;
+        return true;
+      }
+
+      bool length_field(std::string_view prefix, std::string &value)
+      {
+        if (!consume(prefix)) return false;
+        std::size_t length = 0;
+        if (!decimal(':', length) || length > input_.size() - position_) return false;
+        value.assign(input_.data() + position_, length);
+        position_ += length;
+        return consume("\n");
+      }
+
+      bool content_field(std::vector<std::byte> &value)
+      {
+        if (!consume("content=")) return false;
+        std::size_t length = 0;
+        if (!decimal(':', length) || length > input_.size() - position_) return false;
+        value.reserve(length);
+        for (std::size_t index = 0; index < length; ++index)
+          value.push_back(static_cast<std::byte>(static_cast<unsigned char>(input_[position_ + index])));
+        position_ += length;
+        return consume("\n");
+      }
+
+      [[nodiscard]] bool finished() const noexcept { return position_ == input_.size(); }
+
+    private:
+      std::string_view input_;
+      std::size_t position_{0};
+    };
+
+    CanonicalPackageContentParseResult invalid_encoding(std::string message)
+    {
+      return {std::nullopt, {make_issue(CanonicalPackageContentIssueCode::invalid_canonical_encoding,
+        {}, std::move(message))}};
+    }
 
     void append_length_field(std::string &output, std::string_view field, std::string_view value)
     {
@@ -266,6 +327,49 @@ namespace vix::cli::project::native
     result.canonicalBytes = std::move(bytes);
     result.contentId = std::move(*id);
     return result;
+  }
+
+  CanonicalPackageContentParseResult parse_canonical_package_content(std::string_view bytes)
+  {
+    CanonicalReader reader{bytes};
+    if (!reader.consume("VIX-PACKAGE-CONTENT-v1\n") || !reader.consume("entry-count="))
+      return invalid_encoding("canonical package content has an invalid domain or entry-count field");
+    std::size_t count = 0;
+    if (!reader.decimal('\n', count) || count > bytes.size() / 5u)
+      return invalid_encoding("canonical package content has an invalid or unbounded entry count");
+
+    CanonicalPackageTree tree;
+    tree.entries.reserve(count);
+    for (std::size_t index = 0; index < count; ++index)
+    {
+      CanonicalPackageEntry entry;
+      if (!reader.consume("entry\n") || !reader.length_field("path=", entry.path))
+        return invalid_encoding("canonical package entry or path field is malformed");
+      if (reader.consume("type=4:file\n"))
+      {
+        if (reader.consume("executable=1:0\n")) entry.executable = false;
+        else if (reader.consume("executable=1:1\n")) entry.executable = true;
+        else return invalid_encoding("canonical regular-file executable field is invalid");
+        entry.kind = CanonicalPackageEntryKind::file;
+        if (!reader.content_field(entry.content))
+          return invalid_encoding("canonical regular-file content length or bytes are malformed");
+      }
+      else if (reader.consume("type=7:symlink\n"))
+      {
+        entry.kind = CanonicalPackageEntryKind::symlink;
+        if (!reader.length_field("target=", entry.target))
+          return invalid_encoding("canonical symlink target length or bytes are malformed");
+      }
+      else return invalid_encoding("canonical package entry type is unknown");
+      tree.entries.push_back(std::move(entry));
+    }
+    if (!reader.finished()) return invalid_encoding("canonical package content has trailing bytes");
+
+    auto canonical = canonicalize_package_content_tree(tree);
+    if (!canonical.valid()) return {std::nullopt, std::move(canonical.issues)};
+    if (*canonical.canonicalBytes != bytes)
+      return invalid_encoding("package content bytes are valid data but not in canonical encoding/order");
+    return {std::move(tree), {}};
   }
 
   PackageContentVerificationResult CanonicalPackageContentVerifier::verify(

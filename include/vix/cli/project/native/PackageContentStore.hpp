@@ -16,6 +16,8 @@
 
 namespace vix::cli::project::native
 {
+  class FilesystemPackageContentStore;
+
   class PackageContentId final
   {
   public:
@@ -46,6 +48,7 @@ namespace vix::cli::project::native
   private:
     friend class PackageContentVerifier;
     friend class InMemoryPackageContentStore;
+    friend class FilesystemPackageContentStore;
     VerifiedPackageContent(PackageContentId id,
       std::shared_ptr<const PackageContentCandidate> candidate, std::string equivalenceKey)
       : id_(std::move(id)), candidate_(std::move(candidate)), equivalenceKey_(std::move(equivalenceKey)) {}
@@ -61,6 +64,11 @@ namespace vix::cli::project::native
     package_content_verification_failed,
     package_content_unavailable,
     package_content_conflict,
+    package_content_store_io_error,
+    package_content_store_corrupt,
+    package_content_store_conflict,
+    package_content_store_lock_error,
+    package_content_encoding_invalid,
     invalid_content_id,
     invalid_lockfile
   };
@@ -97,7 +105,7 @@ namespace vix::cli::project::native
       const PackageContentId &id, std::string message) const;
   };
 
-  enum class PackageContentAvailability { missing, available };
+  enum class PackageContentAvailability { missing, available, corrupt };
 
   struct PackageContentStoreResult
   {

@@ -468,6 +468,30 @@ target_include_directories(vix_cli_native_package_content_acquisition_tests SYST
 add_test(NAME vix_cli_native_package_content_acquisition_tests
   COMMAND vix_cli_native_package_content_acquisition_tests)
 
+add_executable(vix_cli_native_git_package_content_source_tests
+  NativeGitPackageContentSourceTests.cpp
+  ../src/project/native/PackageContentAcquisition.cpp
+  ../src/project/native/FilesystemPackageContentStore.cpp
+  ../src/project/native/PackageContentDigest.cpp
+  ../src/project/native/GitPackageContentSource.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_git_package_content_source_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_git_package_content_source_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+find_package(Threads REQUIRED)
+target_link_libraries(vix_cli_native_git_package_content_source_tests PRIVATE Threads::Threads)
+add_test(NAME vix_cli_native_git_package_content_source_tests
+  COMMAND vix_cli_native_git_package_content_source_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

@@ -244,6 +244,30 @@ namespace
     assert(serialize_lockfile(gitLock).text == gitBefore.text);
   }
 
+  void unsafe_git_symlink_rejected_by_p10o_test()
+  {
+    const auto expected = encoded(tree("expected", "locked"));
+    assert(expected.valid());
+    CanonicalPackageEntry unsafe;
+    unsafe.path = "include/link";
+    unsafe.kind = CanonicalPackageEntryKind::symlink;
+    unsafe.target = "../../outside";
+    const CanonicalPackageTree untrustedTree{{unsafe}};
+    const auto lock = lock_from_nodes({git_node("https://example.invalid/symlink",
+      std::string(40, 'e'), *expected.contentId)});
+    FakeRegistrySource registry;
+    FakeGitSource git;
+    git.response = {PackageContentSourceStatus::available,
+      std::make_shared<CanonicalPackageContentCandidate>(untrustedTree), {}};
+    InMemoryPackageContentStore store;
+    const auto result = acquire(lock, registry_directory({}), registry, git, store);
+    assert(!result.valid());
+    assert(result.issues.front().code == PackageContentAcquisitionIssueCode::package_content_integrity_failure);
+    assert(!result.issues.front().canonicalIssues.empty());
+    assert(result.issues.front().canonicalIssues.front().code == CanonicalPackageContentIssueCode::invalid_symlink_target);
+    assert(store.inspect(*expected.contentId).value == PackageContentAvailability::missing);
+  }
+
   void registry_integrity_and_mirror_routing_test()
   {
     const auto contentTree = tree("pkg", "expected\n");
@@ -443,6 +467,7 @@ int main()
   reuse_and_registry_acquisition_test();
   git_acquisition_and_exact_request_test();
   digest_mismatch_and_lock_immutability_test();
+  unsafe_git_symlink_rejected_by_p10o_test();
   registry_integrity_and_mirror_routing_test();
   local_corruption_and_all_transport_failure_test();
   mixed_sources_dedup_and_order_test();

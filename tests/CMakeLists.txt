@@ -343,6 +343,29 @@ target_include_directories(vix_cli_native_registry_snapshot_state_tests SYSTEM P
 add_test(NAME vix_cli_native_registry_snapshot_state_tests
   COMMAND vix_cli_native_registry_snapshot_state_tests)
 
+add_executable(vix_cli_native_registry_offline_metadata_tests
+  NativeRegistryOfflineMetadataTests.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_offline_metadata_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_offline_metadata_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_registry_offline_metadata_tests
+  COMMAND vix_cli_native_registry_offline_metadata_tests)
+
 add_executable(vix_cli_ctest_execution_tests
   CTestExecutionTests.cpp
   ../src/project/cmake/CTestExecution.cpp

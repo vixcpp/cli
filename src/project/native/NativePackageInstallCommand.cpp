@@ -26,6 +26,11 @@ namespace vix::cli::project::native
     return {};
   }
 
+  fs::path package_materialization_root(const fs::path &projectRoot)
+  {
+    return projectRoot / ".vix" / "packages";
+  }
+
   int run_native_install_command(const std::vector<std::string> &arguments, const fs::path &workingDirectory)
   {
     const auto parsedArguments = parse_native_install_arguments(arguments);
@@ -111,7 +116,8 @@ namespace vix::cli::project::native
       GitCliPackageContentSource gitSource{fs::temp_directory_path() / "vix-git-content-install", gitRunner};
       FilesystemPackageContentStore store{storePath};
       auto result = install_native_project_packages(workingDirectory, AcquisitionMode::online,
-        *registryBuild.value, registrySource, gitSource, store, workingDirectory / ".vix" / "packages");
+        *registryBuild.value, registrySource, gitSource, store,
+        package_materialization_root(workingDirectory));
       if (!result.valid())
       {
         const auto &issue = result.issues.front();

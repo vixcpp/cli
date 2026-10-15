@@ -1561,9 +1561,8 @@ namespace vix::commands::RunCommand::detail
       replayConfig.target_path = plan.scriptPath;
       replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
       replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
-      replayConfig.command = opt.watch
-                                 ? "vix dev " + plan.scriptPath.string()
-                                 : "vix run " + plan.scriptPath.string();
+      replayConfig.command = "vix run " + plan.scriptPath.string() +
+                             (opt.watch ? " --watch" : "");
       replayConfig.resolved_command = plan.runCmd;
       replayConfig.vix_args = opt.scriptFlags;
       replayConfig.app_args = opt.runArgs;

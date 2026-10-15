@@ -202,7 +202,12 @@ namespace vix::cli::project::native
         "native project paths are invalid or missing");
       return result;
     }
-    if (!validate_lockfile(lockfile).valid() || !validate_lockfile_integrity(lockfile).valid())
+    const bool hasPackageRequirements = !project.packages.empty();
+    const bool hasValidPackageGraph = hasPackageRequirements
+      ? validate_lockfile(lockfile).valid() && validate_lockfile_integrity(lockfile).valid()
+      : lockfile.roots.empty() && lockfile.nodes.empty() && packages.empty() &&
+          validate_lockfile_integrity(lockfile).valid();
+    if (!hasValidPackageGraph)
     {
       issue(result, PackageBuildGraphIssueCode::invalid_lockfile, "vix.lock",
         "locked package graph is semantically invalid or fails integrity validation");
@@ -462,6 +467,26 @@ namespace vix::cli::project::native
     for (const auto &[id, package] : info)
       if (package.project) append_uses(*package.project, id, false, package.root);
     append_uses(project, {}, true, root);
+
+    if (!project.tests.empty())
+    {
+      out << "enable_testing()\n";
+      std::set<std::string> testNames;
+      std::set<std::string> rootTargetNames;
+      for (const auto &target : project.targets) rootTargetNames.insert(target.name);
+      for (const auto &test : project.tests)
+      {
+        if (test.name.empty() || !testNames.insert(test.name).second ||
+            !rootTargetNames.contains(test.target))
+        {
+          issue(result, PackageBuildGraphIssueCode::invalid_project, test.name,
+            "test registration is duplicate or references an unavailable root target");
+          continue;
+        }
+        out << "add_test(NAME " << bracket(test.name) << " COMMAND $<TARGET_FILE:"
+            << test.target << ">)\n";
+      }
+    }
 
     if (!result.issues.empty()) return result;
     result.cmakeLists = out.str();

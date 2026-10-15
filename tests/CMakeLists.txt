@@ -82,12 +82,6 @@ add_executable(vix_cli_git_progress_parser_tests GitProgressParserTests.cpp)
 target_include_directories(vix_cli_git_progress_parser_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 add_test(NAME vix_cli_git_progress_parser_tests COMMAND vix_cli_git_progress_parser_tests)
 
-add_executable(vix_cli_module_manifest_tests ModuleManifestTests.cpp
-  ../src/modules/ModuleManifest.cpp ../src/commands/modules/ModulesContent.cpp
-  ../src/commands/modules/ModulesUtils.cpp)
-target_include_directories(vix_cli_module_manifest_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-add_test(NAME vix_cli_module_manifest_tests COMMAND vix_cli_module_manifest_tests)
-
 add_executable(vix_cli_module_graph_tests ModuleGraphTests.cpp
   ../src/modules/ModuleGraph.cpp)
 target_include_directories(vix_cli_module_graph_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
@@ -117,6 +111,23 @@ target_include_directories(vix_cli_project_discovery_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
 )
 add_test(NAME vix_cli_project_discovery_tests COMMAND vix_cli_project_discovery_tests)
+
+add_executable(vix_cli_native_new_project_tests
+  NativeNewProjectTests.cpp
+  ../src/commands/NewCommand.cpp
+  ../src/commands/InitCommand.cpp
+  ../src/commands/new/NewGenerator.cpp
+  ../src/project/ProjectDiscovery.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_new_project_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_new_project_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_new_project_tests COMMAND vix_cli_native_new_project_tests)
 
 add_executable(vix_cli_target_selection_tests
   TargetSelectionTests.cpp
@@ -610,6 +621,73 @@ endif()
 add_test(NAME vix_cli_native_package_content_acquisition_tests
   COMMAND vix_cli_native_package_content_acquisition_tests)
 
+add_executable(vix_cli_native_development_runtime_tests
+  NativeDevelopmentRuntimeTests.cpp
+  ../src/project/ProjectDiscovery.cpp
+  ../src/project/TargetSelection.cpp
+  ../src/project/TestSelection.cpp
+  ../src/project/cmake/CMakeFileApi.cpp
+  ../src/project/cmake/CMakeProjectAdapter.cpp
+  ../src/project/cmake/CTestDiscovery.cpp
+  ../src/project/cmake/CTestExecution.cpp
+  ../src/project/native/NativeDevelopmentRuntime.cpp
+  ../src/project/native/NativePackageInstallCommand.cpp
+  ../src/project/native/NativePackageInstall.cpp
+  ../src/project/native/PackageCommandRuntime.cpp
+  ../src/project/native/NativeDependencyMutation.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+  ../src/project/native/RegistryMetadataSource.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/FilesystemMetadataStorage.cpp
+  ../src/project/native/GitPackageMetadataSource.cpp
+  ../src/project/native/GitPackageContentSource.cpp
+  ../src/project/native/PackageContentAcquisition.cpp
+  ../src/project/native/RegistryContentTransport.cpp
+  ../src/project/native/PackageMaterialization.cpp
+  ../src/project/native/FilesystemPackageContentStore.cpp
+  ../src/project/native/PackageContentDigest.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/ProjectLockState.cpp
+  ../src/project/native/PackageBuildGraph.cpp
+)
+target_include_directories(vix_cli_native_development_runtime_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_development_runtime_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::engine)
+endif()
+if (TARGET vix::process)
+  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::process)
+endif()
+if (TARGET vix::json)
+  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::json)
+endif()
+if (TARGET vix::crypto)
+  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::crypto)
+endif()
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::requests)
+endif()
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix_warnings)
+endif()
+find_package(Threads REQUIRED)
+target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE Threads::Threads)
+add_test(NAME vix_cli_native_development_runtime_tests
+  COMMAND vix_cli_native_development_runtime_tests)
+
 add_executable(vix_cli_native_git_package_content_source_tests
   NativeGitPackageContentSourceTests.cpp
   ../src/project/native/PackageContentAcquisition.cpp
@@ -675,13 +753,14 @@ add_test(
     -P ${CMAKE_CURRENT_SOURCE_DIR}/TestsTargetMigrationTest.cmake
 )
 
-add_test(
-  NAME vix_cli_targets_command_tests
-  COMMAND ${CMAKE_COMMAND}
-    -DVIX_CLI_EXECUTABLE=$<TARGET_FILE:vix_cli>
-    -DVIX_P4_FIXTURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/fixtures/project_file_api
-    -P ${CMAKE_CURRENT_SOURCE_DIR}/TargetsCommandTest.cmake
+add_executable(vix_cli_dev_command_forwarding_tests
+  DevCommandForwardingTests.cpp
+  ../src/commands/DevCommand.cpp
 )
+target_include_directories(vix_cli_dev_command_forwarding_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+add_test(NAME vix_cli_dev_command_forwarding_tests COMMAND vix_cli_dev_command_forwarding_tests)
 
 add_test(
   NAME vix_cli_build_target_migration_tests
@@ -903,21 +982,6 @@ add_test(
 )
 
 add_test(
-  NAME vix_cli_module_git_install_contracts
-  COMMAND
-    bash
-    ${CMAKE_CURRENT_SOURCE_DIR}/ModuleGitInstallContractTest.sh
-    ${CMAKE_BINARY_DIR}/vix
-)
-
-add_test(
-  NAME vix_cli_init_and_auto_git
-  COMMAND
-    ${CMAKE_CURRENT_SOURCE_DIR}/InitAndAutoGitTest.sh
-    ${CMAKE_BINARY_DIR}/vix
-)
-
-add_test(
   NAME vix_cli_run_script_dependency_path
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/RunScriptDependencyPathTest.sh
@@ -1009,12 +1073,4 @@ add_test(NAME vix_cli_run_execution_paths_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_compiled_dependency_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCompiledDependencyContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_dev_option_coverage
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevOptionCoverageTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_dev_project_contract
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevProjectContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_dev_single_cpp_contract
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevSingleCppContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_dev_single_cpp_signal_contract
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/dev/DevSingleCppSignalContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 set_tests_properties(vix_cli_run_vix_app_contract vix_cli_run_cache_contract vix_cli_build_passthrough_contract PROPERTIES LABELS "contract;known-regression")

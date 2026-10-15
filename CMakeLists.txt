@@ -62,7 +62,7 @@ list(FILTER CLI_SOURCES EXCLUDE REGEX "/src/app/AppProjectResolver\\.cpp$")
 # These command implementations remain historical source assets, but are not
 # part of the canonical C++ development CLI.
 list(FILTER CLI_SOURCES EXCLUDE REGEX
-  "/src/commands/(AgentCommand|GameExportCommand|NoteCommand|DesktopCommand|MobileCommand|MobileCommandUnavailable|OrmCommand|DbCommand|P2PCommand|MakeCommand|TaskCommand|ServiceCommand|ProxyCommand|HealthCommand|DeployCommand|LogsCommand|EnvCommand|ProductionCommand|WsCommand)\\.cpp$|/src/commands/replay/ReplayCommand\\.cpp$|/src/commands/(db|ws|env)/.*\\.cpp$")
+  "/src/commands/(AgentCommand|GameExportCommand|NoteCommand|DesktopCommand|MobileCommand|MobileCommandUnavailable|OrmCommand|DbCommand|P2PCommand|TaskCommand|ServiceCommand|ProxyCommand|HealthCommand|DeployCommand|LogsCommand|EnvCommand|ProductionCommand|WsCommand)\\.cpp$|/src/commands/replay/ReplayCommand\\.cpp$|/src/commands/(db|ws|env)/.*\\.cpp$")
 list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )

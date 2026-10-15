@@ -120,6 +120,12 @@ namespace
     assert(graph.cmakeLists->find("target_link_libraries(app PRIVATE a_core)") != std::string::npos);
     assert(graph.cmakeLists->find("target_link_libraries(app PRIVATE b_core)") != std::string::npos);
     assert(graph.cmakeLists->find("target_link_libraries(a_core PUBLIC b_core)") != std::string::npos);
+    auto registeredTestProject = *appManifest.value;
+    registeredTestProject.tests.push_back({"app-smoke", "app"});
+    const auto testGraph = generate_package_build_graph(registeredTestProject, projectRoot, lock, materialized);
+    assert(testGraph.valid() && testGraph.cmakeLists);
+    assert(testGraph.cmakeLists->find("enable_testing()") != std::string::npos);
+    assert(testGraph.cmakeLists->find("add_test(NAME [[app-smoke]] COMMAND $<TARGET_FILE:app>)") != std::string::npos);
     const auto repeated = generate_package_build_graph(*appManifest.value, projectRoot, lock, materialized);
     assert(repeated.valid() && repeated.cmakeLists == graph.cmakeLists);
 

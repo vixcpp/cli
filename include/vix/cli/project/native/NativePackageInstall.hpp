@@ -65,6 +65,8 @@ namespace vix::cli::project::native
     const std::filesystem::path &materializationRoot);
 
   [[nodiscard]] std::filesystem::path package_content_store_path();
+  [[nodiscard]] std::filesystem::path package_materialization_root(
+    const std::filesystem::path &projectRoot);
   [[nodiscard]] int run_native_install_command(
     const std::vector<std::string> &arguments,
     const std::filesystem::path &workingDirectory = std::filesystem::current_path());

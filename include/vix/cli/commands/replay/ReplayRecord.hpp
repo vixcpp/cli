@@ -116,7 +116,7 @@ namespace vix::commands::replay
   /**
    * @brief Full replayable execution record.
    *
-   * A ReplayRecord is the durable description of a `vix run`, `vix dev`,
+   * A ReplayRecord is the durable description of a `vix run` operation,
    * or future runtime execution. It stores enough information to explain
    * what happened and to replay the same command later.
    */
@@ -180,7 +180,7 @@ namespace vix::commands::replay
      * @brief Reconstructed public command.
      *
      * Example:
-     * vix dev server.cpp
+     * vix run --watch server.cpp
      */
     std::string command;
 

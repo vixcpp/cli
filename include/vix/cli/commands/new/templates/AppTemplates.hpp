@@ -125,7 +125,7 @@ WAF_MODE=basic
   /// src/app/ModuleRegistry.cpp for a new App project.
   ///
   /// The default implementation is intentionally empty, but it gives the
-  /// project a clean integration point after `vix modules add <name>`.
+  /// project a clean integration point for an internal application module.
   std::string make_app_module_registry_cpp();
 
   /// README.md for a new App project.

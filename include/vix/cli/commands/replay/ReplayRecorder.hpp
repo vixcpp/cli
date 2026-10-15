@@ -148,7 +148,7 @@ namespace vix::commands::replay
   /**
    * @brief Records one replayable Vix execution.
    *
-   * ReplayRecorder is used by `vix run`, `vix dev`, and later by server/runtime
+   * ReplayRecorder is used by `vix run` and later by server/runtime
    * capture code. It owns the run id, log paths, timing information, and final
    * persistence of the ReplayRecord.
    */

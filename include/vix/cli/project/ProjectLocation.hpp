@@ -11,7 +11,8 @@ namespace vix::cli::project
 {
   enum class ProjectSystem
   {
-    cmake
+    cmake,
+    native_vix
   };
 
   struct ProjectLocation

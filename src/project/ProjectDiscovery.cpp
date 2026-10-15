@@ -34,7 +34,13 @@ namespace vix::cli::project
 
     while (!current.empty())
     {
-      if (marker_is_regular_file(current / "CMakeLists.txt"))
+      const bool hasCMake = marker_is_regular_file(current / "CMakeLists.txt");
+      const bool hasNative = marker_is_regular_file(current / "vix.toml");
+      if (hasCMake && hasNative)
+        return {std::nullopt, ProjectError::ambiguous_project_authority};
+      if (hasNative)
+        return {ProjectLocation{current, ProjectSystem::native_vix}, std::nullopt};
+      if (hasCMake)
         return {ProjectLocation{current, ProjectSystem::cmake}, std::nullopt};
 
       const Path parent = current.parent_path();

@@ -14,8 +14,8 @@ explicitly classified until its real-effect contract is added.
 | `clean`      | main | yes               | CleanCommand         | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
 | `completion` | no   | yes               | CompletionCommand    | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
 | `deps`       | no   | yes               | InstallCommand       | deprecated install       | PROJECT_MUTATION | UNCOVERED | —                           |
-| `dev`        | main | yes               | DevCommand           | —                        | LONG_RUNNING     | UNCOVERED | —                           |
 | `doctor`     | main | yes               | DoctorCommand        | —                        | READ_ONLY_LOCAL  | UNCOVERED | —                           |
+| `dev`        | main | yes               | DevCommand           | —                        | LONG_RUNNING     | PASS      | vix_cli_dev_command_forwarding_tests |
 | `fmt`        | main | yes               | FmtCommand           | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
 | `i`          | no   | yes               | InstallCommand       | install                  | PROJECT_MUTATION | UNCOVERED | —                           |
 | `info`       | main | yes               | InfoCommand          | —                        | READ_ONLY_LOCAL  | UNCOVERED | —                           |
@@ -24,7 +24,6 @@ explicitly classified until its real-effect contract is added.
 | `list`       | main | yes               | ListCommand          | —                        | READ_ONLY_LOCAL  | UNCOVERED | —                           |
 | `login`      | main | yes               | CloudCommand::login  | —                        | NETWORK          | UNCOVERED | —                           |
 | `logout`     | main | yes               | CloudCommand::logout | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
-| `modules`    | main | yes               | ModulesCommand       | —                        | PROJECT_MUTATION | UNCOVERED | —                           |
 | `new`        | main | yes               | NewCommand           | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
 | `outdated`   | main | yes               | OutdatedCommand      | —                        | NETWORK          | UNCOVERED | —                           |
 | `pack`       | main | yes               | PackCommand          | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
@@ -36,7 +35,6 @@ explicitly classified until its real-effect contract is added.
 | `run`        | main | yes               | RunCommand           | implicit `.cpp`/`.vix`   | LOCAL_WRITE      | PASS      | vix_cli_run_core_contract   |
 | `search`     | main | yes               | SearchCommand        | —                        | NETWORK          | UNCOVERED | —                           |
 | `store`      | main | yes               | StoreCommand         | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
-| `targets`    | main | yes               | TargetsCommand       | —                        | READ_ONLY_LOCAL  | PASS      | vix_cli_targets_command_tests |
 | `test`       | main | yes               | TestsCommand         | tests                    | LOCAL_WRITE      | UNCOVERED | —                           |
 | `tests`      | no   | yes               | TestsCommand         | test                     | LOCAL_WRITE      | UNCOVERED | —                           |
 | `uninstall`  | main | yes               | UninstallCommand     | —                        | SYSTEM           | UNCOVERED | —                           |

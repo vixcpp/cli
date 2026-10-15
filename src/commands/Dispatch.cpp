@@ -15,7 +15,6 @@
 #include <vix/cli/commands/NewCommand.hpp>
 #include <vix/cli/commands/InitCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
-#include <vix/cli/commands/TargetsCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
@@ -32,7 +31,6 @@
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
-#include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
@@ -99,14 +97,6 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::BuildCommand::help(); }});
 
-    add({"targets",
-         "Project",
-         "List configured CMake targets",
-         [](const Args &a)
-         { return vix::commands::TargetsCommand::run(a); },
-         []()
-         { return vix::commands::TargetsCommand::help(); }});
-
     add({"run",
          "Project",
          "Build (if needed) then run",
@@ -117,7 +107,7 @@ namespace vix::cli::dispatch
 
     add({"dev",
          "Project",
-         "Hot reload dev mode",
+         "Run a C++ project while watching for changes",
          [](const Args &a)
          { return vix::commands::DevCommand::run(a); },
          []()
@@ -371,14 +361,6 @@ namespace vix::cli::dispatch
          { return vix::commands::UninstallCommand::run(a); },
          []()
          { return vix::commands::UninstallCommand::help(); }});
-
-    add({"modules",
-         "Project",
-         "Optional project modules (init/add/list/check)",
-         [](const Args &a)
-         { return vix::commands::ModulesCommand::run(a); },
-         []()
-         { return vix::commands::ModulesCommand::help(); }});
 
   }
 

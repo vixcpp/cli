@@ -81,6 +81,22 @@ namespace
     assert(cmakeResult.location->root == cmake);
     assert(cmakeResult.location->system == project::ProjectSystem::cmake);
 
+    const fs::path native = root / "native";
+    fs::create_directories(native / "src");
+    touch(native / "vix.toml");
+    const auto nativeResult = project::discover_project(native / "src");
+    assert(nativeResult.success());
+    assert(nativeResult.location->root == native);
+    assert(nativeResult.location->system == project::ProjectSystem::native_vix);
+
+    const fs::path ambiguous = root / "ambiguous";
+    fs::create_directories(ambiguous);
+    touch(ambiguous / "vix.toml");
+    touch(ambiguous / "CMakeLists.txt");
+    const auto ambiguousResult = project::discover_project(ambiguous);
+    assert(!ambiguousResult.success());
+    assert(ambiguousResult.error == project::ProjectError::ambiguous_project_authority);
+
     const fs::path outer = root / "outer";
     const fs::path inner = outer / "inner";
     fs::create_directories(inner / "src" / "deep");

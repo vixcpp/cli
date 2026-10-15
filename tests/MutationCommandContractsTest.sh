@@ -100,34 +100,3 @@ UPDATE_OK="$ROOT/update-ok"; write_update_project "$UPDATE_OK"
 grep -q '"version": "2.0.0"' "$UPDATE_OK/vix.json"
 test "$(grep -c '"version": "2.0.0"' "$UPDATE_OK/vix.lock")" -eq 2
 assert_clean_mutation_state "$UPDATE_OK"
-
-module_failure_case() {
-  local project="$1" registration="$2"
-  mkdir -p "$project/modules"
-  printf '%s' "$registration" > "$project/$3"
-  cp "$project/$3" "$project/original"
-  if (cd "$project" && VIX_TEST_FAIL_MODULE_REGISTRATION=1 "$VIX_BIN" modules add auth >"$project/failure.log" 2>&1); then exit 1; fi
-  grep -q 'Injected module registration failure.' "$project/failure.log"
-  test ! -e "$project/modules/auth"
-  test -z "$(find "$project/modules" -name '.auth.vix-txn-*' -print -quit)"
-  cmp "$project/original" "$project/$3"
-  assert_clean_mutation_state "$project"
-}
-
-module_failure_case "$ROOT/module-app-fail" $'# ORIGINAL APP\n\nname = "module_app"\nstandard = "c++20"\n' vix.app
-module_failure_case "$ROOT/module-cmake-fail" $'# ORIGINAL CMAKE\ncmake_minimum_required(VERSION 3.20)\nproject(module_cmake)\n' CMakeLists.txt
-
-MODULE_OK="$ROOT/module-ok"
-mkdir -p "$MODULE_OK/modules"
-printf '# KEEP\nname = "module_ok"\nstandard = "c++20"\n' > "$MODULE_OK/vix.app"
-(cd "$MODULE_OK" && "$VIX_BIN" modules add auth >/dev/null)
-test -f "$MODULE_OK/modules/auth/vix.module"; test -f "$MODULE_OK/modules/auth/CMakeLists.txt"
-test -f "$MODULE_OK/modules/auth/include/auth/AuthModule.hpp"; test -f "$MODULE_OK/modules/auth/src/AuthModule.cpp"
-test -f "$MODULE_OK/modules/auth/include/auth/controllers/AuthController.hpp"; test -f "$MODULE_OK/modules/auth/src/controllers/AuthController.cpp"
-test -f "$MODULE_OK/modules/auth/tests/test_auth.cpp"
-grep -q '\[module.auth\]' "$MODULE_OK/vix.app"
-assert_clean_mutation_state "$MODULE_OK"
-(cd "$MODULE_OK" && "$VIX_BIN" modules disable auth >/dev/null)
-grep -q 'enabled = false' "$MODULE_OK/vix.app"; assert_clean_mutation_state "$MODULE_OK"
-(cd "$MODULE_OK" && "$VIX_BIN" modules enable auth >/dev/null)
-grep -q 'enabled = true' "$MODULE_OK/vix.app"; assert_clean_mutation_state "$MODULE_OK"

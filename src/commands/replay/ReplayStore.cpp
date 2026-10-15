@@ -231,7 +231,7 @@ namespace vix::commands::replay
     std::error_code ec;
     if (!fs::exists(latest, ec) || ec)
     {
-      err = "no replay runs found. Run `vix run` or `vix dev` first.";
+      err = "no replay runs found. Run `vix run` first.";
       return std::nullopt;
     }
 

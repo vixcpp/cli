@@ -100,7 +100,6 @@ namespace vix::commands::RunCommand::detail
     {
       return v == "--verbose" || v == "--quiet" || v == "-q" ||
              v == "--watch" || v == "--reload" ||
-             v == "--dev-mode" ||
              v == "--force-server" || v == "--force-script" ||
              v == "--san" || v == "--no-san" ||
              v == "--ubsan" || v == "--tsan" ||
@@ -489,27 +488,9 @@ namespace vix::commands::RunCommand::detail
       {
         opt.localCache = true;
       }
-      else if (a == "--dep")
-      {
-        opt.tempDeps.push_back(take_value(args, i, "--dep", opt));
-        if (opt.parseFailed)
-          return opt;
-      }
-      else if (a.rfind("--dep=", 0) == 0)
-      {
-        opt.tempDeps.push_back(take_eq_value(a, "--dep="));
-      }
-      else if (a == "--save")
-      {
-        opt.saveTempDeps = true;
-      }
       else if (a == "--replay")
       {
         opt.replay = true;
-      }
-      else if (a == "--dev-mode")
-      {
-        opt.devMode = true;
       }
       else if (a == "--log-level" || a == "--loglevel")
       {
@@ -1122,44 +1103,6 @@ namespace vix::commands::RunCommand::detail
     if (!discovered.success())
       return std::nullopt;
     return discovered.location->root;
-  }
-
-  bool project_has_vue_frontend(const fs::path &projectDir)
-  {
-    const fs::path manifest = projectDir / "vix.json";
-
-    std::error_code ec;
-    if (!fs::exists(manifest, ec) || ec)
-      return false;
-
-    std::ifstream in(manifest);
-    if (!in)
-      return false;
-
-    std::string content(
-        (std::istreambuf_iterator<char>(in)),
-        std::istreambuf_iterator<char>());
-
-    return content.find("\"template\"") != std::string::npos &&
-           content.find("\"vue\"") != std::string::npos &&
-           content.find("\"frontend\"") != std::string::npos;
-  }
-
-  void print_vue_fullstack_banner()
-  {
-    std::cout << "\n"
-              << "  " << CYAN << BOLD << "Vix app running" << RESET << "\n\n"
-
-              << "  " << GRAY << "Backend" << RESET << "\n"
-              << "    " << CYAN << "Vix" << RESET << ": http://localhost:8080\n\n"
-
-              << "  " << GRAY << "Frontend" << RESET << "\n"
-              << "    " << CYAN << "Vue" << RESET << ": run "
-              << BOLD << "cd frontend && npm run dev" << RESET << "\n"
-              << "    " << GRAY << "URL" << RESET << ": http://localhost:5173\n\n"
-
-              << "  " << GRAY << "API" << RESET << "\n"
-              << "    /api -> Vix backend\n\n";
   }
 
   void apply_log_level_env(const Options &opt)

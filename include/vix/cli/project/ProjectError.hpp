@@ -13,6 +13,7 @@ namespace vix::cli::project
   {
     project_not_found,
     ambiguous_project,
+    ambiguous_project_authority,
     unsupported_project_system,
     configured_metadata_unavailable,
     target_not_found,
@@ -31,6 +32,7 @@ namespace vix::cli::project
     {
     case ProjectError::project_not_found: return "project_not_found";
     case ProjectError::ambiguous_project: return "ambiguous_project";
+    case ProjectError::ambiguous_project_authority: return "ambiguous_project_authority";
     case ProjectError::unsupported_project_system: return "unsupported_project_system";
     case ProjectError::configured_metadata_unavailable: return "configured_metadata_unavailable";
     case ProjectError::target_not_found: return "target_not_found";

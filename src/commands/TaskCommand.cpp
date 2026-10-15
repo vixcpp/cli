@@ -12,7 +12,6 @@
  *
  */
 #include <vix/cli/commands/TaskCommand.hpp>
-#include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/FmtCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/CheckCommand.hpp>
@@ -56,7 +55,6 @@ namespace
 {
   enum class TaskKind
   {
-    Dev,
     Run,
     Fmt,
     Check,
@@ -72,7 +70,6 @@ namespace
   };
 
   constexpr TaskSpec kBuiltins[] = {
-      {"dev", "Run in dev mode with hot reload", TaskKind::Dev},
       {"run", "Run the application", TaskKind::Run},
       {"fmt", "Format code with clang-format", TaskKind::Fmt},
       {"check", "Validate build, tests, runtime and sanitizers", TaskKind::Check},
@@ -792,9 +789,6 @@ namespace
   {
     switch (task)
     {
-    case TaskKind::Dev:
-      return vix::commands::DevCommand::run(args);
-
     case TaskKind::Run:
       return vix::commands::RunCommand::run(args);
 
@@ -1231,7 +1225,6 @@ namespace vix::commands
         << "  vix task --help\n\n"
 
         << "Built-in tasks\n"
-        << "  dev       Run in dev mode with hot reload\n"
         << "  run       Run the application\n"
         << "  fmt       Format code\n"
         << "  check     Validate build, tests, runtime and sanitizers\n"

@@ -1,25 +1,32 @@
-/**
- *
- *  @file DevCommand.hpp
- *  @author Gaspard Kirira
- *
- *  Copyright 2025, Gaspard Kirira.  All rights reserved.
- *  https://github.com/vixcpp/vix
- *  Use of this source code is governed by a MIT license
- *  that can be found in the License file.
- *
- *  Vix.cpp
- */
 #ifndef VIX_DEV_COMMAND_HPP
 #define VIX_DEV_COMMAND_HPP
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace vix::commands::DevCommand
 {
-  int run(const std::vector<std::string> &args);
+  namespace detail
+  {
+    inline std::vector<std::string> watched_run_arguments(
+        const std::vector<std::string> &arguments)
+    {
+      std::vector<std::string> forwarded = arguments;
+      forwarded.insert(forwarded.begin(), "--watch");
+      return forwarded;
+    }
+
+    template <typename Run>
+    int dispatch_watched_run(const std::vector<std::string> &arguments, Run &&run)
+    {
+      const auto forwarded = watched_run_arguments(arguments);
+      return std::forward<Run>(run)(forwarded);
+    }
+  }
+
+  int run(const std::vector<std::string> &arguments);
   int help();
-} // namespace vix::commands::DevCommand
+}
 
 #endif

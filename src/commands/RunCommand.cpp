@@ -13,7 +13,6 @@
  */
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
-#include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 #include <vix/cli/commands/replay/ReplayRecorder.hpp>
@@ -22,8 +21,10 @@
 #include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 #include <vix/cli/project/ProjectDiscovery.hpp>
+#include <vix/cli/project/NativeProjectCommandDispatch.hpp>
 #include <vix/cli/project/TargetSelection.hpp>
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
+#include <vix/cli/project/native/NativeDevelopmentRuntime.hpp>
 #include <vix/cli/build/BuildContext.hpp>
 #include <vix/engine/ExecutionPlanning.hpp>
 #include <vix/engine/SanitizerMode.hpp>
@@ -79,147 +80,6 @@ namespace
     fs::path path{};
   };
 
-  bool should_clear_terminal_now()
-  {
-    return false;
-  }
-
-  std::vector<std::string> split_dep_spec(const std::string &spec)
-  {
-    std::vector<std::string> args;
-    if (spec.find(';') == std::string::npos || spec.find('=') == std::string::npos)
-    {
-      args.push_back(spec);
-      args.push_back("--yes");
-      return args;
-    }
-
-    std::string git;
-    std::istringstream in(spec);
-    std::string part;
-    std::vector<std::pair<std::string, std::string>> options;
-    while (std::getline(in, part, ';'))
-    {
-      const auto eq = part.find('=');
-      if (eq == std::string::npos)
-        continue;
-      std::string key = part.substr(0, eq);
-      std::string value = part.substr(eq + 1);
-      if (key == "git" || key == "url")
-        git = value;
-      else
-        options.push_back({key, value});
-    }
-
-    if (!git.empty())
-      args.push_back(git);
-    for (const auto &[key, value] : options)
-    {
-      if (key == "tag" || key == "branch" || key == "rev" || key == "target" || key == "name" || key == "include" || key == "subdirectory")
-      {
-        args.push_back("--" + key);
-        args.push_back(value);
-      }
-      else if (key == "header_only" || key == "header-only")
-      {
-        if (value == "1" || value == "true" || value == "yes" || value == "on")
-          args.push_back("--header-only");
-      }
-    }
-    args.push_back("--yes");
-    return args;
-  }
-
-  int install_temp_deps_in_dir(const fs::path &dir, const std::vector<std::string> &deps)
-  {
-    std::error_code ec;
-    const fs::path old = fs::current_path(ec);
-    if (ec)
-      return 1;
-    fs::current_path(dir, ec);
-    if (ec)
-      return 1;
-
-    int rc = 0;
-    for (const std::string &dep : deps)
-    {
-      std::ostringstream muted;
-      std::streambuf *oldOut = std::cout.rdbuf(muted.rdbuf());
-      rc = vix::commands::InstallCommand::run(split_dep_spec(dep));
-      std::cout.rdbuf(oldOut);
-      if (rc != 0)
-        break;
-    }
-
-    fs::current_path(old, ec);
-    return rc;
-  }
-
-  fs::path make_temp_run_dep_dir()
-  {
-    std::error_code ec;
-    fs::path base = fs::temp_directory_path(ec);
-    if (ec)
-      base = fs::current_path();
-    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
-    fs::path dir = base / ("vix-run-deps-" + std::to_string(static_cast<long long>(now)));
-    fs::create_directories(dir, ec);
-    return dir;
-  }
-
-  int run_with_temporary_deps(Options opt)
-  {
-    if (!opt.singleCpp || opt.cppFile.empty())
-    {
-      error("--dep is supported for single C++ files");
-      return 2;
-    }
-
-    if (opt.saveTempDeps)
-    {
-      for (const std::string &dep : opt.tempDeps)
-      {
-        const int rc = vix::commands::InstallCommand::run(split_dep_spec(dep));
-        if (rc != 0)
-          return rc;
-      }
-      opt.tempDeps.clear();
-      return run_script_mode(opt);
-    }
-
-    const fs::path original = fs::absolute(opt.cppFile).lexically_normal();
-    const fs::path tempDir = make_temp_run_dep_dir();
-    const fs::path tempSource = tempDir / original.filename();
-    std::error_code ec;
-    fs::copy_file(original, tempSource, fs::copy_options::overwrite_existing, ec);
-    if (ec)
-    {
-      error("cannot prepare temporary run source: " + ec.message());
-      return 1;
-    }
-
-    {
-      std::ofstream app(tempDir / "vix.app", std::ios::binary | std::ios::trunc);
-      app << "name = \"vix-temp-run\"\n";
-      app << "type = \"executable\"\n";
-      app << "standard = \"c++20\"\n";
-      app << "sources = [\"" << original.filename().string() << "\"]\n";
-    }
-
-    const int installRc = install_temp_deps_in_dir(tempDir, opt.tempDeps);
-    if (installRc != 0)
-    {
-      fs::remove_all(tempDir, ec);
-      return installRc;
-    }
-
-    opt.cppFile = tempSource;
-    opt.tempDeps.clear();
-    const int rc = run_script_mode(opt);
-    fs::remove_all(tempDir, ec);
-    return rc;
-  }
-
   std::string trim_copy_local(std::string s)
   {
     auto is_ws = [](unsigned char c)
@@ -234,25 +94,6 @@ namespace
 
     s.erase(0, i);
     return s;
-  }
-
-  static void warn_if_env_file_missing(const fs::path &projectDir, const Options &opt)
-  {
-    std::error_code ec;
-
-    const fs::path envFile = projectDir / ".env";
-    if (fs::exists(envFile, ec) && !ec)
-      return;
-
-    const fs::path envExample = projectDir / ".env.example";
-    if (!fs::exists(envExample, ec) || ec)
-      return;
-
-    if (!opt.envHint)
-      return;
-
-    hint(".env not found.");
-    step("cp .env.example .env");
   }
 
   std::string to_dep_folder_name(const std::string &pkg)
@@ -325,124 +166,6 @@ namespace
     }
 
     return out;
-  }
-
-  static int build_project_with_vix_build(
-      const fs::path &projectDir,
-      const Options &opt,
-      fs::path &outExecutable)
-  {
-    namespace detail = vix::commands::RunCommand::detail;
-
-    std::string requestedTarget;
-
-    if (!opt.appName.empty() &&
-        opt.appName != projectDir.filename().string())
-    {
-      requestedTarget = opt.appName;
-    }
-
-    const fs::path buildDir = projectDir / "build-ninja";
-
-    std::ostringstream cmd;
-
-#ifdef _WIN32
-    cmd << "cmd /C \"cd /D "
-        << detail::quote(projectDir.string())
-        << " && vix build --build-target ";
-
-    if (!requestedTarget.empty())
-      cmd << detail::quote(requestedTarget);
-    else
-      cmd << "all";
-#else
-    cmd << "cd "
-        << detail::quote(projectDir.string())
-        << " && vix build --build-target ";
-
-    if (!requestedTarget.empty())
-      cmd << detail::quote(requestedTarget);
-    else
-      cmd << "all";
-#endif
-
-    if (!opt.preset.empty())
-      cmd << " --preset " << detail::quote(opt.preset);
-
-    if (opt.jobs > 0)
-      cmd << " -j " << opt.jobs;
-
-    if (opt.verbose)
-      cmd << " -v";
-    else
-      cmd << " -q";
-
-    if (opt.clean)
-      cmd << " --clean";
-
-    if (opt.withSqlite)
-      cmd << " --with-sqlite";
-
-    if (opt.withMySql)
-      cmd << " --with-mysql";
-
-#ifdef _WIN32
-    cmd << "\"";
-#endif
-
-    const int rawCode =
-        detail::run_cmd_live_filtered(
-            cmd.str(),
-            "Building project");
-
-    const int buildExit =
-        detail::normalize_exit_code(rawCode);
-
-    if (buildExit == 130)
-    {
-      hint("Program interrupted by user.");
-      return 0;
-    }
-
-    if (buildExit != 0)
-      return buildExit;
-
-    auto exePath =
-        detail::resolve_runnable_executable(
-            buildDir,
-            requestedTarget);
-
-    if (!exePath)
-    {
-      if (!requestedTarget.empty())
-      {
-        error("Built executable not found for target: " + requestedTarget);
-        hint("Resolved build directory: " + buildDir.string());
-        detail::print_runnable_executable_candidates(buildDir);
-        return 1;
-      }
-
-      const auto candidates = detail::find_runnable_executables(buildDir, false);
-
-      if (candidates.empty())
-      {
-        error("No runnable executable found.");
-        hint("Resolved build directory: " + buildDir.string());
-        hint("The project may only build libraries, tests, or non-runnable targets.");
-        return 1;
-      }
-
-      error("Multiple runnable executables found.");
-      hint("Run one explicitly:");
-
-      for (const auto &p : candidates)
-        step("  vix run " + detail::runnable_executable_display_path(p));
-
-      return 1;
-    }
-
-    outExecutable = *exePath;
-    return 0;
   }
 
   static int run_normalized_cmake_project(
@@ -566,14 +289,6 @@ namespace
     }
   }
 
-  void clear_terminal_if_enabled()
-  {
-    if (!should_clear_terminal_now())
-      return;
-
-    std::cout << "\033[2J\033[H" << std::flush;
-  }
-
   struct RunProgress
   {
     using Clock = std::chrono::steady_clock;
@@ -655,40 +370,6 @@ namespace
 #endif
   }
 
-  bool looks_like_test_binary(const fs::path &p)
-  {
-    const std::string n = p.filename().string();
-    return n.find("_test") != std::string::npos ||
-           n.find("_tests") != std::string::npos ||
-           n.rfind("test_", 0) == 0;
-  }
-
-  std::optional<fs::path> find_single_test_binary(const fs::path &buildDir)
-  {
-    std::error_code ec{};
-    if (!fs::exists(buildDir, ec) || ec)
-      return std::nullopt;
-
-    std::vector<fs::path> candidates;
-
-    for (auto it = fs::directory_iterator(buildDir, ec);
-         !ec && it != fs::directory_iterator();
-         ++it)
-    {
-      const auto &p = it->path();
-      if (!is_executable_file(p))
-        continue;
-      if (!looks_like_test_binary(p))
-        continue;
-      candidates.push_back(p);
-    }
-
-    if (candidates.size() == 1)
-      return candidates.front();
-
-    return std::nullopt;
-  }
-
   void ensure_mode_env_for_run(const Options &opt)
   {
     const char *cur = vix::env::legacy::getenv("VIX_MODE");
@@ -756,113 +437,6 @@ namespace
     return 1;
   }
 
-  int run_test_binary_if_present(
-      const fs::path &buildDir,
-      const std::vector<std::string> &runArgs,
-      const std::string &cwd,
-      bool showUi)
-  {
-    auto testExe = find_single_test_binary(buildDir);
-    if (!testExe)
-      return -1;
-
-    if (showUi)
-    {
-      info("No main executable found. Detected library project; running test binary:");
-      step(testExe->string());
-    }
-
-#ifdef _WIN32
-    std::string cmd = "\"" + testExe->string() + "\"";
-    cmd += vix::commands::RunCommand::detail::join_quoted_args_local(runArgs);
-
-    Options fakeOpt;
-    fakeOpt.cwd = cwd;
-    cmd = vix::commands::RunCommand::detail::wrap_with_cwd_if_needed(fakeOpt, cmd);
-
-    int raw = std::system(cmd.c_str());
-    int testExit = vix::commands::RunCommand::detail::normalize_exit_code(raw);
-
-    if (testExit == 130)
-    {
-      hint("ℹ Program interrupted by user (SIGINT).");
-      return 0;
-    }
-
-    if (testExit != 0)
-    {
-      error("Test execution failed (exit code " + std::to_string(testExit) + ").");
-      return testExit;
-    }
-
-    return 0;
-#else
-    std::string testCmd = vix::commands::RunCommand::detail::quote(testExe->string());
-    testCmd += vix::commands::RunCommand::detail::join_quoted_args_local(runArgs);
-
-    Options fakeOpt;
-    fakeOpt.cwd = cwd;
-    testCmd = vix::commands::RunCommand::detail::wrap_with_cwd_if_needed(fakeOpt, testCmd);
-
-    const LiveRunResult tr =
-        vix::commands::RunCommand::detail::run_cmd_live_filtered_capture(
-            testCmd,
-            "",
-            true,
-            0,
-            false);
-
-    const int testExit = tr.exitCode;
-
-    if (testExit == 130)
-    {
-      hint("ℹ Program interrupted by user (SIGINT).");
-      return 0;
-    }
-
-    if (testExit != 0)
-    {
-      std::string log = tr.stderrText;
-      if (!tr.stdoutText.empty())
-        log += tr.stdoutText;
-
-      bool handled = false;
-      const vix::cli::errors::RuntimeCrashEvidence evidence{
-          tr.terminatedBySignal,
-          tr.termSignal};
-
-      if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
-              log,
-              evidence))
-      {
-        const fs::path diagnosticPath{};
-
-        handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
-            log,
-            diagnosticPath,
-            "Test crashed",
-            evidence);
-
-        if (!handled &&
-            vix::cli::errors::RawLogDetectors::handleKnownRunFailure(log, diagnosticPath))
-        {
-          handled = true;
-        }
-
-        if (!handled && !tr.printed_live)
-          std::cout << log << "\n";
-      }
-
-      if (!handled)
-        error("Test execution failed (exit code " + std::to_string(testExit) + ").");
-
-      return testExit;
-    }
-
-    return 0;
-#endif
-  }
-
   int run_executable_direct(
       const fs::path &exePath,
       const Options &opt,
@@ -910,7 +484,7 @@ namespace
     replayConfig.target_path = exePath;
     replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
     replayConfig.target_kind = replay::ReplayTargetKind::Project;
-    replayConfig.command = opt.watch ? "vix dev" : "vix run";
+    replayConfig.command = opt.watch ? "vix run --watch" : "vix run";
     replayConfig.resolved_command = runCmd;
     replayConfig.app_args = opt.runArgs;
     replayConfig.watch = opt.watch;
@@ -1014,484 +588,6 @@ namespace
 
     return 0;
 #endif
-  }
-
-  // Historical vix.app run implementation retained outside canonical CLI.
-#if 0
-  [[maybe_unused]] int run_resolved_project(
-      const app::AppProjectResolveResult &resolved,
-      const Options &opt,
-      bool showUi)
-  {
-    using namespace vix::commands::RunCommand::detail;
-
-    const fs::path buildDir = resolved.userProjectDir / "build-ninja";
-    RunProgress progress(3, showUi);
-
-    {
-      std::error_code ec;
-      fs::create_directories(buildDir, ec);
-
-      if (ec)
-      {
-        error("Unable to create build directory: " + ec.message());
-        return 1;
-      }
-    }
-
-    const bool alreadyConfigured = has_cmake_cache(buildDir);
-
-    progress.phase_start("Configure project");
-
-    if (alreadyConfigured)
-    {
-      progress.phase_done("Configure project", "cache already present");
-    }
-    else
-    {
-      std::ostringstream oss;
-
-#ifdef _WIN32
-      oss << "cmd /C \"cmake"
-          << " --log-level=WARNING"
-          << " -S " << quote(resolved.cmakeSourceDir.string())
-          << " -B " << quote(buildDir.string())
-          << " -G Ninja"
-          << "\"";
-#else
-      oss << "cmake"
-          << " --log-level=WARNING"
-          << " -S " << quote(resolved.cmakeSourceDir.string())
-          << " -B " << quote(buildDir.string())
-          << " -G Ninja";
-#endif
-
-      const LiveRunResult cr = run_cmd_live_filtered_capture(
-          oss.str(),
-          "",
-          false,
-          0,
-          false);
-
-      const int code = cr.exitCode;
-
-      if (code != 0)
-      {
-        std::string log = cr.stderrText;
-
-        if (!cr.stdoutText.empty())
-          log += cr.stdoutText;
-
-        if (!log.empty())
-        {
-          const bool handled = vix::cli::ErrorHandler::printBuildErrors(
-              log,
-              resolved.cmakeListsPath,
-              "CMake configure failed");
-
-          if (!handled)
-            std::cout << log << "\n";
-        }
-
-        error("CMake configure failed.");
-        hint("Generated source directory: " + resolved.cmakeSourceDir.string());
-        hint("Build directory: " + buildDir.string());
-
-        return code != 0 ? code : 2;
-      }
-
-      progress.phase_done("Configure project", "completed");
-    }
-
-    progress.phase_start("Build project");
-
-    {
-      std::ostringstream oss;
-
-#ifdef _WIN32
-      oss << "cmd /C \"cmake --build "
-          << quote(buildDir.string());
-
-      if (resolved.generated && !resolved.targetName.empty())
-        oss << " --target " << quote(resolved.targetName);
-
-      oss << " --";
-
-      if (opt.jobs > 0)
-        oss << " -j " << opt.jobs;
-
-      oss << "\"";
-#else
-      oss << "cmake --build "
-          << quote(buildDir.string());
-
-      if (resolved.generated && !resolved.targetName.empty())
-        oss << " --target " << quote(resolved.targetName);
-
-      oss << " --";
-
-      if (opt.jobs > 0)
-        oss << " -j " << opt.jobs;
-
-      if (opt.quiet)
-        oss << " --quiet";
-#endif
-
-      clear_terminal_if_enabled();
-
-      int rawCode = 0;
-      const std::string buildLog =
-          run_and_capture_with_code(oss.str() + " 2>&1", rawCode);
-
-      const int buildExit = normalize_exit_code(rawCode);
-
-      if (buildExit == 130)
-      {
-        hint("ℹ Program interrupted by user (SIGINT).");
-        return 0;
-      }
-
-      if (buildExit != 0)
-      {
-        bool handled = false;
-
-        if (!buildLog.empty())
-        {
-          handled = vix::cli::ErrorHandler::printBuildErrors(
-              buildLog,
-              resolved.cmakeListsPath,
-              "Build failed");
-        }
-
-        if (!handled)
-        {
-          error("Build failed (exit code " + std::to_string(buildExit) + ").");
-
-          if (!buildLog.empty())
-            std::cout << buildLog << "\n";
-        }
-
-        return buildExit != 0 ? buildExit : 3;
-      }
-    }
-
-    progress.phase_done("Build project", "completed");
-    progress.phase_start("Run application");
-
-    const std::string exeName =
-        resolved.generated ? resolved.targetName : std::string{};
-
-    auto exePathOpt = resolve_runnable_executable(buildDir, exeName);
-
-    if (!exePathOpt)
-    {
-      const auto candidates = find_runnable_executables(buildDir, false);
-
-      if (candidates.size() > 1)
-      {
-        error("Multiple runnable executables found.");
-        hint("Resolved build directory: " + buildDir.string());
-        hint("Run one explicitly:");
-
-        for (const auto &p : candidates)
-        {
-          std::error_code relEc;
-          fs::path rel = fs::relative(p, fs::current_path(), relEc);
-
-          const std::string runnable =
-              relEc ? p.string() : rel.string();
-
-          step("  vix run " + runnable);
-        }
-
-        return 1;
-      }
-
-      const int testRc = run_test_binary_if_present(
-          buildDir,
-          opt.runArgs,
-          opt.cwd,
-          showUi);
-
-      if (testRc != -1)
-      {
-        progress.phase_done("Run application", "test executed");
-
-        if (showUi)
-          success("🏃 Test executed.");
-
-        return testRc;
-      }
-
-      if (!exeName.empty())
-        error("Built executable not found for target: " + exeName);
-      else
-        error("Built executable not found.");
-
-      hint("Resolved build directory: " + buildDir.string());
-      hint("No runnable application target could be resolved automatically.");
-
-      if (resolved.generated)
-        hint("Generated CMake source: " + resolved.cmakeSourceDir.string());
-
-      return 1;
-    }
-    const int runRc = run_executable_direct(
-        *exePathOpt,
-        opt,
-        "Execution failed",
-        effective_timeout_sec(opt));
-
-    if (runRc != 0)
-      return runRc;
-
-    progress.phase_done("Run application", "completed");
-
-    if (showUi)
-    {
-      if (resolved.generated)
-        success("🏃 Application started from vix.app.");
-      else
-        success("🏃 Application started.");
-    }
-
-    return 0;
-  }
-#endif
-
-  [[maybe_unused]] int run_project_with_presets(
-      const fs::path &projectDir,
-      const Options &opt,
-      bool showUi)
-  {
-    using namespace vix::commands::RunCommand::detail;
-
-    (void)showUi;
-
-    fs::path exePath;
-
-    const int buildCode =
-        build_project_with_vix_build(
-            projectDir,
-            opt,
-            exePath);
-
-    if (buildCode != 0)
-      return buildCode;
-
-    if (opt.checkOnly)
-      return 0;
-
-    const int runCode =
-        run_executable_direct(
-            exePath,
-            opt,
-            "Execution failed",
-            effective_timeout_sec(opt));
-
-    if (runCode == 130)
-    {
-      hint("Program interrupted by user.");
-      return 0;
-    }
-
-    return runCode;
-  }
-
-  static std::optional<std::filesystem::path> find_local_binary()
-  {
-    namespace fs = std::filesystem;
-
-    std::vector<fs::path> candidates;
-
-    for (auto &p : fs::directory_iterator(fs::current_path()))
-    {
-      if (!p.is_regular_file())
-        continue;
-
-      if (!is_executable_file(p.path()))
-        continue;
-
-      if (looks_like_test_binary(p.path()))
-        continue;
-
-      candidates.push_back(p.path());
-    }
-
-    if (candidates.empty())
-      return std::nullopt;
-
-    const std::string cwdName = fs::current_path().filename().string();
-
-    for (const auto &c : candidates)
-    {
-      if (c.filename() == cwdName)
-        return c;
-    }
-
-    std::vector<fs::path> filtered;
-
-    for (const auto &c : candidates)
-    {
-      const std::string name = c.filename().string();
-
-      if (name.find("test") != std::string::npos)
-        continue;
-
-      if (name.find("bench") != std::string::npos)
-        continue;
-
-      filtered.push_back(c);
-    }
-
-    if (filtered.size() == 1)
-      return filtered[0];
-
-    if (!filtered.empty())
-      return filtered[0];
-
-    return candidates[0];
-  }
-
-  struct LastBuildMetadata
-  {
-    fs::path binary;
-    vix::engine::SanitizerMode sanitizerMode{
-        vix::engine::SanitizerMode::None};
-  };
-
-  static std::optional<std::string> json_string_field(
-      const std::string &line,
-      std::string_view field)
-  {
-    const std::string key =
-        "\"" + std::string(field) + "\"";
-
-    const auto keyPos = line.find(key);
-    if (keyPos == std::string::npos)
-      return std::nullopt;
-
-    const auto colon =
-        line.find(':', keyPos + key.size());
-
-    if (colon == std::string::npos)
-      return std::nullopt;
-
-    const auto firstQuote =
-        line.find('"', colon + 1);
-
-    if (firstQuote == std::string::npos)
-      return std::nullopt;
-
-    const auto secondQuote =
-        line.find('"', firstQuote + 1);
-
-    if (secondQuote == std::string::npos)
-      return std::nullopt;
-
-    return line.substr(
-        firstQuote + 1,
-        secondQuote - firstQuote - 1);
-  }
-
-  static std::optional<LastBuildMetadata> read_last_build(
-      const fs::path &projectDir)
-  {
-    const fs::path metaFile =
-        projectDir / ".vix" / "meta.json";
-
-    std::ifstream in(metaFile);
-    if (!in)
-      return std::nullopt;
-
-    LastBuildMetadata metadata;
-    std::string sanitizerName{"none"};
-    std::string line;
-
-    while (std::getline(in, line))
-    {
-      if (const auto value =
-              json_string_field(line, "last_binary"))
-      {
-        metadata.binary = *value;
-      }
-
-      if (const auto value =
-              json_string_field(line, "sanitizer"))
-      {
-        sanitizerName = *value;
-      }
-    }
-
-    if (metadata.binary.empty())
-      return std::nullopt;
-
-    if (metadata.binary.is_relative())
-    {
-      metadata.binary =
-          projectDir / metadata.binary;
-    }
-
-    metadata.binary =
-        metadata.binary.lexically_normal();
-
-    if (sanitizerName != "none")
-    {
-      const auto parsed =
-          vix::engine::parse_sanitizer_mode(
-              sanitizerName);
-
-      if (!parsed)
-        return std::nullopt;
-
-      metadata.sanitizerMode = *parsed;
-    }
-
-    return metadata;
-  }
-  static int run_last_built_project(
-      const fs::path &projectDir,
-      const Options &opt)
-  {
-    const auto lastBuild =
-        read_last_build(projectDir);
-
-    if (!lastBuild)
-    {
-      error("No successful build found for this project.");
-      hint("Run: vix build");
-      return 1;
-    }
-
-    std::error_code ec;
-
-    fs::path executable =
-        fs::absolute(lastBuild->binary, ec);
-
-    if (ec)
-      executable =
-          lastBuild->binary.lexically_normal();
-    else
-      executable = executable.lexically_normal();
-
-    if (!is_executable_file(executable))
-    {
-      error(
-          "Last built executable is missing or not executable.");
-
-      hint(executable.string());
-      hint("Run: vix build");
-      return 1;
-    }
-
-    return run_executable_direct(
-        executable,
-        opt,
-        "Execution failed",
-        vix::commands::RunCommand::detail::
-            effective_timeout_sec(opt),
-        vix::engine::sanitizer_enabled(
-            lastBuild->sanitizerMode));
   }
 
   static RunTarget resolve_target(const Options &opt)
@@ -1665,8 +761,6 @@ namespace vix::commands::RunCommand
   int run(const std::vector<std::string> &args)
   {
     Options opt = parse(args);
-    const bool showUi = opt.ui;
-
     if (opt.parseFailed)
       return opt.parseExitCode;
 
@@ -1717,8 +811,6 @@ namespace vix::commands::RunCommand
 
     if (opt.singleCpp)
     {
-      if (!opt.tempDeps.empty())
-        return run_with_temporary_deps(opt);
       return run_script_mode(opt);
     }
 
@@ -1754,10 +846,41 @@ namespace vix::commands::RunCommand
         : (!opt.dir.empty() ? fs::absolute(fs::path(opt.dir)) : cwd);
     const auto normalizedProject =
         vix::cli::project::discover_project(normalizedBase);
+    if (!normalizedProject.success() &&
+        normalizedProject.error == vix::cli::project::ProjectError::ambiguous_project_authority)
+    {
+      error("Project contains both vix.toml and CMakeLists.txt; project authority is ambiguous.");
+      return 1;
+    }
     if (normalizedProject.success())
     {
       const std::string requestedName =
           directTarget.kind == RunTargetKind::Project ? std::string{} : opt.appName;
+
+      if (normalizedProject.location->system == vix::cli::project::ProjectSystem::native_vix && opt.watch)
+      {
+        error("watch mode is not available for native vix.toml projects yet.");
+        return 2;
+      }
+
+      const auto nativeRun = vix::cli::project::dispatch_native_run(
+        normalizedProject,
+        requestedName.empty() ? std::nullopt : std::optional<std::string>{requestedName},
+        opt.runArgs, opt.preset,
+        [](const vix::cli::project::ProjectLocation &location,
+           const std::optional<std::string> &target, const std::vector<std::string> &arguments,
+           std::string_view preset)
+        {
+          return vix::cli::project::native::run_native_project(
+            location.root, target, arguments, preset);
+        });
+      if (nativeRun)
+      {
+        const auto &result = *nativeRun;
+        if (!result.output.empty()) std::cout << result.output;
+        if (!result.success()) error("native run failed: " + result.diagnostic);
+        return result.exitCode;
+      }
 
       if (opt.watch)
       {
@@ -1773,16 +896,6 @@ namespace vix::commands::RunCommand
         return run_normalized_cmake_project(
             normalizedProject.location->root, opt, requestedName);
 
-    }
-
-    // Retain the historical local-binary convenience only when no named
-    // project target or explicit project directory was supplied.
-    if (opt.appName.empty() && opt.dir.empty())
-    {
-      if (auto binary = find_local_binary())
-        return run_executable_direct(
-            *binary, opt, "Execution failed",
-            detail::effective_timeout_sec(opt));
     }
 
     const bool explicitTarget =
@@ -1814,7 +927,6 @@ namespace vix::commands::RunCommand
     out << "Targets:\n";
     out << "  project                    Current project or project directory/name\n";
     out << "  source.cpp                 Single C++ source file\n";
-    out << "  app.vix                    Vix manifest\n";
     out << "  ./app                      Executable binary\n";
     out << "  docker://<image>           Docker image\n";
     out << "  container://<image>        Container image\n";
@@ -1840,7 +952,6 @@ namespace vix::commands::RunCommand
     out << "  --reload                   Alias for --watch\n";
     out << "  --force-server             Treat the program as a long-running server\n";
     out << "  --force-script             Treat the program as a short-lived script\n\n";
-    out << "  --dev-mode                 Use the build-ninja project watch layout\n\n";
 
     out << "Run behavior:\n";
     out << "  --ui                       Enable interactive run progress UI\n";
@@ -1853,8 +964,6 @@ namespace vix::commands::RunCommand
     out << "                             Compiler cache fingerprint: fast, strict\n\n";
 
     out << "Script mode:\n";
-    out << "  --dep <git-url>            Temporary Git dependency for single-file run\n";
-    out << "  --save                     Save --dep entries into vix.app\n";
     out << "  --auto-deps                Auto-add includes from .vix/deps/*/include\n";
     out << "  --auto-deps=local          Same as --auto-deps\n";
     out << "  --auto-deps=up             Search dependencies in parent directories too\n";

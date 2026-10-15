@@ -30,6 +30,38 @@ for command in "${commands[@]}"; do
   esac
 done
 
+for command in new init build run test dev repl add remove update install; do
+  grep -Fq "add({\"$command\"" "$DISPATCH" || {
+    echo "Required canonical command is not registered: $command" >&2
+    exit 1
+  }
+done
+
+for command in target targets module modules; do
+  if grep -Fq "add({\"$command\"" "$DISPATCH"; then
+    echo "Removed command remains registered: $command" >&2
+    exit 1
+  fi
+  if grep -Fq "cmd == \"$command\"" "$ROOT/src/CLI.cpp"; then
+    echo "Removed command remains in help routing: $command" >&2
+    exit 1
+  fi
+  if grep -Fq "out << \"  $command " "$ROOT/src/CLI.cpp"; then
+    echo "Removed command remains in top-level help: $command" >&2
+    exit 1
+  fi
+done
+
+DEV_SOURCE="$ROOT/src/commands/DevCommand.cpp"
+grep -Fq 'RunCommand::run' "$DEV_SOURCE" || {
+  echo "vix dev does not delegate to the generic run command" >&2
+  exit 1
+}
+if grep -Eiq 'ProjectDiscovery|NativeDevelopmentRuntime|DevSession|vix\.app|app\.vix|Vue|frontend|server application|web application' "$DEV_SOURCE"; then
+  echo "vix dev contains a separate or application-specific execution path" >&2
+  exit 1
+fi
+
 # These commands are intentionally outside the current generic C++ CLI
 # constitution. Keep this negative surface contract explicit so their removal
 # is not mistaken for a missing coverage row.

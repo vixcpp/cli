@@ -26,7 +26,6 @@
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/env/Legacy.hpp>
-#include <vix/cli/commands/run/dev/DevSession.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 
 #include <algorithm>
@@ -1412,9 +1411,8 @@ namespace vix::commands::RunCommand::detail
       replayConfig.target_path = state.script;
       replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
       replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
-      replayConfig.command = opt.watch
-                                 ? "vix dev " + state.script.string()
-                                 : "vix run " + state.script.string();
+      replayConfig.command = "vix run " + state.script.string() +
+                             (opt.watch ? " --watch" : "");
       replayConfig.resolved_command = cmdRun;
       replayConfig.vix_args = opt.scriptFlags;
       replayConfig.app_args = opt.runArgs;
@@ -2562,32 +2560,8 @@ namespace vix::commands::RunCommand::detail
     using Clock = std::chrono::steady_clock;
     namespace fs = std::filesystem;
 
-    const bool devMode = opt.devMode;
-    const fs::path buildDir = projectDir / (devMode ? "build-ninja" : "build-dev");
+    const fs::path buildDir = projectDir / "build-dev";
     const std::string targetName = projectDir.filename().string();
-
-    if (devMode)
-    {
-      vix::commands::RunCommand::dev::DevSession session(
-          vix::commands::RunCommand::dev::DevSessionOptions{
-              projectDir,
-              buildDir,
-              targetName,
-              opt,
-              std::chrono::milliseconds(300),
-              std::chrono::milliseconds(200),
-              opt.quiet});
-
-      const auto result = session.run();
-      return result.exitCode;
-    }
-
-    if (devMode)
-    {
-      info("Vix dev mode enabled.");
-      hint("Project: " + projectDir.string());
-      hint("Build directory: " + buildDir.string());
-    }
 
     std::error_code ec;
     fs::create_directories(buildDir, ec);
@@ -2722,46 +2696,20 @@ namespace vix::commands::RunCommand::detail
     {
       if (!has_cmake_cache(buildDir))
       {
-        if (devMode)
-          info("Configuring project for dev mode (build-ninja/).");
-        else
-          info("Configuring project for watch mode (build-dev/).");
+        info("Configuring project for watch mode (build-dev/).");
 
         std::ostringstream oss;
-
-        if (devMode)
-        {
-          oss << "cmake"
-              << " -S " << quote(projectDir.string())
-              << " -B " << quote(buildDir.string())
-              << " -G Ninja"
-              << " -DCMAKE_BUILD_TYPE=Debug"
-              << " -DCMAKE_EXPORT_COMPILE_COMMANDS=ON";
-        }
-        else
-        {
-          oss << "cd " << quote(buildDir.string()) << " && cmake ..";
-        }
+        oss << "cd " << quote(buildDir.string()) << " && cmake ..";
 
         const std::string cmd = oss.str();
 
         const int code = run_cmd_live_filtered(cmd, "Configuring project");
         if (code != 0)
         {
-          const std::string label = devMode ? "build-ninja/" : "build-dev/";
-
-          error("CMake configure failed for dev mode (" + label + ", code " + std::to_string(code) + ").");
+          error("CMake configure failed for watch mode (build-dev/, code " + std::to_string(code) + ").");
           hint("Check your CMakeLists.txt or run the command manually:");
-
-          if (devMode)
-          {
-            step("  cmake -S " + projectDir.string() + " -B " + buildDir.string() + " -G Ninja");
-          }
-          else
-          {
-            step("  cd " + buildDir.string());
-            step("  cmake ..");
-          }
+          step("  cd " + buildDir.string());
+          step("  cmake ..");
 
           return code != 0 ? code : 4;
         }
@@ -2775,7 +2723,7 @@ namespace vix::commands::RunCommand::detail
         {
           std::cout << CYAN << BOLD << "Compiling " << RESET
                     << CYAN << BOLD << targetName << RESET
-                    << GRAY << " (dev)" << RESET
+                    << GRAY << " (watch)" << RESET
                     << "\n";
         }
 
@@ -2783,15 +2731,7 @@ namespace vix::commands::RunCommand::detail
 
         std::ostringstream oss;
 
-        if (devMode)
-        {
-          oss << "cmake --build " << quote(buildDir.string())
-              << " --target " << quote(targetName);
-        }
-        else
-        {
-          oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
-        }
+        oss << "cd " << quote(buildDir.string()) << " && cmake --build .";
 
         if (fs::exists(buildDir / "build.ninja"))
         {
@@ -2818,18 +2758,16 @@ namespace vix::commands::RunCommand::detail
         {
           watch_spinner_stop();
 
-          const std::string buildLabel = devMode ? "build-ninja/" : "build-dev/";
-
           if (!buildLog.empty())
           {
             (void)vix::cli::ErrorHandler::printBuildErrors(
                 buildLog,
                 buildDir,
-                "Build failed in dev mode (" + buildLabel + ")");
+                "Build failed in watch mode (build-dev/)");
           }
           else
           {
-            error("Build failed in dev mode (" + buildLabel + ", code " + std::to_string(code) + ").");
+            error("Build failed in watch mode (build-dev/, code " + std::to_string(code) + ").");
           }
 
           hint("Fix the errors, save your files, and Vix will rebuild automatically.");

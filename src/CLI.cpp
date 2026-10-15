@@ -33,7 +33,6 @@
 #include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
-#include <vix/cli/commands/ModulesCommand.hpp>
 #include <vix/cli/commands/UpgradeCommand.hpp>
 #include <vix/cli/commands/DoctorCommand.hpp>
 #include <vix/cli/commands/UninstallCommand.hpp>
@@ -459,8 +458,6 @@ namespace vix
         return commands::CleanCommand::help();
       if (cmd == "reset")
         return commands::ResetCommand::help();
-      if (cmd == "modules")
-        return commands::ModulesCommand::help();
 
       if (cmd == "login" || cmd == "logout")
         return vix::cli::dispatch::global().help(cmd);
@@ -538,10 +535,9 @@ namespace vix
     out << "  add <package>              Add a dependency\n";
     out << "  install                    Install project dependencies\n";
     out << "  run                        Build and run a project or C++ file\n";
-    out << "  dev                        Start development mode\n";
     out << "  build                      Configure and build\n";
-    out << "  targets                    List configured CMake targets\n";
     out << "  test                       Run project tests\n";
+    out << "  dev                        Run a C++ project while watching for changes\n";
 
     out << "Project:\n";
     out << "  check                      Validate a project or source file\n";
@@ -549,7 +545,6 @@ namespace vix
     out << "  fmt                        Format C++ source files\n";
     out << "  clean                      Remove local build caches\n";
     out << "  reset                      Reset caches and dependencies\n";
-    out << "  modules                    Manage optional project modules\n\n";
 
     out << "Dependencies and registry:\n";
     out << "  login                      Authenticate with the Vix account service\n";

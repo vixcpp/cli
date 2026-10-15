@@ -171,13 +171,8 @@ namespace vix::commands::RunCommand::detail
     std::string warnedArg;
 
     bool localCache = false;
-    bool devMode{false};
     bool replay = false;
 
-    std::vector<std::string> tempDeps;
-    bool saveTempDeps = false;
-
-    bool fullstackVue = false;
   };
 
   /**
@@ -533,8 +528,6 @@ namespace vix::commands::RunCommand::detail
       const Options &opt,
       const fs::path &cwd);
 
-  bool project_has_vue_frontend(const fs::path &projectDir);
-  void print_vue_fullstack_banner();
 
   // ===========================================================================
   // Process / command execution

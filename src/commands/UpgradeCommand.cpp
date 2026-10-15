@@ -270,15 +270,6 @@ namespace vix::commands
 #endif
     }
 
-    std::string stderr_null_suffix()
-    {
-#ifdef _WIN32
-      return " 2>nul";
-#else
-      return " 2>/dev/null";
-#endif
-    }
-
     bool have_cmd(const std::string &name)
     {
 #ifdef _WIN32

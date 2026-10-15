@@ -25,7 +25,7 @@ namespace vix::commands::replay
   /**
    * @brief Describes the high-level command that produced a replay record.
    *
-   * A replay can come from `vix run`, `vix dev`, or later from a dedicated
+   * A replay can come from `vix run`, including watch mode, or later from a dedicated
    * runtime/server capture mode.
    */
   enum class ReplayMode

@@ -426,6 +426,9 @@ namespace vix
     out << "  install                    Install locked package dependencies\n";
     out << "  publish                    Publish the current Registry package\n\n";
 
+    out << "System:\n";
+    out << "  upgrade                    Upgrade Vix\n\n";
+
     out << "Global options:\n";
     out << "  --verbose                  Enable debug output\n";
     out << "  -q, --quiet                Only show warnings and errors\n";

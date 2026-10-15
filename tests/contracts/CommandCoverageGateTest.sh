@@ -10,7 +10,7 @@ MANIFEST="$ROOT/tests/contracts/CommandCoverage.md"
 CLI="${1:-}"
 
 mapfile -t commands < <(sed -n 's/^[[:space:]]*add({"\([^"]*\)".*/\1/p' "$DISPATCH" | sort -u)
-expected_commands=(add build dev init install new publish remove repl run test update)
+expected_commands=(add build dev init install new publish remove repl run test update upgrade)
 expected_sorted="$(printf '%s\n' "${expected_commands[@]}" | sort)"
 actual_sorted="$(printf '%s\n' "${commands[@]}")"
 [[ "$actual_sorted" == "$expected_sorted" ]] || {
@@ -39,14 +39,42 @@ for command in "${commands[@]}"; do
   esac
 done
 
-for command in new init build run test dev repl add remove update install publish; do
+for command in new init build run test dev repl add remove update install publish upgrade; do
   grep -Fq "add({\"$command\"" "$DISPATCH" || {
     echo "Required canonical command is not registered: $command" >&2
     exit 1
   }
 done
 
-for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion upgrade uninstall make task target targets module modules tests up i deps; do
+for completion in bash/vix zsh/_vix fish/vix.fish; do
+  file="$ROOT/share/completions/$completion"
+  [[ -f "$file" ]] || { echo "Missing shell completion asset: $completion" >&2; exit 1; }
+  for command in new init build run test dev repl add remove update install publish upgrade; do
+    grep -Eq "(^|[^[:alnum:]_-])$command([^[:alnum:]_-]|$)" "$file" || {
+      echo "Shell completion omits canonical command $command: $completion" >&2; exit 1; }
+  done
+  for command in login registry search modules targets doctor uninstall; do
+    if grep -Eq "(^|[^[:alnum:]_-])$command([^[:alnum:]_-]|$)" "$file"; then
+      echo "Retired command appears in shell completion $completion: $command" >&2; exit 1
+    fi
+  done
+done
+
+grep -Fq 'UpgradeRuntime runtime' "$ROOT/src/commands/UpgradeCommand.cpp" || {
+  echo "UpgradeCommand does not compose UpgradeRuntime" >&2; exit 1; }
+grep -Fq 'runtime.run(' "$ROOT/src/commands/UpgradeCommand.cpp" || {
+  echo "UpgradeCommand does not delegate execution to UpgradeRuntime" >&2; exit 1; }
+
+ASSEMBLER="$ROOT/../../cmake/AssembleVixDistribution.cmake"
+for input in VIX_CLI_BINARY VIX_SDK_PREFIX VIX_SDK_LIBRARIES VIX_RELEASE_TRUST VIX_DISTRIBUTION_SOURCE; do
+  grep -Fq "$input" "$ASSEMBLER" || {
+    echo "Distribution assembler lacks explicit input $input" >&2; exit 1; }
+done
+if grep -Eq 'file\(COPY .*modules/|GLOB_RECURSE' "$ASSEMBLER"; then
+  echo "Distribution assembler sweeps repository modules instead of admitted inputs" >&2; exit 1
+fi
+
+for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion uninstall make task target targets module modules tests up i deps; do
   if grep -Fq "add({\"$command\"" "$DISPATCH"; then
     echo "Removed command remains registered: $command" >&2
     exit 1
@@ -63,6 +91,8 @@ done
 
 grep -Fq 'link("https://vixcpp.com/docs")' "$ROOT/src/CLI.cpp" || {
   echo "Canonical documentation URL is missing from top-level help" >&2; exit 1; }
+grep -Fq 'out << "  upgrade                    Upgrade Vix' "$ROOT/src/CLI.cpp" || {
+  echo "Canonical upgrade help entry is missing" >&2; exit 1; }
 if grep -Fq 'docs.vixcpp.com/cli' "$ROOT/src/CLI.cpp"; then
   echo "Historical CLI documentation URL remains in top-level help" >&2
   exit 1
@@ -74,7 +104,7 @@ if [[ -n "$CLI" ]]; then
     grep -Eq "^[[:space:]]+$command([[:space:]]|$)" <<<"$help_output" || {
       echo "Canonical command is missing from top-level help: $command" >&2; exit 1; }
   done
-  for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion upgrade uninstall make task target targets module modules tests up i deps; do
+  for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion uninstall make task target targets module modules tests up i deps; do
     if grep -Eq "^[[:space:]]+$command([[:space:]]|$)" <<<"$help_output"; then
       echo "Removed command remains in top-level help: $command" >&2; exit 1
     fi

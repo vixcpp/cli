@@ -57,6 +57,58 @@ namespace vix::cli::distribution
     std::filesystem::path root_;
   };
 
+  class ExecutableExposure
+  {
+  public:
+    virtual ~ExecutableExposure() = default;
+    virtual Result<Unit> expose(const std::filesystem::path &installationRoot,
+                                const std::filesystem::path &activeExecutable) = 0;
+  };
+
+  struct BootstrapOutcome
+  {
+    std::string version;
+    std::filesystem::path installationRoot;
+    std::filesystem::path exposedExecutable;
+  };
+
+  class ManagedInstallerRuntime
+  {
+  public:
+    ManagedInstallerRuntime(ReleaseManifestSource &source, DistributionArtifactFetcher &fetcher,
+                            ArchiveExtractor &extractor, InstallationActivator &activator,
+                            ExecutableExposure &exposure)
+        : source_(source), fetcher_(fetcher), extractor_(extractor), activator_(activator), exposure_(exposure) {}
+
+    Result<BootstrapOutcome> install(const std::filesystem::path &installationRoot,
+                                     const ReleaseTrustStore &trustStore,
+                                     const std::filesystem::path &exposedExecutable,
+                                     const HostPlatform &host, const std::string &channel = "stable");
+
+  private:
+    ReleaseManifestSource &source_;
+    DistributionArtifactFetcher &fetcher_;
+    ArchiveExtractor &extractor_;
+    InstallationActivator &activator_;
+    ExecutableExposure &exposure_;
+  };
+
+  Result<std::filesystem::path> default_managed_vix_home();
+  Result<std::filesystem::path> default_vix_executable_path();
+
+#ifndef _WIN32
+  class PosixExecutableExposure final : public ExecutableExposure
+  {
+  public:
+    explicit PosixExecutableExposure(std::filesystem::path path) : path_(std::move(path)) {}
+    Result<Unit> expose(const std::filesystem::path &installationRoot,
+                        const std::filesystem::path &activeExecutable) override;
+
+  private:
+    std::filesystem::path path_;
+  };
+#endif
+
   enum class RuntimeOutcomeKind { already_current, upgraded, externally_managed, unmanaged_install };
   struct RuntimeOutcome
   {

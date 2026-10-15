@@ -13,6 +13,9 @@
 #include <set>
 #include <stdexcept>
 #include <system_error>
+#ifndef _WIN32
+#include <cstdlib>
+#endif
 
 #include <zlib.h>
 
@@ -192,6 +195,272 @@ namespace vix::cli::distribution
     if (versionRoot.empty())
       return {{}, fail(ErrorCode::release_source_missing, "distribution version root is empty")};
     return {versionRoot / "share" / "vix" / "distribution" / "source.toml", {}};
+  }
+
+  Result<fs::path> default_managed_vix_home()
+  {
+#ifdef _WIN32
+    return {{}, fail(ErrorCode::unsupported_activation_platform, "managed bootstrap is not supported on Windows yet")};
+#else
+    if (const char *overrideRoot = std::getenv("VIX_HOME"); overrideRoot && *overrideRoot)
+    {
+      const fs::path path{overrideRoot};
+      if (!path.is_absolute())
+        return {{}, fail(ErrorCode::invalid_value, "VIX_HOME must be an absolute path")};
+      return {path, {}};
+    }
+    if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+    {
+      const fs::path path{xdg};
+      if (!path.is_absolute())
+        return {{}, fail(ErrorCode::invalid_value, "XDG_DATA_HOME must be an absolute path")};
+      return {path / "vix", {}};
+    }
+    if (const char *home = std::getenv("HOME"); home && *home)
+    {
+      const fs::path path{home};
+      if (!path.is_absolute())
+        return {{}, fail(ErrorCode::invalid_value, "HOME must be an absolute path for managed installation")};
+      return {path / ".local" / "share" / "vix", {}};
+    }
+    return {{}, fail(ErrorCode::invalid_value, "HOME or XDG_DATA_HOME is required for managed installation")};
+#endif
+  }
+
+  Result<fs::path> default_vix_executable_path()
+  {
+#ifdef _WIN32
+    return {{}, fail(ErrorCode::unsupported_activation_platform, "managed bootstrap is not supported on Windows yet")};
+#else
+    const char *home = std::getenv("HOME");
+    if (!home || !*home)
+      return {{}, fail(ErrorCode::invalid_value, "HOME is required to expose vix on PATH")};
+    const fs::path path{home};
+    if (!path.is_absolute())
+      return {{}, fail(ErrorCode::invalid_value, "HOME must be an absolute path to expose vix on PATH")};
+    return {path / ".local" / "bin" / "vix", {}};
+#endif
+  }
+
+#ifndef _WIN32
+  Result<Unit> PosixExecutableExposure::expose(const fs::path &installationRoot, const fs::path &activeExecutable)
+  {
+    if (path_.empty() || installationRoot.empty() || activeExecutable.empty())
+      return {{}, fail(ErrorCode::executable_exposure_failed, "stable executable path is invalid")};
+    const auto expectedTarget = (installationRoot / "current" / "bin" / "vix").lexically_normal();
+    if (activeExecutable.lexically_normal() != expectedTarget)
+      return {{}, fail(ErrorCode::executable_exposure_failed, "PATH exposure must resolve through the managed current pointer")};
+    std::error_code ec;
+    fs::create_directories(path_.parent_path(), ec);
+    if (ec)
+      return {{}, fail(ErrorCode::executable_exposure_failed, "user executable directory could not be created")};
+    const auto desired = fs::absolute(activeExecutable, ec);
+    if (ec)
+      return {{}, fail(ErrorCode::executable_exposure_failed, "active executable path could not be resolved")};
+    const auto status = fs::symlink_status(path_, ec);
+    if (!ec && fs::exists(status))
+    {
+      if (!fs::is_symlink(status))
+        return {{}, fail(ErrorCode::executable_exposure_failed, "refusing to replace a non-symlink PATH entry")};
+      const auto existing = fs::read_symlink(path_, ec);
+      if (!ec && (path_.parent_path() / existing).lexically_normal() == desired.lexically_normal())
+        return {Unit{}, {}};
+      return {{}, fail(ErrorCode::executable_exposure_failed, "refusing to replace an unrelated vix PATH symlink")};
+    }
+    if (ec != std::errc::no_such_file_or_directory && ec)
+      return {{}, fail(ErrorCode::executable_exposure_failed, "PATH entry could not be inspected")};
+    ec.clear();
+    fs::create_symlink(desired, path_, ec);
+    if (ec)
+      return {{}, fail(ErrorCode::executable_exposure_failed, "stable PATH symlink could not be created")};
+    return {Unit{}, {}};
+  }
+#endif
+
+  Result<BootstrapOutcome> ManagedInstallerRuntime::install(const fs::path &installationRoot,
+                                                            const ReleaseTrustStore &trustStore,
+                                                            const fs::path &exposedExecutable,
+                                                            const HostPlatform &host,
+                                                            const std::string &channel)
+  {
+#ifdef _WIN32
+    (void)installationRoot;
+    (void)trustStore;
+    (void)exposedExecutable;
+    (void)host;
+    (void)channel;
+    return {{}, fail(ErrorCode::unsupported_activation_platform, "managed bootstrap is not supported on Windows yet")};
+#else
+    const auto canonicalHost = parse_host_platform(host.canonical());
+    if (installationRoot.empty() || exposedExecutable.empty() || trustStore.keys.empty() ||
+        !canonicalHost.valid() || *canonicalHost.value != host || channel.empty())
+      return {{}, fail(ErrorCode::invalid_value, "managed bootstrap inputs are invalid")};
+    auto current = activator_.current_version();
+    if (!current.valid())
+      return {{}, current.error};
+    if (current.value->has_value())
+      return {{}, fail(ErrorCode::already_installed, "a managed Vix installation is already active")};
+    std::error_code ec;
+    const auto rootStatus = fs::symlink_status(installationRoot, ec);
+    if (!ec && fs::is_symlink(rootStatus))
+      return {{}, fail(ErrorCode::staging_failed, "managed installation root must not be a symlink")};
+    if (ec != std::errc::no_such_file_or_directory && ec)
+      return {{}, fail(ErrorCode::staging_failed, "managed installation root could not be inspected")};
+    ec.clear();
+    if (fs::exists(installationRoot / "install.toml", ec) || ec)
+      return {{}, fail(ErrorCode::already_installed, "an installation receipt already exists; bootstrap will not overwrite it")};
+
+    auto signedManifest = source_.fetch(channel);
+    if (!signedManifest.valid())
+      return {{}, signedManifest.error};
+    auto verified = verify_release_manifest(signedManifest.value->manifestText, signedManifest.value->signature, trustStore, "current");
+    if (!verified.valid())
+      return {{}, verified.error};
+    const auto &manifest = verified.value->manifest();
+    if (manifest.channel != channel)
+      return {{}, fail(ErrorCode::channel_mismatch, "signed release channel differs from requested channel")};
+    if (!manifest.components.empty())
+      return {{}, fail(ErrorCode::unsupported_components, "release declares components that this bootstrap cannot install")};
+    const auto artifactIt = std::find_if(manifest.artifacts.begin(), manifest.artifacts.end(),
+                                         [&](const ReleaseArtifact &artifact) { return artifact.host == host; });
+    if (artifactIt == manifest.artifacts.end())
+      return {{}, fail(ErrorCode::unsupported_host_artifact, "release has no exact artifact for this host")};
+    if (artifactIt->archive != ArchiveFormat::tar_gz)
+      return {{}, fail(ErrorCode::unsupported_archive, "managed bootstrap currently supports tar.gz artifacts only")};
+    const auto version = version_string(manifest.version);
+    const auto layout = installation_layout(installationRoot, version);
+    if (!layout.valid())
+      return {{}, layout.error};
+    if (fs::exists(layout.value->versionRoot, ec) || ec)
+      return {{}, fail(ErrorCode::already_installed, "the release version directory already exists; bootstrap will not overwrite it")};
+
+    const auto staging = installationRoot / "staging" / version;
+    const auto stagingParent = fs::symlink_status(installationRoot / "staging", ec);
+    if (!ec && fs::is_symlink(stagingParent))
+      return {{}, fail(ErrorCode::staging_failed, "staging parent must not be a symlink")};
+    if (ec != std::errc::no_such_file_or_directory && ec)
+      return {{}, fail(ErrorCode::staging_failed, "staging parent could not be inspected")};
+    ec.clear();
+    if (fs::exists(staging, ec) || ec)
+      return {{}, fail(ErrorCode::staging_failed, "version staging path already exists")};
+    fs::create_directories(staging, ec);
+    if (ec)
+      return {{}, fail(ErrorCode::staging_failed, "version staging directory could not be created")};
+    const auto archive = fetcher_.fetch(artifactIt->location, staging / "release.archive");
+    if (!archive.valid())
+    {
+      fs::remove_all(staging, ec);
+      return {{}, archive.error};
+    }
+    const auto archiveSize = fs::file_size(*archive.value, ec);
+    if (ec || archiveSize > maximum_distribution_archive_bytes || (artifactIt->size && archiveSize != *artifactIt->size))
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::artifact_digest_mismatch, "downloaded artifact size is invalid or differs from signed metadata")};
+    }
+    std::ifstream archiveInput(*archive.value, std::ios::binary);
+    if (!archiveInput)
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::artifact_fetch_failed, "downloaded release artifact cannot be read")};
+    }
+    const std::string bytes{std::istreambuf_iterator<char>{archiveInput}, std::istreambuf_iterator<char>{}};
+    if (bytes.size() != archiveSize || !verify_distribution_artifact(bytes, artifactIt->digest).valid())
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::artifact_digest_mismatch, "downloaded artifact differs from signed size or digest")};
+    }
+    const auto extracted = extractor_.extract(artifactIt->archive, *archive.value, staging / "unpacked");
+    if (!extracted.valid())
+    {
+      fs::remove_all(staging, ec);
+      return {{}, extracted.error};
+    }
+    if (!fs::is_regular_file(*extracted.value / "bin" / "vix", ec) || ec ||
+        !fs::is_directory(*extracted.value / "share" / "vix", ec) || ec)
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::invalid_distribution, "release is missing bin/vix or share/vix")};
+    }
+    fs::create_directories(layout.value->versions, ec);
+    if (ec)
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::staging_failed, "version directory could not be created")};
+    }
+    if (fs::is_symlink(fs::symlink_status(layout.value->versions, ec)) || ec)
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::staging_failed, "versions directory is invalid or symlinked")};
+    }
+    fs::rename(*extracted.value, layout.value->versionRoot, ec);
+    if (ec)
+    {
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::staging_failed, "validated version could not be promoted")};
+    }
+    const InstallReceipt receipt{1, "current", manifest.version, host, channel, InstallKind::managed, {}, installationRoot.string()};
+    const auto receiptBytes = serialize_install_receipt(receipt);
+    if (!receiptBytes.valid())
+    {
+      fs::remove_all(layout.value->versionRoot, ec);
+      fs::remove_all(staging, ec);
+      return {{}, receiptBytes.error};
+    }
+    const auto receiptTemp = installationRoot / "install.toml.next";
+    if (fs::exists(receiptTemp, ec) || ec)
+    {
+      fs::remove_all(layout.value->versionRoot, ec);
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::staging_failed, "temporary installation receipt already exists")};
+    }
+    {
+      std::ofstream output(receiptTemp, std::ios::binary | std::ios::trunc);
+      if (!output)
+      {
+        fs::remove_all(layout.value->versionRoot, ec);
+        fs::remove_all(staging, ec);
+        return {{}, fail(ErrorCode::staging_failed, "managed installation receipt could not be staged")};
+      }
+      output.write(receiptBytes.value->data(), static_cast<std::streamsize>(receiptBytes.value->size()));
+      output.flush();
+      if (!output)
+      {
+        output.close();
+        fs::remove(receiptTemp, ec);
+        fs::remove_all(layout.value->versionRoot, ec);
+        fs::remove_all(staging, ec);
+        return {{}, fail(ErrorCode::staging_failed, "managed installation receipt could not be written")};
+      }
+    }
+    fs::rename(receiptTemp, layout.value->receipt, ec);
+    if (ec)
+    {
+      fs::remove(receiptTemp, ec);
+      fs::remove_all(layout.value->versionRoot, ec);
+      fs::remove_all(staging, ec);
+      return {{}, fail(ErrorCode::staging_failed, "managed installation receipt could not be committed")};
+    }
+    auto activated = activator_.activate(version);
+    if (!activated.valid())
+    {
+      fs::remove(layout.value->receipt, ec);
+      fs::remove_all(layout.value->versionRoot, ec);
+      fs::remove_all(staging, ec);
+      return {{}, activated.error};
+    }
+    const auto exposed = exposure_.expose(installationRoot, layout.value->current / "bin" / "vix");
+    if (!exposed.valid())
+    {
+      auto restored = activator_.rollback(std::nullopt);
+      fs::remove(layout.value->receipt, ec);
+      if (!restored.valid())
+        return {{}, fail(ErrorCode::rollback_failed, "PATH exposure failed and active pointer could not be cleared")};
+      return {{}, exposed.error};
+    }
+    fs::remove_all(staging, ec);
+    return {BootstrapOutcome{version, installationRoot, exposedExecutable}, {}};
+#endif
   }
 
   Result<SignedReleaseManifest> HttpsReleaseManifestSource::fetch(const std::string &channel)
@@ -374,7 +643,19 @@ namespace vix::cli::distribution
     return {{}, fail(ErrorCode::rollback_failed, "Windows version rollback is not implemented")};
 #else
     if (!previousVersion)
-      return {{}, fail(ErrorCode::rollback_failed, "no previous managed version is available")};
+    {
+      std::error_code ec;
+      const auto pointer = root_ / "current";
+      const auto status = fs::symlink_status(pointer, ec);
+      if (ec == std::errc::no_such_file_or_directory || status.type() == fs::file_type::not_found)
+        return {Unit{}, {}};
+      if (ec || !fs::is_symlink(status))
+        return {{}, fail(ErrorCode::rollback_failed, "initial activation pointer could not be safely removed")};
+      fs::remove(pointer, ec);
+      if (ec)
+        return {{}, fail(ErrorCode::rollback_failed, "initial activation pointer could not be removed")};
+      return {Unit{}, {}};
+    }
     auto restored = activate(*previousVersion);
     if (!restored.valid())
       return {{}, fail(ErrorCode::rollback_failed, "previous managed version could not be reactivated")};

@@ -101,6 +101,18 @@ namespace
     }
   };
 
+  struct FakeExposure final : ExecutableExposure
+  {
+    int calls{0};
+    fs::path received;
+    Result<Unit> expose(const fs::path &, const fs::path &activeExecutable) override
+    {
+      ++calls;
+      received = activeExecutable;
+      return {Unit{}, {}};
+    }
+  };
+
   const std::string secretText =
       "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
       "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
@@ -109,14 +121,15 @@ namespace
       hex_bytes("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
 
   SignedReleaseManifest signed_fixture(const std::string &archiveBytes, const std::string &generation = "current",
-                                       std::optional<ReleaseComponent> component = std::nullopt)
+                                       std::optional<ReleaseComponent> component = std::nullopt,
+                                       vix::cli::project::native::Version releaseVersion = {2, 4, 0, {}})
   {
     const auto host = parse_host_platform("x86_64-linux-gnu");
     const auto digest = digest_distribution_artifact(archiveBytes);
     assert(host.valid() && digest.valid());
     ReleaseManifest manifest;
     manifest.generation = generation;
-    manifest.version = {2, 4, 0, {}};
+    manifest.version = std::move(releaseVersion);
     manifest.channel = "stable";
     manifest.sequence = 8;
     manifest.artifacts.push_back({"host-linux", *host.value, "https://releases.invalid/vix.tar.gz",
@@ -163,6 +176,13 @@ namespace
     output << "format = 1\n\n[[trusted-key]]\nkey-id = \"runtime-test\"\nalgorithm = \"ed25519\"\npublic-key = \""
            << vix::crypto::hex_lower(publicKey) << "\"\n";
     return path;
+  }
+
+  ReleaseTrustStore trusted_release_store(const fs::path &root)
+  {
+    const auto loaded = load_release_trust_store(write_trust(root));
+    assert(loaded.valid());
+    return *loaded.value;
   }
 
   void component_release_fails_closed(const std::string &label, ReleaseComponent component)
@@ -404,6 +424,203 @@ int main()
   const auto symlinkEscape = write_tar_gz(archiveRoot / "symlink.tar.gz", "bin/escape", '2', "../../outside");
   const auto rejectedSymlink = extractor.extract(ArchiveFormat::tar_gz, symlinkEscape, archiveRoot / "symlink-output");
   assert(!rejectedSymlink.valid() && rejectedSymlink.error->code == ErrorCode::unsafe_archive);
+
+#if !defined(_WIN32)
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-invalid-host";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{root / "home"};
+    FakeExposure exposure;
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const HostPlatform invalidHost{};
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", invalidHost);
+    assert(!result.valid() && result.error->code == ErrorCode::invalid_value);
+    assert(source.calls == 0 && fetcher.calls == 0 && packageExtractor.calls == 0 && exposure.calls == 0);
+    assert(!fs::exists(root / "home"));
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-success";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes);
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{root / "home"};
+    const auto exposed = root / "user-bin" / "vix";
+    PosixExecutableExposure exposure{exposed};
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    assert(host.valid());
+    const auto home = root / "home";
+    const auto result = runtime.install(home, trust, exposed, *host.value);
+    assert(result.valid() && result.value->version == "2.4.0");
+    assert(source.calls == 1 && fetcher.calls == 1 && packageExtractor.calls == 1);
+    assert(fs::is_symlink(exposed));
+    assert(fs::read_symlink(exposed) == fs::absolute(home / "current" / "bin" / "vix"));
+    const auto active = activator.current_version();
+    assert(active.valid() && active.value->value() == "2.4.0");
+    std::ifstream receiptInput(home / "install.toml", std::ios::binary);
+    const std::string receiptText{std::istreambuf_iterator<char>{receiptInput}, std::istreambuf_iterator<char>{}};
+    const auto receipt = parse_install_receipt(receiptText);
+    assert(receipt.valid() && receipt.value->installKind == InstallKind::managed &&
+           receipt.value->generation == "current" && receipt.value->channel == "stable");
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-reject";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes, "vix2");
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{root / "home"};
+    FakeExposure exposure;
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    assert(!result.valid() && result.error->code == ErrorCode::wrong_generation);
+    assert(fetcher.calls == 0 && packageExtractor.calls == 0 && exposure.calls == 0);
+    const auto active = activator.current_version();
+    assert(active.valid() && !active.value->has_value());
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-invalid-signature";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes);
+    source.value.signature.signature[0] = source.value.signature.signature[0] == 'A' ? 'B' : 'A';
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{root / "home"};
+    FakeExposure exposure;
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    assert(!result.valid() && result.error->code == ErrorCode::invalid_signature);
+    assert(fetcher.calls == 0 && packageExtractor.calls == 0 && exposure.calls == 0);
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-existing";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root / "home" / "versions" / "2.3.0", ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes);
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{root / "home"};
+    assert(activator.activate("2.3.0").valid());
+    FakeExposure exposure;
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    assert(!result.valid() && result.error->code == ErrorCode::already_installed);
+    assert(source.calls == 0 && fetcher.calls == 0 && packageExtractor.calls == 0);
+    const auto current = activator.current_version();
+    assert(current.valid() && current.value->value() == "2.3.0");
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-host-digest";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes);
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{root / "home"};
+    FakeExposure exposure;
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const auto arm = parse_host_platform("aarch64-linux-gnu");
+    assert(arm.valid());
+    const auto unsupported = runtime.install(root / "home", trust, root / "bin" / "vix", *arm.value);
+    assert(!unsupported.valid() && unsupported.error->code == ErrorCode::unsupported_host_artifact);
+    assert(fetcher.calls == 0 && packageExtractor.calls == 0);
+
+    source.value = signed_fixture(archiveBytes);
+    fetcher.bytes = "different-archive-bytes";
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    const auto mismatch = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    assert(!mismatch.valid() && mismatch.error->code == ErrorCode::artifact_digest_mismatch);
+    assert(packageExtractor.calls == 0 && exposure.calls == 0);
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-unsafe";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trust = trusted_release_store(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes);
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    packageExtractor.fail = true;
+    PosixInstallationActivator activator{root / "home"};
+    FakeExposure exposure;
+    ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    assert(!result.valid() && result.error->code == ErrorCode::unsafe_archive);
+    assert(exposure.calls == 0 && !fs::exists(root / "home" / "current"));
+    assert(!fs::exists(root / "home" / "install.toml"));
+  }
+
+  {
+    const auto root = fs::temp_directory_path() / "vix-dist-bootstrap-upgrade";
+    std::error_code ec;
+    fs::remove_all(root, ec);
+    fs::create_directories(root, ec);
+    const auto trustPath = write_trust(root);
+    const auto trust = load_release_trust_store(trustPath);
+    assert(trust.valid());
+    const auto home = root / "managed";
+    const auto host = parse_host_platform("x86_64-linux-gnu");
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes, "current", {}, {2, 3, 0, {}});
+    FakeFetcher fetcher;
+    FakeExtractor packageExtractor;
+    PosixInstallationActivator activator{home};
+    FakeExposure exposure;
+    ManagedInstallerRuntime installer{source, fetcher, packageExtractor, activator, exposure};
+    const auto installed = installer.install(home, *trust.value, root / "bin" / "vix", *host.value);
+    assert(installed.valid() && installed.value->version == "2.3.0");
+    assert(fs::is_directory(home / "versions" / "2.3.0"));
+
+    source.value = signed_fixture(archiveBytes);
+    UpgradeRuntime upgrader{source, fetcher, packageExtractor, activator};
+    const auto upgraded = upgrader.run(home / "install.toml", trustPath, *host.value);
+    assert(upgraded.valid() && upgraded.value->kind == RuntimeOutcomeKind::upgraded &&
+           upgraded.value->version == std::optional<std::string>{"2.4.0"});
+    const auto activeB = activator.current_version();
+    assert(activeB.valid() && activeB.value->value() == "2.4.0");
+    assert(fs::is_directory(home / "versions" / "2.3.0") && fs::is_directory(home / "versions" / "2.4.0"));
+    assert(activator.rollback(std::optional<std::string>{"2.3.0"}).valid());
+    const auto rolledBack = activator.current_version();
+    assert(rolledBack.valid() && rolledBack.value->value() == "2.3.0");
+  }
+#endif
 
 #if !defined(_WIN32)
   {

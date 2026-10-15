@@ -1,0 +1,3 @@
+#compdef vix
+
+_arguments '1:command:(new init build run test dev repl add remove update install publish upgrade)' '*:argument:'

@@ -73,10 +73,72 @@ list(REMOVE_DUPLICATES CLI_SOURCES)
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(vix::cli ALIAS vix_cli)
 
+# First-install bootstrap, deliberately separate from the public vix command
+# surface. It reuses the same distribution verification/runtime sources.
+add_executable(vix_installer
+  tools/vix-installer/main.cpp
+  src/distribution/Distribution.cpp
+  src/distribution/Runtime.cpp
+  src/project/native/CanonicalHash.cpp
+  src/project/native/Validation.cpp
+  src/util/Semver.cpp
+)
+set_target_properties(vix_installer PROPERTIES OUTPUT_NAME vix-installer)
+target_include_directories(vix_installer PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+# Release-maintainer utility: creates and signs the already-frozen format-1
+# manifest. The private signing key is read only from the invoking CI secret.
+add_executable(vix_release_tool
+  tools/vix-release/main.cpp
+  src/distribution/Distribution.cpp
+  src/project/native/CanonicalHash.cpp
+  src/project/native/Validation.cpp
+  src/util/Semver.cpp
+)
+set_target_properties(vix_release_tool PROPERTIES OUTPUT_NAME vix-release-tool)
+target_include_directories(vix_release_tool PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+target_include_directories(vix_release_tool SYSTEM PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus>
+)
+target_include_directories(vix_installer SYSTEM PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/tomlplusplus>
+)
+set(_vix_installer_generated_dir "${CMAKE_CURRENT_BINARY_DIR}/generated-installer")
+file(MAKE_DIRECTORY "${_vix_installer_generated_dir}")
+set(VIX_INSTALLER_TRUST_HEX "")
+set(VIX_INSTALLER_SOURCE_HEX "")
+if (DEFINED VIX_INSTALLER_TRUST_STORE_FILE OR DEFINED VIX_INSTALLER_SOURCE_CONFIG_FILE)
+  if (NOT DEFINED VIX_INSTALLER_TRUST_STORE_FILE OR NOT EXISTS "${VIX_INSTALLER_TRUST_STORE_FILE}" OR
+      NOT DEFINED VIX_INSTALLER_SOURCE_CONFIG_FILE OR NOT EXISTS "${VIX_INSTALLER_SOURCE_CONFIG_FILE}")
+    message(FATAL_ERROR "Both installer public trust and source configuration files must exist when provisioning is requested")
+  endif()
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${VIX_INSTALLER_TRUST_STORE_FILE}"
+    "${VIX_INSTALLER_SOURCE_CONFIG_FILE}"
+  )
+  file(READ "${VIX_INSTALLER_TRUST_STORE_FILE}" VIX_INSTALLER_TRUST_HEX HEX)
+  file(READ "${VIX_INSTALLER_SOURCE_CONFIG_FILE}" VIX_INSTALLER_SOURCE_HEX HEX)
+  if (VIX_INSTALLER_TRUST_HEX STREQUAL "" OR VIX_INSTALLER_SOURCE_HEX STREQUAL "")
+    message(FATAL_ERROR "Installer trust and source configuration inputs must not be empty")
+  endif()
+endif()
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/tools/vix-installer/vix_installer_provisioned.hpp.in"
+  "${_vix_installer_generated_dir}/vix_installer_provisioned.hpp"
+  @ONLY
+)
+target_include_directories(vix_installer PRIVATE "${_vix_installer_generated_dir}")
+
 # Release archives are verified and extracted in-process; no shell tools are
 # invoked by the distribution runtime.
 find_package(ZLIB REQUIRED)
 target_link_libraries(vix_cli PRIVATE ZLIB::ZLIB)
+target_link_libraries(vix_installer PRIVATE ZLIB::ZLIB)
+target_link_libraries(vix_release_tool PRIVATE ZLIB::ZLIB)
 
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -97,6 +159,10 @@ endfunction()
 if (MSVC)
   vix_add_flag_if_supported(vix_cli /W4)
   vix_add_flag_if_supported(vix_cli /permissive-)
+  vix_add_flag_if_supported(vix_installer /W4)
+  vix_add_flag_if_supported(vix_installer /permissive-)
+  vix_add_flag_if_supported(vix_release_tool /W4)
+  vix_add_flag_if_supported(vix_release_tool /permissive-)
 else()
   vix_add_flag_if_supported(vix_cli -Wall)
   vix_add_flag_if_supported(vix_cli -Wextra)
@@ -104,6 +170,14 @@ else()
   vix_add_flag_if_supported(vix_cli -Wconversion)
   vix_add_flag_if_supported(vix_cli -Wformat=2)
   vix_add_flag_if_supported(vix_cli -Wpedantic)
+  foreach(_distribution_tool vix_installer vix_release_tool)
+    vix_add_flag_if_supported(${_distribution_tool} -Wall)
+    vix_add_flag_if_supported(${_distribution_tool} -Wextra)
+    vix_add_flag_if_supported(${_distribution_tool} -Wshadow)
+    vix_add_flag_if_supported(${_distribution_tool} -Wconversion)
+    vix_add_flag_if_supported(${_distribution_tool} -Wformat=2)
+    vix_add_flag_if_supported(${_distribution_tool} -Wpedantic)
+  endforeach()
 endif()
 
 # ----------------------------------------------------
@@ -346,6 +420,7 @@ endif()
 if (TARGET vix::requests)
   message(STATUS "[cli] Registry HTTPS transport enabled")
   target_link_libraries(vix_cli PRIVATE vix::requests)
+  target_link_libraries(vix_installer PRIVATE vix::requests)
 else()
   message(FATAL_ERROR "[cli] Registry HTTPS transport requires vix::requests")
 endif()
@@ -356,6 +431,8 @@ endif()
 if (TARGET vix::crypto)
   message(STATUS "[cli] Registry signature verification enabled")
   target_link_libraries(vix_cli PRIVATE vix::crypto)
+  target_link_libraries(vix_installer PRIVATE vix::crypto)
+  target_link_libraries(vix_release_tool PRIVATE vix::crypto)
 else()
   message(FATAL_ERROR "[cli] Registry signature verification requires vix::crypto")
 endif()
@@ -363,6 +440,8 @@ endif()
 # ----------------------------------------------------
 if (TARGET vix_warnings)
   target_link_libraries(vix_cli PRIVATE vix_warnings)
+  target_link_libraries(vix_installer PRIVATE vix_warnings)
+  target_link_libraries(vix_release_tool PRIVATE vix_warnings)
 endif()
 
 if (COMMAND vix_enable_sanitizers)
@@ -453,6 +532,18 @@ endif()
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   install(TARGETS vix_cli
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+  install(FILES
+    share/completions/bash/vix
+    DESTINATION share/completions/bash
+  )
+  install(FILES
+    share/completions/zsh/_vix
+    DESTINATION share/completions/zsh
+  )
+  install(FILES
+    share/completions/fish/vix.fish
+    DESTINATION share/completions/fish
   )
 endif()
 

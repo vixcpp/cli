@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,6 +30,9 @@ namespace vix::cli::distribution
     externally_managed,
     unsupported_host_artifact,
     unsupported_components,
+    unsupported_activation_platform,
+    already_installed,
+    executable_exposure_failed,
     channel_mismatch,
     no_newer_release,
     release_source_missing,
@@ -133,6 +137,16 @@ namespace vix::cli::distribution
     std::string keyId;
     std::string signature;
   };
+  Result<ReleaseManifest> make_current_release_manifest(
+      const vix::cli::project::native::Version &version,
+      std::string channel,
+      std::uint64_t sequence,
+      std::vector<ReleaseArtifact> artifacts,
+      std::vector<ReleaseComponent> components = {});
+  Result<SignatureEnvelope> sign_release_manifest(
+      const ReleaseManifest &manifest,
+      const std::string &keyId,
+      std::span<const std::uint8_t> externally_provisionedPrivateKey);
   Result<SignatureEnvelope> parse_signature_envelope(const std::string &text);
   Result<std::string> serialize_signature_envelope(const SignatureEnvelope &envelope);
 

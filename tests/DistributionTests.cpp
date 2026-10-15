@@ -87,6 +87,14 @@ int main()
   assert(!DistributionArtifactDigest::parse("sha256:BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD").valid());
 
   auto manifest = fixture_manifest();
+  const auto generatedManifest = make_current_release_manifest(
+      {2, 4, 0, {}}, "stable", 17, manifest.artifacts);
+  assert(generatedManifest.valid() && generatedManifest.value->generation == "current" &&
+         generatedManifest.value->components.empty());
+  const auto generatedBytes = serialize_release_manifest(*generatedManifest.value);
+  const auto generatedBytesAgain = serialize_release_manifest(*generatedManifest.value);
+  assert(generatedBytes.valid() && generatedBytesAgain.valid() &&
+         *generatedBytes.value == *generatedBytesAgain.value);
   const auto encoded = serialize_release_manifest(manifest);
   assert(encoded.valid());
   const auto decoded = parse_release_manifest(*encoded.value);
@@ -108,12 +116,10 @@ int main()
   const auto secret = hex_bytes("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
                                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
   const auto publicKey = hex_bytes("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
-  std::array<std::uint8_t, 64> signature{};
-  const auto payloadBytes = std::span<const std::uint8_t>{reinterpret_cast<const std::uint8_t *>(payload1.value->data()), payload1.value->size()};
-  assert(vix::crypto::sign(vix::crypto::SignatureAlg::ed25519, secret, payloadBytes, signature));
-  const auto signatureHex = vix::crypto::hex_lower(signature);
+  const auto signedEnvelope = sign_release_manifest(manifest, "release-test", secret);
+  assert(signedEnvelope.valid());
   ReleaseTrustStore trust{{ReleaseTrustKey{"release-test", "ed25519", vix::crypto::hex_lower(publicKey)}}};
-  SignatureEnvelope envelope{"ed25519", "release-test", signatureHex};
+  SignatureEnvelope envelope = *signedEnvelope.value;
   const auto verifiedManifest = verify_release_manifest(*encoded.value, envelope, trust);
   assert(verifiedManifest.valid());
   auto altered = manifest;

@@ -1,0 +1,9 @@
+#pragma once
+
+#include <string_view>
+
+namespace vix_installer::provisioned
+{
+  inline constexpr std::string_view release_trust_hex = "@VIX_INSTALLER_TRUST_HEX@";
+  inline constexpr std::string_view distribution_source_hex = "@VIX_INSTALLER_SOURCE_HEX@";
+}

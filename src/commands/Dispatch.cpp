@@ -24,6 +24,7 @@
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
+#include <vix/cli/commands/UpgradeCommand.hpp>
 
 #include <stdexcept>
 
@@ -131,6 +132,14 @@ namespace vix::cli::dispatch
          { return vix::commands::InstallCommand::run(a); },
          []()
          { return vix::commands::InstallCommand::help(); }});
+
+    add({"upgrade",
+         "System",
+         "Upgrade Vix",
+         [](const Args &a)
+         { return vix::commands::UpgradeCommand::run(a); },
+         []()
+         { return vix::commands::UpgradeCommand::help(); }});
 
   }
 

@@ -18,6 +18,7 @@
 #include <vix/cli/project/native/Validation.hpp>
 #include <vix/cli/util/Semver.hpp>
 #include <vix/crypto/signature.hpp>
+#include <vix/crypto/hex.hpp>
 
 #if defined(__linux__)
 #include <features.h>
@@ -466,10 +467,15 @@ namespace vix::cli::distribution
           const auto kind = kindText ? parse_component_kind(*kindText) : std::nullopt;
           const auto archive = archiveText ? parse_archive(*archiveText) : std::nullopt;
           const auto digest = digestText ? DistributionArtifactDigest::parse(*digestText) : Result<DistributionArtifactDigest>{};
-          if (!id || !valid_id(*id) || !componentIds.insert(*id).second || !kind || !location || location->empty() || !archive || !digest.valid())
+          if (!id || !valid_id(*id) || !componentIds.insert(*id).second)
             return {{}, error(digest.error ? ErrorCode::invalid_artifact_digest : ErrorCode::malformed_manifest, "release component has missing or invalid fields")};
-          ReleaseComponent component{*id, *kind, {}, {}, *location, *archive, *digest.value, {}, {}};
-          if (*kind == ComponentKind::host)
+          if (!kind)
+            return {{}, error(digest.error ? ErrorCode::invalid_artifact_digest : ErrorCode::malformed_manifest, "release component has missing or invalid fields")};
+          const ComponentKind componentKind = *kind;
+          if (!location || location->empty() || !archive || !digest.valid())
+            return {{}, error(digest.error ? ErrorCode::invalid_artifact_digest : ErrorCode::malformed_manifest, "release component has missing or invalid fields")};
+          ReleaseComponent component{*id, componentKind, {}, {}, *location, *archive, *digest.value, {}, {}};
+          if (componentKind == ComponentKind::host)
           {
             if (table->contains("target"))
               return {{}, error(ErrorCode::malformed_manifest, "host component cannot declare a target tuple")};
@@ -481,7 +487,7 @@ namespace vix::cli::distribution
               return {{}, host.error};
             component.host = *host.value;
           }
-          else if (*kind == ComponentKind::target_sdk)
+          else if (componentKind == ComponentKind::target_sdk)
           {
             if (table->contains("host"))
               return {{}, error(ErrorCode::malformed_manifest, "target SDK cannot declare a host tuple")};
@@ -592,6 +598,42 @@ namespace vix::cli::distribution
     if (!serialized.valid())
       return {{}, serialized.error};
     return {"VIX-RELEASE-MANIFEST-v1\n" + *serialized.value, {}};
+  }
+
+  Result<ReleaseManifest> make_current_release_manifest(
+      const vix::cli::project::native::Version &version, std::string channel,
+      std::uint64_t sequence, std::vector<ReleaseArtifact> artifacts,
+      std::vector<ReleaseComponent> components)
+  {
+    ReleaseManifest manifest;
+    manifest.generation = "current";
+    manifest.version = version;
+    manifest.channel = std::move(channel);
+    manifest.sequence = sequence;
+    manifest.artifacts = std::move(artifacts);
+    manifest.components = std::move(components);
+    const auto validated = serialize_release_manifest(manifest);
+    if (!validated.valid())
+      return {{}, validated.error};
+    return {std::move(manifest), {}};
+  }
+
+  Result<SignatureEnvelope> sign_release_manifest(
+      const ReleaseManifest &manifest, const std::string &keyId,
+      std::span<const std::uint8_t> externally_provisionedPrivateKey)
+  {
+    if (keyId.empty())
+      return {{}, error(ErrorCode::invalid_signature, "release signing key id is empty")};
+    const auto payload = release_signing_payload(manifest);
+    if (!payload.valid())
+      return {{}, payload.error};
+    std::array<std::uint8_t, 64> signature{};
+    const auto message = std::span<const std::uint8_t>{
+        reinterpret_cast<const std::uint8_t *>(payload.value->data()), payload.value->size()};
+    if (!vix::crypto::sign(vix::crypto::SignatureAlg::ed25519,
+                           externally_provisionedPrivateKey, message, signature))
+      return {{}, error(ErrorCode::invalid_signature, "external Ed25519 release signing operation failed")};
+    return {SignatureEnvelope{"ed25519", keyId, vix::crypto::hex_lower(signature)}, {}};
   }
 
   Result<ReleaseTrustStore> parse_release_trust_store(const std::string &text)

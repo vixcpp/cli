@@ -18,6 +18,7 @@ exactly the frozen release surface. A command must have one row.
 | `run`        | main | yes               | RunCommand           | implicit `.cpp`          | LOCAL_WRITE      | PASS      | vix_cli_run_core_contract   |
 | `test`       | main | yes               | TestsCommand         | —                        | LOCAL_WRITE      | UNCOVERED | —                           |
 | `update`     | main | yes               | UpdateCommand        | —                        | PROJECT_MUTATION | UNCOVERED | —                           |
+| `upgrade`    | main | yes               | UpgradeCommand       | —                        | LOCAL_WRITE      | PASS      | vix_cli_distribution_runtime_tests |
 | `help`       | main | CLI special route | CLI::help            | `-h`, `--help`           | READ_ONLY_LOCAL  | PASS      | vix_cli_global_contract     |
 | `version`    | main | CLI special route | CLI::version         | `-v`, `--version`        | READ_ONLY_LOCAL  | PASS      | vix_cli_global_contract     |
 

@@ -69,6 +69,8 @@ namespace vix::cli::project::native
         case RegistrySnapshotRoutingErrorCode::snapshot_rejected: return "registry_snapshot_rejected";
         case RegistrySnapshotRoutingErrorCode::all_registry_locations_rejected:
           return "all_registry_locations_rejected";
+        case RegistrySnapshotRoutingErrorCode::terminal_location_or_authority_failure:
+          return "terminal_registry_location_or_authority_failure";
       }
       return "registry_source_or_trust_failure";
     }
@@ -158,12 +160,24 @@ namespace vix::cli::project::native
         for (const auto &location : registry->locations)
         {
           auto response = registrySource_.registry_observation_at(location, identity);
-          if (!response.succeeded || !response.observation)
+          if (response.status != RegistryObservationLocationStatus::available)
           {
             lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::location_or_verification_failure,
               identity.registry, location.descriptor,
               response.diagnostic.empty() ? "location failed to return an observation" : std::move(response.diagnostic)});
-            continue;
+            if (response.status == RegistryObservationLocationStatus::not_found ||
+                response.status == RegistryObservationLocationStatus::transport_failure ||
+                response.status == RegistryObservationLocationStatus::permission_denied)
+              continue;
+            lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::terminal_location_or_authority_failure,
+              identity.registry, location.descriptor, "terminal Registry metadata location failure"});
+            return {false, {}, "terminal Registry metadata location failure; mirror fallback is forbidden"};
+          }
+          if (!response.observation)
+          {
+            lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::terminal_location_or_authority_failure,
+              identity.registry, location.descriptor, "available Registry metadata response omitted its observation"});
+            return {false, {}, "available Registry metadata response omitted its observation"};
           }
           auto verified = verify_registry_observation(authorities_, verifier_, identity, *response.observation);
           if (!verified.valid())
@@ -171,7 +185,9 @@ namespace vix::cli::project::native
             for (const auto &issue : verified.issues)
               lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::location_or_verification_failure,
                 identity.registry, location.descriptor, verification_code_text(issue.code) + ": " + issue.message});
-            continue;
+            lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::terminal_location_or_authority_failure,
+              identity.registry, location.descriptor, "Registry authority verification failed; mirror fallback is forbidden"});
+            return {false, {}, "Registry authority verification failed; mirror fallback is forbidden"};
           }
           auto accepted = check_registry_snapshot_state(previous, *verified.observation);
           if (!accepted.valid())
@@ -179,7 +195,7 @@ namespace vix::cli::project::native
             for (const auto &issue : accepted.issues)
               lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::snapshot_rejected,
                 identity.registry, location.descriptor, code_text(issue.code) + ": " + issue.message});
-            continue;
+            return {false, {}, "Registry snapshot rejected; mirror fallback is forbidden"};
           }
           const auto pin = std::lower_bound(pins_.begin(), pins_.end(), identity.registry,
             [](const auto &value, std::string_view registryId) { return value.registryId < registryId; });
@@ -189,7 +205,7 @@ namespace vix::cli::project::native
             lastIssues_.push_back({RegistrySnapshotRoutingErrorCode::snapshot_rejected,
               identity.registry, location.descriptor,
               "registry_snapshot_changed_during_acquisition: observation differs from this session's pinned snapshot"});
-            continue;
+            return {false, {}, "Registry snapshot changed during acquisition; mirror fallback is forbidden"};
           }
           if (pin == pins_.end() || pin->registryId != identity.registry)
             pins_.insert(pin, RegistrySnapshotPin{identity.registry, accepted.observation->snapshot()});

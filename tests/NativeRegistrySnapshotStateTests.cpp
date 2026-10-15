@@ -63,7 +63,7 @@ namespace
   {
     UnverifiedRegistryObservation value{snapshot(sequence, std::move(digest), query.registry),
       query, std::move(releases), "test-only verified fixture"};
-    return {true, std::move(value), {}};
+    return {RegistryObservationLocationStatus::available, std::move(value), {}};
   }
 
   VerifiedRegistryObservation verified(AcceptVerifier &verifier, std::uint64_t sequence,
@@ -147,14 +147,16 @@ namespace
     MemoryLocations locations;
     locations.reply = [](const RegistryLocation &location, const RegistryPackageIdentity &)
     {
-      if (location.descriptor == "first") return response(40, digestB);
+      if (location.descriptor == "first")
+        return UnverifiedRegistryLocationResult{RegistryObservationLocationStatus::transport_failure,
+          std::nullopt, "first mirror unavailable"};
       return response(50, digestA);
     };
     RegistrySnapshotGuard guard(fixture.locations, fixture.authorities, locations, verifier, git,
       {{"vix", 50, digestA}});
     auto accepted = guard.registry_releases(packageA);
     assert(accepted.succeeded && accepted.releases.empty());
-    assert(locations.calls.size() == 2);
+    assert((locations.calls == std::vector<std::string>{"first/a", "second/a"}));
     assert(guard.pins().size() == 1 && guard.pins()[0].snapshot.sequence == 50);
 
     locations.calls.clear();
@@ -167,7 +169,7 @@ namespace
       {{"vix", 50, digestA}});
     auto empty = emptyGuard.registry_releases(packageA);
     assert(empty.succeeded && empty.releases.empty());
-    assert(locations.calls.size() == 1); // acceptable empty observation stops fallback
+    assert((locations.calls == std::vector<std::string>{"first/a"})); // acceptable empty observation stops fallback
     assert(emptyGuard.proposed_states().size() == 1 && emptyGuard.proposed_states().front().sequence == 50);
     auto emptyCatalog = acquire_resolution_catalog({requirement("a", packageA)}, emptyGuard);
     assert(emptyCatalog.valid() && emptyCatalog.catalog);
@@ -177,14 +179,16 @@ namespace
     locations.calls.clear();
     locations.reply = [](const RegistryLocation &location, const RegistryPackageIdentity &identity)
     {
-      if (location.descriptor == "first") return response(40, digestB, identity, {}); // stale empty
+      if (location.descriptor == "first") return response(40, digestB, identity, {}); // stale snapshot is terminal
       return response(50, digestA, identity, {candidate(identity)});
     };
     RegistrySnapshotGuard staleEmpty(fixture.locations, fixture.authorities, locations, verifier, git,
       {{"vix", 50, digestA}});
     auto foundAfterFallback = staleEmpty.registry_releases(packageA);
-    assert(foundAfterFallback.succeeded && foundAfterFallback.releases.size() == 1);
-    assert(locations.calls.size() == 2);
+    assert(!foundAfterFallback.succeeded);
+    assert((locations.calls == std::vector<std::string>{"first/a"}));
+    assert(staleEmpty.last_issues().front().code == RegistrySnapshotRoutingErrorCode::snapshot_rejected);
+    assert(staleEmpty.last_issues().front().message.find("registry_rollback_detected") != std::string::npos);
 
     locations.calls.clear();
     locations.reply = [](const RegistryLocation &location, const RegistryPackageIdentity &identity)
@@ -195,17 +199,21 @@ namespace
     RegistrySnapshotGuard equivocationFallback(fixture.locations, fixture.authorities, locations, verifier, git,
       {{"vix", 50, digestA}});
     auto afterEquivocation = equivocationFallback.registry_releases(packageA);
-    assert(afterEquivocation.succeeded && afterEquivocation.releases.size() == 1);
-    assert(locations.calls.size() == 2 && equivocationFallback.proposed_states().front().sequence == 51);
+    assert(!afterEquivocation.succeeded);
+    assert((locations.calls == std::vector<std::string>{"first/a"}));
+    assert(equivocationFallback.proposed_states().empty());
+    assert(equivocationFallback.last_issues().front().code == RegistrySnapshotRoutingErrorCode::snapshot_rejected);
+    assert(equivocationFallback.last_issues().front().message.find("registry_snapshot_equivocation") != std::string::npos);
 
     locations.calls.clear();
     locations.reply = [](const RegistryLocation &, const RegistryPackageIdentity &)
-      { return UnverifiedRegistryLocationResult{false, std::nullopt, "offline"}; };
+      { return UnverifiedRegistryLocationResult{RegistryObservationLocationStatus::transport_failure, std::nullopt, "offline"}; };
     RegistrySnapshotGuard rejected(fixture.locations, fixture.authorities, locations, verifier, git,
       {{"vix", 50, digestA}});
     auto allRejected = rejected.registry_releases(packageA);
     assert(!allRejected.succeeded);
-    assert(rejected.last_issues().size() == 3);
+    assert((locations.calls == std::vector<std::string>{"first/a", "second/a"}));
+    assert(rejected.last_issues().front().code == RegistrySnapshotRoutingErrorCode::location_or_verification_failure);
     assert(rejected.last_issues().back().code == RegistrySnapshotRoutingErrorCode::all_registry_locations_rejected);
     assert(allRejected.diagnostic.find("no_candidate") == std::string::npos);
   }
@@ -254,12 +262,14 @@ namespace
     assert(!failed.valid() && !failed.catalog);
     assert(failed.issues.size() == 1);
     assert(failed.issues.front().code == MetadataAcquisitionErrorCode::registry_source_failure);
-    assert(failed.issues.front().message.find("registry_snapshot_changed_during_acquisition") != std::string::npos);
+    assert(failed.issues.front().message.find("snapshot changed during acquisition") != std::string::npos);
     assert(mixed.pins().size() == 1 && mixed.pins().front().snapshot.sequence == 50);
-    assert(mixed.last_issues().size() == 3);
-    assert(mixed.last_issues()[0].message.find("registry_snapshot_changed_during_acquisition") != std::string::npos);
-    assert(mixed.last_issues()[1].message.find("registry_snapshot_changed_during_acquisition") != std::string::npos);
-    assert(mixed.last_issues().back().code == RegistrySnapshotRoutingErrorCode::all_registry_locations_rejected);
+    assert(std::any_of(mixed.last_issues().begin(), mixed.last_issues().end(), [](const auto &issue)
+    {
+      return issue.code == RegistrySnapshotRoutingErrorCode::snapshot_rejected &&
+        issue.message.find("registry_snapshot_changed_during_acquisition") != std::string::npos;
+    }));
+    assert((locations.calls == std::vector<std::string>{"first/a", "first/b"}));
 
     locations.reply = [&](const RegistryLocation &, const RegistryPackageIdentity &identity)
     {
@@ -323,14 +333,13 @@ namespace
     assert(guard.pins().size() == 1);
     assert(guard.pins().front().registryId == "vix");
     assert(guard.pins().front().snapshot == snapshot(50, digestA));
-    assert(returned.size() == 3); // both configured locations returned the rejected 49/Z observation
-    assert(returned[0] == snapshot(50, digestA));
-    assert(returned[1] == snapshot(49, digestB));
-    assert(returned[2] == snapshot(49, digestB));
+    assert((returned == std::vector<RegistrySnapshotIdentity>{
+      snapshot(50, digestA), snapshot(49, digestB)}));
+    assert((locations.calls == std::vector<std::string>{"first/a", "first/b"}));
     assert(has_session_issue(guard, "registry_snapshot_changed_during_acquisition"));
     assert(std::all_of(guard.last_issues().begin(), guard.last_issues().end(), [](const auto &issue)
       { return issue.registryId == "vix"; }));
-    assert(result.issues.front().message.find("registry_snapshot_changed_during_acquisition") != std::string::npos);
+    assert(result.issues.front().message.find("snapshot changed during acquisition") != std::string::npos);
   }
 
   void mid_session_same_sequence_different_digest_test()
@@ -362,12 +371,11 @@ namespace
     assert(guard.pins().size() == 1);
     assert(guard.pins().front().registryId == "vix");
     assert(guard.pins().front().snapshot == snapshot(50, digestA));
-    assert(returned.size() == 3); // both locations returned 50/B after the session pinned 50/A
-    assert(returned[0] == snapshot(50, digestA));
-    assert(returned[1] == snapshot(50, digestB));
-    assert(returned[2] == snapshot(50, digestB));
+    assert((returned == std::vector<RegistrySnapshotIdentity>{
+      snapshot(50, digestA), snapshot(50, digestB)}));
+    assert((locations.calls == std::vector<std::string>{"first/a", "first/b"}));
     assert(has_session_issue(guard, "registry_snapshot_changed_during_acquisition"));
-    assert(result.issues.front().message.find("registry_snapshot_changed_during_acquisition") != std::string::npos);
+    assert(result.issues.front().message.find("snapshot changed during acquisition") != std::string::npos);
   }
 }
 

@@ -64,7 +64,8 @@ namespace vix::cli::project::native
     unknown_registry_authority,
     location_or_verification_failure,
     snapshot_rejected,
-    all_registry_locations_rejected
+    all_registry_locations_rejected,
+    terminal_location_or_authority_failure
   };
 
   struct RegistrySnapshotRoutingIssue

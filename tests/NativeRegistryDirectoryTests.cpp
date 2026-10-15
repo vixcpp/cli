@@ -126,7 +126,7 @@ namespace
       calls.emplace_back(location.descriptor, identity);
       for (const auto &reply : replies)
         if (reply.location == location.descriptor && reply.identity == identity) return reply.result;
-      return {false, std::nullopt, "no in-memory observation configured"};
+      return {RegistryObservationLocationStatus::not_found, std::nullopt, "no in-memory observation configured"};
     }
   };
 
@@ -224,9 +224,9 @@ namespace
     assert(metadataAndContent.valid());
     MemoryLocations metadataSource;
     metadataSource.replies.push_back({"metadata-first", logical,
-      {false, std::nullopt, "first unavailable"}});
+      {RegistryObservationLocationStatus::transport_failure, std::nullopt, "first unavailable"}});
     metadataSource.replies.push_back({"metadata-second", logical,
-      {true, make_observation(logical, {}), {}}});
+      {RegistryObservationLocationStatus::available, make_observation(logical, {}), {}}});
     TestVerifier metadataVerifier;
     const auto metadataResult = route_verified_registry_observation(
       *metadataAndContent.value, authority_directory(), metadataSource, metadataVerifier, logical);
@@ -266,8 +266,10 @@ namespace
 
     auto routedDirectory = directory("vix", {"location-A", "location-B"});
     MemoryLocations fallback;
-    fallback.replies.push_back({"location-A", identity, {false, std::nullopt, "A unavailable"}});
-    fallback.replies.push_back({"location-B", identity, {true, make_observation(identity, {versionOne}), {}}});
+    fallback.replies.push_back({"location-A", identity,
+      {RegistryObservationLocationStatus::not_found, std::nullopt, "A unavailable"}});
+    fallback.replies.push_back({"location-B", identity,
+      {RegistryObservationLocationStatus::available, make_observation(identity, {versionOne}), {}}});
     TestVerifier verifier;
     auto authorities = authority_directory();
     const auto result = route_verified_registry_observation(routedDirectory, authorities, fallback, verifier, identity);
@@ -275,8 +277,8 @@ namespace
     assert(fallback.calls.size() == 2 && fallback.calls[0].first == "location-A" && fallback.calls[1].first == "location-B");
 
     MemoryLocations noMerge;
-    noMerge.replies.push_back({"location-A", identity, {true, make_observation(identity, {versionOne}), {}}});
-    noMerge.replies.push_back({"location-B", identity, {true, make_observation(identity, {versionTwo}), {}}});
+    noMerge.replies.push_back({"location-A", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {versionOne}), {}}});
+    noMerge.replies.push_back({"location-B", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {versionTwo}), {}}});
     const auto routedObservation = route_verified_registry_observation(routedDirectory, authorities, noMerge, verifier, identity);
     assert(routedObservation.valid() && routedObservation.observation->releases().size() == 1);
     assert(routedObservation.observation->releases().front().version == versionOne.version);
@@ -284,8 +286,8 @@ namespace
 
     auto emptyDirectory = directory("vix", {"empty", "would-have-release"});
     MemoryLocations empty;
-    empty.replies.push_back({"empty", identity, {true, make_observation(identity, {}), {}}});
-    empty.replies.push_back({"would-have-release", identity, {true, make_observation(identity, {versionOne}), {}}});
+    empty.replies.push_back({"empty", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {}), {}}});
+    empty.replies.push_back({"would-have-release", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {versionOne}), {}}});
     const auto emptyObservation = route_verified_registry_observation(emptyDirectory, authorities, empty, verifier, identity);
     assert(emptyObservation.valid() && emptyObservation.observation->releases().empty());
     assert(empty.calls.size() == 1);
@@ -309,7 +311,8 @@ namespace
     assert(source.calls.empty());
 
     const RegistryPackageIdentity identity{"vix", "example", "pkg"};
-    source.replies = {{"A", identity, {false, std::nullopt, "offline"}}, {"B", identity, {false, std::nullopt, "unavailable"}}};
+    source.replies = {{"A", identity, {RegistryObservationLocationStatus::transport_failure, std::nullopt, "offline"}},
+      {"B", identity, {RegistryObservationLocationStatus::transport_failure, std::nullopt, "unavailable"}}};
     const auto failed = route_verified_registry_observation(known, authorities, source, verifier, identity);
     assert(!failed.valid());
     const auto locationFailures = std::count_if(failed.issues.begin(), failed.issues.end(), [](const auto &issue)
@@ -337,9 +340,9 @@ namespace
     auto directoryA = directory("vix", {"https://host-a.invalid/registry"});
     auto directoryB = directory("vix", {"https://host-b.invalid/registry"});
     MemoryLocations sourceA;
-    sourceA.replies.push_back({"https://host-a.invalid/registry", identity, {true, make_observation(identity, {candidate}), {}}});
+    sourceA.replies.push_back({"https://host-a.invalid/registry", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {candidate}), {}}});
     MemoryLocations sourceB;
-    sourceB.replies.push_back({"https://host-b.invalid/registry", identity, {true, make_observation(identity, {candidate}), {}}});
+    sourceB.replies.push_back({"https://host-b.invalid/registry", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {candidate}), {}}});
     const auto lockA = resolve_through(directoryA, sourceA, exact("db", identity, {1, 2, 0, std::nullopt}));
     const auto lockB = resolve_through(directoryB, sourceB, exact("db", identity, {1, 2, 0, std::nullopt}));
     assert(locks_equal(lockA, lockB));
@@ -349,8 +352,8 @@ namespace
     auto mirrorsAB = directory("vix", {"A", "B"});
     auto mirrorsBA = directory("vix", {"B", "A"});
     MemoryLocations sourceAB;
-    sourceAB.replies = {{"A", identity, {true, make_observation(identity, {candidate}), {}}},
-      {"B", identity, {true, make_observation(identity, {candidate}), {}}}};
+    sourceAB.replies = {{"A", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {candidate}), {}}},
+      {"B", identity, {RegistryObservationLocationStatus::available, make_observation(identity, {candidate}), {}}}};
     MemoryLocations sourceBA;
     sourceBA.replies = sourceAB.replies;
     TestVerifier verifier;
@@ -371,7 +374,7 @@ namespace
     auto registryDirectory = directory("vix", {"git://metadata-host.invalid/registry"});
     MemoryLocations locationSource;
     locationSource.replies.push_back({"git://metadata-host.invalid/registry", registryIdentity,
-      {true, make_observation(registryIdentity, {release(registryIdentity, {1, 0, 0, std::nullopt})}), {}}});
+      {RegistryObservationLocationStatus::available, make_observation(registryIdentity, {release(registryIdentity, {1, 0, 0, std::nullopt})}), {}}});
     GitOnlyMemorySource gitSource;
     gitSource.records.push_back({gitRepository, TagRevision{"v1"}, commit_git, digest_a, git_contract()});
     TestVerifier verifier;

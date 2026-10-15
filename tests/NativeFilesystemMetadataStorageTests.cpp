@@ -97,7 +97,7 @@ namespace
       const RegistryLocation &location, const RegistryPackageIdentity &) override
     {
       visited.push_back(location.descriptor);
-      return {true, observation, {}};
+      return {RegistryObservationLocationStatus::available, observation, {}};
     }
   };
 

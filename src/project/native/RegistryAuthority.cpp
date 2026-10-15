@@ -134,23 +134,39 @@ namespace vix::cli::project::native
     for (const auto &location : registry->locations)
     {
       auto response = source.registry_observation_at(location, identity);
-      if (!response.succeeded || !response.observation)
+      if (response.status != RegistryObservationLocationStatus::available)
       {
         result.issues.push_back({VerifiedRegistryRoutingErrorCode::location_or_verification_failure,
           identity.registry, location.descriptor,
           response.diagnostic.empty() ? "location failed to return an observation" : std::move(response.diagnostic)});
-        continue;
+        if (response.status == RegistryObservationLocationStatus::not_found ||
+            response.status == RegistryObservationLocationStatus::transport_failure ||
+            response.status == RegistryObservationLocationStatus::permission_denied)
+          continue;
+        result.issues.push_back({VerifiedRegistryRoutingErrorCode::terminal_location_or_authority_failure,
+          identity.registry, location.descriptor, "terminal Registry metadata location failure"});
+        return result;
+      }
+      if (!response.observation)
+      {
+        result.issues.push_back({VerifiedRegistryRoutingErrorCode::terminal_location_or_authority_failure,
+          identity.registry, location.descriptor, "available Registry metadata response omitted its observation"});
+        return result;
       }
       auto verified = verify_registry_observation(authorities, verifier, identity, *response.observation);
       if (verified.valid())
       {
         result.observation = std::move(verified.observation);
+        result.unverifiedObservation = *response.observation;
         result.issues.clear();
         return result;
       }
       for (const auto &issue : verified.issues)
         result.issues.push_back({VerifiedRegistryRoutingErrorCode::location_or_verification_failure,
           identity.registry, location.descriptor, issue.message});
+      result.issues.push_back({VerifiedRegistryRoutingErrorCode::terminal_location_or_authority_failure,
+        identity.registry, location.descriptor, "Registry authority verification failed; mirror fallback is forbidden"});
+      return result;
     }
     if (result.issues.empty())
       result.issues.push_back({VerifiedRegistryRoutingErrorCode::location_or_verification_failure,
@@ -177,6 +193,7 @@ namespace vix::cli::project::native
       if (!diagnostic.empty()) diagnostic += "; ";
       diagnostic += issue.code == VerifiedRegistryRoutingErrorCode::unknown_registry ? "unknown_registry" :
         issue.code == VerifiedRegistryRoutingErrorCode::unknown_registry_authority ? "unknown_registry_authority" :
+        issue.code == VerifiedRegistryRoutingErrorCode::terminal_location_or_authority_failure ? "terminal_registry_location_or_authority_failure" :
         issue.code == VerifiedRegistryRoutingErrorCode::all_registry_locations_untrusted_or_failed ?
           "all_registry_locations_untrusted_or_failed" : "registry_authentication_or_location_failure";
       diagnostic += " [" + issue.registryId + "]";

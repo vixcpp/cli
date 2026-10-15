@@ -82,7 +82,7 @@ namespace
     {
       calls.push_back(location.descriptor);
       for (const auto &reply : replies) if (reply.location == location.descriptor) return reply.result;
-      return {false, std::nullopt, "location unavailable"};
+      return {RegistryObservationLocationStatus::not_found, std::nullopt, "location unavailable"};
     }
   };
 
@@ -183,13 +183,15 @@ namespace
     MemoryLocation source;
     auto bad = observation();
     bad.releases[0].version.patch++;
-    source.replies = {{"mirror-a", {true, bad, {}}}, {"mirror-b", {true, observation(), {}}}};
+    source.replies = {{"mirror-a", {RegistryObservationLocationStatus::available, bad, {}}},
+      {"mirror-b", {RegistryObservationLocationStatus::available, observation(), {}}}};
     auto routed = route_verified_registry_observation(locations, authorities, source, verifier, identity);
-    assert(routed.valid() && source.calls.size() == 2 && source.calls[1] == "mirror-b");
+    assert(!routed.valid() && source.calls.size() == 1);
 
     MemoryLocation emptySource;
-    emptySource.replies = {{"mirror-a", {true, observation(8, digest, identity, {}), {}}},
-      {"mirror-b", {true, observation(), {}}}};
+    emptySource.replies = {{"mirror-a", {RegistryObservationLocationStatus::available,
+        observation(8, digest, identity, {}), {}}},
+      {"mirror-b", {RegistryObservationLocationStatus::available, observation(), {}}}};
     auto emptyRouted = route_verified_registry_observation(locations, authorities, emptySource, verifier, identity);
     assert(emptyRouted.valid() && emptyRouted.observation->releases().empty() && emptySource.calls.size() == 1);
     EmptyGit git;
@@ -201,10 +203,12 @@ namespace
     assert(!unresolved.valid() && unresolved.issues.front().code == ResolverErrorCode::no_candidate);
 
     MemoryLocation failed;
-    failed.replies = {{"mirror-a", {true, bad, {}}}, {"mirror-b", {false, std::nullopt, "unavailable"}}};
+    failed.replies = {{"mirror-a", {RegistryObservationLocationStatus::available, bad, {}}},
+      {"mirror-b", {RegistryObservationLocationStatus::transport_failure, std::nullopt, "unavailable"}}};
     auto allBad = route_verified_registry_observation(locations, authorities, failed, verifier, identity);
-    assert(!allBad.valid() && allBad.issues.size() == 3);
-    assert(allBad.issues.back().code == VerifiedRegistryRoutingErrorCode::all_registry_locations_untrusted_or_failed);
+    assert(!allBad.valid() && allBad.issues.back().code ==
+      VerifiedRegistryRoutingErrorCode::terminal_location_or_authority_failure);
+    assert(failed.calls.size() == 1);
     VerifiedRoutedPackageMetadataSource failedSource(locations, authorities, failed, verifier, git);
     auto acquisitionFailure = acquire_resolution_catalog({root}, failedSource);
     assert(!acquisitionFailure.valid() && acquisitionFailure.issues.front().code == MetadataAcquisitionErrorCode::registry_source_failure);
@@ -216,18 +220,51 @@ namespace
     assert(forkA != forkB);
   }
 
+  void typed_location_fallback_tests()
+  {
+    auto locations = make_locations({"mirror-a", "mirror-b"});
+    auto authorities = make_authorities();
+    MemoryVerifier verifier;
+    const std::vector<RegistryObservationLocationStatus> fallbackStatuses{
+      RegistryObservationLocationStatus::not_found,
+      RegistryObservationLocationStatus::transport_failure,
+      RegistryObservationLocationStatus::permission_denied};
+    for (const auto status : fallbackStatuses)
+    {
+      MemoryLocation source;
+      source.replies = {{"mirror-a", {status, std::nullopt, "first mirror unavailable"}},
+        {"mirror-b", {RegistryObservationLocationStatus::available, observation(), {}}}};
+      const auto routed = route_verified_registry_observation(locations, authorities, source, verifier, identity);
+      assert(routed.valid() && source.calls.size() == 2 && source.calls.back() == "mirror-b");
+    }
+
+    const std::vector<RegistryObservationLocationStatus> terminalStatuses{
+      RegistryObservationLocationStatus::configuration_error,
+      RegistryObservationLocationStatus::malformed_metadata,
+      RegistryObservationLocationStatus::integrity_failure};
+    for (const auto status : terminalStatuses)
+    {
+      MemoryLocation source;
+      source.replies = {{"mirror-a", {status, std::nullopt, "terminal metadata failure"}},
+        {"mirror-b", {RegistryObservationLocationStatus::available, observation(), {}}}};
+      const auto routed = route_verified_registry_observation(locations, authorities, source, verifier, identity);
+      assert(!routed.valid() && source.calls.size() == 1);
+      assert(routed.issues.back().code == VerifiedRegistryRoutingErrorCode::terminal_location_or_authority_failure);
+    }
+  }
+
   void authority_does_not_enter_lock_identity_test()
   {
     auto locations = make_locations({"host-a"});
     MemoryLocation sourceA;
-    sourceA.replies = {{"host-a", {true, observation(), {}}}};
+    sourceA.replies = {{"host-a", {RegistryObservationLocationStatus::available, observation(), {}}}};
     MemoryVerifier verifier;
     auto authoritiesA = make_authorities("vix-authority");
     auto authoritiesB = make_authorities("relocated-authority-handle");
     auto proofB = observation();
     proofB.authorityEvidence = evidence_for(proofB, "relocated-authority-handle");
     MemoryLocation sourceB;
-    sourceB.replies = {{"host-a", {true, proofB, {}}}};
+    sourceB.replies = {{"host-a", {RegistryObservationLocationStatus::available, proofB, {}}}};
     EmptyGit git;
     PackageRequirement root{"sqlite", RegistryRequirement{identity, ExactVersion{{1, 2, 0, std::nullopt}}}};
     VerifiedRoutedPackageMetadataSource routedA(locations, authoritiesA, sourceA, verifier, git);
@@ -255,5 +292,6 @@ int main()
   directory_and_verified_type_tests();
   binding_and_tampering_tests();
   routing_pipeline_tests();
+  typed_location_fallback_tests();
   authority_does_not_enter_lock_identity_test();
 }

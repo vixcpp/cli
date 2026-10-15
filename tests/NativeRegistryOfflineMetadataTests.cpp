@@ -109,8 +109,8 @@ namespace
       const RegistryLocation &location, const RegistryPackageIdentity &) override
     {
       locations.push_back(location.descriptor);
-      if (fail) return {false, std::nullopt, "deliberate location source failure"};
-      return {true, value, {}};
+      if (fail) return {RegistryObservationLocationStatus::transport_failure, std::nullopt, "deliberate location source failure"};
+      return {RegistryObservationLocationStatus::available, value, {}};
     }
   };
 

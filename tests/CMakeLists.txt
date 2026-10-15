@@ -366,6 +366,34 @@ target_include_directories(vix_cli_native_registry_offline_metadata_tests SYSTEM
 add_test(NAME vix_cli_native_registry_offline_metadata_tests
   COMMAND vix_cli_native_registry_offline_metadata_tests)
 
+add_executable(vix_cli_native_registry_metadata_source_tests
+  NativeRegistryMetadataSourceTests.cpp
+  ../src/project/native/RegistryMetadataSource.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_registry_metadata_source_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_registry_metadata_source_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+if (TARGET vix::crypto)
+  target_link_libraries(vix_cli_native_registry_metadata_source_tests PRIVATE vix::crypto)
+endif()
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_native_registry_metadata_source_tests PRIVATE vix::requests)
+endif()
+add_test(NAME vix_cli_native_registry_metadata_source_tests
+  COMMAND vix_cli_native_registry_metadata_source_tests)
+
 add_executable(vix_cli_native_filesystem_metadata_storage_tests
   NativeFilesystemMetadataStorageTests.cpp
   ../src/project/native/FilesystemMetadataStorage.cpp

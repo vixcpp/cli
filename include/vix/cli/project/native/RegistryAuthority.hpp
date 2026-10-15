@@ -62,8 +62,8 @@ namespace vix::cli::project::native
     friend bool operator==(const RegistrySnapshotIdentity &, const RegistrySnapshotIdentity &) = default;
   };
 
-  // The source/location boundary produces only unverified claims. Evidence is
-  // opaque here; this phase deliberately does not prescribe its wire format.
+  // The source/location boundary produces only unverified claims. Authority
+  // evidence remains opaque to routing; the concrete verifier owns its encoding.
   struct UnverifiedRegistryObservation
   {
     RegistrySnapshotIdentity snapshot;
@@ -72,9 +72,20 @@ namespace vix::cli::project::native
     std::string authorityEvidence;
   };
 
+  enum class RegistryObservationLocationStatus
+  {
+    available,
+    not_found,
+    transport_failure,
+    permission_denied,
+    configuration_error,
+    malformed_metadata,
+    integrity_failure
+  };
+
   struct UnverifiedRegistryLocationResult
   {
-    bool succeeded{false};
+    RegistryObservationLocationStatus status{RegistryObservationLocationStatus::configuration_error};
     std::optional<UnverifiedRegistryObservation> observation;
     std::string diagnostic;
   };
@@ -151,7 +162,8 @@ namespace vix::cli::project::native
     unknown_registry,
     unknown_registry_authority,
     location_or_verification_failure,
-    all_registry_locations_untrusted_or_failed
+    all_registry_locations_untrusted_or_failed,
+    terminal_location_or_authority_failure
   };
   struct VerifiedRegistryRoutingIssue
   {
@@ -163,6 +175,9 @@ namespace vix::cli::project::native
   struct VerifiedRegistryRoutingResult
   {
     std::optional<VerifiedRegistryObservation> observation;
+    // Retained only for the immediate online metadata admission/cache path;
+    // callers still must verify it before treating it as trusted.
+    std::optional<UnverifiedRegistryObservation> unverifiedObservation;
     std::vector<VerifiedRegistryRoutingIssue> issues;
     [[nodiscard]] bool valid() const noexcept { return observation.has_value() && issues.empty(); }
   };

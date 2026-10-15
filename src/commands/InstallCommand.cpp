@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/InstallCommand.hpp>
+#include <vix/cli/project/native/NativePackageInstall.hpp>
 #include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 #include <vix/cli/app/AppManifest.hpp>
@@ -658,7 +659,7 @@ namespace vix::commands
       return args[i];
     }
 
-    static ParsedArgs parse_args(const std::vector<std::string> &args)
+    [[maybe_unused]] static ParsedArgs parse_args(const std::vector<std::string> &args)
     {
       ParsedArgs parsed;
 
@@ -3352,7 +3353,7 @@ namespace vix::commands
       }
     }
 
-    static int install_global_package(const std::string &specRaw)
+    [[maybe_unused]] static int install_global_package(const std::string &specRaw)
     {
       const auto started = std::chrono::steady_clock::now();
 
@@ -4464,7 +4465,7 @@ namespace vix::commands
       return 0;
     }
 
-    static int install_git_dependency_from_cli(const ParsedArgs &parsed)
+    [[maybe_unused]] static int install_git_dependency_from_cli(const ParsedArgs &parsed)
     {
       if (!parsed.module.empty())
         return install_git_dependency_for_module(parsed);
@@ -4859,39 +4860,7 @@ namespace vix::commands
 
   int InstallCommand::run(const std::vector<std::string> &args)
   {
-    ParsedArgs parsed;
-    try
-    {
-      parsed = parse_args(args);
-    }
-    catch (const std::exception &ex)
-    {
-      vix::cli::util::err_line(std::cerr, ex.what());
-      return 1;
-    }
-
-    if (parsed.globalMode)
-    {
-      if (parsed.globalSpec.empty())
-      {
-        vix::cli::util::err_line(std::cerr, "missing package after -g");
-        vix::cli::util::warn_line(std::cerr, "Example: vix install -g @gk/jwt@1.0.0");
-        return 1;
-      }
-
-      return install_global_package(parsed.globalSpec);
-    }
-
-    if (!parsed.gitSpec.empty())
-      return install_git_dependency_from_cli(parsed);
-
-    if (!parsed.module.empty())
-    {
-      vix::cli::util::err_line(std::cerr, "--module requires a Git URL");
-      return 1;
-    }
-
-    return install_project_dependencies();
+    return vix::cli::project::native::run_native_install_command(args);
   }
 
   int InstallCommand::help()
@@ -4899,28 +4868,8 @@ namespace vix::commands
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix install\n";
-    out << "  vix install <git-url> [options]\n";
-    out << "  vix install -g <package>\n\n";
-
-    out << "Install project dependencies, Git dependencies, or global packages.\n\n";
-
-    out << "Git options:\n";
-    out << "  --name <name>              Dependency name\n";
-    out << "  --tag <tag>                Use a Git tag\n";
-    out << "  --branch <branch>          Use a Git branch\n";
-    out << "  --rev, --commit <rev>      Use a Git commit or revision\n";
-    out << "  --target <target>          CMake target to link\n";
-    out << "  -m, --module <name>        Declare and link the Git dependency from a module\n";
-    out << "  --subdirectory, --subdir <dir>\n";
-    out << "                             CMake project inside the repository\n";
-    out << "  --header-only, --headers   Treat the dependency as header-only\n";
-    out << "  --include <dir>            Include directory for header-only dependencies\n\n";
-
-    out << "Global:\n";
-    out << "  -g, --global <package>     Install a package globally\n\n";
-
-    out << "  -h, --help                 Show this help\n";
+    out << "  vix install\n\n";
+    out << "Acquire and materialize the exact package graph in vix.lock.\n";
 
     return 0;
   }

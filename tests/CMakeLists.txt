@@ -539,6 +539,30 @@ target_include_directories(vix_cli_native_package_materialization_tests SYSTEM P
 add_test(NAME vix_cli_native_package_materialization_tests
   COMMAND vix_cli_native_package_materialization_tests)
 
+add_executable(vix_cli_native_package_install_tests
+  NativePackageInstallTests.cpp
+  ../src/project/native/NativePackageInstall.cpp
+  ../src/project/native/PackageContentAcquisition.cpp
+  ../src/project/native/PackageMaterialization.cpp
+  ../src/project/native/FilesystemPackageContentStore.cpp
+  ../src/project/native/PackageContentDigest.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/ProjectLockState.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+)
+target_include_directories(vix_cli_native_package_install_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_package_install_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+add_test(NAME vix_cli_native_package_install_tests
+  COMMAND vix_cli_native_package_install_tests)
+
 add_executable(vix_cli_native_package_build_graph_tests
   NativePackageBuildGraphTests.cpp
   ../src/project/native/PackageBuildGraph.cpp

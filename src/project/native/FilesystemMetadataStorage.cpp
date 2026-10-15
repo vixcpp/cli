@@ -139,86 +139,12 @@ namespace vix::cli::project::native
                         { return item.value; }, revision);
     }
 
-    toml::table requirement_table(const PackageRequirement &requirement)
-    {
-      toml::table result;
-      result.insert("alias", requirement.alias);
-      std::visit([&](const auto &source)
-                 {
-        using T = std::decay_t<decltype(source)>;
-        if constexpr (std::is_same_v<T, RegistryRequirement>)
-        {
-          result.insert("source", "registry");
-          result.insert("registry", source.identity.registry);
-          result.insert("publisher", source.identity.publisher);
-          result.insert("name", source.identity.name);
-          toml::table requirement_value;
-          if (const auto *exact = std::get_if<ExactVersion>(&source.version))
-            requirement_value.insert("exact", version_text(exact->version));
-          else requirement_value.insert("compatible", version_text(std::get<CompatibleVersion>(source.version).version));
-          result.insert("requirement", std::move(requirement_value));
-        }
-        else
-        {
-          result.insert("source", "git");
-          result.insert("repository", source.normalizedRepository);
-          toml::table revision;
-          revision.insert(revision_kind(source.revision), revision_value(source.revision));
-          result.insert("revision", std::move(revision));
-        } }, requirement.source);
-      return result;
-    }
-
     std::string contract_text(const PackageContract &contract)
     {
-      toml::table root;
-      root.insert("format", contract.format);
-      toml::table package;
-      if (const auto *registry = std::get_if<RegistryPackageContractIdentity>(&contract.identity))
-      {
-        package.insert("source", "registry");
-        package.insert("registry", registry->identity.registry);
-        package.insert("publisher", registry->identity.publisher);
-        package.insert("name", registry->identity.name);
-        package.insert("version", version_text(registry->version));
-      }
-      else
-        package.insert("source", "git");
-      root.insert("package", std::move(package));
-      toml::array packages;
-      for (const auto &requirement : contract.packages)
-        packages.push_back(requirement_table(requirement));
-      root.insert("packages", std::move(packages));
-      toml::table integration;
-      if (const auto *native = std::get_if<NativeVixIntegration>(&contract.integration))
-      {
-        integration.insert("type", "native-vix");
-        toml::array roots;
-        for (const auto &path : native->includeRoots)
-          roots.push_back(path);
-        integration.insert("include-roots", std::move(roots));
-      }
-      else
-      {
-        integration.insert("type", "cmake-config");
-        integration.insert("config-name", std::get<CMakeConfigIntegration>(contract.integration).configName);
-      }
-      root.insert("integration", std::move(integration));
-      toml::array exports;
-      for (const auto &entry : contract.exports)
-      {
-        toml::table item;
-        item.insert("name", entry.name);
-        if (const auto *native = std::get_if<NativeExportMapping>(&entry.mapping))
-          item.insert("project-target", native->projectTarget);
-        else
-          item.insert("cmake-target", std::get<CMakeExportMapping>(entry.mapping).cmakeTarget);
-        exports.push_back(std::move(item));
-      }
-      root.insert("exports", std::move(exports));
-      std::ostringstream output;
-      output << root;
-      return output.str();
+      auto result = serialize_package_contract_text(contract);
+      if (!result.valid() || !result.text)
+        throw StorageFailure{"package contract serialization failed", false};
+      return std::move(*result.text);
     }
 
     PackageContract parse_contract(const std::string &text)

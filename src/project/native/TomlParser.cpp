@@ -1031,6 +1031,70 @@ namespace vix::cli::project::native
     return parse_file<PackageContract>(path, parse_package_contract_text);
   }
 
+  PackageContractSerializationResult serialize_package_contract_text(const PackageContract &contract)
+  {
+    PackageContractSerializationResult result;
+    const auto validation = validate_package_contract(contract);
+    if (!validation.valid())
+    {
+      result.issues = validation.issues;
+      return result;
+    }
+    try
+    {
+      toml::table root;
+      root.insert("format", contract.format);
+      toml::table package;
+      if (const auto *registry = std::get_if<RegistryPackageContractIdentity>(&contract.identity))
+      {
+        package.insert("source", "registry");
+        package.insert("registry", registry->identity.registry);
+        package.insert("publisher", registry->identity.publisher);
+        package.insert("name", registry->identity.name);
+        package.insert("version", version_text(registry->version));
+      }
+      else
+        package.insert("source", "git");
+      root.insert("package", std::move(package));
+      toml::array packages;
+      for (const auto &requirement : contract.packages)
+        packages.push_back(requirement_table(requirement));
+      root.insert("packages", std::move(packages));
+      toml::table integration;
+      if (const auto *native = std::get_if<NativeVixIntegration>(&contract.integration))
+      {
+        integration.insert("type", "native-vix");
+        integration.insert("include-roots", string_array(native->includeRoots));
+      }
+      else
+      {
+        integration.insert("type", "cmake-config");
+        integration.insert("config-name", std::get<CMakeConfigIntegration>(contract.integration).configName);
+      }
+      root.insert("integration", std::move(integration));
+      toml::array exports;
+      for (const auto &entry : contract.exports)
+      {
+        toml::table item;
+        item.insert("name", entry.name);
+        if (const auto *native = std::get_if<NativeExportMapping>(&entry.mapping))
+          item.insert("project-target", native->projectTarget);
+        else
+          item.insert("cmake-target", std::get<CMakeExportMapping>(entry.mapping).cmakeTarget);
+        exports.push_back(std::move(item));
+      }
+      root.insert("exports", std::move(exports));
+      std::ostringstream output;
+      output << root;
+      result.text = output.str();
+    }
+    catch (const std::exception &error)
+    {
+      result.issues.push_back({ValidationCode::invalid_package_contract, "", error.what(), std::nullopt});
+    }
+    return result;
+  }
+
   ParseResult<Lockfile> parse_lockfile_text(std::string_view text, std::string_view source)
   {
     return parse_text<Lockfile>(text, source, lockfile);

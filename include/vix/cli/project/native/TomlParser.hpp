@@ -63,6 +63,8 @@ namespace vix::cli::project::native
     [[nodiscard]] bool valid() const noexcept { return text.has_value() && issues.empty(); }
   };
 
+  using PackageContractSerializationResult = NativeManifestSerializationResult;
+
   struct NativeManifestWriteResult
   {
     bool written{false};
@@ -101,6 +103,8 @@ namespace vix::cli::project::native
   [[nodiscard]] ParseResult<PackageContract> parse_package_contract_text(
       std::string_view text, std::string_view source = "<text>");
   [[nodiscard]] ParseResult<PackageContract> parse_package_contract_file(const std::filesystem::path &path);
+  [[nodiscard]] PackageContractSerializationResult serialize_package_contract_text(
+      const PackageContract &contract);
 
   [[nodiscard]] ParseResult<Lockfile> parse_lockfile_text(
       std::string_view text, std::string_view source = "<text>");

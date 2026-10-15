@@ -996,12 +996,33 @@ add_test(
     ${CMAKE_BINARY_DIR}/vix
 )
 
-add_test(
-  NAME vix_cli_publish_preflight
-  COMMAND
-    ${CMAKE_CURRENT_SOURCE_DIR}/PublishPreflightTest.sh
-    ${CMAKE_BINARY_DIR}/vix
+add_executable(vix_cli_native_package_publication_tests
+  NativePackagePublicationTests.cpp
+  ../src/project/native/PackagePublication.cpp
+  ../src/project/native/PackageContentDigest.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
 )
+target_include_directories(vix_cli_native_package_publication_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_package_publication_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_native_package_publication_tests PRIVATE vix::requests)
+endif()
+if (TARGET vix::json)
+  target_link_libraries(vix_cli_native_package_publication_tests PRIVATE vix::json)
+endif()
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_native_package_publication_tests PRIVATE vix_warnings)
+endif()
+add_test(NAME vix_cli_native_package_publication_tests
+  COMMAND vix_cli_native_package_publication_tests)
 
 add_test(
   NAME vix_cli_registry_integrity

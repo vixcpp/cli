@@ -163,10 +163,8 @@ namespace vix::commands::BuildCommand
       return name == "CMakeLists.txt" ||
              name == "CMakePresets.json" ||
              name == "CMakeUserPresets.json" ||
-             name == "vix.json" ||
              name == "vix.toml" ||
              name == "vix.lock" ||
-             name == "vix.module" ||
              ext == ".cmake";
     }
 
@@ -3196,7 +3194,7 @@ namespace vix::commands::BuildCommand
         }
 
         for (const std::string &provider : providers)
-          out << "run: vix upgrade --sdk " << provider << "\n";
+          out << "Required Vix SDK profile is not installed: " << provider << "\n";
       }
 
       if (!resolution.error.empty())

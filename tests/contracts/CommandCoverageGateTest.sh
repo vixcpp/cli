@@ -7,8 +7,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DISPATCH="$ROOT/src/commands/Dispatch.cpp"
 MANIFEST="$ROOT/tests/contracts/CommandCoverage.md"
+CLI="${1:-}"
 
 mapfile -t commands < <(sed -n 's/^[[:space:]]*add({"\([^"]*\)".*/\1/p' "$DISPATCH" | sort -u)
+expected_commands=(add build dev init install new publish remove repl run test update)
+expected_sorted="$(printf '%s\n' "${expected_commands[@]}" | sort)"
+actual_sorted="$(printf '%s\n' "${commands[@]}")"
+[[ "$actual_sorted" == "$expected_sorted" ]] || {
+  echo "Dispatcher command set does not exactly match the canonical release surface" >&2
+  printf 'Expected:\n%s\nActual:\n%s\n' "$expected_sorted" "$actual_sorted" >&2
+  exit 1
+}
 
 for command in "${commands[@]}"; do
   row="$(grep -E "^\|[[:space:]]+\`$command\`[[:space:]]+\|" "$MANIFEST" || true)"
@@ -30,14 +39,14 @@ for command in "${commands[@]}"; do
   esac
 done
 
-for command in new init build run test dev repl add remove update install; do
+for command in new init build run test dev repl add remove update install publish; do
   grep -Fq "add({\"$command\"" "$DISPATCH" || {
     echo "Required canonical command is not registered: $command" >&2
     exit 1
   }
 done
 
-for command in target targets module modules; do
+for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion upgrade uninstall make task target targets module modules tests up i deps; do
   if grep -Fq "add({\"$command\"" "$DISPATCH"; then
     echo "Removed command remains registered: $command" >&2
     exit 1
@@ -51,6 +60,28 @@ for command in target targets module modules; do
     exit 1
   fi
 done
+
+grep -Fq 'link("https://vixcpp.com/docs")' "$ROOT/src/CLI.cpp" || {
+  echo "Canonical documentation URL is missing from top-level help" >&2; exit 1; }
+if grep -Fq 'docs.vixcpp.com/cli' "$ROOT/src/CLI.cpp"; then
+  echo "Historical CLI documentation URL remains in top-level help" >&2
+  exit 1
+fi
+
+if [[ -n "$CLI" ]]; then
+  help_output="$("$CLI" --help)"
+  for command in "${expected_commands[@]}"; do
+    grep -Eq "^[[:space:]]+$command([[:space:]]|$)" <<<"$help_output" || {
+      echo "Canonical command is missing from top-level help: $command" >&2; exit 1; }
+  done
+  for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion upgrade uninstall make task target targets module modules tests up i deps; do
+    if grep -Eq "^[[:space:]]+$command([[:space:]]|$)" <<<"$help_output"; then
+      echo "Removed command remains in top-level help: $command" >&2; exit 1
+    fi
+  done
+  grep -Fq 'https://vixcpp.com/docs' <<<"$help_output" || {
+    echo "Canonical documentation URL is missing from CLI help" >&2; exit 1; }
+fi
 
 DEV_SOURCE="$ROOT/src/commands/DevCommand.cpp"
 grep -Fq 'RunCommand::run' "$DEV_SOURCE" || {
@@ -82,7 +113,7 @@ done
 
 # Guard the implicit command form independently from the comprehensive run
 # contracts: adding/removing an extension route changes public dispatch.
-grep -Fq 'ext == ".vix" || ext == ".cpp"' "$ROOT/src/CLI.cpp" || {
-  echo "Missing implicit .cpp/.vix dispatch contract" >&2; exit 1; }
+grep -Fq 'ext == ".cpp"' "$ROOT/src/CLI.cpp" || {
+  echo "Missing implicit .cpp dispatch contract" >&2; exit 1; }
 
 echo "CommandCoverageGateTest passed"

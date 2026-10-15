@@ -234,6 +234,7 @@ add_executable(vix_cli_native_project_lock_state_tests
   ../src/project/native/Lockfile.cpp
   ../src/project/native/CanonicalHash.cpp
   ../src/project/native/Validation.cpp
+  ../src/util/Semver.cpp
 )
 target_include_directories(vix_cli_native_project_lock_state_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -668,9 +669,6 @@ target_include_directories(vix_cli_native_development_runtime_tests SYSTEM PRIVA
 if (TARGET vix::engine)
   target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::engine)
 endif()
-if (TARGET vix::process)
-  target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::process)
-endif()
 if (TARGET vix::json)
   target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE vix::json)
 endif()
@@ -1024,6 +1022,60 @@ endif()
 add_test(NAME vix_cli_native_package_publication_tests
   COMMAND vix_cli_native_package_publication_tests)
 
+add_executable(vix_cli_distribution_foundation_tests
+  DistributionTests.cpp
+  ../src/distribution/Distribution.cpp
+  ../src/distribution/Runtime.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+  ../src/util/Semver.cpp
+)
+target_include_directories(vix_cli_distribution_foundation_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_distribution_foundation_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+if (TARGET vix::crypto)
+  target_link_libraries(vix_cli_distribution_foundation_tests PRIVATE vix::crypto)
+endif()
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_distribution_foundation_tests PRIVATE vix::requests)
+endif()
+target_link_libraries(vix_cli_distribution_foundation_tests PRIVATE ZLIB::ZLIB)
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_distribution_foundation_tests PRIVATE vix_warnings)
+endif()
+add_test(NAME vix_cli_distribution_foundation_tests
+  COMMAND vix_cli_distribution_foundation_tests)
+
+add_executable(vix_cli_distribution_runtime_tests
+  DistributionRuntimeTests.cpp
+  ../src/distribution/Distribution.cpp
+  ../src/distribution/Runtime.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/Validation.cpp
+  ../src/util/Semver.cpp
+)
+target_include_directories(vix_cli_distribution_runtime_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_distribution_runtime_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+target_link_libraries(vix_cli_distribution_runtime_tests PRIVATE ZLIB::ZLIB)
+if (TARGET vix::crypto)
+  target_link_libraries(vix_cli_distribution_runtime_tests PRIVATE vix::crypto)
+endif()
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_distribution_runtime_tests PRIVATE vix::requests)
+endif()
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_distribution_runtime_tests PRIVATE vix_warnings)
+endif()
+add_test(NAME vix_cli_distribution_runtime_tests
+  COMMAND vix_cli_distribution_runtime_tests)
+
 add_test(
   NAME vix_cli_registry_integrity
   COMMAND
@@ -1067,7 +1119,7 @@ add_test(NAME vix_cli_public_option_coverage
 add_test(NAME vix_cli_capability_coverage
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/CapabilityCoverageGateTest.sh)
 add_test(NAME vix_cli_command_coverage
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/CommandCoverageGateTest.sh)
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/CommandCoverageGateTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_global_option_coverage
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/GlobalOptionCoverageGateTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_global_contract

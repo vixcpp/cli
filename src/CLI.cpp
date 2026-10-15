@@ -13,37 +13,7 @@
  */
 
 #include <vix/cli/CLI.hpp>
-#include <vix/cli/commands/NewCommand.hpp>
-#include <vix/cli/commands/InitCommand.hpp>
-#include <vix/cli/commands/RunCommand.hpp>
-#include <vix/cli/commands/BuildCommand.hpp>
-#include <vix/cli/commands/DevCommand.hpp>
-#include <vix/cli/commands/PackCommand.hpp>
-#include <vix/cli/commands/VerifyCommand.hpp>
-#include <vix/cli/commands/CheckCommand.hpp>
-#include <vix/cli/commands/TestsCommand.hpp>
-#include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/Dispatch.hpp>
-#include <vix/cli/commands/CacheCommand.hpp>
-#include <vix/cli/commands/RegistryCommand.hpp>
-#include <vix/cli/commands/AddCommand.hpp>
-#include <vix/cli/commands/SearchCommand.hpp>
-#include <vix/cli/commands/RemoveCommand.hpp>
-#include <vix/cli/commands/ListCommand.hpp>
-#include <vix/cli/commands/StoreCommand.hpp>
-#include <vix/cli/commands/PublishCommand.hpp>
-#include <vix/cli/commands/InstallCommand.hpp>
-#include <vix/cli/commands/UpgradeCommand.hpp>
-#include <vix/cli/commands/DoctorCommand.hpp>
-#include <vix/cli/commands/UninstallCommand.hpp>
-#include <vix/cli/commands/UnpublishCommand.hpp>
-#include <vix/cli/commands/UpdateCommand.hpp>
-#include <vix/cli/commands/OutdatedCommand.hpp>
-#include <vix/cli/commands/CompletionCommand.hpp>
-#include <vix/cli/commands/InfoCommand.hpp>
-#include <vix/cli/commands/FmtCommand.hpp>
-#include <vix/cli/commands/CleanCommand.hpp>
-#include <vix/cli/commands/ResetCommand.hpp>
 #include <vix/env/Legacy.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/log/Logger.hpp>
@@ -354,7 +324,7 @@ namespace vix
     {
       std::filesystem::path p{cmd};
       const auto ext = p.extension().string();
-      if (ext == ".vix" || ext == ".cpp")
+      if (ext == ".cpp")
       {
         args.insert(args.begin(), cmd);
         cmd = "run";
@@ -363,9 +333,6 @@ namespace vix
 
     if (cmd == "help")
       return help(args);
-
-    if (cmd == "version")
-      return version(args);
 
     if (!args.empty() && (args[0] == "--help" || args[0] == "-h"))
     {
@@ -387,15 +354,6 @@ namespace vix
         return 1;
       }
       return dispatcher.help(cmd);
-    }
-
-    if (!args.empty() && args[0] == "unpublish")
-    {
-      // Usage:
-      //   vix registry unpublish <namespace/name> [-y|--yes]
-      // On forward sans le mot "unpublish"
-      std::vector<std::string> rest(args.begin() + 1, args.end());
-      return vix::commands::UnpublishCommand{}.run(rest);
     }
 
     if (!dispatcher.has(cmd))
@@ -435,83 +393,6 @@ namespace vix
     {
       const std::string &cmd = args[0];
 
-      if (cmd == "new")
-        return commands::NewCommand::help();
-      if (cmd == "init")
-        return commands::InitCommand::help();
-      if (cmd == "build")
-        return commands::BuildCommand::help();
-      if (cmd == "run")
-        return commands::RunCommand::help();
-      if (cmd == "dev")
-        return commands::DevCommand::help();
-      if (cmd == "check")
-        return commands::CheckCommand::help();
-      if (cmd == "tests" || cmd == "test")
-        return commands::TestsCommand::help();
-      if (cmd == "repl")
-        return commands::ReplCommand::help();
-
-      if (cmd == "fmt")
-        return commands::FmtCommand::help();
-      if (cmd == "clean")
-        return commands::CleanCommand::help();
-      if (cmd == "reset")
-        return commands::ResetCommand::help();
-
-      if (cmd == "login" || cmd == "logout")
-        return vix::cli::dispatch::global().help(cmd);
-
-      if (cmd == "pack")
-        return commands::PackCommand::help();
-      if (cmd == "verify")
-        return commands::VerifyCommand::help();
-      if (cmd == "cache")
-        return commands::CacheCommand::help();
-
-      if (cmd == "registry")
-        return commands::RegistryCommand::help();
-      if (cmd == "add")
-        return commands::AddCommand::help();
-      if (cmd == "search")
-        return commands::SearchCommand::help();
-      if (cmd == "remove")
-        return commands::RemoveCommand::help();
-      if (cmd == "list")
-        return commands::ListCommand::help();
-      if (cmd == "update" || cmd == "up")
-        return commands::UpdateCommand::help();
-      if (cmd == "outdated")
-        return commands::OutdatedCommand::help();
-      if (cmd == "store")
-        return commands::StoreCommand::help();
-      if (cmd == "publish")
-        return commands::PublishCommand::help();
-      if (cmd == "unpublish")
-        return commands::UnpublishCommand{}.help();
-      if (cmd == "install" || cmd == "i")
-        return commands::InstallCommand::help();
-
-      if (cmd == "deps")
-      {
-        vix::cli::util::warn_line(
-            std::cout,
-            "'vix deps' is deprecated, use 'vix install'");
-
-        return commands::InstallCommand::help();
-      }
-
-      if (cmd == "completion")
-        return commands::CompletionCommand::help();
-      if (cmd == "upgrade")
-        return commands::UpgradeCommand::help();
-      if (cmd == "info")
-        return commands::InfoCommand::help();
-      if (cmd == "doctor")
-        return commands::DoctorCommand::help();
-      if (cmd == "uninstall")
-        return commands::UninstallCommand::help();
-
       if (vix::cli::dispatch::global().has(cmd))
         return vix::cli::dispatch::global().help(cmd);
 
@@ -529,47 +410,21 @@ namespace vix
     out << "  vix <file.cpp>\n";
     out << "  vix help <command>\n\n";
 
-    out << "Common commands:\n";
-    out << "  new <name>                 Create a new Vix project\n";
-    out << "  init                       Initialize the current directory\n";
-    out << "  add <package>              Add a dependency\n";
-    out << "  install                    Install project dependencies\n";
-    out << "  run                        Build and run a project or C++ file\n";
-    out << "  build                      Configure and build\n";
-    out << "  test                       Run project tests\n";
-    out << "  dev                        Run a C++ project while watching for changes\n";
-
     out << "Project:\n";
-    out << "  check                      Validate a project or source file\n";
-    out << "  repl                       Start the interactive REPL\n";
-    out << "  fmt                        Format C++ source files\n";
-    out << "  clean                      Remove local build caches\n";
-    out << "  reset                      Reset caches and dependencies\n";
+    out << "  new <name>                 Create a minimal native Vix project\n";
+    out << "  init                       Adopt the current directory as a Vix project\n";
+    out << "  build                      Build the project\n";
+    out << "  run                        Build and run the project\n";
+    out << "  test                       Run registered project tests\n";
+    out << "  dev                        Run while watching for changes\n";
+    out << "  repl                       Start the C++ REPL\n\n";
 
-    out << "Dependencies and registry:\n";
-    out << "  login                      Authenticate with the Vix account service\n";
-    out << "  logout                     End the Vix account session\n";
-    out << "  registry                   Manage the registry index\n";
-    out << "  search <query>             Search registry packages\n";
-    out << "  list                       List project dependencies\n";
-    out << "  remove <package>           Remove a dependency\n";
-    out << "  update                     Update dependencies\n";
-    out << "  outdated                   Check outdated dependencies\n";
-    out << "  store                      Manage the local package store\n";
-    out << "  publish                    Publish a package version\n";
-    out << "  unpublish                  Remove a published version\n\n";
-
-    out << "Packaging:\n";
-    out << "  pack                       Create a distributable package\n";
-    out << "  verify                     Verify package integrity\n";
-    out << "  cache                      Cache a package locally\n\n";
-
-    out << "System:\n";
-    out << "  doctor                     Check the installation and toolchain\n";
-    out << "  info                       Show environment information\n";
-    out << "  completion                 Generate shell completions\n";
-    out << "  upgrade                    Upgrade the Vix CLI\n";
-    out << "  uninstall                  Uninstall the Vix CLI\n\n";
+    out << "Packages:\n";
+    out << "  add <package-or-url>       Add a package dependency\n";
+    out << "  remove <package-or-url>    Remove a root package dependency\n";
+    out << "  update                     Update all package dependencies\n";
+    out << "  install                    Install locked package dependencies\n";
+    out << "  publish                    Publish the current Registry package\n\n";
 
     out << "Global options:\n";
     out << "  --verbose                  Enable debug output\n";
@@ -580,7 +435,7 @@ namespace vix
 
     out << "Run 'vix help <command>' for detailed command usage.\n";
     out << "Documentation: "
-        << link("https://docs.vixcpp.com/cli/")
+        << link("https://vixcpp.com/docs")
         << "\n";
 
     return 0;

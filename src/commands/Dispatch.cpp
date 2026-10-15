@@ -17,33 +17,13 @@
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
-#include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
-#include <vix/cli/commands/PackCommand.hpp>
-#include <vix/cli/commands/VerifyCommand.hpp>
 #include <vix/cli/commands/ReplCommand.hpp>
-#include <vix/cli/commands/CacheCommand.hpp>
-#include <vix/cli/commands/RegistryCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
-#include <vix/cli/commands/SearchCommand.hpp>
 #include <vix/cli/commands/RemoveCommand.hpp>
-#include <vix/cli/commands/ListCommand.hpp>
-#include <vix/cli/commands/StoreCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
-#include <vix/cli/commands/UpgradeCommand.hpp>
-#include <vix/cli/commands/DoctorCommand.hpp>
-#include <vix/cli/commands/UninstallCommand.hpp>
-#include <vix/cli/commands/UnpublishCommand.hpp>
 #include <vix/cli/commands/UpdateCommand.hpp>
-#include <vix/cli/commands/OutdatedCommand.hpp>
-#include <vix/cli/util/Ui.hpp>
-#include <vix/cli/commands/CompletionCommand.hpp>
-#include <vix/cli/commands/InfoCommand.hpp>
-#include <vix/cli/commands/FmtCommand.hpp>
-#include <vix/cli/commands/CleanCommand.hpp>
-#include <vix/cli/commands/ResetCommand.hpp>
-#include <vix/cli/commands/CloudCommand.hpp>
 
 #include <stdexcept>
 
@@ -55,15 +35,6 @@ namespace vix::cli::dispatch
     {
       map_.emplace(e.name, std::move(e));
     };
-    auto auth_help = []()
-    {
-      std::cout << "Usage:\n"
-                << "  vix login [options]\n"
-                << "  vix logout\n\n"
-                << "Authenticate with the configured Vix account service.\n";
-      return 0;
-    };
-
     // Project
     add({"new",
          "Project",
@@ -80,14 +51,6 @@ namespace vix::cli::dispatch
          { return vix::commands::InitCommand::run(a); },
          []()
          { return vix::commands::InitCommand::help(); }});
-
-    add({"completion",
-         "Info",
-         "Generate shell completion script",
-         [](const Args &a)
-         { return vix::commands::CompletionCommand::run(a); },
-         []()
-         { return vix::commands::CompletionCommand::help(); }});
 
     add({"build",
          "Project",
@@ -113,39 +76,9 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::DevCommand::help(); }});
 
-    add({"login",
-         "Cloud",
-         "Connect to Softadastra Cloud",
-         [](const Args &a)
-         { return vix::commands::CloudCommand::login(a); },
-         auth_help});
-
-    add({"logout",
-         "Cloud",
-         "Remove the local Softadastra Cloud session",
-         [](const Args &a)
-         { return vix::commands::CloudCommand::logout(a); },
-         auth_help});
-
-    add({"check",
-         "Project",
-         "Validate build / script check",
-         [](const Args &a)
-         { return vix::commands::CheckCommand::run(a); },
-         []()
-         { return vix::commands::CheckCommand::help(); }});
-
-    add({"tests",
-         "Project",
-         "Run tests (alias of check --tests)",
-         [](const Args &a)
-         { return vix::commands::TestsCommand::run(a); },
-         []()
-         { return vix::commands::TestsCommand::help(); }});
-
     add({"test",
          "Project",
-         "Alias of tests",
+         "Run registered project tests",
          [](const Args &a)
          { return vix::commands::TestsCommand::run(a); },
          []()
@@ -159,94 +92,21 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::ReplCommand::help(); }});
 
-    add({"fmt",
-         "Project",
-         "Format C++ source files",
-         [](const Args &a)
-         { return vix::commands::FmtCommand::run(a); },
-         []()
-         { return vix::commands::FmtCommand::help(); }});
-
-    add({"clean",
-         "Project",
-         "Remove local cache directories",
-         [](const Args &a)
-         { return vix::commands::CleanCommand::run(a); },
-         []()
-         { return vix::commands::CleanCommand::help(); }});
-
-    add({"reset",
-         "Project",
-         "Clean project cache and reinstall dependencies",
-         [](const Args &a)
-         { return vix::commands::ResetCommand::run(a); },
-         []()
-         { return vix::commands::ResetCommand::help(); }});
-
-    // Packaging & security
-    add({"pack",
-         "Packaging",
-         "Create dist/<name>@<version> (+ optional .vixpkg)",
-         [](const Args &a)
-         { return vix::commands::PackCommand::run(a); },
-         []()
-         { return vix::commands::PackCommand::help(); }});
-
-    add({"verify",
-         "Packaging",
-         "Verify dist/<name>@<version> or .vixpkg",
-         [](const Args &a)
-         { return vix::commands::VerifyCommand::run(a); },
-         []()
-         { return vix::commands::VerifyCommand::help(); }});
-    add({"cache",
-         "Packaging",
-         "Cache a package into the local store",
-         [](const Args &a)
-         { return vix::commands::CacheCommand::run(a); },
-         []()
-         { return vix::commands::CacheCommand::help(); }});
-
-    // Registry
-    add({"registry",
-         "Registry",
-         "Sync/search the Git-based registry index",
-         [](const Args &a)
-         { return vix::commands::RegistryCommand::run(a); },
-         []()
-         { return vix::commands::RegistryCommand::help(); }});
-
     add({"add",
          "Registry",
-         "Add a dependency from registry (pins commit)",
+         "Add a Registry or Git package dependency",
          [](const Args &a)
          { return vix::commands::AddCommand::run(a); },
          []()
          { return vix::commands::AddCommand::help(); }});
 
-    add({"search",
-         "Registry",
-         "Search packages in local registry index (offline)",
-         [](const Args &a)
-         { return vix::commands::SearchCommand::run(a); },
-         []()
-         { return vix::commands::SearchCommand::help(); }});
-
     add({"remove",
          "Registry",
-         "Remove a dependency from vix.lock",
+         "Remove a root package dependency",
          [](const Args &a)
          { return vix::commands::RemoveCommand::run(a); },
          []()
          { return vix::commands::RemoveCommand::help(); }});
-
-    add({"list",
-         "Registry",
-         "List project dependencies from vix.lock",
-         [](const Args &a)
-         { return vix::commands::ListCommand::run(a); },
-         []()
-         { return vix::commands::ListCommand::help(); }});
 
     add({"update",
          "Registry",
@@ -256,49 +116,13 @@ namespace vix::cli::dispatch
          []()
          { return vix::commands::UpdateCommand::help(); }});
 
-    add({"up",
-         "Registry",
-         "Alias for update",
-         [](const Args &a)
-         { return vix::commands::UpdateCommand::run(a); },
-         []()
-         { return vix::commands::UpdateCommand::help(); }});
-
-    add({"outdated",
-         "Registry",
-         "Check which dependencies are behind the latest versions",
-         [](const Args &a)
-         { return vix::commands::OutdatedCommand::run(a); },
-         []()
-         { return vix::commands::OutdatedCommand::help(); }});
-
-    add({"store",
-         "Registry",
-         "Manage local store cache (gc/path)",
-         [](const Args &a)
-         { return vix::commands::StoreCommand::run(a); },
-         []()
-         { return vix::commands::StoreCommand::help(); }});
-
     add({"publish",
          "Registry",
-         "Publish a package version to the registry (JSON + PR)",
+         "Publish the current package to its configured Registry",
          [](const Args &a)
          { return vix::commands::PublishCommand::run(a); },
          []()
          { return vix::commands::PublishCommand::help(); }});
-
-    add({"unpublish",
-         "Registry",
-         "Remove a package from the registry (opens PR, destructive)",
-         [](const Args &a)
-         {
-           return vix::commands::UnpublishCommand{}.run(a);
-         },
-         []()
-         {
-           return vix::commands::UnpublishCommand{}.help();
-         }});
 
     add({"install",
          "Registry",
@@ -307,60 +131,6 @@ namespace vix::cli::dispatch
          { return vix::commands::InstallCommand::run(a); },
          []()
          { return vix::commands::InstallCommand::help(); }});
-
-    add({"i",
-         "Registry",
-         "Alias for install",
-         [](const Args &a)
-         { return vix::commands::InstallCommand::run(a); },
-         []()
-         { return vix::commands::InstallCommand::help(); }});
-
-    add({"deps",
-         "Registry",
-         "Alias for install (deprecated)",
-         [](const Args &a)
-         {
-           vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
-           return vix::commands::InstallCommand::run(a);
-         },
-         []()
-         {
-           vix::cli::util::warn_line(std::cout, "'vix deps' is deprecated, use 'vix install'");
-           return 0;
-         }});
-
-    add({"upgrade",
-         "Info",
-         "Upgrade the Vix CLI binary",
-         [](const Args &a)
-         { return vix::commands::UpgradeCommand::run(a); },
-         []()
-         { return vix::commands::UpgradeCommand::help(); }});
-
-    add({"info",
-         "Info",
-         "Show Vix environment and cache locations",
-         [](const Args &a)
-         { return vix::commands::InfoCommand::run(a); },
-         []()
-         { return vix::commands::InfoCommand::help(); }});
-
-    add({"doctor",
-         "Info",
-         "Check toolchain and install health",
-         [](const Args &a)
-         { return vix::commands::DoctorCommand::run(a); },
-         []()
-         { return vix::commands::DoctorCommand::help(); }});
-
-    add({"uninstall",
-         "Info",
-         "Remove Vix CLI from the system",
-         [](const Args &a)
-         { return vix::commands::UninstallCommand::run(a); },
-         []()
-         { return vix::commands::UninstallCommand::help(); }});
 
   }
 

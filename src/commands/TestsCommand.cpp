@@ -541,7 +541,7 @@ namespace vix::commands::TestsCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix tests [path] [options] [-- ctest args...]\n\n";
+    out << "  vix test [path] [options] [-- ctest args...]\n\n";
 
     out << "Description:\n";
     out << "  Build, discover, and run project tests.\n";
@@ -576,19 +576,19 @@ namespace vix::commands::TestsCommand
     out << "                            Use `-- -R <regex>` for advanced native filtering.\n\n";
 
     out << "Examples:\n";
-    out << "  vix tests\n";
-    out << "  vix tests --list\n";
-    out << "  vix tests --watch\n";
-    out << "  vix tests --run\n";
-    out << "  vix tests ./examples/blog\n";
-    out << "  vix tests --preset release\n";
-    out << "  vix tests --exact-test tree.basic\n";
-    out << "  vix tests --exact-test=tree.basic\n";
-    out << "  vix tests -R tree.basic\n";
-    out << "  vix tests --fail-fast\n";
-    out << "  vix tests --raw\n";
-    out << "  vix tests -- --output-on-failure\n";
-    out << "  vix tests -- -R MySuite\n\n";
+    out << "  vix test\n";
+    out << "  vix test --list\n";
+    out << "  vix test --watch\n";
+    out << "  vix test --run\n";
+    out << "  vix test ./examples/project\n";
+    out << "  vix test --preset release\n";
+    out << "  vix test --exact-test tree.basic\n";
+    out << "  vix test --exact-test=tree.basic\n";
+    out << "  vix test -R tree.basic\n";
+    out << "  vix test --fail-fast\n";
+    out << "  vix test --raw\n";
+    out << "  vix test -- --output-on-failure\n";
+    out << "  vix test -- -R MySuite\n\n";
 
     out << "Behavior:\n";
     out << "  Native Vix projects       Execute registered project tests\n";
@@ -597,7 +597,6 @@ namespace vix::commands::TestsCommand
 
     out << "See also:\n";
     out << "  vix build --build-target all\n";
-    out << "  vix check --tests\n";
 
     return 0;
   }

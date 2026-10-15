@@ -59,10 +59,12 @@ file(GLOB_RECURSE CLI_SOURCES
 # Keep the historical source available for reference, but do not compile it
 # into the canonical CLI.
 list(FILTER CLI_SOURCES EXCLUDE REGEX "/src/app/AppProjectResolver\\.cpp$")
+# The old Git-index RegistryCatalog is only used by the retired Note command.
+list(FILTER CLI_SOURCES EXCLUDE REGEX "/src/registry/RegistryCatalog\\.cpp$")
 # These command implementations remain historical source assets, but are not
 # part of the canonical C++ development CLI.
 list(FILTER CLI_SOURCES EXCLUDE REGEX
-  "/src/commands/(AgentCommand|GameExportCommand|NoteCommand|DesktopCommand|MobileCommand|MobileCommandUnavailable|OrmCommand|DbCommand|P2PCommand|TaskCommand|ServiceCommand|ProxyCommand|HealthCommand|DeployCommand|LogsCommand|EnvCommand|ProductionCommand|WsCommand)\\.cpp$|/src/commands/replay/ReplayCommand\\.cpp$|/src/commands/(db|ws|env)/.*\\.cpp$")
+  "/src/commands/(AgentCommand|GameExportCommand|NoteCommand|DesktopCommand|MobileCommand|MobileCommandUnavailable|OrmCommand|DbCommand|P2PCommand|ServiceCommand|ProxyCommand|HealthCommand|DeployCommand|LogsCommand|EnvCommand|ProductionCommand|WsCommand)\\.cpp$|/src/commands/replay/ReplayCommand\\.cpp$|/src/commands/(db|ws|env)/.*\\.cpp$")
 list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
@@ -70,6 +72,11 @@ list(REMOVE_DUPLICATES CLI_SOURCES)
 
 add_executable(vix_cli ${CLI_SOURCES})
 add_executable(vix::cli ALIAS vix_cli)
+
+# Release archives are verified and extracted in-process; no shell tools are
+# invoked by the distribution runtime.
+find_package(ZLIB REQUIRED)
+target_link_libraries(vix_cli PRIVATE ZLIB::ZLIB)
 
 target_include_directories(vix_cli PRIVATE
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -119,30 +126,11 @@ endfunction()
 get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 set(_VIX_REPLY_DIR    "${_VIX_MODULES_DIR}/reply")
-set(_VIX_PROCESS_DIR  "${_VIX_MODULES_DIR}/process")
 set(_VIX_ENGINE_DIR   "${_VIX_MODULES_DIR}/engine")
 set(_VIX_REQUESTS_DIR "${_VIX_MODULES_DIR}/requests")
 
 if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
   add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
-endif()
-
-if (EXISTS "${_VIX_PROCESS_DIR}/CMakeLists.txt" AND NOT TARGET vix::process)
-  set(VIX_PROCESS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  set(VIX_PROCESS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-
-  add_subdirectory(
-    "${_VIX_PROCESS_DIR}"
-    "${CMAKE_BINARY_DIR}/_vix_process"
-  )
-endif()
-
-if (TARGET vix::process)
-  target_link_libraries(vix_cli PRIVATE vix::process)
-else()
-  message(FATAL_ERROR
-    "[cli] RegistryCatalog requires the vix::process target"
-  )
 endif()
 
 if (EXISTS "${_VIX_ENGINE_DIR}/CMakeLists.txt" AND NOT TARGET vix::engine)
@@ -185,12 +173,8 @@ else()
   get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
   set(_VIX_CORE_DIR     "${_VIX_MODULES_DIR}/core")
-  set(_VIX_ASYNC_DIR    "${_VIX_MODULES_DIR}/async")
   set(_VIX_JSON_DIR     "${_VIX_MODULES_DIR}/json")
-  set(_VIX_TEMPLATE_DIR "${_VIX_MODULES_DIR}/template")
   set(_VIX_CRYPTO_DIR   "${_VIX_MODULES_DIR}/crypto")
-  set(_VIX_SYNC_DIR     "${_VIX_MODULES_DIR}/sync")
-  set(_VIX_CACHE_DIR    "${_VIX_MODULES_DIR}/cache")
   set(_VIX_REQUESTS_DIR  "${_VIX_MODULES_DIR}/requests")
   set(_VIX_ENGINE_DIR    "${_VIX_MODULES_DIR}/engine")
 
@@ -202,20 +186,12 @@ else()
   if (_LOCAL_LAYOUT_OK)
     message(STATUS "[cli] Building inside Vix repo -> resolving local sibling modules")
 
-    if (EXISTS "${_VIX_ASYNC_DIR}/CMakeLists.txt" AND NOT TARGET vix::async)
-      add_subdirectory("${_VIX_ASYNC_DIR}" "${CMAKE_BINARY_DIR}/_vix_async")
-    endif()
-
     if (EXISTS "${_VIX_JSON_DIR}/CMakeLists.txt" AND NOT TARGET vix::json)
       add_subdirectory("${_VIX_JSON_DIR}" "${CMAKE_BINARY_DIR}/_vix_json")
     endif()
 
     if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
       add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
-    endif()
-
-    if (EXISTS "${_VIX_TEMPLATE_DIR}/CMakeLists.txt" AND NOT TARGET vix::template)
-      add_subdirectory("${_VIX_TEMPLATE_DIR}" "${CMAKE_BINARY_DIR}/_vix_template")
     endif()
 
     if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND NOT TARGET vix::core)
@@ -240,14 +216,6 @@ else()
       add_subdirectory("${_VIX_CRYPTO_DIR}" "${CMAKE_BINARY_DIR}/_vix_crypto")
     endif()
 
-    if (EXISTS "${_VIX_SYNC_DIR}/CMakeLists.txt" AND NOT TARGET vix::sync)
-      add_subdirectory("${_VIX_SYNC_DIR}" "${CMAKE_BINARY_DIR}/_vix_sync")
-    endif()
-
-    if (EXISTS "${_VIX_CACHE_DIR}/CMakeLists.txt" AND NOT TARGET vix::cache)
-      add_subdirectory("${_VIX_CACHE_DIR}" "${CMAKE_BINARY_DIR}/_vix_cache")
-    endif()
-
     if (EXISTS "${_VIX_ENGINE_DIR}/CMakeLists.txt" AND NOT TARGET vix::engine)
       set(VIX_ENGINE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
       add_subdirectory("${_VIX_ENGINE_DIR}" "${CMAKE_BINARY_DIR}/_vix_engine")
@@ -255,10 +223,6 @@ else()
 
     if (TARGET vix::core)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::core)
-    endif()
-
-    if (TARGET vix::async)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::async)
     endif()
 
     if (TARGET vix::json)
@@ -269,10 +233,6 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::reply)
     endif()
 
-    if (TARGET vix::template)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::template)
-    endif()
-
     if (TARGET vix::requests)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::requests)
     endif()
@@ -281,28 +241,16 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::crypto)
     endif()
 
-    if (TARGET vix::sync)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::sync)
-    endif()
-
-    if (TARGET vix::cache)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::cache)
-    endif()
-
     if (TARGET vix::engine)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::engine)
     endif()
 
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ASYNC_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_JSON_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REPLY_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_TEMPLATE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REQUESTS_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_SYNC_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CACHE_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ENGINE_DIR}/include")
 
     if (_VIX_LOCAL_LINK_TARGETS)
@@ -393,25 +341,23 @@ else()
 endif()
 
 # ----------------------------------------------------
-# Account authentication support
+# HTTPS Registry metadata, content, and publication transport
 # ----------------------------------------------------
 if (TARGET vix::requests)
-  message(STATUS "[cli] Account authentication enabled")
+  message(STATUS "[cli] Registry HTTPS transport enabled")
   target_link_libraries(vix_cli PRIVATE vix::requests)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_REQUESTS=1)
 else()
-  message(FATAL_ERROR "[cli] Account authentication requires vix::requests")
+  message(FATAL_ERROR "[cli] Registry HTTPS transport requires vix::requests")
 endif()
 
 # ----------------------------------------------------
-# Optional crypto command support
+# Registry signature verification
 # ----------------------------------------------------
 if (TARGET vix::crypto)
-  message(STATUS "[cli] Crypto command enabled")
+  message(STATUS "[cli] Registry signature verification enabled")
   target_link_libraries(vix_cli PRIVATE vix::crypto)
-  target_compile_definitions(vix_cli PRIVATE VIX_CLI_HAS_CRYPTO=1)
 else()
-  message(STATUS "[cli] Crypto command disabled: vix::crypto target not found")
+  message(FATAL_ERROR "[cli] Registry signature verification requires vix::crypto")
 endif()
 
 # ----------------------------------------------------

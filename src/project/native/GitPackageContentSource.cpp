@@ -321,6 +321,36 @@ namespace vix::cli::project::native
 #endif
   }
 
+  GitObjectTreeReadResult read_git_object_tree(
+    GitCommandRunner &runner, std::string_view gitDirectory, std::string_view fullCommit)
+  {
+    auto run = [&](std::vector<std::string> arguments, std::string input = {})
+    { return runner.run({std::move(arguments), std::move(input)}); };
+    const auto listing = run({"git", "--git-dir", std::string{gitDirectory}, "ls-tree", "-r", "-z",
+      "--full-tree", std::string{fullCommit}});
+    if (!listing.started || listing.exitCode != 0)
+      return {GitObjectTreeReadStatus::transport_failure, std::nullopt, "cannot enumerate exact Git commit tree"};
+
+    std::vector<TreeLeaf> leaves;
+    CanonicalPackageTree tree;
+    std::string error;
+    if (!parse_tree(listing.standardOutput, leaves, error))
+      return {GitObjectTreeReadStatus::invalid_object_data, std::nullopt,
+        "invalid exact-commit Git tree: " + error};
+    if (leaves.empty()) return {GitObjectTreeReadStatus::available, std::move(tree), {}};
+
+    std::string input;
+    for (const auto &leaf : leaves)
+    { input += leaf.oid; input.push_back('\n'); }
+    const auto blobs = run({"git", "--git-dir", std::string{gitDirectory}, "cat-file", "--batch"}, std::move(input));
+    if (!blobs.started || blobs.exitCode != 0)
+      return {GitObjectTreeReadStatus::transport_failure, std::nullopt, "cannot read Git blob batch"};
+    if (!parse_batch(blobs.standardOutput, leaves, tree, error))
+      return {GitObjectTreeReadStatus::invalid_object_data, std::nullopt,
+        "invalid Git cat-file batch protocol: " + error};
+    return {GitObjectTreeReadStatus::available, std::move(tree), {}};
+  }
+
   GitCliPackageContentSource::GitCliPackageContentSource(fs::path workRoot, GitCommandRunner &runner)
     : workRoot_(std::move(workRoot)), runner_(runner) {}
 
@@ -359,19 +389,12 @@ namespace vix::cli::project::native
     if (!type.started || type.exitCode != 0) return failed("exact locked Git commit is unavailable after object acquisition");
     while (!type.standardOutput.empty() && (type.standardOutput.back() == '\n' || type.standardOutput.back() == '\r')) type.standardOutput.pop_back();
     if (type.standardOutput != "commit") return invalid("locked Git object is not itself a commit; tag peeling is forbidden");
-    auto listing = run({"git", "--git-dir", gitDir, "ls-tree", "-r", "-z", "--full-tree", commit});
-    if (!listing.started || listing.exitCode != 0) return failed("cannot enumerate exact locked commit tree");
-    std::vector<TreeLeaf> leaves; std::string error;
-    if (!parse_tree(listing.standardOutput, leaves, error)) return invalid("invalid exact-commit Git tree: " + error);
-    std::string input;
-    for (const auto &leaf : leaves) { input += leaf.oid; input.push_back('\n'); }
-    if (leaves.empty())
-      return {PackageContentSourceStatus::available, std::make_shared<CanonicalPackageContentCandidate>(CanonicalPackageTree{}), {}};
-    auto blobs = run({"git", "--git-dir", gitDir, "cat-file", "--batch"}, std::move(input));
-    if (!blobs.started || blobs.exitCode != 0) return failed("cannot read Git blob batch");
-    CanonicalPackageTree candidate;
-    if (!parse_batch(blobs.standardOutput, leaves, candidate, error)) return invalid("invalid Git cat-file batch protocol: " + error);
+    auto objectTree = read_git_object_tree(runner_, gitDir, commit);
+    if (objectTree.status == GitObjectTreeReadStatus::transport_failure)
+      return failed(std::move(objectTree.diagnostic));
+    if (objectTree.status != GitObjectTreeReadStatus::available || !objectTree.tree)
+      return invalid(std::move(objectTree.diagnostic));
     return {PackageContentSourceStatus::available,
-      std::make_shared<CanonicalPackageContentCandidate>(std::move(candidate)), {}};
+      std::make_shared<CanonicalPackageContentCandidate>(std::move(*objectTree.tree)), {}};
   }
 } // namespace vix::cli::project::native

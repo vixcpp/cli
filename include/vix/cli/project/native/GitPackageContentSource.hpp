@@ -6,7 +6,9 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <vix/cli/project/native/PackageContentAcquisition.hpp>
@@ -33,6 +35,20 @@ namespace vix::cli::project::native
     virtual ~GitCommandRunner() = default;
     [[nodiscard]] virtual GitCommandResult run(const GitCommand &command) = 0;
   };
+
+  enum class GitObjectTreeReadStatus { available, transport_failure, invalid_object_data };
+  struct GitObjectTreeReadResult
+  {
+    GitObjectTreeReadStatus status{GitObjectTreeReadStatus::transport_failure};
+    std::optional<CanonicalPackageTree> tree;
+    std::string diagnostic;
+  };
+
+  // Shared object-database reader used by content and metadata acquisition.
+  // It reads one exact commit tree without creating a worktree or admitting
+  // bytes to the persistent package-content store.
+  [[nodiscard]] GitObjectTreeReadResult read_git_object_tree(
+    GitCommandRunner &runner, std::string_view gitDirectory, std::string_view fullCommit);
 
   class NativeGitCommandRunner final : public GitCommandRunner
   {

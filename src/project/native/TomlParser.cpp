@@ -2,6 +2,7 @@
 
 #include <toml.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <atomic>
 #include <chrono>
@@ -832,6 +833,48 @@ namespace vix::cli::project::native
   ParseResult<NativeProject> parse_native_manifest_file(const std::filesystem::path &path)
   {
     return parse_file<NativeProject>(path, parse_native_manifest_text);
+  }
+
+  ParseResult<VersionRequirement> parse_version_requirement_constraint(
+    std::string_view constraint, std::string_view source)
+  {
+    try
+    {
+      const auto separator = constraint.find('=');
+      if (separator == std::string_view::npos)
+        fail(ParseErrorCode::invalid_discriminated_shape, "requirement",
+          "expected exact=<version> or compatible=<version>");
+      const auto mode = constraint.substr(0, separator);
+      const auto versionText = constraint.substr(separator + 1);
+      if ((mode != "exact" && mode != "compatible") || versionText.empty() ||
+          !std::all_of(versionText.begin(), versionText.end(), [](unsigned char value)
+            { return (value >= '0' && value <= '9') || (value >= 'A' && value <= 'Z') ||
+                (value >= 'a' && value <= 'z') || value == '.' || value == '-'; }))
+        fail(ParseErrorCode::invalid_value, "requirement",
+          "expected exact=<version> or compatible=<version> using a format-1 version");
+
+      auto parsed = toml::parse("value = \"" + std::string{versionText} + "\"", source);
+      const auto &node = required(parsed, "value", "");
+      const auto version = version_value(node, "requirement." + std::string{mode});
+      if (!valid_semver(version))
+        fail(ParseErrorCode::invalid_value, "requirement", "invalid format-1 semantic version");
+      if (mode == "exact")
+        return {VersionRequirement{ExactVersion{version}}, {}};
+      return {VersionRequirement{CompatibleVersion{version}}, {}};
+    }
+    catch (const Failure &failure)
+    {
+      return {std::nullopt, {failure.issue}};
+    }
+    catch (const toml::parse_error &error)
+    {
+      return {std::nullopt, {issue(ParseErrorCode::toml_syntax_error, "requirement",
+        std::string{error.description()}, &error.source())}};
+    }
+    catch (const std::exception &error)
+    {
+      return {std::nullopt, {issue(ParseErrorCode::invalid_value, "requirement", error.what())}};
+    }
   }
 
   NativeManifestSerializationResult serialize_native_manifest(const NativeProject &project)

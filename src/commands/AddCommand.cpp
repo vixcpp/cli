@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/AddCommand.hpp>
+#include <vix/cli/project/native/PackageCommandRuntime.hpp>
 
 #include <vix/cli/Style.hpp>
 #include <vix/cli/util/Lockfile.hpp>
@@ -1157,6 +1158,8 @@ namespace vix::commands
 
   int AddCommand::run(const std::vector<std::string> &args)
   {
+    return vix::cli::project::native::run_native_add_command(args);
+
     if (args.empty())
     {
       return help();
@@ -1465,37 +1468,11 @@ namespace vix::commands
   {
     std::cout
         << "vix add\n"
-        << "Add a package to your project.\n\n"
-
-        << "Usage\n"
-        << "  vix add [@]namespace/name[@version]\n"
-        << "  vix add [@]namespace/name[@version] --module <name>\n"
-        << "  vix add [@]namespace/name[@version] -m <name>\n"
-        << "  vix add [@]namespace/name[@version] --module <name> --link <target>\n\n"
-
-        << "Examples\n"
-        << "  vix add gk/jwt\n"
-        << "  vix add gk/jwt@^1.0.0\n"
-        << "  vix add @gk/jwt\n"
-        << "  vix add @gk/jwt@~1.2.0\n"
-        << "  vix add gk/jwt@^1.0.0 --module auth\n"
-        << "  vix add gk/jwt@^1.0.0 -m auth\n"
-        << "  vix add gk/jwt@^1.0.0 --module auth --link gk::jwt\n\n"
-
-        << "What happens\n"
-        << "  • Resolves the exact version (latest if not specified)\n"
-        << "  • Fetches the package at a pinned commit\n"
-        << "  • Updates vix.json with the declared dependency\n"
-        << "  • Updates vix.lock with the exact resolved version\n"
-        << "  • With --module, updates modules/<name>/vix.module instead of adding the dependency directly to vix.json\n"
-        << "  • Module dependencies are resolved by the application build and kept in the root vix.lock\n"
-        << "  • Installs all required dependencies\n\n"
-
-        << "Notes\n"
-        << "  • Use 'vix registry sync' if a package is not found\n"
-        << "  • '@namespace/name' is supported (scoped packages)\n"
-        << "  • vix.json stores declared dependency requirements\n"
-        << "  • vix.lock stores exact resolved versions for reproducible installs\n";
+        << "Add and resolve a native package requirement.\n\n"
+        << "  vix add <publisher>/<package> --version exact=<version>|compatible=<version> [--registry <id>]\n"
+        << "  vix add <git-url> --commit <full-object-id>\n"
+        << "  vix add <git-url> --branch <name>\n"
+        << "  vix add <git-url> --tag <name>\n";
 
     return 0;
   }

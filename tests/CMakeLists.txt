@@ -267,6 +267,7 @@ add_test(NAME vix_cli_native_resolution_catalog_tests COMMAND vix_cli_native_res
 
 add_executable(vix_cli_native_metadata_acquisition_tests
   NativeMetadataAcquisitionTests.cpp
+  ../src/project/native/NativeDependencyMutation.cpp
   ../src/project/native/MetadataAcquisition.cpp
   ../src/project/native/ResolutionCatalog.cpp
   ../src/project/native/Resolver.cpp
@@ -282,6 +283,49 @@ target_include_directories(vix_cli_native_metadata_acquisition_tests SYSTEM PRIV
   ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
 )
 add_test(NAME vix_cli_native_metadata_acquisition_tests COMMAND vix_cli_native_metadata_acquisition_tests)
+
+add_executable(vix_cli_native_package_command_runtime_tests
+  NativePackageCommandRuntimeTests.cpp
+  ../src/project/native/PackageCommandRuntime.cpp
+  ../src/project/native/NativeDependencyMutation.cpp
+  ../src/project/native/MetadataAcquisition.cpp
+  ../src/project/native/ResolutionCatalog.cpp
+  ../src/project/native/Resolver.cpp
+  ../src/project/native/Lockfile.cpp
+  ../src/project/native/CanonicalHash.cpp
+  ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
+  ../src/project/native/RegistryMetadataSource.cpp
+  ../src/project/native/RegistrySnapshotState.cpp
+  ../src/project/native/RegistryAuthority.cpp
+  ../src/project/native/RegistryDirectory.cpp
+  ../src/project/native/MetadataStorage.cpp
+  ../src/project/native/FilesystemMetadataStorage.cpp
+  ../src/project/native/GitPackageMetadataSource.cpp
+  ../src/project/native/GitPackageContentSource.cpp
+  ../src/project/native/PackageContentDigest.cpp
+  ../src/project/native/PackageContentStore.cpp
+  ../src/project/native/RegistryContentTransport.cpp
+)
+target_include_directories(vix_cli_native_package_command_runtime_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../include
+)
+target_include_directories(vix_cli_native_package_command_runtime_tests SYSTEM PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
+)
+if (TARGET vix::crypto)
+  target_link_libraries(vix_cli_native_package_command_runtime_tests PRIVATE vix::crypto)
+endif()
+if (TARGET vix::requests)
+  target_link_libraries(vix_cli_native_package_command_runtime_tests PRIVATE vix::requests)
+endif()
+find_package(Threads REQUIRED)
+target_link_libraries(vix_cli_native_package_command_runtime_tests PRIVATE Threads::Threads)
+if (TARGET vix_warnings)
+  target_link_libraries(vix_cli_native_package_command_runtime_tests PRIVATE vix_warnings)
+endif()
+add_test(NAME vix_cli_native_package_command_runtime_tests
+  COMMAND vix_cli_native_package_command_runtime_tests)
 
 add_executable(vix_cli_native_registry_directory_tests
   NativeRegistryDirectoryTests.cpp

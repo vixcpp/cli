@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/UpdateCommand.hpp>
+#include <vix/cli/project/native/PackageCommandRuntime.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/util/Ui.hpp>
 #include <vix/cli/util/Manifest.hpp>
@@ -516,6 +517,8 @@ namespace vix::commands
 
   int UpdateCommand::run(const std::vector<std::string> &args)
   {
+    return vix::cli::project::native::run_native_update_command(args);
+
     try
     {
       Options opt;
@@ -915,52 +918,8 @@ namespace vix::commands
   int UpdateCommand::help()
   {
     std::cout
-        << "vix update (alias: up)\n"
-        << "Update project or global packages to newer versions.\n\n"
-
-        << "Usage\n"
-        << "  vix update\n"
-        << "  vix up\n"
-        << "  vix update [@]namespace/name[@version]\n"
-        << "  vix up [@]namespace/name[@version]\n"
-        << "  vix update [options]\n"
-        << "  vix up [options]\n"
-        << "  vix update -g [@]namespace/name[@version]\n\n"
-
-        << "Options\n"
-        << "  -g, --global   Update a global package\n"
-        << "  --dry-run      Show what would be updated without changing vix.lock\n"
-        << "  --json         Print machine-readable JSON output\n"
-        << "  --install      Run 'vix install' after update\n"
-        << "  -h, --help     Show this help message\n\n"
-
-        << "Examples\n"
-        << "  vix update\n"
-        << "  vix update gk/jwt\n"
-        << "  vix update @gk/jwt\n"
-        << "  vix update gk/jwt@^1.2.0\n"
-        << "  vix update gk/jwt gk/pdf --install\n"
-        << "  vix update --dry-run\n"
-        << "  vix update @gk/jwt --json\n"
-        << "  vix update -g @gk/jwt\n\n"
-
-        << "What happens\n"
-        << "  • Project mode:\n"
-        << "    - Reads dependency ranges from vix.json\n"
-        << "    - Resolves newer matching versions from the registry\n"
-        << "    - Rewrites vix.lock with exact pinned versions\n"
-        << "    - Optionally runs 'vix install'\n"
-        << "\n"
-        << "  • Global mode (-g):\n"
-        << "    - Resolves the latest version from the registry\n"
-        << "    - Reinstalls the package globally\n"
-        << "    - Reuses 'vix install -g' logic\n\n"
-
-        << "Notes\n"
-        << "  • Version ranges are stored in vix.json\n"
-        << "  • Exact resolved versions are stored in vix.lock\n"
-        << "  • Global update does not use vix.lock\n"
-        << "  • A project dependency must already exist in vix.json\n";
+        << "vix update\n"
+        << "Re-resolve all native root requirements using fresh online metadata.\n";
 
     return 0;
   }

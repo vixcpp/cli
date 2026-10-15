@@ -54,10 +54,15 @@ requirement = { compatible = "1.0.0" }
     std::string headerMode{"100644"};
     std::string headerContent{"int package_api();\n"};
     std::string contract{contractText};
+    std::string symbolicHead{"ref: refs/heads/main\tHEAD\n"};
+    bool advertiseSymbolicHead{true};
 
     GitCommandResult run(const GitCommand &command) override
     {
       commands.push_back(command);
+      if (has_argument(command, "ls-remote"))
+        return advertiseSymbolicHead ? GitCommandResult{true, 0, symbolicHead, {}} :
+          GitCommandResult{true, 0, std::string{commitOid} + "\tHEAD\n", {}};
       if (has_argument(command, "check-ref-format")) return {true, 0, {}, {}};
       if (has_argument(command, "init")) return {true, 0, {}, {}};
       if (has_argument(command, "fetch"))
@@ -226,6 +231,35 @@ requirement = { compatible = "1.0.0" }
     std::filesystem::remove_all(workRoot, error);
   }
 
+  void default_branch_discovery_tests()
+  {
+    ScriptedGitRunner runner;
+    GitPackageMetadataSource source{std::filesystem::path{"unused"}, runner};
+    const GitPackageIdentity identity{"https://example.invalid/org/repo.git", true};
+    auto discovered = source.discover_default_branch(identity);
+    assert(discovered.valid() && *discovered.branch == "main");
+    assert(runner.commands.size() == 2);
+    assert(has_argument(runner.commands.front(), "ls-remote"));
+    assert(has_argument(runner.commands.front(), identity.normalizedRepository));
+    assert(has_argument(runner.commands.front(), "HEAD"));
+
+    runner.commands.clear();
+    runner.symbolicHead = "ref: refs/heads/trunk\tHEAD\n";
+    discovered = source.discover_default_branch(identity);
+    assert(discovered.valid() && *discovered.branch == "trunk");
+
+    runner.commands.clear();
+    runner.symbolicHead = "ref: refs/tags/v1\tHEAD\n";
+    discovered = source.discover_default_branch(identity);
+    assert(!discovered.valid());
+
+    runner.commands.clear();
+    runner.advertiseSymbolicHead = false;
+    discovered = source.discover_default_branch(identity);
+    assert(!discovered.valid());
+    assert(runner.commands.size() == 1);
+  }
+
   void online_composition_routes_typed_sources()
   {
     const auto workRoot = std::filesystem::temp_directory_path() / "vix-git-metadata-composition";
@@ -247,5 +281,6 @@ int main()
 {
   exact_commit_branch_and_tag_tests();
   failures_and_digest_tests();
+  default_branch_discovery_tests();
   online_composition_routes_typed_sources();
 }

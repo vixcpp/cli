@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/RemoveCommand.hpp>
+#include <vix/cli/project/native/PackageCommandRuntime.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/util/Lockfile.hpp>
 #include <vix/cli/util/Resolver.hpp>
@@ -311,6 +312,8 @@ namespace vix::commands
 
   int RemoveCommand::run(const std::vector<std::string> &args)
   {
+    return vix::cli::project::native::run_native_remove_command(args);
+
     vix::cli::util::ProjectMutationLock mutationLock(fs::current_path());
     if (!mutationLock.acquired())
     {
@@ -475,32 +478,9 @@ namespace vix::commands
   {
     std::cout
         << "vix remove\n"
-        << "Remove a package from your project.\n\n"
-
-        << "Usage\n"
-        << "  vix remove [@]namespace/name[@version]\n"
-        << "  vix remove [@]namespace/name[@version] --purge [-y]\n\n"
-
-        << "Examples\n"
-        << "  vix remove gk/jwt\n"
-        << "  vix remove gk/jwt@1.0.0\n"
-        << "  vix remove @gk/jwt\n"
-        << "  vix remove @gk/jwt@1.0.0\n"
-        << "  vix remove @gk/jwt --purge -y\n\n"
-
-        << "What happens\n"
-        << "  • Removes the dependency from vix.json and vix.lock\n"
-        << "  • Regenerates existing project CMake integration\n"
-        << "  • Keeps cached packages unless --purge is used\n\n"
-
-        << "Options\n"
-        << "  --purge    Delete local package files (.vix/deps/...)\n"
-        << "  -y         Skip confirmation when using --purge\n\n"
-
-        << "Notes\n"
-        << "  • Only affects the current project\n"
-        << "  • Does not modify the registry\n"
-        << "  • Supports scoped packages (@namespace/name)\n";
+        << "Remove a native root package requirement and re-resolve remaining roots.\n\n"
+        << "  vix remove <publisher>/<package> [--registry <id>]\n"
+        << "  vix remove <git-url>\n";
 
     return 0;
   }

@@ -1,12 +1,17 @@
 #include <vix/cli/project/native/CanonicalHash.hpp>
 #include <vix/cli/project/native/Lockfile.hpp>
 #include <vix/cli/project/native/MetadataAcquisition.hpp>
+#include <vix/cli/project/native/NativeDependencyMutation.hpp>
 #include <vix/cli/project/native/Resolver.hpp>
 #include <vix/cli/project/native/TomlParser.hpp>
 #include <vix/cli/project/native/Validation.hpp>
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -280,6 +285,245 @@ namespace
     const auto lockB = make_resolved_lockfile(*graphB.value);
     assert(lockA.valid() && lockB.valid() && serialized_equal(*lockA.value, *lockB.value));
   }
+
+  std::string read_text(const std::filesystem::path &path)
+  {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+  }
+
+  struct FaultingProjectStateOperations final : ProjectStateFileOperations
+  {
+    int failWriteCall{0};
+    std::vector<int> failRenameCalls;
+    std::vector<int> failRemoveCalls;
+    int writeCalls{0};
+    int renameCalls{0};
+    int removeCalls{0};
+    std::vector<std::filesystem::path> touchedPaths;
+    bool is_directory(const std::filesystem::path &path, std::error_code &error) const override
+    { return std::filesystem::is_directory(path, error); }
+    bool exists(const std::filesystem::path &path, std::error_code &error) const override
+    { return std::filesystem::exists(path, error); }
+    bool write_complete(const std::filesystem::path &path, std::string_view bytes) override
+    {
+      touchedPaths.push_back(path);
+      if (++writeCalls == failWriteCall)
+      {
+        std::ofstream partial(path, std::ios::binary | std::ios::trunc);
+        partial << "partial";
+        return false;
+      }
+      std::ofstream output(path, std::ios::binary | std::ios::trunc);
+      output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+      output.flush();
+      return output.good();
+    }
+    void rename(const std::filesystem::path &from, const std::filesystem::path &to,
+      std::error_code &error) override
+    {
+      ++renameCalls;
+      touchedPaths.push_back(from);
+      touchedPaths.push_back(to);
+      if (std::find(failRenameCalls.begin(), failRenameCalls.end(), renameCalls) != failRenameCalls.end())
+      {
+        error = std::make_error_code(std::errc::permission_denied);
+        return;
+      }
+      std::filesystem::rename(from, to, error);
+    }
+    void remove(const std::filesystem::path &path, std::error_code &error) override
+    {
+      ++removeCalls;
+      touchedPaths.push_back(path);
+      if (std::find(failRemoveCalls.begin(), failRemoveCalls.end(), removeCalls) != failRemoveCalls.end())
+      {
+        error = std::make_error_code(std::errc::permission_denied);
+        return;
+      }
+      std::filesystem::remove(path, error);
+    }
+  };
+
+  void assert_project_state_unchanged(const std::filesystem::path &root,
+    const std::string &manifest, const std::string &lock)
+  {
+    assert(read_text(root / "vix.toml") == manifest);
+    assert(read_text(root / "vix.lock") == lock);
+  }
+
+  void transaction_failure_matrix_tests(const std::filesystem::path &root,
+    const std::string &manifest, const std::string &lock)
+  {
+    const auto ordinary_failure = [&](FaultingProjectStateOperations &operations,
+      bool writeManifest = true, std::optional<std::string> candidateLock = std::string{"candidate lock"})
+    {
+      NativeProjectStateTransaction transaction{root, &operations};
+      const auto result = transaction.commit(writeManifest,
+        writeManifest ? std::optional<std::string>{"candidate manifest"} : std::nullopt,
+        candidateLock);
+      assert(!result.valid());
+      assert(!result.issues.empty());
+      assert(result.issues.front().code != ProjectStateTransactionCode::rollback_failure);
+      assert_project_state_unchanged(root, manifest, lock);
+    };
+
+    FaultingProjectStateOperations manifestWrite;
+    manifestWrite.failWriteCall = 1;
+    ordinary_failure(manifestWrite);
+
+    FaultingProjectStateOperations lockWrite;
+    lockWrite.failWriteCall = 2;
+    ordinary_failure(lockWrite);
+
+    FaultingProjectStateOperations manifestReplace;
+    manifestReplace.failRenameCalls = {3};
+    ordinary_failure(manifestReplace);
+
+    FaultingProjectStateOperations lockReplace;
+    lockReplace.failRenameCalls = {4};
+    ordinary_failure(lockReplace);
+
+    FaultingProjectStateOperations lockRemoval;
+    lockRemoval.failRemoveCalls = {1};
+    ordinary_failure(lockRemoval, true, std::nullopt);
+
+    FaultingProjectStateOperations rollbackFailure;
+    rollbackFailure.failRenameCalls = {4, 5};
+    NativeProjectStateTransaction transaction{root, &rollbackFailure};
+    const auto result = transaction.commit(true, std::string{"candidate manifest"},
+      std::string{"candidate lock"});
+    assert(!result.valid());
+    assert(!result.issues.empty());
+    assert(result.issues.front().code == ProjectStateTransactionCode::rollback_failure);
+  }
+
+  void native_dependency_mutation_service_tests()
+  {
+    namespace fs = std::filesystem;
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto root = fs::temp_directory_path() / ("vix-native-mutation-" + std::to_string(nonce));
+    assert(fs::create_directories(root));
+
+    NativeProject project;
+    project.name = "mutation-app";
+    const auto initial = serialize_native_manifest(project);
+    assert(initial.valid());
+    {
+      std::ofstream output(root / "vix.toml", std::ios::binary);
+      output << *initial.text;
+      assert(output.good());
+    }
+    {
+      std::ofstream output(root / "vix.lock", std::ios::binary);
+      output << "previous lock bytes";
+      assert(output.good());
+    }
+    {
+      std::ofstream legacyJson(root / "vix.json", std::ios::binary);
+      legacyJson << "not authoritative legacy data";
+      std::ofstream legacyApp(root / "vix.app", std::ios::binary);
+      legacyApp << "also ignored";
+      assert(legacyJson.good() && legacyApp.good());
+    }
+
+    MemorySource source;
+    source.releases.push_back(registry("a", {1, 2, 0, std::nullopt}));
+    NativeDependencyMutationService service{root, source};
+    const auto added = service.add(compatible("a", {"vix", "example", "a"}, {1, 0, 0, std::nullopt}));
+    assert(added.valid());
+    const auto addedManifest = parse_native_manifest_file(root / "vix.toml");
+    const auto addedLock = parse_lockfile_file(root / "vix.lock");
+    assert(addedManifest.valid() && addedManifest.value->packages.size() == 1);
+    assert(addedLock.valid() && addedLock.value->roots.size() == 1);
+    const auto duplicate = service.add(compatible("a", {"vix", "example", "a"}, {1, 0, 0, std::nullopt}));
+    assert(!duplicate.valid() && duplicate.issues.front().code == NativeDependencyMutationCode::requirement_already_exists);
+
+    const std::string gitRepository{"https://example.invalid/org/git-dependency.git"};
+    source.gitRecords.push_back({gitRepository, TagRevision{"v1.0"}, commit_a, digest_b, git_contract()});
+    const auto addedGit = service.add(git_req("git-dependency", gitRepository, TagRevision{"v1.0"}));
+    assert(addedGit.valid());
+    const auto bothLock = parse_lockfile_file(root / "vix.lock");
+    assert(bothLock.valid() && bothLock.value->roots.size() == 2 && bothLock.value->nodes.size() == 2);
+
+    const auto beforeUpdateManifest = read_text(root / "vix.toml");
+    const auto beforeUpdateLock = read_text(root / "vix.lock");
+    source.releases.push_back(registry("a", {1, 4, 0, std::nullopt}));
+    FaultingProjectStateOperations updateOperations;
+    NativeDependencyMutationService updateService{root, source, &updateOperations};
+    const auto updated = updateService.update();
+    assert(updated.valid());
+    assert(read_text(root / "vix.toml") == beforeUpdateManifest);
+    assert(read_text(root / "vix.lock") != beforeUpdateLock);
+    assert(std::none_of(updateOperations.touchedPaths.begin(), updateOperations.touchedPaths.end(),
+      [](const auto &path) { return path.filename() == "vix.toml"; }));
+
+    const auto currentManifest = read_text(root / "vix.toml");
+    {
+      std::ofstream output(root / "vix.toml", std::ios::binary | std::ios::trunc);
+      output << "# Preserve original formatting on failed update.\n" << currentManifest;
+      output.close();
+      assert(output.good());
+    }
+    const auto stableManifest = read_text(root / "vix.toml");
+    const auto stableLock = read_text(root / "vix.lock");
+    const auto transactionRoot = root / "transaction-matrix";
+    assert(fs::create_directories(transactionRoot));
+    {
+      std::ofstream manifestOutput(transactionRoot / "vix.toml", std::ios::binary);
+      manifestOutput << stableManifest;
+      std::ofstream lockOutput(transactionRoot / "vix.lock", std::ios::binary);
+      lockOutput << stableLock;
+      assert(manifestOutput.good() && lockOutput.good());
+    }
+    transaction_failure_matrix_tests(transactionRoot, stableManifest, stableLock);
+    fs::remove_all(transactionRoot);
+
+    // Resolver failure must occur before the transaction begins.
+    const auto conflictRoot = root / "resolver-conflict";
+    assert(fs::create_directories(conflictRoot));
+    {
+      std::ofstream output(conflictRoot / "vix.toml", std::ios::binary);
+      output << *initial.text;
+      assert(output.good());
+      std::ofstream lockOutput(conflictRoot / "vix.lock", std::ios::binary);
+      lockOutput << "L1";
+      assert(lockOutput.good());
+    }
+    MemorySource conflictSource;
+    conflictSource.releases.push_back(registry("a", {1, 2, 0, std::nullopt}));
+    FaultingProjectStateOperations noPersistence;
+    NativeDependencyMutationService conflictService{conflictRoot, conflictSource, &noPersistence};
+    const auto oldManifest = read_text(conflictRoot / "vix.toml");
+    const auto oldLock = read_text(conflictRoot / "vix.lock");
+    const auto conflict = conflictService.add(compatible("a", {"vix", "example", "a"},
+      {2, 0, 0, std::nullopt}));
+    assert(!conflict.valid() && conflict.issues.front().code == NativeDependencyMutationCode::resolution_failure);
+    assert_project_state_unchanged(conflictRoot, oldManifest, oldLock);
+    assert(noPersistence.writeCalls == 0 && noPersistence.renameCalls == 0 && noPersistence.removeCalls == 0);
+    fs::remove_all(conflictRoot);
+
+    source.failRegistry = true;
+    FaultingProjectStateOperations metadataFailureOperations;
+    NativeDependencyMutationService metadataFailureService{root, source, &metadataFailureOperations};
+    const auto failedUpdate = metadataFailureService.update();
+    assert(!failedUpdate.valid());
+    assert(read_text(root / "vix.toml") == stableManifest);
+    assert(read_text(root / "vix.lock") == stableLock);
+    assert(metadataFailureOperations.writeCalls == 0 && metadataFailureOperations.renameCalls == 0 &&
+      metadataFailureOperations.removeCalls == 0);
+
+    const auto removed = service.remove("a");
+    assert(removed.valid());
+    auto remainingManifest = parse_native_manifest_file(root / "vix.toml");
+    assert(remainingManifest.valid() && remainingManifest.value->packages.size() == 1);
+    const auto removedGit = service.remove("git-dependency");
+    assert(removedGit.valid());
+    const auto emptyManifest = parse_native_manifest_file(root / "vix.toml");
+    assert(emptyManifest.valid() && emptyManifest.value->packages.empty());
+    assert(!fs::exists(root / "vix.lock"));
+    fs::remove_all(root);
+  }
 }
 
 int main()
@@ -289,4 +533,5 @@ int main()
   git_dedup_and_mixed_pipeline_test();
   cycle_absence_and_failure_tests();
   source_order_independence_test();
+  native_dependency_mutation_service_tests();
 }

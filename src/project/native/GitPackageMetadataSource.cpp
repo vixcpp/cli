@@ -177,4 +177,44 @@ namespace vix::cli::project::native
       GitResolution{identity.normalizedRepository, revision, std::move(fullCommit),
         canonical.contentId->digest(), *parsedContract.value}, {}};
   }
+
+  GitDefaultBranchResult GitPackageMetadataSource::discover_default_branch(
+    const GitPackageIdentity &identity)
+  {
+    if (!identity.repositoryRoot || identity.normalizedRepository.empty() ||
+        identity.normalizedRepository.find_first_of("\r\n") != std::string::npos ||
+        identity.normalizedRepository.find('\0') != std::string::npos)
+      return {std::nullopt, "Git default-branch request has an invalid repository identity"};
+
+    const auto result = run(runner_, {"git", "ls-remote", "--symref",
+      identity.normalizedRepository, "HEAD"});
+    if (!result.started || result.exitCode != 0)
+      return {std::nullopt, "could not discover the Git repository default branch"};
+
+    std::optional<std::string> branch;
+    std::size_t offset = 0;
+    while (offset < result.standardOutput.size())
+    {
+      const auto end = result.standardOutput.find('\n', offset);
+      auto line = std::string_view{result.standardOutput}.substr(offset,
+        end == std::string::npos ? result.standardOutput.size() - offset : end - offset);
+      if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+      offset = end == std::string::npos ? result.standardOutput.size() : end + 1;
+      if (!line.starts_with("ref: ")) continue;
+      const auto tab = line.find('\t');
+      if (tab == std::string_view::npos || line.substr(tab + 1) != "HEAD" || branch)
+        return {std::nullopt, "Git repository returned malformed symbolic HEAD data"};
+      const auto ref = line.substr(5, tab - 5);
+      constexpr std::string_view prefix{"refs/heads/"};
+      if (!ref.starts_with(prefix) || ref.size() == prefix.size())
+        return {std::nullopt, "Git symbolic HEAD does not identify a branch"};
+      const auto name = ref.substr(prefix.size());
+      if (!valid_revision_name(runner_, prefix, name))
+        return {std::nullopt, "Git symbolic HEAD contains an invalid branch name"};
+      branch = std::string{name};
+    }
+    if (!branch)
+      return {std::nullopt, "Git repository did not advertise a symbolic default branch"};
+    return {std::move(branch), {}};
+  }
 }

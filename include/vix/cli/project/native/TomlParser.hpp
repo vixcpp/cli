@@ -82,6 +82,12 @@ namespace vix::cli::project::native
       std::string_view text, std::string_view source = "<text>");
   [[nodiscard]] ParseResult<NativeProject> parse_native_manifest_file(const std::filesystem::path &path);
 
+  // CLI spelling follows the native requirement discriminator names:
+  // "exact=1.2.3" or "compatible=1.2.3". The semver value is parsed by the
+  // same strict semantic parser used by vix.toml.
+  [[nodiscard]] ParseResult<VersionRequirement> parse_version_requirement_constraint(
+    std::string_view constraint, std::string_view source = "<constraint>");
+
   [[nodiscard]] NativeManifestSerializationResult serialize_native_manifest(const NativeProject &project);
   [[nodiscard]] NativeProjectMutationResult add_root_package_requirement(
     NativeProject &project, PackageRequirement requirement);

@@ -1,6 +1,10 @@
 #include <vix/cli/project/native/TomlParser.hpp>
 
 #include <cassert>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -247,6 +251,101 @@ digest = "sha256:ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
     assert(has_error(wrongType, ParseErrorCode::wrong_type, "project.name"));
     assert(wrongType.issues.front().location && wrongType.issues.front().location->line);
   }
+
+  void native_manifest_mutation_tests()
+  {
+    auto parsed = parse_native_manifest_text(R"toml(format = 1
+[project]
+name = "writer-check"
+cxx-standard = "c++23"
+[[targets]]
+name = "core"
+kind = "static"
+sources = ["src/core.cpp"]
+[targets.includes]
+public = ["include"]
+[targets.definitions]
+public = ["CORE_API=1"]
+[[targets]]
+name = "core-test"
+kind = "executable"
+sources = ["tests/core_test.cpp"]
+[[tests]]
+name = "core-test"
+target = "core-test"
+)toml");
+    assert(parsed.valid() && parsed.value);
+
+    const auto first = serialize_native_manifest(*parsed.value);
+    if (!first.valid() || !first.text)
+      for (const auto &issue : first.issues)
+        std::cerr << to_string(issue.code) << " [" << issue.subject << "]: " << issue.message << '\n';
+    assert(first.valid() && first.text);
+    const auto reparsed = parse_native_manifest_text(*first.text);
+    assert(reparsed.valid() && reparsed.value);
+    const auto second = serialize_native_manifest(*reparsed.value);
+    assert(second.valid() && second.text && *first.text == *second.text);
+    assert(reparsed.value->name == parsed.value->name);
+    assert(reparsed.value->cxxStandard == parsed.value->cxxStandard);
+    assert(reparsed.value->targets.size() == 2 && reparsed.value->tests.size() == 1);
+    assert(reparsed.value->targets.front().sources == parsed.value->targets.front().sources);
+    assert(reparsed.value->targets.front().includes.size() == 1);
+    assert(reparsed.value->targets.front().definitions.size() == 1);
+
+    NativeProject project = *parsed.value;
+    PackageRequirement registry{"fmt", RegistryRequirement{{"vix", "fmtlib", "fmt"},
+      CompatibleVersion{Version{10, 0, 0, std::nullopt}}}};
+    assert(add_root_package_requirement(project, registry).valid());
+    assert(project.packages.size() == 1);
+    assert(!add_root_package_requirement(project, registry).valid());
+    PackageRequirement invalidRequirement{"", RegistryRequirement{{"vix", "fmtlib", "bad"},
+      ExactVersion{Version{1, 0, 0, std::nullopt}}}};
+    assert(!add_root_package_requirement(project, invalidRequirement).valid());
+    assert(project.packages.size() == 1);
+    PackageRequirement git{"proto", GitRequirement{"https://example.invalid/proto.git", true,
+      TagRevision{"v1.2.0"}}};
+    assert(add_root_package_requirement(project, git).valid());
+    assert(project.packages.size() == 2);
+    const auto mixed = serialize_native_manifest(project);
+    assert(mixed.valid() && mixed.text);
+    const auto mixedParsed = parse_native_manifest_text(*mixed.text);
+    assert(mixedParsed.valid() && mixedParsed.value && mixedParsed.value->packages.size() == 2);
+    assert(std::holds_alternative<RegistryRequirement>(mixedParsed.value->packages[0].source));
+    assert(std::holds_alternative<GitRequirement>(mixedParsed.value->packages[1].source));
+
+    PackageRequirement replacement{"fmt", RegistryRequirement{{"vix", "fmtlib", "fmt"},
+      ExactVersion{Version{10, 1, 0, std::nullopt}}}};
+    assert(replace_root_package_requirement(project, "fmt", replacement).valid());
+    assert(std::get<ExactVersion>(std::get<RegistryRequirement>(project.packages.front().source).version).version ==
+      (Version{10, 1, 0, std::nullopt}));
+    assert(remove_root_package_requirement(project, "proto").valid());
+    assert(remove_root_package_requirement(project, "fmt").valid());
+    assert(project.packages.empty());
+    assert(!remove_root_package_requirement(project, "missing").valid());
+    assert(project.targets.size() == 2 && project.tests.size() == 1);
+
+    NativeProject invalid = *parsed.value;
+    invalid.format = 9;
+    const auto invalidSerialized = serialize_native_manifest(invalid);
+    assert(!invalidSerialized.valid());
+
+    const auto root = std::filesystem::temp_directory_path() / "vix-native-manifest-writer-test";
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+    assert(!error);
+    const auto path = root / "vix.toml";
+    { std::ofstream sentinel(path, std::ios::binary); sentinel << "old-content\n"; }
+    const auto rejected = write_native_manifest_atomic(path, invalid);
+    assert(!rejected.valid());
+    { std::ifstream existing(path, std::ios::binary); const std::string bytes{std::istreambuf_iterator<char>{existing}, {}};
+      assert(bytes == "old-content\n"); }
+    const auto written = write_native_manifest_atomic(path, *parsed.value);
+    assert(written.valid());
+    const auto disk = parse_native_manifest_file(path);
+    assert(disk.valid() && disk.value && disk.value->name == parsed.value->name);
+    std::filesystem::remove_all(root, error);
+  }
 }
 
 int main()
@@ -255,4 +354,5 @@ int main()
   contract_tests();
   lock_tests();
   location_tests();
+  native_manifest_mutation_tests();
 }

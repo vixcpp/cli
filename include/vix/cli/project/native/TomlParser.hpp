@@ -36,6 +36,40 @@ namespace vix::cli::project::native
     std::optional<ValidationLocation> location;
   };
 
+  enum class NativeProjectMutationErrorCode
+  {
+    invalid_project,
+    duplicate_requirement_alias,
+    requirement_not_found
+  };
+
+  struct NativeProjectMutationIssue
+  {
+    NativeProjectMutationErrorCode code{NativeProjectMutationErrorCode::invalid_project};
+    std::string subject;
+    std::string message;
+  };
+
+  struct NativeProjectMutationResult
+  {
+    std::vector<NativeProjectMutationIssue> issues;
+    [[nodiscard]] bool valid() const noexcept { return issues.empty(); }
+  };
+
+  struct NativeManifestSerializationResult
+  {
+    std::optional<std::string> text;
+    std::vector<ValidationIssue> issues;
+    [[nodiscard]] bool valid() const noexcept { return text.has_value() && issues.empty(); }
+  };
+
+  struct NativeManifestWriteResult
+  {
+    bool written{false};
+    std::string diagnostic;
+    [[nodiscard]] bool valid() const noexcept { return written && diagnostic.empty(); }
+  };
+
   template <typename T>
   struct ParseResult
   {
@@ -47,6 +81,16 @@ namespace vix::cli::project::native
   [[nodiscard]] ParseResult<NativeProject> parse_native_manifest_text(
       std::string_view text, std::string_view source = "<text>");
   [[nodiscard]] ParseResult<NativeProject> parse_native_manifest_file(const std::filesystem::path &path);
+
+  [[nodiscard]] NativeManifestSerializationResult serialize_native_manifest(const NativeProject &project);
+  [[nodiscard]] NativeProjectMutationResult add_root_package_requirement(
+    NativeProject &project, PackageRequirement requirement);
+  [[nodiscard]] NativeProjectMutationResult remove_root_package_requirement(
+    NativeProject &project, std::string_view alias);
+  [[nodiscard]] NativeProjectMutationResult replace_root_package_requirement(
+    NativeProject &project, std::string_view alias, PackageRequirement replacement);
+  [[nodiscard]] NativeManifestWriteResult write_native_manifest_atomic(
+    const std::filesystem::path &path, const NativeProject &project);
 
   [[nodiscard]] ParseResult<PackageContract> parse_package_contract_text(
       std::string_view text, std::string_view source = "<text>");

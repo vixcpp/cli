@@ -3,14 +3,27 @@
 #include <toml.hpp>
 
 #include <charconv>
+#include <atomic>
+#include <chrono>
 #include <fstream>
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace vix::cli::project::native
 {
@@ -20,6 +33,194 @@ namespace vix::cli::project::native
 
     using Table = toml::table;
     using Node = toml::node;
+
+    std::string version_text(const Version &version)
+    {
+      auto text = std::to_string(version.major) + "." + std::to_string(version.minor) + "." +
+        std::to_string(version.patch);
+      if (version.prerelease) text += "-" + *version.prerelease;
+      return text;
+    }
+
+    const char *visibility_name(UsageVisibility visibility)
+    {
+      switch (visibility)
+      {
+      case UsageVisibility::private_: return "private";
+      case UsageVisibility::public_: return "public";
+      case UsageVisibility::interface_: return "interface";
+      }
+      return "private";
+    }
+
+    const char *target_kind_name(TargetKind kind)
+    {
+      switch (kind)
+      {
+      case TargetKind::executable: return "executable";
+      case TargetKind::static_library: return "static";
+      case TargetKind::shared_library: return "shared";
+      case TargetKind::interface_library: return "interface";
+      }
+      return "executable";
+    }
+
+    const char *standard_name(CxxStandard standard)
+    { return standard == CxxStandard::cxx20 ? "c++20" : "c++23"; }
+
+    std::string revision_name(const GitRevisionRequirement &revision)
+    {
+      return std::visit([](const auto &value)
+      {
+        using Revision = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<Revision, CommitRevision>) return std::string{"commit"};
+        if constexpr (std::is_same_v<Revision, TagRevision>) return std::string{"tag"};
+        return std::string{"branch"};
+      }, revision);
+    }
+
+    const std::string &revision_value(const GitRevisionRequirement &revision)
+    { return std::visit([](const auto &value) -> const std::string & { return value.value; }, revision); }
+
+    toml::table requirement_table(const PackageRequirement &requirement)
+    {
+      toml::table table;
+      table.insert("alias", requirement.alias);
+      std::visit([&](const auto &source)
+      {
+        using Source = std::decay_t<decltype(source)>;
+        if constexpr (std::is_same_v<Source, RegistryRequirement>)
+        {
+          table.insert("source", "registry");
+          table.insert("registry", source.identity.registry);
+          table.insert("publisher", source.identity.publisher);
+          table.insert("name", source.identity.name);
+          toml::table version;
+          if (const auto *exact = std::get_if<ExactVersion>(&source.version))
+            version.insert("exact", version_text(exact->version));
+          else
+            version.insert("compatible", version_text(std::get<CompatibleVersion>(source.version).version));
+          table.insert("requirement", std::move(version));
+        }
+        else
+        {
+          table.insert("source", "git");
+          table.insert("repository", source.normalizedRepository);
+          toml::table revision;
+          revision.insert(revision_name(source.revision), revision_value(source.revision));
+          table.insert("revision", std::move(revision));
+        }
+      }, requirement.source);
+      return table;
+    }
+
+    toml::array string_array(const std::vector<std::string> &values)
+    {
+      toml::array result;
+      for (const auto &value : values) result.push_back(value);
+      return result;
+    }
+
+    std::string native_manifest_text(const NativeProject &project)
+    {
+      toml::table root;
+      root.insert("format", project.format);
+      toml::table projectTable;
+      projectTable.insert("name", project.name);
+      if (project.cxxStandard) projectTable.insert("cxx-standard", standard_name(*project.cxxStandard));
+      root.insert("project", std::move(projectTable));
+
+      toml::array packages;
+      for (const auto &package : project.packages) packages.push_back(requirement_table(package));
+      if (!project.packages.empty()) root.insert("packages", std::move(packages));
+
+      toml::array targets;
+      for (const auto &target : project.targets)
+      {
+        toml::table item;
+        item.insert("name", target.name);
+        item.insert("kind", target_kind_name(target.kind));
+        if (!target.sources.empty()) item.insert("sources", string_array(target.sources));
+        if (target.cxxStandard) item.insert("cxx-standard", standard_name(*target.cxxStandard));
+        if (!target.includes.empty())
+        {
+          toml::table visibility;
+          for (const auto access : {UsageVisibility::private_, UsageVisibility::public_, UsageVisibility::interface_})
+          {
+            std::vector<std::string> paths;
+            bool declared = false;
+            for (const auto &include : target.includes)
+              if (include.visibility == access)
+              {
+                declared = true;
+                paths.insert(paths.end(), include.paths.begin(), include.paths.end());
+              }
+            if (declared) visibility.insert(visibility_name(access), string_array(paths));
+          }
+          item.insert("includes", std::move(visibility));
+        }
+        if (!target.uses.empty())
+        {
+          toml::table uses;
+          for (const auto visibility : {UsageVisibility::private_, UsageVisibility::public_, UsageVisibility::interface_})
+          {
+            std::vector<std::string> values;
+            for (const auto &use : target.uses) if (use.visibility == visibility) values.push_back(use.target);
+            if (!values.empty()) uses.insert(visibility_name(visibility), string_array(values));
+          }
+          if (!uses.empty()) item.insert("uses", std::move(uses));
+        }
+        if (!target.definitions.empty())
+        {
+          toml::table definitions;
+          for (const auto visibility : {UsageVisibility::private_, UsageVisibility::public_, UsageVisibility::interface_})
+          {
+            std::vector<std::string> values;
+            bool declared = false;
+            for (const auto &definition : target.definitions)
+              if (definition.visibility == visibility)
+              {
+                declared = true;
+                values.insert(values.end(), definition.values.begin(), definition.values.end());
+              }
+            if (declared) definitions.insert(visibility_name(visibility), string_array(values));
+          }
+          if (!definitions.empty()) item.insert("definitions", std::move(definitions));
+        }
+        toml::array packageUses;
+        for (const auto &use : target.packageUses)
+        {
+          toml::table packageUse;
+          packageUse.insert("package", use.requirementAlias);
+          packageUse.insert("target", use.exportName);
+          packageUse.insert("visibility", visibility_name(use.visibility));
+          packageUses.push_back(std::move(packageUse));
+        }
+        if (!target.packageUses.empty()) item.insert("package-uses", std::move(packageUses));
+        targets.push_back(std::move(item));
+      }
+      root.insert("targets", std::move(targets));
+
+      toml::array tests;
+      for (const auto &test : project.tests)
+      {
+        toml::table item;
+        item.insert("name", test.name);
+        item.insert("target", test.target);
+        tests.push_back(std::move(item));
+      }
+      if (!project.tests.empty()) root.insert("tests", std::move(tests));
+      std::ostringstream output;
+      output << root;
+      return output.str();
+    }
+
+    NativeProjectMutationResult mutation_failure(NativeProjectMutationErrorCode code,
+      std::string subject, std::string message)
+    { return {{{code, std::move(subject), std::move(message)}}}; }
+
+    bool valid_project_candidate(const NativeProject &project)
+    { return validate_native_project(project).valid(); }
 
     struct Failure
     {
@@ -631,6 +832,151 @@ namespace vix::cli::project::native
   ParseResult<NativeProject> parse_native_manifest_file(const std::filesystem::path &path)
   {
     return parse_file<NativeProject>(path, parse_native_manifest_text);
+  }
+
+  NativeManifestSerializationResult serialize_native_manifest(const NativeProject &project)
+  {
+    NativeManifestSerializationResult result;
+    const auto validation = validate_native_project(project);
+    if (!validation.valid())
+    {
+      result.issues = validation.issues;
+      return result;
+    }
+    try
+    {
+      result.text = native_manifest_text(project);
+    }
+    catch (const std::exception &error)
+    {
+      result.issues.push_back({ValidationCode::invalid_project_name, "", error.what(), std::nullopt});
+    }
+    return result;
+  }
+
+  NativeProjectMutationResult add_root_package_requirement(NativeProject &project, PackageRequirement requirement)
+  {
+    if (!valid_project_candidate(project))
+      return mutation_failure(NativeProjectMutationErrorCode::invalid_project, "vix.toml",
+        "cannot mutate an invalid native project model");
+    if (std::any_of(project.packages.begin(), project.packages.end(), [&](const auto &existing)
+      { return existing.alias == requirement.alias; }))
+      return mutation_failure(NativeProjectMutationErrorCode::duplicate_requirement_alias, requirement.alias,
+        "a root package requirement already uses this alias");
+    auto candidate = project;
+    candidate.packages.push_back(std::move(requirement));
+    const auto validation = validate_native_project(candidate);
+    if (!validation.valid())
+      return mutation_failure(NativeProjectMutationErrorCode::invalid_project, "packages",
+        validation.issues.front().message);
+    project = std::move(candidate);
+    return {};
+  }
+
+  NativeProjectMutationResult remove_root_package_requirement(NativeProject &project, std::string_view alias)
+  {
+    if (!valid_project_candidate(project))
+      return mutation_failure(NativeProjectMutationErrorCode::invalid_project, "vix.toml",
+        "cannot mutate an invalid native project model");
+    const auto found = std::find_if(project.packages.begin(), project.packages.end(),
+      [&](const auto &requirement) { return requirement.alias == alias; });
+    if (found == project.packages.end())
+      return mutation_failure(NativeProjectMutationErrorCode::requirement_not_found, std::string{alias},
+        "root package requirement does not exist");
+    auto candidate = project;
+    candidate.packages.erase(candidate.packages.begin() + std::distance(project.packages.begin(), found));
+    const auto validation = validate_native_project(candidate);
+    if (!validation.valid())
+      return mutation_failure(NativeProjectMutationErrorCode::invalid_project, "packages",
+        validation.issues.front().message);
+    project = std::move(candidate);
+    return {};
+  }
+
+  NativeProjectMutationResult replace_root_package_requirement(
+    NativeProject &project, std::string_view alias, PackageRequirement replacement)
+  {
+    if (!valid_project_candidate(project))
+      return mutation_failure(NativeProjectMutationErrorCode::invalid_project, "vix.toml",
+        "cannot mutate an invalid native project model");
+    const auto found = std::find_if(project.packages.begin(), project.packages.end(),
+      [&](const auto &requirement) { return requirement.alias == alias; });
+    if (found == project.packages.end())
+      return mutation_failure(NativeProjectMutationErrorCode::requirement_not_found, std::string{alias},
+        "root package requirement does not exist");
+    auto candidate = project;
+    const auto index = static_cast<std::size_t>(std::distance(project.packages.begin(), found));
+    candidate.packages[index] = std::move(replacement);
+    const auto validation = validate_native_project(candidate);
+    if (!validation.valid())
+      return mutation_failure(NativeProjectMutationErrorCode::invalid_project, "packages",
+        validation.issues.front().message);
+    project = std::move(candidate);
+    return {};
+  }
+
+  NativeManifestWriteResult write_native_manifest_atomic(
+    const std::filesystem::path &path, const NativeProject &project)
+  {
+    const auto serialized = serialize_native_manifest(project);
+    if (!serialized.valid() || !serialized.text)
+      return {false, serialized.issues.empty() ? "native manifest serialization failed" :
+        "native manifest is invalid: " + serialized.issues.front().message};
+
+    namespace fs = std::filesystem;
+    static std::atomic<std::uint64_t> sequence{0};
+    const auto suffix = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+      "-" + std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+    const fs::path temporary = path.parent_path() /
+      (path.filename().string() + ".vix-tmp-" + suffix);
+    {
+      std::ofstream output(temporary, std::ios::binary | std::ios::out | std::ios::trunc);
+      if (!output || !(output << *serialized.text) || !(output.flush()))
+      {
+        std::error_code ignored;
+        fs::remove(temporary, ignored);
+        return {false, "cannot write temporary native manifest"};
+      }
+    }
+#ifdef _WIN32
+    const HANDLE file = CreateFileW(temporary.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE || !FlushFileBuffers(file))
+    {
+      if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+      std::error_code ignored;
+      fs::remove(temporary, ignored);
+      return {false, "cannot flush temporary native manifest"};
+    }
+    CloseHandle(file);
+    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    {
+      std::error_code ignored;
+      fs::remove(temporary, ignored);
+      return {false, "cannot atomically replace native manifest"};
+    }
+#else
+    const int descriptor = ::open(temporary.c_str(), O_RDONLY);
+    if (descriptor < 0 || ::fsync(descriptor) != 0)
+    {
+      if (descriptor >= 0) ::close(descriptor);
+      std::error_code ignored;
+      fs::remove(temporary, ignored);
+      return {false, "cannot flush temporary native manifest"};
+    }
+    ::close(descriptor);
+    std::error_code error;
+    fs::rename(temporary, path, error);
+    if (error)
+    {
+      const auto renameMessage = error.message();
+      fs::remove(temporary, error);
+      return {false, "cannot atomically replace native manifest: " + renameMessage};
+    }
+    const int directory = ::open(path.parent_path().empty() ? "." : path.parent_path().c_str(), O_RDONLY);
+    if (directory >= 0) { (void)::fsync(directory); ::close(directory); }
+#endif
+    return {true, {}};
   }
 
   ParseResult<PackageContract> parse_package_contract_text(std::string_view text, std::string_view source)

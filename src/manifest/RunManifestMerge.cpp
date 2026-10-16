@@ -79,18 +79,25 @@ namespace vix::cli::manifest
     if (cli.jobs == 0 && mf.jobs > 0)
       o.jobs = mf.jobs;
 
-    const bool cliSan = cli.enableSanitizers || cli.enableUbsanOnly;
-    if (!cliSan)
+    if (mf.san)
     {
-      if (mf.san == "ubsan")
+      if (*mf.san == "off")
       {
-        o.enableUbsanOnly = true;
-        o.enableSanitizers = false;
+        o.projectDiagnosticRequest = {
+            vix::cli::commands::DiagnosticRequestKind::Off,
+            vix::cli::commands::DiagnosticMode::None};
       }
-      else if (mf.san == "asan_ubsan")
+      else if (*mf.san == "ubsan")
       {
-        o.enableSanitizers = true;
-        o.enableUbsanOnly = false;
+        o.projectDiagnosticRequest = {
+            vix::cli::commands::DiagnosticRequestKind::Explicit,
+            vix::cli::commands::DiagnosticMode::Undefined};
+      }
+      else if (*mf.san == "asan_ubsan")
+      {
+        o.projectDiagnosticRequest = {
+            vix::cli::commands::DiagnosticRequestKind::Explicit,
+            vix::cli::commands::DiagnosticMode::AddressUndefined};
       }
     }
 

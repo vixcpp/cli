@@ -36,7 +36,7 @@ int main()
       ("vix-native-new-project-" + std::to_string(stamp));
   fs::create_directories(root);
 
-  assert(vix::commands::NewCommand::run({"example", "--dir", root.string()}) == 0);
+  assert(vix::commands::NewCommand::run({(root / "example").string()}) == 0);
   const fs::path projectRoot = root / "example";
   assert(fs::is_regular_file(projectRoot / "vix.toml"));
   assert(fs::is_regular_file(projectRoot / "src" / "main.cpp"));
@@ -53,6 +53,8 @@ int main()
   assert(parsed.value->targets.front().name == "example");
   assert(parsed.value->targets.front().kind == TargetKind::executable);
   assert(parsed.value->targets.front().sources == std::vector<std::string>{"src/main.cpp"});
+  assert(vix::commands::NewCommand::run({"legacy-force", "--force"}) == 2);
+  assert(vix::commands::NewCommand::run({"--dir", "legacy-dir"}) == 2);
 
   const auto discovered = vix::cli::project::discover_project(projectRoot);
   assert(discovered.success());

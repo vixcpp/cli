@@ -4,6 +4,10 @@ VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 PROJECT="$ROOT/project with spaces"; mkdir -p "$PROJECT"
 export HOME="$ROOT/home"; mkdir -p "$HOME"
+normalize_pty_output() {
+  local normalized="${1//$'\r\n'/$'\n'}"
+  printf '%s' "${normalized%$'\r'}"
+}
 fail() { echo "BuildCoreContractTest: $*" >&2; exit 1; }
 expect_parse_error() { set +e; local o; o="$("$@" 2>&1)"; local rc=$?; set -e; [[ $rc == 2 ]] || { printf '%s\n' "$o" >&2; fail "expected parse failure"; }; }
 cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
@@ -16,23 +20,27 @@ if(TEST_FEATURE)
 endif()
 CMAKE
 cat >"$PROJECT/main.cpp" <<'CPP'
-int main() { return 0; }
+#include <iostream>
+int main() { std::cout << "BUILD_CORE_TARGET\n"; }
 CPP
-"$VIX_BIN" build --dir "$PROJECT" --launcher none --linker default --build-target contract >/dev/null
-test -f "$PROJECT/build-ninja/contract" || fail "CMake passthrough/build target"
-"$VIX_BIN" build --dir "$PROJECT" --no-cache --fast --clean --warning-check --launcher none --linker default >/dev/null
-"$VIX_BIN" build --dir "$PROJECT" --target native --graph-executor auto --heartbeat --launcher none --linker default >/dev/null
-"$VIX_BIN" build --dir "$PROJECT" --target=native --graph-executor=off --no-heartbeat --launcher=none --linker=default >/dev/null
-targets="$("$VIX_BIN" build --targets)"; grep -Fq native <<<"$targets" || fail "native target missing"
-for preset in dev dev-ninja release; do "$VIX_BIN" build --dir "$PROJECT" --preset="$preset" --launcher none --linker default >/dev/null; done
-for mode in address undefined address,undefined thread; do "$VIX_BIN" build --dir "$PROJECT" --sanitize="$mode" --launcher none --linker default >/dev/null; done
-printf 'build contract log\n' >"$PROJECT/build-ninja/build.log"
-"$VIX_BIN" build --dir "$PROJECT" --log "$PROJECT/build-ninja/build.log" | grep -Fq 'build contract log' || fail "--log file"
-"$VIX_BIN" build --dir "$PROJECT" --log "$PROJECT/build-ninja" | grep -Fq 'build contract log' || fail "--log directory"
-expect_parse_error "$VIX_BIN" build --dir "$PROJECT" --graph-executor=bad
-expect_parse_error "$VIX_BIN" build --dir "$PROJECT" --launcher=bad
-expect_parse_error "$VIX_BIN" build --dir "$PROJECT" --linker=bad
-expect_parse_error "$VIX_BIN" build --dir "$PROJECT" --sanitize=bad
-expect_parse_error "$VIX_BIN" build --dir "$PROJECT" --page 0
-expect_parse_error "$VIX_BIN" build --dir "$PROJECT" --bin --out "$ROOT/out"
+"$VIX_BIN" build --dir "$PROJECT" contract >/dev/null
+out="$("$VIX_BIN" run contract --dir "$PROJECT")" || fail "File API target did not execute"
+out="$(normalize_pty_output "$out")"
+grep -Fxq 'BUILD_CORE_TARGET' <<<"$out" || fail "program output was not preserved"
+for retired in --sanitize --sanitize=address --no-san; do
+  expect_parse_error "$VIX_BIN" build "$retired"
+done
+for conflict in '--san --asan' '--asan --ubsan' '--asan --tsan' '--ubsan --tsan' '--san --san'; do
+  # shellcheck disable=SC2086 # Deliberate option-list expansion for parser coverage.
+  expect_parse_error "$VIX_BIN" build $conflict
+done
+for mode in --san --asan --ubsan --tsan; do
+  set +e
+  output="$("$VIX_BIN" build --dir "$PROJECT" "$mode" 2>&1)"
+  code=$?
+  set -e
+  [[ $code != 0 ]] || fail "external CMake accepted $mode without Vix instrumentation"
+  grep -Fq 'Vix diagnostic modes are not available for arbitrary external CMake projects.' <<<"$output" ||
+    fail "external CMake did not fail closed for $mode"
+done
 echo "BuildCoreContractTest passed"

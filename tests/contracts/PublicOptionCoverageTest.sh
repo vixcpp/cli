@@ -19,9 +19,10 @@ check_help() {
     [[ -z "$option" ]] || require_matrix_entry "$command" "$option"
   # Examples intentionally contain user/project flags; only the declared help
   # synopsis is part of this command's option surface.
-  done < <(printf '%s\n' "$help" | sed '/^Examples:/,$d' | grep -oE -- '--[a-z][a-z0-9-]*' | sort -u)
+  done < <(printf '%s\n' "$help" | sed '/^Examples:/,$d' | grep -oE -- '--[a-z][a-z0-9-]*(=[a-z][a-z0-9-]*)?' | sort -u)
 }
 check_help run
 check_help build
 check_help dev
+check_help test
 echo "PublicOptionCoverageTest passed"

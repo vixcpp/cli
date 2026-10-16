@@ -18,19 +18,28 @@
 #include <string>
 #include <vector>
 
+#include <vix/cli/commands/DiagnosticMode.hpp>
+
 namespace vix::commands::TestsCommand::detail
 {
   namespace fs = std::filesystem;
+  using DiagnosticMode = ::vix::cli::commands::DiagnosticMode;
 
   struct Options
   {
     bool watch = false;
     bool list = false;
     bool failFast = false;
+    bool ctestMode = false;
+    bool verbose = false;
+    bool quiet = false;
+    DiagnosticMode diagnosticMode{DiagnosticMode::None};
+    ::vix::cli::commands::DiagnosticRequest diagnosticRequest{};
+    bool parseFailed = false;
+    std::string parseError;
     bool runAfter = false; // --run (tests + runtime)
     bool raw = false;
-    // Exact normalized-CMake selector. testPattern retains historical regex
-    // filtering semantics for the native CTest path.
+    // Literal, case-sensitive substring filter over registered test names.
     std::optional<std::string> exactTestName;
     std::string testPattern;
 

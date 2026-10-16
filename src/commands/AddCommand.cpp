@@ -13,12 +13,16 @@ namespace vix::commands
   int AddCommand::help()
   {
     std::cout
-        << "vix add\n"
-        << "Add and resolve a native package requirement.\n\n"
-        << "  vix add <publisher>/<package> [--registry <id>] [--version exact=<version>|compatible=<version>]\n"
-        << "  vix add <git-url>\n"
-        << "  vix add <git-url> --branch <name>|--tag <name>|--commit <full-object-id>\n"
-        << "Registry defaults to the latest stable release; Git defaults to the remote HEAD branch.\n";
+        << "Usage:\n"
+        << "  vix add <publisher>/<package> [options]\n"
+        << "  vix add <git-url> [revision]\n\n"
+        << "Add a package requirement to the current project.\n\n"
+        << "Options:\n"
+        << "  --registry <id>          Select a logical Registry\n"
+        << "  --version <constraint>   Select exact= or compatible= version\n"
+        << "  --branch <name>          Select a Git branch\n"
+        << "  --tag <name>             Select a Git tag\n"
+        << "  --commit <object-id>     Select a full Git commit ID\n";
     return 0;
   }
 } // namespace vix::commands

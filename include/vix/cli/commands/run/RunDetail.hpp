@@ -27,6 +27,7 @@
 #include <functional>
 
 #include <vix/cli/ErrorHandler.hpp>
+#include <vix/cli/commands/DiagnosticMode.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
 
 #ifndef _WIN32
@@ -36,6 +37,7 @@
 namespace vix::commands::RunCommand::detail
 {
   namespace fs = std::filesystem;
+  using DiagnosticMode = ::vix::cli::commands::DiagnosticMode;
 
   /**
    * @brief Automatic dependency discovery strategy for script mode.
@@ -136,10 +138,9 @@ namespace vix::commands::RunCommand::detail
     bool forceServerLike = false;
     bool forceScriptLike = false;
 
-    bool enableSanitizers = false;      // ASan + UBSan
-    bool enableUbsanOnly = false;       // UBSan only
-    bool enableThreadSanitizer = false; // TSan only
-    bool sanitizerSelectionExplicit = false;
+    DiagnosticMode diagnosticMode{DiagnosticMode::None};
+    ::vix::cli::commands::DiagnosticRequest diagnosticRequest{};
+    ::vix::cli::commands::DiagnosticRequest projectDiagnosticRequest{};
 
     bool withSqlite = false;
     bool withMySql = false;
@@ -148,6 +149,9 @@ namespace vix::commands::RunCommand::detail
 
     // Script / runtime forwarding
     std::vector<std::string> scriptFlags;
+    std::vector<std::string> cmakeArgs;
+    std::vector<std::string> compilerArgs;
+    std::vector<std::string> linkerArgs;
     std::vector<std::string> runArgs;
     std::vector<std::string> runEnv;
 
@@ -334,10 +338,12 @@ namespace vix::commands::RunCommand::detail
     std::vector<std::string> systemIncludeDirs;
     std::vector<std::string> defines;
     std::vector<std::string> compileOpts;
+    std::vector<std::string> explicitCompilerArgs;
 
     std::vector<std::string> libDirs;
     std::vector<std::string> libs;
     std::vector<std::string> linkOpts;
+    std::vector<std::string> explicitLinkerArgs;
 
     std::vector<std::string> depFingerprints;
     std::vector<std::string> headerFingerprints;
@@ -426,6 +432,7 @@ namespace vix::commands::RunCommand::detail
 
     bool terminatedBySignal = false;
     int termSignal = 0;
+    bool cancelledByWatch = false;
   };
 
   /**
@@ -483,11 +490,13 @@ namespace vix::commands::RunCommand::detail
    * - UBSan-only
    * - ThreadSanitizer
    *
-   * @param enableSanitizers True when ASan+UBSan mode is enabled.
-   * @param enableUbsanOnly True when UBSan-only mode is enabled.
-   * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
    * @return True if any sanitizer mode is active.
    */
+  inline bool want_any_sanitizer(DiagnosticMode mode) noexcept
+  {
+    return vix::engine::sanitizer_enabled(mode);
+  }
+
   inline bool want_any_sanitizer(
       bool enableSanitizers,
       bool enableUbsanOnly,
@@ -575,7 +584,13 @@ namespace vix::commands::RunCommand::detail
       bool useSan = false,
       bool captureOnly = false,
       vix::commands::replay::ReplayCapture *replayCapture = nullptr,
-      LiveOutputObserver outputObserver = {});
+      LiveOutputObserver outputObserver = {},
+      std::function<bool()> cancelForWatch = {});
+
+  /**
+   * @brief Replay buffered process output when it was not already shown live.
+   */
+  void emit_captured_program_output(const LiveRunResult &result);
 
   /**
    * @brief Run a command and capture its output plus exit code.
@@ -603,6 +618,8 @@ namespace vix::commands::RunCommand::detail
    * to capture and convert into friendly diagnostics. On Windows this is a
    * no-op because the current runtime sanitizer environment is POSIX-only.
    */
+  void apply_sanitizer_env_if_needed(
+      DiagnosticMode mode);
   void apply_sanitizer_env_if_needed(
       bool enableSanitizers,
       bool enableUbsanOnly,
@@ -776,7 +793,9 @@ namespace vix::commands::RunCommand::detail
       bool useVixRuntime,
       const std::vector<std::string> &scriptFlags,
       bool withSqlite,
-      bool withMySql);
+      bool withMySql,
+      const std::vector<std::string> &compilerArgs = {},
+      const std::vector<std::string> &linkerArgs = {});
 
   /**
    * @brief Execute a single C++ file using the best available script engine.

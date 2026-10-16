@@ -506,9 +506,9 @@ namespace vix::commands::RunCommand::detail
       std::ostringstream oss;
 
       oss << "direct";
-      oss << ";san=" << text::bool01(want_any_sanitizer(opt.enableSanitizers, opt.enableUbsanOnly, opt.enableThreadSanitizer));
+      oss << ";san=" << text::bool01(want_any_sanitizer(opt.diagnosticMode));
 
-      oss << ";san_mode=" << sanitizer_mode_string(opt.enableSanitizers, opt.enableUbsanOnly, opt.enableThreadSanitizer);
+      oss << ";san_mode=" << sanitizer_mode_string(opt.diagnosticMode);
       oss << ";sqlite=" << text::bool01(opt.withSqlite);
       oss << ";mysql=" << text::bool01(opt.withMySql);
 
@@ -559,7 +559,8 @@ namespace vix::commands::RunCommand::detail
     std::vector<std::string> collect_direct_header_fingerprints(
         const fs::path &cppPath,
         const ScriptProbeResult &probe,
-        const std::string &compiler)
+        const std::string &compiler,
+        const std::vector<std::string> &compilerArgs)
     {
       std::ostringstream cmd;
       cmd << process::quote(compiler) << " -MM";
@@ -573,6 +574,8 @@ namespace vix::commands::RunCommand::detail
         cmd << " -D" << def;
       for (const auto &compileOpt : probe.compileOpts)
         append_quoted(cmd, compileOpt);
+      for (const auto &compilerArg : compilerArgs)
+        append_quoted(cmd, compilerArg);
 
       cmd << " " << process::quote(cppPath.string());
 
@@ -683,10 +686,12 @@ namespace vix::commands::RunCommand::detail
       fp.systemIncludeDirs = probe.systemIncludeDirs;
       fp.defines = probe.defines;
       fp.compileOpts = probe.compileOpts;
+      fp.explicitCompilerArgs = opt.compilerArgs;
 
       fp.libDirs = probe.libDirs;
       fp.libs = probe.libs;
       fp.linkOpts = probe.linkOpts;
+      fp.explicitLinkerArgs = opt.linkerArgs;
 
       fp.depFingerprints = collect_dep_fingerprints(probe);
       if (probe.usesVixRuntime)
@@ -698,7 +703,8 @@ namespace vix::commands::RunCommand::detail
       fp.headerFingerprints = collect_direct_header_fingerprints(
           abs,
           probe,
-          compiler);
+          compiler,
+          opt.compilerArgs);
       direct_perf_trace("dependency_discovery", dependencyDiscoveryStart);
       const auto dependencyHeaders = collect_header_fingerprints(probe);
       fp.headerFingerprints.insert(
@@ -743,10 +749,12 @@ namespace vix::commands::RunCommand::detail
       append_fingerprint_list(oss, "system_include_dirs", fp.systemIncludeDirs);
       append_fingerprint_list(oss, "defines", fp.defines);
       append_fingerprint_list(oss, "compile_opts", fp.compileOpts);
+      append_fingerprint_list(oss, "explicit_compiler_args", fp.explicitCompilerArgs);
 
       append_fingerprint_list(oss, "lib_dirs", fp.libDirs);
       append_fingerprint_list(oss, "libs", fp.libs);
       append_fingerprint_list(oss, "link_opts", fp.linkOpts);
+      append_fingerprint_list(oss, "explicit_linker_args", fp.explicitLinkerArgs);
 
       append_fingerprint_list(oss, "dep_fingerprints", fp.depFingerprints);
       append_fingerprint_list(oss, "header_fingerprints", fp.headerFingerprints);
@@ -1153,29 +1161,40 @@ namespace vix::commands::RunCommand::detail
       for (const auto &compileOpt : plan.probe.compileOpts)
         append_quoted(cmd, compileOpt);
 
-      const bool san = want_any_sanitizer(
-          opt.enableSanitizers,
-          opt.enableUbsanOnly,
-          opt.enableThreadSanitizer);
+      for (const auto &compilerArg : opt.compilerArgs)
+        append_quoted(cmd, compilerArg);
+
+      for (const auto &linkerArg : opt.linkerArgs)
+        append_quoted(cmd, linkerArg);
+
+      const bool san = want_any_sanitizer(opt.diagnosticMode);
 
       if (san)
       {
-        if (opt.enableThreadSanitizer)
+        if (opt.diagnosticMode == DiagnosticMode::Thread)
         {
           cmd << " -fsanitize=thread";
           cmd << " -O1";
           cmd << " -g";
           cmd << " -fno-omit-frame-pointer";
         }
-        else if (opt.enableUbsanOnly)
+        else if (opt.diagnosticMode == DiagnosticMode::Undefined)
         {
           cmd << " -fsanitize=undefined";
+          cmd << " -g";
+          cmd << " -fno-sanitize-recover=all";
+        }
+        else if (opt.diagnosticMode == DiagnosticMode::Address)
+        {
+          cmd << " -fsanitize=address";
+          cmd << " -fno-omit-frame-pointer";
           cmd << " -g";
         }
         else
         {
           cmd << " -fsanitize=address,undefined";
           cmd << " -fno-omit-frame-pointer";
+          cmd << " -fno-sanitize-recover=all";
           cmd << " -g";
         }
       }
@@ -1470,10 +1489,7 @@ namespace vix::commands::RunCommand::detail
     }
 
 #ifndef _WIN32
-    apply_sanitizer_env_if_needed(
-        opt.enableSanitizers,
-        opt.enableUbsanOnly,
-        opt.enableThreadSanitizer);
+    apply_sanitizer_env_if_needed(opt.diagnosticMode);
 #endif
 
     const DirectScriptCacheState &cache = plan.cacheState;
@@ -1493,10 +1509,7 @@ namespace vix::commands::RunCommand::detail
           "",
           false,
           0,
-          want_any_sanitizer(
-              opt.enableSanitizers,
-              opt.enableUbsanOnly,
-              opt.enableThreadSanitizer),
+          want_any_sanitizer(opt.diagnosticMode),
           true);
       direct_perf_trace("compiler_and_linker", compileStart);
 
@@ -1583,10 +1596,7 @@ namespace vix::commands::RunCommand::detail
         "Running script...",
         plan.passthroughRuntime,
         plan.effectiveTimeoutSec,
-        want_any_sanitizer(
-            opt.enableSanitizers,
-            opt.enableUbsanOnly,
-            opt.enableThreadSanitizer),
+        want_any_sanitizer(opt.diagnosticMode),
         false,
         replayEnabled ? &replayCapture : nullptr);
 
@@ -1618,18 +1628,22 @@ namespace vix::commands::RunCommand::detail
     }
 
     bool handled = run.failureHandled;
+    std::string runtimeLog = run.stderrText;
+    runtimeLog += run.stdoutText;
+    const vix::cli::errors::RuntimeCrashEvidence evidence{
+        run.terminatedBySignal,
+        run.termSignal};
+    const bool hasRuntimeEvidence =
+        vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
+            runtimeLog,
+            evidence);
+
+    if (run.exitCode == 0 && !hasRuntimeEvidence)
+      emit_captured_program_output(run);
 
     if (!handled && run.exitCode != 0)
     {
-      std::string runtimeLog = run.stderrText;
-      runtimeLog += run.stdoutText;
-      const vix::cli::errors::RuntimeCrashEvidence evidence{
-          run.terminatedBySignal,
-          run.termSignal};
-
-      if (vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(
-              runtimeLog,
-              evidence))
+      if (hasRuntimeEvidence)
       {
         handled = vix::cli::errors::RawLogDetectors::handleRuntimeCrash(
             runtimeLog,

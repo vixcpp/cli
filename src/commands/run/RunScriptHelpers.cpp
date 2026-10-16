@@ -173,9 +173,33 @@ namespace vix::commands::RunCommand::detail
     watch_spinner_start(std::string(label));
   }
 
+  bool want_sanitizers(DiagnosticMode mode)
+  {
+    return mode == DiagnosticMode::AddressUndefined ||
+           mode == DiagnosticMode::Address ||
+           mode == DiagnosticMode::Undefined;
+  }
+
   bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly)
   {
     return enableSanitizers || enableUbsanOnly;
+  }
+
+  std::string sanitizer_mode_string(DiagnosticMode mode)
+  {
+    if (mode == DiagnosticMode::Thread)
+      return "tsan";
+
+    if (mode == DiagnosticMode::Undefined)
+      return "ubsan";
+
+    if (mode == DiagnosticMode::AddressUndefined)
+      return "asan_ubsan";
+
+    if (mode == DiagnosticMode::Address)
+      return "asan";
+
+    return "none";
   }
 
   std::string sanitizer_mode_string(
@@ -183,26 +207,21 @@ namespace vix::commands::RunCommand::detail
       bool enableUbsanOnly,
       bool enableThreadSanitizer)
   {
-    if (enableThreadSanitizer)
-      return "tsan";
-
-    if (enableUbsanOnly)
-      return "ubsan";
-
-    if (enableSanitizers)
-      return "asan_ubsan";
-
-    return "none";
+    return sanitizer_mode_string(
+        enableThreadSanitizer ? DiagnosticMode::Thread
+            : enableUbsanOnly ? DiagnosticMode::Undefined
+            : enableSanitizers ? DiagnosticMode::AddressUndefined
+                               : DiagnosticMode::None);
   }
 
   std::string make_script_config_signature(
       bool useVixRuntime,
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer,
+      DiagnosticMode mode,
       const std::vector<std::string> &scriptFlags,
       bool withSqlite,
-      bool withMySql)
+      bool withMySql,
+      const std::vector<std::string> &compilerArgs,
+      const std::vector<std::string> &linkerArgs)
   {
     std::string sig;
     sig.reserve(192);
@@ -211,18 +230,12 @@ namespace vix::commands::RunCommand::detail
     sig += useVixRuntime ? "1" : "0";
 
     sig += ";san=";
-    sig += want_any_sanitizer(
-               enableSanitizers,
-               enableUbsanOnly,
-               enableThreadSanitizer)
+    sig += want_any_sanitizer(mode)
                ? "1"
                : "0";
 
     sig += ";mode=";
-    sig += sanitizer_mode_string(
-        enableSanitizers,
-        enableUbsanOnly,
-        enableThreadSanitizer);
+    sig += sanitizer_mode_string(mode);
 
     sig += ";sqlite=";
     sig += withSqlite ? "1" : "0";
@@ -237,7 +250,38 @@ namespace vix::commands::RunCommand::detail
       sig += ",";
     }
 
+    sig += ";compilerArgs=";
+    for (const auto &arg : compilerArgs)
+    {
+      sig += arg;
+      sig += ",";
+    }
+    sig += ";linkerArgs=";
+    for (const auto &arg : linkerArgs)
+    {
+      sig += arg;
+      sig += ",";
+    }
+
     return sig;
+  }
+
+  std::string make_script_config_signature(
+      bool useVixRuntime,
+      bool enableSanitizers,
+      bool enableUbsanOnly,
+      bool enableThreadSanitizer,
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql)
+  {
+    return make_script_config_signature(
+        useVixRuntime,
+        enableThreadSanitizer ? DiagnosticMode::Thread
+            : enableUbsanOnly ? DiagnosticMode::Undefined
+            : enableSanitizers ? DiagnosticMode::AddressUndefined
+                               : DiagnosticMode::None,
+        scriptFlags, withSqlite, withMySql);
   }
 
   std::string join_quoted_args_local(const std::vector<std::string> &a)

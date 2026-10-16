@@ -2,6 +2,7 @@
 
 #include <vix/cli/project/native/TomlParser.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <utility>
@@ -46,9 +47,17 @@ namespace vix::cli::project::native
   NativePackageInstallParseResult parse_native_install_arguments(
     const std::vector<std::string> &arguments)
   {
-    if (!arguments.empty())
-      return {false, "usage: vix install (package selection belongs to vix add)"};
-    return {true, {}};
+    bool offline = false;
+    for (const auto &argument : arguments)
+    {
+      if (argument == "--offline" && !offline)
+      {
+        offline = true;
+        continue;
+      }
+      return {false, false, "usage: vix install [--offline] (package selection belongs to vix add)"};
+    }
+    return {true, offline, {}};
   }
 
   NativePackageInstallResult install_native_project_packages(
@@ -114,7 +123,15 @@ namespace vix::cli::project::native
         }
         message += ')';
       }
-      add_issue(result, NativePackageInstallIssueCode::content_acquisition_failed,
+      const bool corruptCachedContent = std::any_of(failure.contentIssues.begin(), failure.contentIssues.end(),
+        [](const auto &issue) { return issue.code == PackageContentIssueCode::package_content_store_corrupt; });
+      const auto code = failure.code == PackageContentAcquisitionIssueCode::offline_package_content_unavailable
+          ? NativePackageInstallIssueCode::offline_content_missing
+          : corruptCachedContent ? NativePackageInstallIssueCode::corrupt_cached_content
+          : NativePackageInstallIssueCode::content_acquisition_failed;
+      if (corruptCachedContent)
+        message = "cached package content is corrupt: " + message;
+      add_issue(result, code,
         failure.digest.empty() ? lockPath.string() : failure.digest, std::move(message));
       return result;
     }

@@ -1,173 +1,138 @@
 /**
- *
- *  @file TestsFlow.cpp
- *  @author Gaspard Kirira
- *
- *  Copyright 2025, Gaspard Kirira.  All rights reserved.
- *  https://github.com/vixcpp/vix
- *  Use of this source code is governed by a MIT license
- *  that can be found in the License file.
- *
- *  Vix.cpp
- *
+ * @file TestsFlow.cpp
+ * Public argument parsing for the generic `vix test` command.
  */
 #include <vix/cli/commands/tests/TestsDetail.hpp>
 
 #include <filesystem>
-#include <string>
-#include <vector>
 #include <system_error>
 
 namespace vix::commands::TestsCommand::detail
 {
   namespace fs = std::filesystem;
 
-  static bool looks_like_path(const std::string &s)
-  {
-    if (s.empty())
-      return false;
-
-    if (s[0] == '-')
-      return false;
-
-    if (s.find('/') != std::string::npos)
-      return true;
-
-    if (s.rfind("./", 0) == 0 || s.rfind("../", 0) == 0)
-      return true;
-
-    std::error_code ec;
-    return fs::exists(fs::path(s), ec);
-  }
-
-  static fs::path normalize_project_dir(const fs::path &p)
+  static fs::path normalize_project_dir(const fs::path &path)
   {
     std::error_code ec;
-
-    fs::path abs = fs::absolute(p, ec);
+    const auto absolute = fs::absolute(path, ec);
     if (ec)
-      abs = p;
-
-    fs::path canon = fs::weakly_canonical(abs, ec);
-    if (ec)
-      return abs;
-
-    return canon;
+      return path;
+    const auto canonical = fs::weakly_canonical(absolute, ec);
+    return ec ? absolute : canonical;
   }
 
   Options parse(const std::vector<std::string> &args)
   {
     Options opt{};
-    opt.forwarded.reserve(args.size() + 8);
-    opt.ctestArgs.reserve(16);
-
-    std::vector<std::string> left;
-    left.reserve(args.size());
-
-    bool afterSep = false;
-    for (const auto &a : args)
+    bool directorySelected = false;
+    bool filterSelected = false;
+    bool verboseSelected = false;
+    bool quietSelected = false;
+    std::optional<::vix::cli::commands::DiagnosticRequest> diagnosticRequest;
+    for (std::size_t i = 0; i < args.size(); ++i)
     {
-      if (!afterSep && a == "--")
+      const auto &arg = args[i];
+      if (arg == "--ctest")
       {
-        afterSep = true;
+        opt.ctestMode = true;
+        if (i + 1 >= args.size())
+        {
+          opt.parseFailed = true;
+          opt.parseError = "--ctest requires CTest arguments.";
+          return opt;
+        }
+        for (++i; i < args.size(); ++i)
+          opt.ctestArgs.push_back(args[i]);
+        break;
+      }
+      std::string diagnosticError;
+      if (vix::cli::commands::select_diagnostic_request_option(
+              arg, diagnosticRequest, diagnosticError))
+      {
+        if (!diagnosticError.empty())
+        {
+          opt.parseFailed = true;
+          opt.parseError = std::move(diagnosticError);
+          return opt;
+        }
+        opt.diagnosticRequest = *diagnosticRequest;
         continue;
       }
-
-      if (afterSep)
-        opt.ctestArgs.push_back(a);
+      if (arg == "--watch") opt.watch = true;
+      else if (arg == "--list") opt.list = true;
+      else if (arg == "--fail-fast") opt.failFast = true;
+      else if (arg == "--verbose") { opt.verbose = true; verboseSelected = true; }
+      else if (arg == "--quiet" || arg == "-q") { opt.quiet = true; quietSelected = true; }
+      else if (arg == "-d" || arg == "--dir")
+      {
+        if (i + 1 >= args.size() || args[i + 1].empty() || args[i + 1].front() == '-')
+        {
+          opt.parseFailed = true;
+          opt.parseError = "Missing value for --dir.";
+          return opt;
+        }
+        opt.projectDir = normalize_project_dir(args[++i]);
+        directorySelected = true;
+      }
+      else if (arg.rfind("--dir=", 0) == 0)
+      {
+        if (arg.size() == 6)
+        {
+          opt.parseFailed = true;
+          opt.parseError = "Missing value for --dir.";
+          return opt;
+        }
+        opt.projectDir = normalize_project_dir(arg.substr(6));
+        directorySelected = true;
+      }
+      else if (arg == "--")
+      {
+        opt.parseFailed = true;
+        opt.parseError = "Raw test-runner arguments are not part of the public vix test interface.";
+        return opt;
+      }
+      else if (!arg.empty() && arg.front() == '-')
+      {
+        opt.parseFailed = true;
+        opt.parseError = "Unknown test option: " + arg;
+        return opt;
+      }
+      else if (!filterSelected)
+      {
+        opt.testPattern = arg;
+        filterSelected = true;
+      }
       else
-        left.push_back(a);
+      {
+        opt.parseFailed = true;
+        opt.parseError = "vix test accepts one optional filter.";
+        return opt;
+      }
     }
 
-    bool projectSet = false;
-
-    for (std::size_t i = 0; i < left.size(); ++i)
+    if (verboseSelected && quietSelected)
     {
-      const std::string &a = left[i];
-
-      if (a == "--watch")
-      {
-        opt.watch = true;
-        continue;
-      }
-      if (a == "--list")
-      {
-        opt.list = true;
-        continue;
-      }
-      if (a == "--fail-fast")
-      {
-        opt.failFast = true;
-        continue;
-      }
-      if (a == "--run")
-      {
-        opt.runAfter = true;
-        continue;
-      }
-      if (a == "--raw")
-      {
-        opt.raw = true;
-        continue;
-      }
-      if (a == "--exact-test")
-      {
-        if (i + 1 < left.size())
-        {
-          opt.exactTestName = left[++i];
-          continue;
-        }
-
-        opt.forwarded.push_back(a);
-        continue;
-      }
-
-      constexpr const char testPrefix[] = "--test=";
-      if (a.rfind(testPrefix, 0) == 0)
-      {
-        opt.testPattern = a.substr(sizeof(testPrefix) - 1);
-        continue;
-      }
-
-      constexpr const char exactTestPrefix[] = "--exact-test=";
-      if (a.rfind(exactTestPrefix, 0) == 0)
-      {
-        opt.exactTestName = a.substr(sizeof(exactTestPrefix) - 1);
-        continue;
-      }
-
-      if (a == "--test" || a == "-R")
-      {
-        if (i + 1 < left.size())
-        {
-          opt.testPattern = left[++i];
-          continue;
-        }
-
-        opt.forwarded.push_back(a);
-        continue;
-      }
-
-      if (!projectSet && looks_like_path(a))
-      {
-        opt.projectDir = normalize_project_dir(fs::path(a));
-        projectSet = true;
-        continue;
-      }
-
-      opt.forwarded.push_back(a);
+      opt.parseFailed = true;
+      opt.parseError = "--verbose and --quiet cannot be used together.";
+      return opt;
     }
-
-    if (!projectSet)
+    if (opt.ctestMode && (filterSelected || opt.list || opt.watch || opt.failFast))
+    {
+      opt.parseFailed = true;
+      opt.parseError = "--ctest cannot be combined with a filter, --list, --watch, or --fail-fast.";
+      return opt;
+    }
+    if (opt.ctestMode &&
+        opt.diagnosticRequest.kind != ::vix::cli::commands::DiagnosticRequestKind::Unspecified)
+    {
+      opt.parseFailed = true;
+      opt.parseError = "Diagnostic options cannot be combined with terminal --ctest mode.";
+      return opt;
+    }
+    if (!directorySelected)
       opt.projectDir = normalize_project_dir(fs::current_path());
-
-    if (opt.failFast)
+    if (opt.failFast && !opt.ctestMode)
       opt.ctestArgs.push_back("--stop-on-failure");
-
-    if (opt.runAfter)
-      opt.forwarded.push_back("--run");
-
     return opt;
   }
-
 } // namespace vix::commands::TestsCommand::detail

@@ -1,75 +1,19 @@
-# Capability coverage manifest
+# Current CLI capability coverage
 
-This manifest is deliberately separate from `OptionCoverage.md`: an option can
-parse correctly while a supported execution path is broken. `PASS` means an
-executable contract exists and is green; `FAIL` means its contract is red;
-`UNAVAILABLE` names an environmental prerequisite; `UNCOVERED` is a required
-future contract, never a pass.
+These rows describe supported current-Vix execution surfaces. `REGISTERED`
+means a test is wired into CTest, not that it passed during static review.
+Historical script/container/URI execution and managed SDK profiles are not
+current CLI capabilities.
 
-| Command | Capability | Variant / source of truth | Test | Status |
-|---|---|---|---|---|
-| run | execution-path | `target.binary` / `RunTargetKind::Binary` | RunExecutionPathsContractTest | PASS |
-| run | execution-path | `target.script` / `RunTargetKind::Script` | RunCoreContractTest | PASS |
-| run | execution-path | `target.project` / `RunTargetKind::Project` | RunExecutionPathsContractTest | PASS |
-| run | execution-path | `target.container` / `RunTargetKind::Container` | controlled runtime mock | UNCOVERED |
-| run | execution-path | `strategy.direct` / `ScriptExecutionStrategy::Direct` | RunCoreContractTest | PASS |
-| run | execution-path | `strategy.cmake-fallback` / `ScriptExecutionStrategy::CMakeFallback` | RunCompiledDependencyContractTest | PASS |
-| run | execution-path | `manifest.vix` / `manifestMode` | RunExecutionPathsContractTest | PASS |
-| run | project-format | `single-cpp` / `.cpp,.cc,.cxx` | RunCoreContractTest | PASS |
-| run | project-format | `cmake-project` / `CMakeLists.txt` | RunExecutionPathsContractTest | PASS |
-| run | project-format | `vix-manifest` / `.vix` | RunExecutionPathsContractTest | PASS |
-| run | project-format | `executable` / executable file | RunExecutionPathsContractTest | PASS |
-| run | project-format | `uri` / docker,container,ssh,http,https | RunExecutionPathsContractTest (local HTTP) | PASS |
-| run | dependency | `none` | RunCoreContractTest | PASS |
-| run | dependency | `local-header` | RunCacheContractTest | PASS |
-| run | dependency | `transitive-local-header` | RunCacheContractTest | PASS |
-| run | dependency | `header-only-managed` / `headerOnlyDepIncludeDirs` | dependency contract | UNCOVERED |
-| run | dependency | `compiled` / `compiledDepPaths` | RunCompiledDependencyContractTest | PASS |
-| run | dependency | `temporary-git` / `--dep` | RunScriptDependencyPathTest | PASS |
-| run | dependency | `auto-deps-local` / `AutoDepsMode::Local` | auto-deps contract | UNCOVERED |
-| run | dependency | `auto-deps-up` / `AutoDepsMode::Up` | auto-deps contract | UNCOVERED |
-| run | linkage | `none` | RunCoreContractTest | PASS |
-| run | linkage | `missing-symbol` | RunCoreContractTest | PASS |
-| run | linkage | `external-library` / script link flags | RunCompiledDependencyContractTest | PASS |
-| run | linkage | `vix-compiled-module` / `usesVixRuntime` | RunVixAppContractTest | PASS |
-| run | cache | `cold,warm,source-touch,source-content` | RunCoreContractTest | PASS |
-| run | cache | `local-header-content` | RunCacheContractTest | PASS |
-| run | cache | `transitive-header-content` | RunCacheContractTest | PASS |
-| run | cache | `compiler-or-flags-changed` | RunSingleCppCacheCliTest | PASS |
-| run | cache | `previous-failure` | RunSingleCppCacheCliTest | PASS |
-| run | runtime | `args,env,cwd,nonzero` | RunCoreContractTest | PASS |
-| run | runtime | `signal` | runtime signal contract | UNCOVERED |
-| run | runtime | `exception` | runtime exception contract | UNCOVERED |
-| build | execution-path | `single-cpp` / `Options::singleCpp` | BuildExecutionPathsContractTest | PASS |
-| build | execution-path | `cmake-ninja` / `BuildCommand::run` | BuildCoreContractTest | PASS |
-| build | execution-path | `target-graph-executor` / `can_use_target_graph_executor` | BuildExecutionPathsContractTest | PASS |
-| build | execution-path | `watch-cmake` | BuildWatchCliTest | PASS |
-| build | execution-path | `watch-graph-executor` | graph watch contract | UNCOVERED |
-| build | execution-path | `log-reader` / `showLog` | BuildCoreContractTest | PASS |
-| build | project-format | `cmake-project` | BuildCoreContractTest | PASS |
-| build | project-format | `single-cpp` | BuildExecutionPathsContractTest | PASS |
-| build | dependency | `native-cmake-package` | BuildNativeCMakeDiscoveryTest | PASS |
-| build | dependency | `local-vix-modules` | SdkProfileCompositionTest | PASS |
-| build | dependency | `managed-sdk-composed` | SdkProfileCompositionTest | PASS |
-| build | dependency | `managed-sdk-missing` | SdkProfileCompositionTest | PASS |
-| install | reconciliation | `no-lock,no-op,cache-rebuild,add,failed` | InstallReconciliationContractTest | PASS |
-| build | linkage | `cmake-interface-target` | BuildNativeCMakeDiscoveryTest | PASS |
-| build | linkage | `compiled-vix-target` | CMake package linkage contract | UNCOVERED |
-| build | linkage | `transitive-system-library` | CMake package linkage contract | UNCOVERED |
-| build | toolchain | `native` | BuildCoreContractTest | PASS |
-| build | toolchain | `discovered-cross` | BuildToolCliCompatTest | PASS |
-| build | toolchain | `cross-sysroot-propagation` | fake toolchain contract | UNCOVERED |
-| build | output | `normal,verbose,quiet` | BuildProgressCliTest | PASS |
-| build | output | `debug,debug-log,cmake-verbose` | BuildToolCliCompatTest | PASS |
-| build | output | `report` | cloud service contract | UNAVAILABLE |
-| sdk | profile | `default` / `profile_names()` | SDK profile contract | UNCOVERED |
-| sdk | profile | `web` / `profile_names()` | SdkProfileCompositionTest | PASS |
-| sdk | profile | `data` / `profile_names()` | SdkProfileCompositionTest | PASS |
-| sdk | profile | `desktop` / `profile_names()` | SDK profile contract | UNCOVERED |
-| sdk | profile | `p2p` / `profile_names()` | SDK profile contract | UNCOVERED |
-| sdk | profile | `game` / `profile_names()` | SDK profile contract | UNCOVERED |
-| sdk | profile | `agent` / `profile_names()` | SDK profile contract | UNCOVERED |
-| sdk | profile | `all` / `profile_names()` | SDK profile contract | UNCOVERED |
-| sdk | cmake-package | `VixConfig.cmake` | SdkProfileCompositionTest | PASS |
-| sdk | cmake-package | `vix::vix umbrella target` | RunVixAppContractTest | PASS |
-| sdk | cmake-package | `module public target` | module linkage contract | UNCOVERED |
+| Capability | Current contract | Test | Status |
+| --- | --- | --- | --- |
+| `standalone-cpp` | Explicit `.cpp` input to build/run | `vix_cli_run_core_contract` | REGISTERED |
+| `external-cmake` | ProjectDiscovery + File API target artifact | `vix_cli_external_cmake_build_state` | REGISTERED |
+| `native-project` | `vix.toml` authority and context-local build | `vix_cli_native_run_fast_path` | REGISTERED |
+| `target-artifact` | Run executes discovered artifact, not guessed path | `vix_cli_build_execution_paths_contract` | REGISTERED |
+| `runtime-arguments` | `--` tail is forwarded to program | `vix_cli_run_core_contract` | REGISTERED |
+| `test-filter` | Case-sensitive literal substring | `vix_cli_tests_command_contract` | REGISTERED |
+| `ctest-escape-hatch` | Terminal external-CMake forwarding | `vix_cli_tests_command_contract` | REGISTERED |
+| `offline-install` | Exact locked local content only | `vix_cli_install_reconciliation_contract` | REGISTERED |
+| `native-dev-lifecycle` | Watch/rebuild/restart on supported POSIX hosts | `vix_cli_native_dev_lifecycle` | REGISTERED |
+| `distribution-upgrade` | UpgradeRuntime boundary | `vix_cli_distribution_runtime_tests` | REGISTERED |

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Command-registration validation.  The manifest is an audit, so UNCOVERED
-# rows remain visible without turning the complete contract suite red; PASS
-# rows must always resolve to an executable CTest contract.
+# Command-registration validation. Coverage status records registration, not
+# test outcome; every command also receives an executable help-route check.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -25,16 +24,16 @@ for command in "${commands[@]}"; do
     echo "Untested public command: $command" >&2
     exit 1
   fi
-  status="$(awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $8); print $8}' <<<"$row")"
-  contract="$(awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $9); print $9}' <<<"$row")"
+  status="$(awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $7); print $7}' <<<"$row")"
+  contract="$(awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $8); print $8}' <<<"$row")"
   case "$status" in
-    PASS)
+    REGISTERED)
       [[ "$contract" != "—" && -n "$contract" ]] || {
-        echo "PASS command has no contract: $command" >&2; exit 1; }
+        echo "REGISTERED command has no contract: $command" >&2; exit 1; }
       grep -Fq -- "$contract" "$ROOT/tests/CMakeLists.txt" || {
-        echo "PASS command references unregistered contract: $command" >&2; exit 1; }
+        echo "REGISTERED command references unregistered contract: $command" >&2; exit 1; }
       ;;
-    UNCOVERED|FAIL|BLOCKED|UNAVAILABLE) ;;
+    HELP_ONLY|GAP|BLOCKED|UNAVAILABLE) ;;
     *) echo "Invalid command status for $command: $status" >&2; exit 1 ;;
   esac
 done
@@ -103,6 +102,10 @@ if [[ -n "$CLI" ]]; then
   for command in "${expected_commands[@]}"; do
     grep -Eq "^[[:space:]]+$command([[:space:]]|$)" <<<"$help_output" || {
       echo "Canonical command is missing from top-level help: $command" >&2; exit 1; }
+    topic_help="$("$CLI" help "$command")" || {
+      echo "Per-command help route failed for canonical command: $command" >&2; exit 1; }
+    grep -Eq '^Usage:|^usage:' <<<"$topic_help" || {
+      echo "Per-command help has no usage heading: $command" >&2; exit 1; }
   done
   for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion uninstall make task target targets module modules tests up i deps; do
     if grep -Eq "^[[:space:]]+$command([[:space:]]|$)" <<<"$help_output"; then
@@ -111,14 +114,156 @@ if [[ -n "$CLI" ]]; then
   done
   grep -Fq 'https://vixcpp.com/docs' <<<"$help_output" || {
     echo "Canonical documentation URL is missing from CLI help" >&2; exit 1; }
+
+  build_help="$($CLI build --help)"
+  run_help="$($CLI run --help)"
+  dev_help="$($CLI dev --help)"
+  test_help="$($CLI test --help)"
+  new_help="$($CLI new --help)"
+  repl_help="$($CLI repl --help)"
+  grep -Fq 'vix new <path>' <<<"$new_help" || { echo 'New help omits the canonical path syntax' >&2; exit 1; }
+  if grep -Eq -- '--force|--dir|template|application|CMakeLists' <<<"$new_help"; then
+    echo 'New help exposes retired project-creation concepts' >&2; exit 1
+  fi
+  if grep -Eq 'Vix.args|--port|server|application' <<<"$repl_help"; then
+    echo 'REPL help exposes an application argument model' >&2; exit 1
+  fi
+  for option in '--dir' '--jobs' '--clean' '--platform' '--out' '--release' '--verbose' '--quiet' '--san' '--asan' '--ubsan' '--tsan' '--cmake' '--compiler-arg' '--linker-arg'; do
+    grep -Fq -- "$option" <<<"$build_help" || { echo "Build help omits $option" >&2; exit 1; }
+  done
+  for option in '--dir' '--release' '--cwd' '--env' '--verbose' '--quiet' '--' '--san' '--asan' '--ubsan' '--tsan' '--diagnostics=off' '--cmake' '--compiler-arg' '--linker-arg'; do
+    grep -Fq -- "$option" <<<"$run_help" || { echo "Run help omits $option" >&2; exit 1; }
+  done
+  for option in '--dir' '--release' '--cwd' '--env' '--verbose' '--quiet' '--' '--cmake' '--san' '--asan' '--ubsan' '--tsan' '--diagnostics=off'; do
+    grep -Fq -- "$option" <<<"$dev_help" || { echo "Dev help omits $option" >&2; exit 1; }
+  done
+  for option in '--dir' '--list' '--watch' '--fail-fast' '--verbose' '--quiet' '--san' '--asan' '--ubsan' '--tsan' '--ctest'; do
+    grep -Fq -- "$option" <<<"$test_help" || { echo "Test help omits $option" >&2; exit 1; }
+  done
+  grep -Fq -- '--diagnostics=off' <<<"$test_help" || { echo 'Test help omits the automatic-diagnostics opt-out' >&2; exit 1; }
+  for term in sqlite mysql cloud heartbeat graph-executor managed-sdk cmake-verbose; do
+    if grep -Eiq -- "$term" <<<"$build_help"; then echo "Build help exposes internal term: $term" >&2; exit 1; fi
+  done
+  for option in --launcher --linker --sysroot --targets --warning-check; do
+    if grep -Eiq -- "(^|[[:space:]])${option}([[:space:]]|$|=)" <<<"$build_help"; then
+      echo "Build help exposes retired option: $option" >&2; exit 1
+    fi
+  done
+  for term in docker container ssh:// http:// openapi force-server force-script compiler-fingerprint with-sqlite with-mysql; do
+    if grep -Eiq -- "$term" <<<"$run_help"; then echo "Run help exposes internal term: $term" >&2; exit 1; fi
+  done
+  for option in --exact-test --test -R --raw --preset --build-target; do
+    if grep -Eiq -- "(^|[[:space:]])${option}([[:space:]]|$|=)" <<<"$test_help"; then
+      echo "Test help exposes retired option: $option" >&2; exit 1
+    fi
+  done
+
+  if output="$("$CLI" build --graph-executor off 2>&1)"; then echo 'Removed build option was accepted' >&2; exit 1; fi
+  grep -Fq 'Unknown build option: --graph-executor' <<<"$output" || { echo 'Build did not reject the removed option at the public parser' >&2; exit 1; }
+  if output="$("$CLI" run --watch 2>&1)"; then echo 'run --watch was accepted' >&2; exit 1; fi
+  grep -Fq 'Unknown run option: --watch' <<<"$output" || { echo 'Run did not reject --watch at the public parser' >&2; exit 1; }
+  if output="$("$CLI" test --preset release 2>&1)"; then echo 'Removed test option was accepted' >&2; exit 1; fi
+  grep -Fq 'Unknown test option: --preset' <<<"$output" || { echo 'Test did not reject the removed option at the public parser' >&2; exit 1; }
+  for args in \
+    'build --build-target app' \
+    'build --preset release' \
+    'build --with-sqlite' \
+    'build --with-mysql' \
+    'build --report' \
+    'build --heartbeat' \
+    'build --graph-executor off' \
+    'build --target aarch64-linux-gnu' \
+    'build --sanitize' \
+    'build --sanitize=address' \
+    'build --no-san' \
+    'build --san --asan' \
+    'run --sanitize' \
+    'run --sanitize=address' \
+    'run --no-san' \
+    'run --asan --tsan' \
+    'run --diagnostics' \
+    'run --diagnostics=on' \
+    'run --diagnostics=san' \
+    'test --sanitize' \
+    'test --sanitize=address' \
+    'test --no-san' \
+    'test --san --ubsan' \
+    'test --diagnostics=asan' \
+    'build -- -DFEATURE=ON' \
+    'run docker://example/image' \
+    'run ssh://host/app' \
+    'run http://example/app' \
+    'run --force-server' \
+    'run --docs' \
+    'run --with-sqlite' \
+    'run --platform aarch64-linux-gnu' \
+    'run --env INVALID' \
+    'test --exact-test unit' \
+    'test -R unit' \
+    'test --test unit' \
+    'test --raw' \
+    'test --build-target unit' \
+    'test filter --ctest -L integration' \
+    'test --list --ctest -L integration' \
+    'test --watch --ctest -L integration' \
+    'test --fail-fast --ctest -L integration' \
+    'test -- filter'; do
+    if output="$($CLI $args 2>&1)"; then echo "Retired syntax was accepted: $args" >&2; exit 1; fi
+  done
+
+  for args in \
+    'run --san --san' \
+    'run --san --diagnostics=off' \
+    'run --diagnostics=off --asan' \
+    'run --diagnostics=off --diagnostics=off' \
+    'dev --san --diagnostics=off' \
+    'test --diagnostics=off --ubsan'; do
+    if output="$("$CLI" $args 2>&1)"; then
+      echo "Conflicting diagnostic request was accepted: $args" >&2
+      exit 1
+    else
+      status=$?
+      [[ "$status" -eq 2 ]] || { echo "Conflict did not return parser status 2: $args ($status)" >&2; exit 1; }
+    fi
+  done
+
+  diagnostic_fixture="$(mktemp -d)"
+  trap 'rm -rf "$diagnostic_fixture"' EXIT
+  printf 'cmake_minimum_required(VERSION 3.20)\nproject(diagnostic_gate LANGUAGES CXX)\n' >"$diagnostic_fixture/CMakeLists.txt"
+  for command in build run dev test; do
+    for mode in --san --asan --ubsan --tsan; do
+      if output="$("$CLI" "$command" --dir "$diagnostic_fixture" "$mode" 2>&1)"; then
+        echo "Vix diagnostic mode unexpectedly succeeded for external CMake $command" >&2
+        exit 1
+      fi
+      grep -Fq 'Vix diagnostic modes are not available for arbitrary external CMake projects.' <<<"$output" || {
+        echo "External CMake $command did not fail closed for $mode" >&2
+        exit 1
+      }
+    done
+  done
+  for command in run test; do
+    output="$($CLI "$command" --dir "$diagnostic_fixture" 2>&1 || true)"
+    if grep -Fq 'Vix diagnostic modes are not available for arbitrary external CMake projects.' <<<"$output"; then
+      echo "Automatic Vix diagnostics incorrectly rejected external CMake $command" >&2
+      exit 1
+    fi
+  done
+
+  if output="$("$CLI" dev example.cpp 2>&1)"; then echo 'Single-source dev was accepted' >&2; exit 1; fi
+  grep -Fq 'not a single source file' <<<"$output" || { echo 'Dev did not explain its project-target-only input' >&2; exit 1; }
+  if output="$("$CLI" repl -- --port 8080 2>&1)"; then echo 'REPL argument tail was accepted' >&2; exit 1; fi
+  for args in 'install package-name' 'publish --dry-run' 'upgrade --check' 'update acme/json'; do
+    if output="$($CLI $args 2>&1)"; then echo "Unsupported command option/argument was accepted: $args" >&2; exit 1; fi
+  done
 fi
 
 DEV_SOURCE="$ROOT/src/commands/DevCommand.cpp"
-grep -Fq 'RunCommand::run' "$DEV_SOURCE" || {
+grep -Fq 'RunCommand::run_watched' "$DEV_SOURCE" || {
   echo "vix dev does not delegate to the generic run command" >&2
   exit 1
 }
-if grep -Eiq 'ProjectDiscovery|NativeDevelopmentRuntime|DevSession|vix\.app|app\.vix|Vue|frontend|server application|web application' "$DEV_SOURCE"; then
+if grep -Eiq 'ProjectDiscovery|NativeDevelopmentRuntime|DevSession|vix\.app|app\.vix|Vue|frontend|server application|web application|--watch' "$DEV_SOURCE"; then
   echo "vix dev contains a separate or application-specific execution path" >&2
   exit 1
 fi
@@ -141,9 +286,12 @@ for command in agent game cloud note desktop mobile p2p orm db service proxy hea
   fi
 done
 
-# Guard the implicit command form independently from the comprehensive run
-# contracts: adding/removing an extension route changes public dispatch.
-grep -Fq 'ext == ".cpp"' "$ROOT/src/CLI.cpp" || {
-  echo "Missing implicit .cpp dispatch contract" >&2; exit 1; }
+# Guard the explicit command form independently from comprehensive run
+# contracts: top-level source input must explain the supported alternatives.
+grep -Fq 'a source file must be used with an explicit command' "$ROOT/src/CLI.cpp" || {
+  echo "Top-level .cpp rejection guidance is missing" >&2; exit 1; }
+if grep -Fq 'cmd = "run"' "$ROOT/src/CLI.cpp"; then
+  echo "Top-level .cpp shortcut still dispatches to run" >&2; exit 1
+fi
 
 echo "CommandCoverageGateTest passed"

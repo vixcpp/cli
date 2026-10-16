@@ -101,7 +101,7 @@ namespace vix::commands::RunCommand::detail
       return v == "--verbose" || v == "--quiet" || v == "-q" ||
              v == "--watch" || v == "--reload" ||
              v == "--force-server" || v == "--force-script" ||
-             v == "--san" || v == "--no-san" ||
+             v == "--san" || v == "--asan" ||
              v == "--ubsan" || v == "--tsan" ||
              v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
              v == "--no-color" ||
@@ -152,11 +152,7 @@ namespace vix::commands::RunCommand::detail
 
     void set_absolute_cwd(std::string &out, const fs::path &p)
     {
-      fs::path value = p;
-      if (value.is_relative())
-        value = fs::absolute(value);
-
-      out = value.string();
+      out = p.string();
     }
 
     void normalize_clear_mode(Options &opt)
@@ -390,22 +386,16 @@ namespace vix::commands::RunCommand::detail
     Options opt;
     Zone zone = Zone::Vix;
     bool afterTarget = false;
+    std::optional<::vix::cli::commands::DiagnosticRequest> selectedDiagnosticRequest;
 
     for (std::size_t i = 0; i < args.size(); ++i)
     {
       const std::string &a = args[i];
 
-      if (a == "--run")
+      if (zone != Zone::Run && a == "--run")
       {
         opt.hasRunSeparator = true;
         zone = Zone::Run;
-        continue;
-      }
-
-      if (a == "--")
-      {
-        opt.hasDoubleDash = true;
-        zone = Zone::Script;
         continue;
       }
 
@@ -416,11 +406,33 @@ namespace vix::commands::RunCommand::detail
         continue;
       }
 
+      if (a == "--")
+      {
+        opt.hasDoubleDash = true;
+        zone = Zone::Run;
+        continue;
+      }
+
       if (zone == Zone::Script)
       {
         warn_if_vix_flag_in_script(opt, a);
         opt.scriptFlags.push_back(a);
         opt.doubleDashArgs.push_back(a);
+        continue;
+      }
+
+      std::string diagnosticError;
+      if (vix::cli::commands::select_diagnostic_request_option(
+              a, selectedDiagnosticRequest, diagnosticError))
+      {
+        if (!diagnosticError.empty())
+        {
+          error(diagnosticError);
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
+        opt.diagnosticRequest = *selectedDiagnosticRequest;
         continue;
       }
 
@@ -618,6 +630,37 @@ namespace vix::commands::RunCommand::detail
       {
         set_absolute_cwd(opt.cwd, fs::path(take_eq_value(a, "--cwd=")));
       }
+      else if (a == "--cmake" || a == "--compiler-arg" || a == "--linker-arg")
+      {
+        const std::string value = take_value(args, i, a, opt);
+        if (opt.parseFailed) return opt;
+        if (value.empty())
+        {
+          error("Empty value for " + a);
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
+        if (a == "--cmake") opt.cmakeArgs.push_back(value);
+        else if (a == "--compiler-arg") opt.compilerArgs.push_back(value);
+        else opt.linkerArgs.push_back(value);
+      }
+      else if (a.rfind("--cmake=", 0) == 0 || a.rfind("--compiler-arg=", 0) == 0 ||
+               a.rfind("--linker-arg=", 0) == 0)
+      {
+        const auto equal = a.find('=');
+        const std::string value = a.substr(equal + 1);
+        if (value.empty())
+        {
+          error("Missing value for " + a.substr(0, equal));
+          opt.parseFailed = true;
+          opt.parseExitCode = 2;
+          return opt;
+        }
+        if (a.rfind("--cmake=", 0) == 0) opt.cmakeArgs.push_back(value);
+        else if (a.rfind("--compiler-arg=", 0) == 0) opt.compilerArgs.push_back(value);
+        else opt.linkerArgs.push_back(value);
+      }
       else if (a == "--env")
       {
         opt.runEnv.push_back(take_value(args, i, "--env", opt));
@@ -637,38 +680,6 @@ namespace vix::commands::RunCommand::detail
       else if (a.rfind("--args=", 0) == 0)
       {
         opt.runArgs.push_back(take_eq_value(a, "--args="));
-      }
-      else if (a == "--san")
-      {
-        opt.sanitizerSelectionExplicit = true;
-
-        opt.enableSanitizers = true;
-        opt.enableUbsanOnly = false;
-        opt.enableThreadSanitizer = false;
-      }
-      else if (a == "--no-san")
-      {
-        opt.sanitizerSelectionExplicit = true;
-
-        opt.enableSanitizers = false;
-        opt.enableUbsanOnly = false;
-        opt.enableThreadSanitizer = false;
-      }
-      else if (a == "--ubsan")
-      {
-        opt.sanitizerSelectionExplicit = true;
-
-        opt.enableSanitizers = false;
-        opt.enableUbsanOnly = true;
-        opt.enableThreadSanitizer = false;
-      }
-      else if (a == "--tsan")
-      {
-        opt.sanitizerSelectionExplicit = true;
-
-        opt.enableSanitizers = false;
-        opt.enableUbsanOnly = false;
-        opt.enableThreadSanitizer = true;
       }
       else if (a == "--auto-deps")
       {

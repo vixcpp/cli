@@ -1186,17 +1186,11 @@ namespace vix::commands::RunCommand::detail
             << " -DCMAKE_C_COMPILER_LAUNCHER=ccache";
       }
 
-      if (want_any_sanitizer(
-              opt.enableSanitizers,
-              opt.enableUbsanOnly,
-              opt.enableThreadSanitizer))
+      if (want_any_sanitizer(opt.diagnosticMode))
       {
         oss << " -DVIX_ENABLE_SANITIZERS=ON"
             << " -DVIX_SANITIZER_MODE="
-            << sanitizer_mode_string(
-                   opt.enableSanitizers,
-                   opt.enableUbsanOnly,
-                   opt.enableThreadSanitizer);
+            << sanitizer_mode_string(opt.diagnosticMode);
       }
       else
       {
@@ -1385,10 +1379,7 @@ namespace vix::commands::RunCommand::detail
 #ifndef _WIN32
     int run_script_binary_posix(const Options &opt, const ScriptProjectState &state)
     {
-      apply_sanitizer_env_if_needed(
-          opt.enableSanitizers,
-          opt.enableUbsanOnly,
-          opt.enableThreadSanitizer);
+      apply_sanitizer_env_if_needed(opt.diagnosticMode);
 
       // A script using vix::io (stdin/stdout) needs stdin forwarded just like
       // a plain script. Only true long-lived server apps should suppress passthrough.
@@ -1429,10 +1420,7 @@ namespace vix::commands::RunCommand::detail
       if (replayEnabled)
         replayCapture.attach(&recorder);
 
-      const bool useSanRuntime = want_any_sanitizer(
-          opt.enableSanitizers,
-          opt.enableUbsanOnly,
-          opt.enableThreadSanitizer);
+      const bool useSanRuntime = want_any_sanitizer(opt.diagnosticMode);
 
       LiveRunResult rr = run_cmd_live_filtered_capture(
           cmdRun,
@@ -1527,6 +1515,9 @@ namespace vix::commands::RunCommand::detail
               runtimeLog,
               evidence);
 
+      if (runCode == 0 && !hasRuntimeEvidence)
+        emit_captured_program_output(rr);
+
       const bool noOutput =
           trim_copy(rr.stdoutText).empty() &&
           trim_copy(rr.stderrText).empty();
@@ -1597,10 +1588,7 @@ namespace vix::commands::RunCommand::detail
 
       cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
 
-      const bool useSanRuntime = want_any_sanitizer(
-          opt.enableSanitizers,
-          opt.enableUbsanOnly,
-          opt.enableThreadSanitizer);
+      const bool useSanRuntime = want_any_sanitizer(opt.diagnosticMode);
 
       const LiveRunResult rr = run_cmd_live_filtered_capture(
           cmdRun,
@@ -1646,6 +1634,8 @@ namespace vix::commands::RunCommand::detail
         return runCode;
       }
 
+      emit_captured_program_output(rr);
+
       return 0;
     }
 #endif
@@ -1666,7 +1656,9 @@ namespace vix::commands::RunCommand::detail
           state.useVixRuntime,
           opt.scriptFlags,
           opt.withSqlite,
-          opt.withMySql);
+          opt.withMySql,
+          opt.compilerArgs,
+          opt.linkerArgs);
 
       if (text::read_text_file_or_empty(state.cmakeLists) != cmakeText)
       {
@@ -1831,10 +1823,7 @@ namespace vix::commands::RunCommand::detail
         }
 
 #ifndef _WIN32
-        apply_sanitizer_env_if_needed(
-            o.enableSanitizers,
-            o.enableUbsanOnly,
-            o.enableThreadSanitizer);
+        apply_sanitizer_env_if_needed(o.diagnosticMode);
 #endif
 
         const DirectScriptCacheState &cache = directPlan.cacheState;
@@ -1854,7 +1843,7 @@ namespace vix::commands::RunCommand::detail
               "Compiling script...",
               false,
               0,
-              o.enableSanitizers || o.enableUbsanOnly,
+              o.diagnosticMode != DiagnosticMode::None,
               true);
           if (const char *trace = vix::env::legacy::getenv("VIX_PERF_TRACE");
               trace && std::string(trace) == "1")
@@ -2006,12 +1995,12 @@ namespace vix::commands::RunCommand::detail
 
     plan.configSignature = make_script_config_signature(
         plan.useVixRuntime,
-        opt.enableSanitizers,
-        opt.enableUbsanOnly,
-        opt.enableThreadSanitizer,
+        opt.diagnosticMode,
         opt.scriptFlags,
         opt.withSqlite,
-        opt.withMySql);
+        opt.withMySql,
+        opt.compilerArgs,
+        opt.linkerArgs);
     plan.dependencyRoots = probe.compiledDepPaths;
     // ScriptCMake can discover manifest dependencies independently of the
     // include probe. Include that metadata-owned root in the graph snapshot.
@@ -2371,10 +2360,7 @@ namespace vix::commands::RunCommand::detail
         ::setenv("VIX_STDOUT_MODE", "line", 1);
         ::setenv("VIX_MODE", "dev", 1);
 
-        apply_sanitizer_env_if_needed(
-            opt.enableSanitizers,
-            opt.enableUbsanOnly,
-            opt.enableThreadSanitizer);
+        apply_sanitizer_env_if_needed(opt.diagnosticMode);
 
         if (!opt.cwd.empty())
         {

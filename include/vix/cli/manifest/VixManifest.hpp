@@ -35,7 +35,7 @@ namespace vix::cli::manifest
     std::string preset = "dev-ninja";
     std::string runPreset;
     int jobs = 0;
-    std::string san = "off"; // off|ubsan|asan_ubsan
+    std::optional<std::string> san; // absent or off|ubsan|asan_ubsan
     std::vector<std::string> buildFlags;
 
     // dev

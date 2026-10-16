@@ -109,14 +109,7 @@ namespace vix
                 << RESET
                 << "\n";
 
-      if (to_lower_copy(value) == "release")
-      {
-        std::cerr << "    To build in release mode, use: vix build --preset release\n";
-      }
-      else
-      {
-        std::cerr << "    Example: VIX_LOG_LEVEL=debug vix build -v\n";
-      }
+      std::cerr << "    Example: VIX_LOG_LEVEL=debug vix build --verbose\n";
     }
 
     static std::size_t levenshtein_distance(const std::string &a, const std::string &b)
@@ -187,18 +180,6 @@ namespace vix
       }
     }
 
-    bool apply_log_level_from_flag(Logger &logger, const std::string &value)
-    {
-      if (auto lvl = parse_log_level(value))
-      {
-        logger.setLevel(*lvl);
-        return true;
-      }
-
-      print_invalid_log_level_error("--log-level", value);
-      return false;
-    }
-
   } // namespace
 
   CLI::CLI()
@@ -219,7 +200,7 @@ namespace vix
     apply_log_level_from_env(logger);
 
     if (argc < 2)
-      return dispatcher.run("repl", {});
+      return help({});
 
     enum class VerbosityMode
     {
@@ -228,9 +209,10 @@ namespace vix
       Quiet
     };
     VerbosityMode verbosity = VerbosityMode::Default;
-    std::optional<std::string> logLevelFlag;
     bool globalHelp = false;
     bool globalVersion = false;
+    bool globalVerbose = false;
+    bool globalQuiet = false;
     int index = 1;
 
     while (index < argc)
@@ -253,6 +235,7 @@ namespace vix
 
       if (arg == "--verbose")
       {
+        globalVerbose = true;
         verbosity = VerbosityMode::Verbose;
         ++index;
         continue;
@@ -260,38 +243,19 @@ namespace vix
 
       if (arg == "--quiet" || arg == "-q")
       {
+        globalQuiet = true;
         verbosity = VerbosityMode::Quiet;
         ++index;
         continue;
       }
 
-      if (arg == "--log-level")
-      {
-        if (index + 1 >= argc)
-        {
-          std::cerr << "vix: --log-level requires a value (trace|debug|info|warn|error|critical).\n";
-          return 1;
-        }
-        logLevelFlag = argv[index + 1];
-        index += 2;
-        continue;
-      }
-
-      constexpr const char prefix[] = "--log-level=";
-      if (arg.rfind(prefix, 0) == 0)
-      {
-        std::string value = arg.substr(sizeof(prefix) - 1);
-        if (value.empty())
-        {
-          std::cerr << "vix: --log-level=VALUE cannot be empty.\n";
-          return 1;
-        }
-        logLevelFlag = value;
-        ++index;
-        continue;
-      }
-
       break;
+    }
+
+    if (globalVerbose && globalQuiet)
+    {
+      vix::cli::util::err_line(std::cerr, "--verbose and --quiet cannot be used together");
+      return 2;
     }
 
     switch (verbosity)
@@ -306,9 +270,6 @@ namespace vix
       break;
     }
 
-    if (logLevelFlag.has_value() && !apply_log_level_from_flag(logger, *logLevelFlag))
-      return 1;
-
     if (globalHelp)
       return help({});
 
@@ -316,19 +277,33 @@ namespace vix
       return version({});
 
     if (index >= argc)
-      return dispatcher.run("repl", {});
+      return help({});
 
     std::string cmd = argv[index];
     std::vector<std::string> args(argv + index + 1, argv + argc);
 
+    bool oppositeCommandVerbosity = false;
+    for (const auto &arg : args)
     {
-      std::filesystem::path p{cmd};
-      const auto ext = p.extension().string();
-      if (ext == ".cpp")
+      if (arg == "--") break;
+      if ((globalVerbose && (arg == "--quiet" || arg == "-q")) ||
+          (globalQuiet && arg == "--verbose"))
       {
-        args.insert(args.begin(), cmd);
-        cmd = "run";
+        oppositeCommandVerbosity = true;
+        break;
       }
+    }
+    if (oppositeCommandVerbosity)
+    {
+      vix::cli::util::err_line(std::cerr, "--verbose and --quiet cannot be used together");
+      return 2;
+    }
+
+    if (std::filesystem::path{cmd}.extension() == ".cpp")
+    {
+      vix::cli::util::err_line(std::cerr,
+          "a source file must be used with an explicit command: vix build <file.cpp> or vix run <file.cpp>");
+      return 2;
     }
 
     if (cmd == "help")
@@ -407,11 +382,10 @@ namespace vix
 
     out << "Usage:\n";
     out << "  vix <command> [options]\n";
-    out << "  vix <file.cpp>\n";
     out << "  vix help <command>\n\n";
 
     out << "Project:\n";
-    out << "  new <name>                 Create a minimal native Vix project\n";
+    out << "  new <path>                 Create a minimal native Vix project\n";
     out << "  init                       Adopt the current directory as a Vix project\n";
     out << "  build                      Build the project\n";
     out << "  run                        Build and run the project\n";
@@ -430,9 +404,8 @@ namespace vix
     out << "  upgrade                    Upgrade Vix\n\n";
 
     out << "Global options:\n";
-    out << "  --verbose                  Enable debug output\n";
-    out << "  -q, --quiet                Only show warnings and errors\n";
-    out << "  --log-level <level>        Set trace, debug, info, warn, error or critical\n";
+    out << "  --verbose                  Show additional details\n";
+    out << "  -q, --quiet                Reduce command output\n";
     out << "  -h, --help                 Show command help\n";
     out << "  -v, --version              Show the installed version\n\n";
 

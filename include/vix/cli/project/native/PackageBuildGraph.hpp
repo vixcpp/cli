@@ -11,6 +11,7 @@
 
 #include <vix/cli/project/native/Models.hpp>
 #include <vix/cli/project/native/PackageContentStore.hpp>
+#include <vix/engine/SanitizerMode.hpp>
 
 namespace vix::cli::project::native
 {
@@ -57,7 +58,8 @@ namespace vix::cli::project::native
     const NativeProject &project,
     const std::filesystem::path &projectRoot,
     const Lockfile &lockfile,
-    const std::vector<MaterializedLockedPackage> &packages);
+    const std::vector<MaterializedLockedPackage> &packages,
+    vix::engine::SanitizerMode diagnosticMode = vix::engine::SanitizerMode::None);
 } // namespace vix::cli::project::native
 
 #endif // VIX_CLI_PROJECT_NATIVE_PACKAGE_BUILD_GRAPH_HPP

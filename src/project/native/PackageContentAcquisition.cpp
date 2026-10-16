@@ -25,6 +25,8 @@ namespace vix::cli::project::native
     PackageContentAcquisitionIssue store_failure(const PackageContentRequirement &required,
       std::vector<PackageContentIssue> issues, std::string message)
     {
+      if (!issues.empty() && !issues.front().message.empty())
+        message += ": " + issues.front().message;
       auto result = acquisition_issue(PackageContentAcquisitionIssueCode::package_content_store_failure,
         required, std::move(message));
       result.contentIssues = std::move(issues);

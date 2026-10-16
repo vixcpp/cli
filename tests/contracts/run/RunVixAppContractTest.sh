@@ -1,28 +1,48 @@
 #!/usr/bin/env bash
-# A public Vix package must provide both headers and compiled target usage
-# requirements. The script path must therefore take CMake fallback, not guess
-# a subset of static libraries.
+# Historical vix.app files do not establish project authority in current Vix.
 set -euo pipefail
-VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"
-VIX_ROOT="${VIX_ROOT:-$(cd "$(dirname "$VIX_BIN")" && pwd)}"
+VIX_BIN="${1:?vix binary required}"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
-export HOME="$ROOT/home"; mkdir -p "$HOME"
-export VIX_ROOT
-cat >"$ROOT/app.cpp" <<'CPP'
-#include <vix.hpp>
-int main() { vix::App app; return 0; }
+export HOME="$ROOT/home"; mkdir -p "$HOME" "$ROOT/project"
+normalize_pty_output() {
+  local normalized="${1//$'\r\n'/$'\n'}"
+  printf '%s' "${normalized%$'\r'}"
+}
+PROJECT="$ROOT/project"
+cat >"$PROJECT/vix.app" <<'APP'
+name = "retired-authority"
+type = "executable"
+sources = ["main.cpp"]
+APP
+cat >"$PROJECT/main.cpp" <<'CPP'
+#include <iostream>
+int main() { std::cout << "current-project-authority\n"; }
 CPP
-set +e
-out="$("$VIX_BIN" run "$ROOT/app.cpp" --no-san --trace-cache 2>&1 | tr -d '\r')"
-status=$?
-set -e
-grep -Fq 'script strategy: cmake fallback' <<<"$out"
-
-# The umbrella test profile deliberately disables installation.  In that
-# configuration the generated script cannot resolve a public Vix package, but
-# it must still choose the CMake strategy.  When a build-tree package is
-# available, keep this as a full compile-and-run regression test.
-if [[ "$status" -ne 0 && -f "$VIX_ROOT/VixConfig.cmake" ]]; then
-  printf '%s\n' "$out" >&2
-  exit "$status"
+if (cd "$PROJECT" && "$VIX_BIN" run) >"$ROOT/no-authority.out" 2>&1; then
+  echo 'historical vix.app unexpectedly established project authority' >&2
+  cat "$ROOT/no-authority.out" >&2
+  exit 1
 fi
+grep -Fq -- 'No Vix or CMake project was found for this run target.' "$ROOT/no-authority.out" || {
+  cat "$ROOT/no-authority.out" >&2
+  echo 'legacy-only directory did not fail through project discovery' >&2
+  exit 1
+}
+if grep -Fq -- 'current-project-authority' "$ROOT/no-authority.out"; then
+  cat "$ROOT/no-authority.out" >&2
+  echo 'legacy source was executed without project authority' >&2
+  exit 1
+fi
+cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
+cmake_minimum_required(VERSION 3.20)
+project(current_authority LANGUAGES CXX)
+add_executable(current_authority main.cpp)
+CMAKE
+out="$("$VIX_BIN" run current_authority --dir "$PROJECT")"
+out="$(normalize_pty_output "$out")"
+grep -Fxq 'current-project-authority' <<<"$out" || {
+  printf '%s\n' "$out" >&2
+  echo 'recognized CMake authority did not execute its target' >&2
+  exit 1
+}
+echo "RunVixAppContractTest passed"

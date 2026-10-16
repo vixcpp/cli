@@ -19,9 +19,12 @@
 #include <string_view>
 #include <vector>
 
+#include <vix/cli/commands/DiagnosticMode.hpp>
+
 namespace vix::commands::RunCommand::detail
 {
   namespace fs = std::filesystem;
+  using DiagnosticMode = ::vix::cli::commands::DiagnosticMode;
 
   /**
    * @brief Prints the watch-mode restart banner.
@@ -40,16 +43,16 @@ namespace vix::commands::RunCommand::detail
    *
    * @param enableSanitizers True when ASan+UBSan mode is enabled.
    * @param enableUbsanOnly True when UBSan-only mode is enabled.
-   * @return True if ASan+UBSan or UBSan-only mode is active.
+   * @return True for address/undefined instrumentation modes (not TSan).
    */
-  bool want_sanitizers(
-      bool enableSanitizers,
-      bool enableUbsanOnly);
+  bool want_sanitizers(DiagnosticMode mode);
+  bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly);
 
   /**
    * @brief Returns the sanitizer mode string used by generated CMake projects.
    *
    * Possible return values:
+   * - "asan"
    * - "asan_ubsan"
    * - "ubsan"
    * - "tsan"
@@ -60,6 +63,7 @@ namespace vix::commands::RunCommand::detail
    * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
    * @return Sanitizer mode string.
    */
+  std::string sanitizer_mode_string(DiagnosticMode mode);
   std::string sanitizer_mode_string(
       bool enableSanitizers,
       bool enableUbsanOnly,
@@ -81,6 +85,14 @@ namespace vix::commands::RunCommand::detail
    * @param withMySql True if MySQL support is enabled.
    * @return Stable configuration signature string.
    */
+  std::string make_script_config_signature(
+      bool useVixRuntime,
+      DiagnosticMode mode,
+      const std::vector<std::string> &scriptFlags,
+      bool withSqlite,
+      bool withMySql,
+      const std::vector<std::string> &compilerArgs = {},
+      const std::vector<std::string> &linkerArgs = {});
   std::string make_script_config_signature(
       bool useVixRuntime,
       bool enableSanitizers,
@@ -122,9 +134,7 @@ namespace vix::commands::RunCommand::detail
    * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
    */
   void apply_sanitizer_env_if_needed(
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer);
+      DiagnosticMode mode);
 
   /**
    * @brief Finds a precompiled Vix header if available.

@@ -25,7 +25,9 @@ namespace vix::cli::project::native
     lock_unnecessary,
     content_acquisition_failed,
     materialization_failed,
-    runtime_configuration_failed
+    runtime_configuration_failed,
+    offline_content_missing,
+    corrupt_cached_content
   };
 
   struct NativePackageInstallIssue
@@ -46,6 +48,7 @@ namespace vix::cli::project::native
   struct NativePackageInstallParseResult
   {
     bool valid{false};
+    bool offline{false};
     std::string diagnostic;
   };
 

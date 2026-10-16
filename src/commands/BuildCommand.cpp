@@ -15,6 +15,7 @@
 #include <vix/cli/Style.hpp>
 #include <vix/cli/cache/ArtifactCache.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
+#include <vix/cli/commands/DiagnosticMode.hpp>
 #include <vix/cli/commands/CloudCommand.hpp>
 #include <vix/cli/build/BuildGraph.hpp>
 #include <vix/cli/build/BuildScheduler.hpp>
@@ -31,6 +32,7 @@
 #include <cctype>
 #include <chrono>
 #include <csignal>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -61,6 +63,7 @@
 #include <vix/cli/project/NativeProjectCommandDispatch.hpp>
 #include <vix/cli/project/TargetSelection.hpp>
 #include <vix/cli/project/cmake/CMakeFileApi.hpp>
+#include <vix/cli/project/cmake/CMakeBuildState.hpp>
 #include <vix/cli/project/cmake/CMakeProjectAdapter.hpp>
 #include <vix/cli/project/native/NativeDevelopmentRuntime.hpp>
 #include <vix/cli/project/native/TomlParser.hpp>
@@ -123,6 +126,7 @@ namespace vix::commands::BuildCommand
       process::Plan plan;
       std::string sdkResolutionError;
       std::string toolchainContent;
+      std::string buildStateError;
     };
 
     enum class WatchDisplayAction
@@ -1637,55 +1641,81 @@ namespace vix::commands::BuildCommand
       return artifact_cache::ArtifactCache::write_manifest(artifact);
     }
 
-    static bool select_sanitizer_mode(
-        process::Options &options,
-        std::optional<process::SanitizerMode> &selectedMode,
-        std::string &selectedArgument,
-        process::SanitizerMode requestedMode,
-        std::string_view requestedArgument,
-        int &exitCode)
-    {
-      if (selectedMode &&
-          *selectedMode != requestedMode)
-      {
-        error(
-            "Conflicting sanitizer options: " +
-            selectedArgument +
-            " and " +
-            std::string(requestedArgument));
-
-        hint("Choose exactly one sanitizer mode per build.");
-        hint("Recommended: vix build --sanitize");
-
-        exitCode = 2;
-        return false;
-      }
-
-      selectedMode = requestedMode;
-      selectedArgument = std::string(requestedArgument);
-      options.sanitizerMode = requestedMode;
-
-      return true;
-    }
-
     static process::Options parse_args_or_exit(
         const std::vector<std::string> &args,
-        int &exitCode)
+        int &exitCode,
+        vix::cli::commands::DiagnosticRequest *diagnosticRequest = nullptr)
     {
       process::Options o;
       exitCode = 0;
       std::optional<process::SanitizerMode> selectedSanitizerMode;
-      std::string selectedSanitizerArgument;
 
       for (std::size_t i = 0; i < args.size(); ++i)
       {
         const std::string &a = args[i];
 
+        const auto take_exact_argument = [&](const std::string &option) -> std::optional<std::string>
+        {
+          if (i + 1 >= args.size() || args[i + 1] == "--")
+          {
+            error("Missing value for " + option);
+            exitCode = 2;
+            return std::nullopt;
+          }
+          return args[++i];
+        };
+
+        std::string diagnosticError;
+        if (vix::cli::commands::select_diagnostic_mode_option(
+                a, selectedSanitizerMode, diagnosticError))
+        {
+          if (!diagnosticError.empty())
+          {
+            error(diagnosticError);
+            exitCode = 2;
+            return o;
+          }
+          o.sanitizerMode = *selectedSanitizerMode;
+          continue;
+        }
+
+        if (a == "--cmake" || a == "--compiler-arg" || a == "--linker-arg")
+        {
+          const auto value = take_exact_argument(a);
+          if (!value) return o;
+          if (value->empty())
+          {
+            error("Empty value for " + a);
+            exitCode = 2;
+            return o;
+          }
+          if (a == "--cmake") o.cmakeArgs.push_back(*value);
+          else if (a == "--compiler-arg") o.compilerArgs.push_back(*value);
+          else o.linkerArgs.push_back(*value);
+          continue;
+        }
+        if (a.rfind("--cmake=", 0) == 0 || a.rfind("--compiler-arg=", 0) == 0 ||
+            a.rfind("--linker-arg=", 0) == 0)
+        {
+          const auto equal = a.find('=');
+          const std::string value = a.substr(equal + 1);
+          if (value.empty())
+          {
+            error("Missing value for " + a.substr(0, equal));
+            exitCode = 2;
+            return o;
+          }
+          if (a.rfind("--cmake=", 0) == 0) o.cmakeArgs.push_back(value);
+          else if (a.rfind("--compiler-arg=", 0) == 0) o.compilerArgs.push_back(value);
+          else o.linkerArgs.push_back(value);
+          continue;
+        }
+
         if (a == "--")
         {
-          for (std::size_t j = i + 1; j < args.size(); ++j)
-            o.cmakeArgs.push_back(args[j]);
-          break;
+          error("Raw build argument tails are not supported; use an explicit advanced option.");
+          exitCode = 2;
+          return o;
         }
 
         if (a == "--help" || a == "-h")
@@ -1787,105 +1817,6 @@ namespace vix::commands::BuildCommand
         else if (a == "--warning-check")
         {
           o.warningCheck = true;
-        }
-        else if (a == "--sanitize" ||
-                 a == "--san")
-        {
-          if (!select_sanitizer_mode(
-                  o,
-                  selectedSanitizerMode,
-                  selectedSanitizerArgument,
-                  process::SanitizerMode::AddressUndefined,
-                  a,
-                  exitCode))
-          {
-            return o;
-          }
-        }
-        else if (a == "--asan")
-        {
-          if (!select_sanitizer_mode(
-                  o,
-                  selectedSanitizerMode,
-                  selectedSanitizerArgument,
-                  process::SanitizerMode::Address,
-                  a,
-                  exitCode))
-          {
-            return o;
-          }
-        }
-        else if (a == "--ubsan")
-        {
-          if (!select_sanitizer_mode(
-                  o,
-                  selectedSanitizerMode,
-                  selectedSanitizerArgument,
-                  process::SanitizerMode::Undefined,
-                  a,
-                  exitCode))
-          {
-            return o;
-          }
-        }
-        else if (a == "--tsan")
-        {
-          if (!select_sanitizer_mode(
-                  o,
-                  selectedSanitizerMode,
-                  selectedSanitizerArgument,
-                  process::SanitizerMode::Thread,
-                  a,
-                  exitCode))
-          {
-            return o;
-          }
-        }
-        else if (a.rfind("--sanitize=", 0) == 0)
-        {
-          const std::string value =
-              a.substr(std::string("--sanitize=").size());
-
-          if (value.empty())
-          {
-            error("Missing value for --sanitize=<mode>");
-            hint(
-                "Valid modes: address, undefined, "
-                "address,undefined, thread");
-
-            exitCode = 2;
-            return o;
-          }
-
-          const auto parsed =
-              vix::engine::parse_sanitizer_mode(value);
-
-          if (!parsed)
-          {
-            error("Invalid sanitizer mode: " + value);
-
-            hint(
-                "Valid modes: address, undefined, "
-                "address,undefined, thread");
-
-            hint(
-                "Recommended: "
-                "vix build --sanitize");
-
-            exitCode = 2;
-            return o;
-          }
-
-          if (!select_sanitizer_mode(
-                  o,
-                  selectedSanitizerMode,
-                  selectedSanitizerArgument,
-                  *parsed,
-                  a,
-                  exitCode))
-          {
-            return o;
-          }
         }
         else if (a == "--managed-sdk")
         {
@@ -2306,6 +2237,13 @@ namespace vix::commands::BuildCommand
         return o;
       }
 
+      if (diagnosticRequest && selectedSanitizerMode)
+      {
+        *diagnosticRequest = {
+            vix::cli::commands::DiagnosticRequestKind::Explicit,
+            *selectedSanitizerMode};
+      }
+
       return o;
     }
 
@@ -2317,30 +2255,6 @@ namespace vix::commands::BuildCommand
     static std::optional<std::string> detect_fast_linker_flag(const process::Options &opt)
     {
       return vix::engine::detect_fast_linker_flag(opt.linker);
-    }
-
-    static void clean_local_build_dir(
-        const fs::path &buildDir,
-        bool quiet)
-    {
-      if (!fs::exists(buildDir))
-        return;
-
-      std::error_code ec;
-      fs::remove_all(buildDir, ec);
-
-      if (ec)
-      {
-        error(
-            "Failed to remove build directory: " +
-            buildDir.string());
-
-        hint(ec.message());
-        throw std::runtime_error("clean failed");
-      }
-
-      if (!quiet)
-        step("removed " + buildDir.string());
     }
 
     static std::vector<std::pair<std::string, std::string>>
@@ -2408,6 +2322,46 @@ namespace vix::commands::BuildCommand
       return vix::engine::make_configuration_signature(
           plan,
           configuration_signature_options(opt, toolchainContent));
+    }
+
+    static std::string external_cmake_toolchain_file_content(
+        const fs::path &projectRoot,
+        const std::vector<std::string> &arguments)
+    {
+      std::ostringstream content;
+      for (std::size_t i = 0; i < arguments.size(); ++i)
+      {
+        std::string assignment;
+        if (arguments[i] == "-D" && i + 1 < arguments.size())
+          assignment = arguments[++i];
+        else if (arguments[i].rfind("-D", 0) == 0)
+          assignment = arguments[i].substr(2);
+        else
+          continue;
+
+        const auto equal = assignment.find('=');
+        if (equal == std::string::npos)
+          continue;
+        std::string name = assignment.substr(0, equal);
+        const auto type = name.find(':');
+        if (type != std::string::npos)
+          name.resize(type);
+        if (name != "CMAKE_TOOLCHAIN_FILE")
+          continue;
+
+        fs::path toolchainPath{assignment.substr(equal + 1)};
+        if (toolchainPath.is_relative())
+          toolchainPath = projectRoot / toolchainPath;
+        toolchainPath = fs::absolute(toolchainPath).lexically_normal();
+        std::ifstream input(toolchainPath, std::ios::binary);
+        std::ostringstream bytes;
+        if (input)
+          bytes << input.rdbuf();
+        const std::string value = input ? bytes.str() : "<unreadable>";
+        content << toolchainPath.generic_string().size() << ':'
+                << toolchainPath.generic_string() << value.size() << ':' << value << '\n';
+      }
+      return content.str();
     }
 
     static std::uint64_t fast_file_size_or_zero(const fs::path &path)
@@ -2506,6 +2460,8 @@ namespace vix::commands::BuildCommand
 
       if (discovered.success())
       {
+        if (discovered.location->system != vix::cli::project::ProjectSystem::cmake)
+          return std::nullopt;
         userProjectDir = discovered.location->root;
       }
       else
@@ -2544,22 +2500,6 @@ namespace vix::commands::BuildCommand
       plan.projectFingerprint =
           util::compute_cmake_config_fingerprint(plan.cmakeSourceDir);
 
-      if (opt.clean)
-      {
-        try
-        {
-          clean_local_build_dir(
-              plan.buildDir,
-              opt.quiet);
-        }
-        catch (const std::exception &)
-        {
-          return std::nullopt;
-        }
-      }
-
-      const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
-
       std::string sdkResolutionError;
       resolve_sdk_for_plan(plan, sdkResolutionError, opt);
 
@@ -2570,7 +2510,36 @@ namespace vix::commands::BuildCommand
         toolchainContent =
             build::toolchain_contents_for_triple(opt.targetTriple, opt.sysroot);
       }
+      toolchainContent += external_cmake_toolchain_file_content(userProjectDir, opt.cmakeArgs);
 
+      std::ostringstream compilerIdentity;
+      compilerIdentity << detect_compiler_identity();
+      if (const char *cc = std::getenv("CC"); cc && *cc)
+        compilerIdentity << ";CC=" << cc;
+      if (const char *cxx = std::getenv("CXX"); cxx && *cxx)
+        compilerIdentity << ";CXX=" << cxx;
+      const std::string platform =
+          opt.targetTriple.empty() ? detect_native_target_triple() : opt.targetTriple;
+      auto context = vix::cli::project::cmake::make_external_cmake_build_state_context(
+          userProjectDir, plan, platform, compilerIdentity.str(), opt.sysroot,
+          opt.sanitizerMode, opt.cmakeArgs, toolchainContent);
+      vix::cli::project::cmake::apply_external_cmake_build_state_context(plan, context);
+
+      plan.cmakeVars = build_cmake_vars(
+          plan.preset,
+          opt,
+          plan.toolchainFile,
+          plan.launcher,
+          plan.fastLinkerFlag,
+          plan.buildDir / "vix-global-packages.cmake",
+          plan.dependencyEnvironmentMode,
+          plan.sdkConfigDir);
+
+      context = vix::cli::project::cmake::make_external_cmake_build_state_context(
+          userProjectDir, plan, platform, compilerIdentity.str(), opt.sysroot,
+          opt.sanitizerMode, opt.cmakeArgs, toolchainContent);
+      vix::cli::project::cmake::apply_external_cmake_build_state_context(plan, context);
+      const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
       plan.cmakeVars = build_cmake_vars(
           plan.preset,
           opt,
@@ -2580,13 +2549,21 @@ namespace vix::commands::BuildCommand
           globalPackagesFile,
           plan.dependencyEnvironmentMode,
           plan.sdkConfigDir);
-
       plan.signature = build_configuration_signature(plan, opt, toolchainContent);
+
+      std::string buildStateError;
+      bool stateReady = opt.clean
+          ? vix::cli::project::cmake::reset_external_cmake_build_state_context(context, buildStateError)
+          : true;
+      if (stateReady)
+        stateReady = vix::cli::project::cmake::prepare_external_cmake_build_state_context(context, buildStateError);
+      (void)stateReady;
 
       return ResolvedBuildPlan{
           std::move(plan),
           std::move(sdkResolutionError),
-          std::move(toolchainContent)};
+          std::move(toolchainContent),
+          std::move(buildStateError)};
     }
     static vix::engine::ConfigureDecision
     evaluate_configure_decision(
@@ -4487,8 +4464,12 @@ namespace vix::commands::BuildCommand
     class BuildCommand
     {
     public:
-      explicit BuildCommand(process::Options opt, bool forceBuildGraph = false)
-          : opt_(std::move(opt)), forceBuildGraph_(forceBuildGraph) {}
+      explicit BuildCommand(
+          process::Options opt,
+          bool forceBuildGraph = false,
+          fs::path *resolvedBackendDirectory = nullptr)
+          : opt_(std::move(opt)), forceBuildGraph_(forceBuildGraph),
+            resolvedBackendDirectory_(resolvedBackendDirectory) {}
 
       int run()
       {
@@ -4533,11 +4514,19 @@ namespace vix::commands::BuildCommand
         }
 
         plan_ = resolvedPlanOpt->plan;
+        if (resolvedBackendDirectory_)
+          *resolvedBackendDirectory_ = plan_.buildDir;
         std::string tc = resolvedPlanOpt->toolchainContent;
 
         if (!resolvedPlanOpt->sdkResolutionError.empty())
         {
           error(resolvedPlanOpt->sdkResolutionError);
+          return 1;
+        }
+
+        if (!resolvedPlanOpt->buildStateError.empty())
+        {
+          error(resolvedPlanOpt->buildStateError);
           return 1;
         }
 
@@ -5377,6 +5366,8 @@ namespace vix::commands::BuildCommand
           const bool legacyBuildQuiet =
               opt_.quiet ||
               (liveBuild &&
+               !showRawBuildOutput) ||
+              (!watch_stdout_is_tty() &&
                !showRawBuildOutput);
 
           const process::ExecResult r =
@@ -5549,8 +5540,8 @@ namespace vix::commands::BuildCommand
           if (!exeOpt)
           {
             error("Unable to resolve the main executable to export.");
-            hint("Use --build-target <name> if your project produces multiple executables.");
-            hint("Run: vix build --build-target <target> -v");
+            hint("Select a project target positionally if your project produces multiple executables.");
+            hint("Run: vix build <target> --verbose");
             return 1;
           }
 
@@ -5577,14 +5568,165 @@ namespace vix::commands::BuildCommand
       process::Options opt_;
       process::Plan plan_{};
       bool forceBuildGraph_ = false;
+      fs::path *resolvedBackendDirectory_{nullptr};
     };
 
   } // namespace
 
-  int run(const std::vector<std::string> &args)
+  namespace
   {
+    static bool normalize_public_build_arguments(
+        const std::vector<std::string> &args,
+        std::vector<std::string> &normalized)
+    {
+      bool sourceSelected = false;
+      bool targetSelected = false;
+      bool verboseSelected = false;
+      bool quietSelected = false;
+      std::optional<vix::cli::commands::DiagnosticMode> diagnosticMode;
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        const auto &arg = args[i];
+        std::string diagnosticError;
+        if (vix::cli::commands::select_diagnostic_mode_option(
+                arg, diagnosticMode, diagnosticError))
+        {
+          if (!diagnosticError.empty())
+          {
+            error(diagnosticError);
+            return false;
+          }
+          normalized.push_back(arg);
+          continue;
+        }
+        if (arg == "--")
+        {
+          error("Raw build arguments are not public; use the explicit single-file argument options when available.");
+          return false;
+        }
+        if (arg == "-h" || arg == "--help" || arg == "--verbose" || arg == "-q" || arg == "--quiet" || arg == "--clean")
+        {
+          verboseSelected = verboseSelected || arg == "--verbose";
+          quietSelected = quietSelected || arg == "-q" || arg == "--quiet";
+          normalized.push_back(arg);
+          continue;
+        }
+        const auto take_option_value = [&](const char *name, const char *internalName = nullptr,
+                                           bool allowOptionValue = false) -> bool
+        {
+          const std::string flag{name};
+          if (arg == flag)
+          {
+            if (i + 1 >= args.size() || args[i + 1].empty() ||
+                (!allowOptionValue && args[i + 1].front() == '-') || args[i + 1] == "--")
+            {
+              error("Missing value for " + flag);
+              return false;
+            }
+            normalized.push_back(internalName ? internalName : name);
+            normalized.push_back(args[++i]);
+            return true;
+          }
+          const std::string prefix = flag + "=";
+          if (arg.rfind(prefix, 0) == 0)
+          {
+            if (arg.size() == prefix.size())
+            {
+              error("Missing value for " + flag);
+              return false;
+            }
+            normalized.push_back(std::string(internalName ? internalName : name) + "=" + arg.substr(prefix.size()));
+            return true;
+          }
+          return false;
+        };
+        if (arg == "-d" || arg == "--dir")
+        {
+          if (i + 1 >= args.size() || args[i + 1].empty() || args[i + 1].front() == '-') { error("Missing value for --dir"); return false; }
+          normalized.push_back("--dir"); normalized.push_back(args[++i]); continue;
+        }
+        if (arg.rfind("--dir=", 0) == 0) { if (arg.size() == 6) { error("Missing value for --dir"); return false; } normalized.push_back(arg); continue; }
+        if (take_option_value("--cmake", nullptr, true) ||
+            take_option_value("--compiler-arg", nullptr, true) ||
+            take_option_value("--linker-arg", nullptr, true))
+          continue;
+        if (arg == "--cmake" || arg.rfind("--cmake=", 0) == 0 ||
+            arg == "--compiler-arg" || arg.rfind("--compiler-arg=", 0) == 0 ||
+            arg == "--linker-arg" || arg.rfind("--linker-arg=", 0) == 0)
+          return false;
+        if (arg == "-j" || arg == "--jobs")
+        {
+          if (i + 1 >= args.size() || args[i + 1].empty() || args[i + 1].front() == '-') { error("Missing value for --jobs"); return false; }
+          normalized.push_back("--jobs"); normalized.push_back(args[++i]); continue;
+        }
+        if (arg.rfind("--jobs=", 0) == 0) { if (arg.size() == 7) { error("Missing value for --jobs"); return false; } normalized.push_back(arg); continue; }
+        if (take_option_value("--platform", "--target")) continue;
+        if (arg == "--platform" || arg.rfind("--platform=", 0) == 0) return false;
+        if (take_option_value("--out")) continue;
+        if (arg == "--out" || arg.rfind("--out=", 0) == 0) return false;
+        if (arg == "--release") { normalized.push_back("--preset"); normalized.push_back("release"); continue; }
+        if (!arg.empty() && arg.front() == '-')
+        {
+          error("Unknown build option: " + arg);
+          hint("Use: vix build --help");
+          return false;
+        }
+        if (targetSelected || sourceSelected)
+        {
+          error("Only one target or source file may be selected.");
+          return false;
+        }
+        const auto extension = std::filesystem::path(arg).extension();
+        if (extension == ".cc" || extension == ".cxx")
+        {
+          error("Single-source build accepts a .cpp file in format 1.");
+          return false;
+        }
+        if (extension == ".cpp")
+        {
+          sourceSelected = true;
+          normalized.push_back(arg);
+        }
+        else
+        {
+          targetSelected = true;
+          normalized.push_back("--build-target");
+          normalized.push_back(arg);
+        }
+      }
+      if (verboseSelected && quietSelected)
+      {
+        error("--verbose and --quiet cannot be used together.");
+        return false;
+      }
+      return true;
+    }
+  }
+
+  static int run_impl(
+      const std::vector<std::string> &args,
+      bool publicInterface,
+      fs::path *resolvedBackendDirectory = nullptr)
+  {
+    std::vector<std::string> publicArgs;
+    if (publicInterface && !normalize_public_build_arguments(args, publicArgs))
+      return 2;
     int parseExit = 0;
-    process::Options opt = parse_args_or_exit(args, parseExit);
+    vix::cli::commands::DiagnosticRequest diagnosticRequest;
+    process::Options opt = parse_args_or_exit(
+        publicInterface ? publicArgs : args, parseExit, &diagnosticRequest);
+
+    if (publicInterface && opt.exportBin)
+    {
+      error("--bin is not part of the public build interface; use --out for one source file.");
+      return 2;
+    }
+
+    if (publicInterface && !opt.outPath.empty() && !opt.singleCpp)
+    {
+      error("--out is available only when building one .cpp source file.");
+      return 2;
+    }
 
     if (opt.exportBin && !opt.outPath.empty())
     {
@@ -5621,6 +5763,38 @@ namespace vix::commands::BuildCommand
     }
     const bool nativeProject = !opt.singleCpp && projectLocation.success() &&
       projectLocation.location->system == vix::cli::project::ProjectSystem::native_vix;
+    const bool externalCmakeProject = !opt.singleCpp && projectLocation.success() &&
+      projectLocation.location->system == vix::cli::project::ProjectSystem::cmake;
+    if (!opt.cmakeArgs.empty() && !externalCmakeProject)
+    {
+      error("--cmake is available only for an external CMake project.");
+      return 2;
+    }
+    if ((!opt.compilerArgs.empty() || !opt.linkerArgs.empty()) && !opt.singleCpp)
+    {
+      error("--compiler-arg and --linker-arg are available only for a single .cpp source file.");
+      return 2;
+    }
+    const auto diagnosticProjectKind = opt.singleCpp
+        ? vix::cli::commands::DiagnosticProjectKind::StandaloneCpp
+        : (!projectLocation.success()
+               ? vix::cli::commands::DiagnosticProjectKind::Unknown
+               : (projectLocation.location->system == vix::cli::project::ProjectSystem::native_vix
+                      ? vix::cli::commands::DiagnosticProjectKind::NativeVix
+                      : vix::cli::commands::DiagnosticProjectKind::ExternalCMake));
+    opt.sanitizerMode = vix::cli::commands::resolve_diagnostic_mode(
+        vix::cli::commands::DiagnosticCommand::Build,
+        opt.preset == "release",
+        diagnosticProjectKind,
+        diagnosticRequest);
+    if (!opt.singleCpp && projectLocation.success() &&
+        projectLocation.location->system == vix::cli::project::ProjectSystem::cmake &&
+        opt.sanitizerMode != process::SanitizerMode::None)
+    {
+      error("Vix diagnostic modes are not available for arbitrary external CMake projects.");
+      hint("Configure sanitizer instrumentation through the project's CMake options.");
+      return 2;
+    }
     if (nativeProject && opt.watch)
     {
       error("watch mode is not available for native vix.toml projects yet.");
@@ -5704,11 +5878,13 @@ namespace vix::commands::BuildCommand
       ? std::optional<vix::cli::project::native::NativeDevelopmentResult>{}
       : vix::cli::project::dispatch_native_build(
           projectLocation, requestedBuildTarget, reportOpt.jobs, reportOpt.preset,
-          [](const vix::cli::project::ProjectLocation &location,
+          [diagnosticMode = reportOpt.sanitizerMode, clean = reportOpt.clean](const vix::cli::project::ProjectLocation &location,
              const std::optional<std::string> &target, int jobs, std::string_view preset)
           {
             return vix::cli::project::native::build_native_project(
-              location.root, target, jobs, preset);
+              location.root, target, jobs, preset,
+              vix::cli::project::native::AcquisitionMode::online, nullptr,
+              diagnosticMode, clean);
           });
     if (nativeBuild)
     {
@@ -5720,8 +5896,6 @@ namespace vix::commands::BuildCommand
     }
     else
     {
-      const bool externalCmakeProject = projectLocation.success() &&
-        projectLocation.location->system == vix::cli::project::ProjectSystem::cmake;
       if (!opt.singleCpp && !externalCmakeProject)
       {
         error("No native vix.toml or external CMake project was discovered.");
@@ -5729,7 +5903,7 @@ namespace vix::commands::BuildCommand
       }
       else
       {
-        BuildCommand cmd(std::move(opt));
+        BuildCommand cmd(std::move(opt), false, resolvedBackendDirectory);
         buildCode = cmd.run();
       }
     }
@@ -5804,20 +5978,7 @@ namespace vix::commands::BuildCommand
     // Single-file builds reuse the script engine.  Do not silently drop the
     // sanitizer selected by `vix build`: its cache key and generated CMake
     // fallback both need the same instrumentation choice.
-    runOpt.enableSanitizers =
-        opt_.sanitizerMode == process::SanitizerMode::AddressUndefined;
-    runOpt.enableUbsanOnly =
-        opt_.sanitizerMode == process::SanitizerMode::Undefined;
-    runOpt.enableThreadSanitizer =
-        opt_.sanitizerMode == process::SanitizerMode::Thread;
-
-    if (opt_.sanitizerMode == process::SanitizerMode::Address)
-    {
-      error("The address-only sanitizer is not supported for single-file builds.");
-      hint("Use `vix build file.cpp --sanitize` for address and undefined checks.");
-      hint("`--asan` remains available for CMake projects.");
-      return 2;
-    }
+    runOpt.diagnosticMode = opt_.sanitizerMode;
 
     runOpt.forceServerLike = false;
     runOpt.forceScriptLike = true;
@@ -5829,6 +5990,8 @@ namespace vix::commands::BuildCommand
     runOpt.runArgs.clear();
     runOpt.runEnv.clear();
     runOpt.scriptFlags = opt_.cmakeArgs;
+    runOpt.compilerArgs = opt_.compilerArgs;
+    runOpt.linkerArgs = opt_.linkerArgs;
     fs::path exePath;
     const int code = run_detail::build_script_executable(runOpt, exePath);
     if (code != 0)
@@ -5840,16 +6003,12 @@ namespace vix::commands::BuildCommand
       return 1;
     }
 
-    fs::path dest;
+    if (!opt_.exportBin && opt_.outPath.empty())
+      return 0;
 
-    if (!opt_.outPath.empty())
-    {
-      dest = fs::absolute(fs::path(opt_.outPath));
-    }
-    else
-    {
-      dest = fs::current_path() / exePath.filename();
-    }
+    const fs::path dest = opt_.exportBin
+        ? fs::current_path() / exePath.filename()
+        : fs::absolute(fs::path(opt_.outPath));
 
     return export_built_binary(exePath, dest, opt_.quiet) ? 0 : 1;
   }
@@ -6531,80 +6690,53 @@ namespace vix::commands::BuildCommand
     return 130;
   }
 
+  int run(const std::vector<std::string> &args)
+  {
+    return run_impl(args, true);
+  }
+
+  int run_internal(
+      const std::vector<std::string> &args,
+      std::filesystem::path *resolvedBackendDirectory)
+  {
+    return run_impl(args, false, resolvedBackendDirectory);
+  }
+
   int help()
   {
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix build [source.cpp] [options] -- [cmake args...]\n\n";
-
-    out << "Build a C++ project or a single source file.\n\n";
-
-    out << "Project:\n";
-    out << "  [source.cpp]              Build a single C++ source file\n";
-    out << "  -d, --dir <path>          Project directory\n\n";
-
-    out << "Build options:\n";
-    out << "  --preset <name>           Build preset: dev, dev-ninja, release\n";
-    out << "  --build-target <name>     Build a specific CMake target\n";
-    out << "  -j, --jobs <n>            Number of parallel build jobs\n";
-    out << "  --clean                   Remove local build directories and configure again\n";
-    out << "  --watch                   Watch project files and rebuild incrementally\n";
-    out << "  --fast                    Use fast no-op detection when possible\n";
-    out << "  --static                  Request static linking\n\n";
-
-    out << "Output:\n";
-    out << "  --bin                     Export the built executable to the project root\n";
-    out << "  --out <path>              Export the built executable to a specific path\n\n";
-
-    out << "Checks:\n";
-    out << "  --warning-check           Build with strong compiler warnings enabled\n";
-    out << "  --sanitize                Enable AddressSanitizer and UndefinedBehaviorSanitizer\n";
-    out << "  --sanitize=<mode>         Sanitizer: address, undefined, address,undefined, thread\n";
-    out << "  --san                     Alias for --sanitize\n";
-    out << "  --asan                    Alias for --sanitize=address\n";
-    out << "  --ubsan                   Alias for --sanitize=undefined\n";
-    out << "  --tsan                    Alias for --sanitize=thread\n\n";
-
-    out << "Diagnostics:\n";
-    out << "  -v, --verbose             Show additional useful build information\n";
-    out << "  --warnings                Show warnings from the last build log\n";
-    out << "  --explain                 Explain why files or targets rebuild\n";
-    out << "  --page <n>                Warning page to display with --warnings, default: 1\n";
-    out << "  --limit <n>               Warnings per page with --warnings, default: 10\n";
-    out << "  --log [path]              Show the current build log or a log file/directory\n";
-    out << "  --debug                   Show internal Vix build diagnostics\n";
-    out << "  --debug-log <scope>       Debug cache, graph, configure, process, toolchain, or all\n";
-    out << "  --cmake-verbose           Stream raw CMake, Ninja and compiler output\n";
-    out << "  -q, --quiet               Minimal output\n\n";
-
-    out << "Platform:\n";
-    out << "  --launcher <mode>         Compiler launcher: auto, none, sccache, ccache\n";
-    out << "  --linker <mode>           Linker mode: auto, default, mold, lld\n";
-    out << "  --target <triple>         Build for a target platform (default: native)\n";
-    out << "  --sysroot <path>          Sysroot for the target toolchain (mainly cross builds)\n";
-    out << "  --targets                 List detected targets and toolchains\n\n";
-
-    out << "Dependencies:\n";
-    out << "  --with-sqlite             Enable SQLite support\n";
-    out << "  --with-mysql              Enable MySQL support\n";
-    out << "  --managed-sdk             Resolve Vix dependencies from installed managed SDK profiles\n\n";
-
-    out << "Cloud:\n";
-    out << "  --report                  Submit a Softadastra Cloud build report\n\n";
-
-    out << "Advanced:\n";
-    out << "  --graph-executor <mode>   Graph executor: auto, on, off\n";
-    out << "  --heartbeat               Show progress heartbeat when a build is silent\n";
-    out << "  --no-heartbeat            Disable the progress heartbeat\n";
-    out << "  --no-cache                Disable Vix cache shortcuts\n";
-    out << "  --no-status               Disable Ninja progress status\n";
-    out << "  --no-up-to-date           Disable Ninja dry-run up-to-date detection\n\n";
-
-    out << "CMake:\n";
-    out << "  -- [args...]              Pass CMake configure arguments (project), or compiler/linker flags (single file)\n\n";
-
-    out << "  -h, --help                Show this help\n";
+    out << "  vix build [target|source.cpp] [options]\n\n";
+    out << "Build a project target or one C++ source file.\n\n";
+    out << "Arguments:\n";
+    out << "  [target]                  Optional project target\n";
+    out << "  [source.cpp]              Build a single C++ source file\n\n";
+    out << "Options:\n";
+    out << "  -d, --dir <path>          Project directory\n";
+    out << "  -j, --jobs <n>            Number of parallel jobs\n";
+    out << "  --clean                   Remove Vix build state, then rebuild\n";
+    out << "  --platform <triple>       Build for a target platform\n";
+    out << "  --out <path>              Output path for one source file\n";
+    out << "  --release                 Build with release settings\n";
+    out << "  --verbose                 Show additional build details\n";
+    out << "  -q, --quiet               Reduce command output\n";
+    out << "\nAdvanced:\n";
+    out << "  --cmake <arg>             One configure argument for external CMake projects\n";
+    out << "  --compiler-arg <arg>      One compiler argument for a single source file\n";
+    out << "  --linker-arg <arg>        One linker argument for a single source file\n";
+    out << "\nDiagnostics:\n";
+    out << "  Diagnostics are off by default; select a mode explicitly.\n";
+    out << "  --san                     ASan + UBSan\n";
+    out << "  --asan                    Detect memory-safety errors\n";
+    out << "  --ubsan                   Detect undefined behavior\n";
+    out << "  --tsan                    Detect data races\n";
+    out << "  -h, --help                Show this help\n\n";
+    out << "Examples:\n";
+    out << "  vix build\n";
+    out << "  vix build app\n";
+    out << "  vix build src/tool.cpp\n";
+    out << "  vix build --platform aarch64-linux-gnu\n";
 
     return 0;
   }

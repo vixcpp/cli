@@ -173,6 +173,12 @@ namespace vix::cli::process
      */
     std::vector<std::string> cmakeArgs;
 
+    /** Exact compiler arguments for standalone single-source builds. */
+    std::vector<std::string> compilerArgs;
+
+    /** Exact linker arguments for standalone single-source builds. */
+    std::vector<std::string> linkerArgs;
+
     /**
      * @brief Sanitizer instrumentation selected for this build.
      *

@@ -66,10 +66,8 @@ namespace vix::commands
 
   int InitCommand::help()
   {
-    std::cout << "vix init\n"
-              << "Adopt the current directory as a native Vix project without moving or guessing files.\n\n"
-              << "Usage\n"
-              << "  vix init\n";
+    std::cout << "Usage:\n  vix init\n\n"
+              << "Adopt the current directory without moving or guessing files.\n";
     return 0;
   }
 }

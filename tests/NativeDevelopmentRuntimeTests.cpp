@@ -1,4 +1,7 @@
 #include <vix/cli/project/native/NativeDevelopmentRuntime.hpp>
+#include <vix/cli/project/native/NativeBuildState.hpp>
+#include <vix/cli/commands/DiagnosticMode.hpp>
+#include <vix/cli/manifest/RunManifestMerge.hpp>
 #include <vix/cli/project/native/ProjectLockState.hpp>
 #include <vix/cli/project/NativeProjectCommandDispatch.hpp>
 #include <vix/cli/project/ProjectDiscovery.hpp>
@@ -107,38 +110,249 @@ namespace
                                    std::vector<std::pair<std::string, TargetCapabilities>> targets,
                                    int &configureCalls, int &buildCalls,
                                    std::vector<std::string> &executed,
-                                   std::optional<std::string> *builtTarget = nullptr)
+                                   std::optional<std::string> *builtTarget = nullptr,
+                                   vix::engine::SanitizerMode *configuredMode = nullptr,
+                                   vix::engine::SanitizerMode *builtMode = nullptr,
+                                   vix::engine::SanitizerMode *executedMode = nullptr)
   {
     NativeDevelopmentHooks hooks;
-    hooks.configure = [&, artifactForSnapshot = artifact, targetsForSnapshot = std::move(targets)](
+    hooks.configure = [&, artifactForSnapshot = artifact, targetsForSnapshot = std::move(targets), configuredMode](
                           const fs::path &, const fs::path &, const fs::path &, const NativeProject &,
-                          const Lockfile &, const std::vector<MaterializedLockedPackage> &, std::string_view)
+                          const Lockfile &, const std::vector<MaterializedLockedPackage> &, std::string_view,
+                          vix::engine::SanitizerMode diagnosticMode)
     {
       ++configureCalls;
+      if (configuredMode) *configuredMode = diagnosticMode;
       NativeDevelopmentCallbackResult result;
       result.success = true;
       result.snapshot = snapshot(targetsForSnapshot, artifactForSnapshot);
       return result;
     };
-    hooks.build = [&, builtTarget](const fs::path &, const fs::path &, const project::ProjectSnapshot &input,
-                      const std::optional<std::string> &requested, int)
+    hooks.build = [&, builtTarget, builtMode](const fs::path &, const fs::path &, const project::ProjectSnapshot &input,
+                      const std::optional<std::string> &requested, int, vix::engine::SanitizerMode diagnosticMode)
     {
       ++buildCalls;
+      if (builtMode) *builtMode = diagnosticMode;
       if (builtTarget) *builtTarget = requested;
       NativeDevelopmentCallbackResult result;
       result.success = true;
       result.snapshot = input;
       return result;
     };
-    hooks.execute = [&](const std::vector<std::string> &argv, const fs::path &)
+    hooks.execute = [&, executedMode](const std::vector<std::string> &argv, const fs::path &,
+                                     vix::engine::SanitizerMode diagnosticMode)
     {
       executed = argv;
+      if (executedMode) *executedMode = diagnosticMode;
       NativeDevelopmentCallbackResult result;
       result.success = true;
       result.exitCode = 0;
       return result;
     };
     return hooks;
+  }
+
+  void diagnostic_mode_parser_and_runtime_propagation_tests()
+  {
+    using Mode = vix::engine::SanitizerMode;
+    const std::pair<std::string_view, Mode> modes[] = {
+      {"--san", Mode::AddressUndefined}, {"--asan", Mode::Address},
+      {"--ubsan", Mode::Undefined}, {"--tsan", Mode::Thread}};
+    for (const auto &[option, expected] : modes)
+    {
+      std::optional<Mode> selected;
+      std::string error;
+      assert(vix::cli::commands::select_diagnostic_mode_option(option, selected, error));
+      assert(error.empty() && selected == expected);
+      assert(!vix::cli::commands::select_diagnostic_mode_option("--sanitize", selected, error));
+      assert(!vix::cli::commands::select_diagnostic_mode_option("--sanitize=address", selected, error));
+      assert(!vix::cli::commands::select_diagnostic_mode_option("--no-san", selected, error));
+      assert(vix::cli::commands::select_diagnostic_mode_option(option, selected, error));
+      assert(!error.empty());
+
+      std::optional<vix::cli::commands::DiagnosticRequest> request;
+      std::string requestError;
+      assert(vix::cli::commands::select_diagnostic_request_option(
+          option, request, requestError));
+      assert(requestError.empty() && request);
+      assert(request->kind == vix::cli::commands::DiagnosticRequestKind::Explicit);
+      assert(request->mode == expected);
+    }
+
+    std::optional<vix::cli::commands::DiagnosticRequest> request;
+    std::string requestError;
+    assert(vix::cli::commands::select_diagnostic_request_option(
+        "--diagnostics=off", request, requestError));
+    assert(request && request->kind == vix::cli::commands::DiagnosticRequestKind::Off);
+    assert(requestError.empty());
+    for (const auto invalid : {"--diagnostics", "--diagnostics=on", "--diagnostics=san",
+                               "--diagnostics=asan", "--diagnostics=ubsan", "--diagnostics=tsan"})
+    {
+      std::optional<vix::cli::commands::DiagnosticRequest> invalidRequest;
+      std::string error;
+      assert(vix::cli::commands::select_diagnostic_request_option(invalid, invalidRequest, error));
+      assert(!error.empty() && !invalidRequest);
+    }
+    for (const auto conflict : {"--san", "--asan", "--diagnostics=off"})
+    {
+      std::string error;
+      assert(vix::cli::commands::select_diagnostic_request_option(conflict, request, error));
+      assert(!error.empty());
+    }
+    std::optional<vix::cli::commands::DiagnosticRequest> duplicateMode;
+    std::string duplicateError;
+    assert(vix::cli::commands::select_diagnostic_request_option(
+        "--san", duplicateMode, duplicateError));
+    assert(vix::cli::commands::select_diagnostic_request_option(
+        "--san", duplicateMode, duplicateError));
+    assert(!duplicateError.empty());
+
+    Root buildRoot;
+    fs::create_directories(buildRoot.path);
+    write(buildRoot.path / "vix.toml", manifest);
+    write(buildRoot.path / "main.cpp", "int main() { return 0; }\n");
+    int configureCalls = 0, buildCalls = 0;
+    std::vector<std::string> executed;
+    Mode configured = Mode::None, builtMode = Mode::None;
+    auto hooks = hooks_for(buildRoot.path / "artifact", {{"app", {true, true}}},
+                           configureCalls, buildCalls, executed, nullptr,
+                           &configured, &builtMode);
+    const auto built = build_native_project(buildRoot.path, std::nullopt, 0, "dev",
+        AcquisitionMode::online, &hooks, Mode::Address);
+    assert(built.success());
+    assert(configured == Mode::Address && builtMode == Mode::Address);
+
+    Root runRoot;
+    fs::create_directories(runRoot.path);
+    write(runRoot.path / "vix.toml", manifest);
+    write(runRoot.path / "main.cpp", "int main() { return 0; }\n");
+    configureCalls = 0;
+    buildCalls = 0;
+    Mode runConfigured = Mode::None, runBuilt = Mode::None, runExecuted = Mode::None;
+    auto runHooks = hooks_for(runRoot.path / "artifact", {{"app", {true, true}}},
+                              configureCalls, buildCalls, executed, nullptr,
+                              &runConfigured, &runBuilt, &runExecuted);
+    const auto ran = run_native_project(runRoot.path, std::nullopt, {}, "dev",
+        AcquisitionMode::online, &runHooks, Mode::Thread);
+    assert(ran.success());
+    assert(runConfigured == Mode::Thread && runBuilt == Mode::Thread && runExecuted == Mode::Thread);
+    const auto automaticRunMode = vix::cli::commands::resolve_diagnostic_mode(
+        vix::cli::commands::DiagnosticCommand::Run, false,
+        vix::cli::commands::DiagnosticProjectKind::NativeVix, {});
+    const auto automaticallyRan = run_native_project(
+        runRoot.path, std::nullopt, {}, "dev", AcquisitionMode::online,
+        &runHooks, automaticRunMode);
+    assert(automaticallyRan.success());
+    assert(runConfigured == Mode::AddressUndefined && runBuilt == Mode::AddressUndefined &&
+           runExecuted == Mode::AddressUndefined);
+
+    Root testRoot;
+    fs::create_directories(testRoot.path);
+    write(testRoot.path / "vix.toml", manifest + "\n[[tests]]\nname = \"smoke\"\ntarget = \"app\"\n");
+    write(testRoot.path / "main.cpp", "int main() { return 0; }\n");
+    configureCalls = 0;
+    buildCalls = 0;
+    Mode testConfigured = Mode::None, testBuilt = Mode::None, testExecuted = Mode::None;
+    auto testHooks = hooks_for(testRoot.path / "artifact", {{"app", {true, true}}},
+                               configureCalls, buildCalls, executed, nullptr,
+                               &testConfigured, &testBuilt, &testExecuted);
+    const auto tested = test_native_project(testRoot.path, std::string{"smoke"}, false, {}, {}, "dev",
+        AcquisitionMode::online, &testHooks, Mode::Undefined);
+    assert(tested.success());
+    assert(testConfigured == Mode::Undefined && testBuilt == Mode::Undefined && testExecuted == Mode::Undefined);
+    const auto automaticTestMode = vix::cli::commands::resolve_diagnostic_mode(
+        vix::cli::commands::DiagnosticCommand::Test, false,
+        vix::cli::commands::DiagnosticProjectKind::NativeVix, {});
+    const auto automaticallyTested = test_native_project(
+        testRoot.path, std::string{"smoke"}, false, {}, {}, "dev",
+        AcquisitionMode::online, &testHooks, automaticTestMode);
+    assert(automaticallyTested.success());
+    assert(testConfigured == Mode::AddressUndefined && testBuilt == Mode::AddressUndefined &&
+           testExecuted == Mode::AddressUndefined);
+  }
+
+  void run_manifest_diagnostic_mode_merge_tests()
+  {
+    using Mode = vix::cli::commands::DiagnosticMode;
+    using RequestKind = vix::cli::commands::DiagnosticRequestKind;
+    using Command = vix::cli::commands::DiagnosticCommand;
+    using ProjectKind = vix::cli::commands::DiagnosticProjectKind;
+    using RunOptions = vix::commands::RunCommand::detail::Options;
+
+    vix::cli::manifest::Manifest manifestOptions;
+    RunOptions cliOptions;
+
+    const auto resolveRun = [](const RunOptions &options, ProjectKind projectKind, bool release = false)
+    {
+      return vix::cli::commands::resolve_diagnostic_mode(
+          Command::Run, release, projectKind, options.diagnosticRequest,
+          options.projectDiagnosticRequest);
+    };
+
+    assert(!manifestOptions.san);
+    auto merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(merged.projectDiagnosticRequest.kind == RequestKind::Unspecified);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::AddressUndefined);
+    assert(resolveRun(merged, ProjectKind::StandaloneCpp) == Mode::AddressUndefined);
+    assert(resolveRun(merged, ProjectKind::StandaloneCpp, true) == Mode::None);
+    assert(resolveRun(merged, ProjectKind::ExternalCMake) == Mode::None);
+
+    manifestOptions.san = "asan_ubsan";
+    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(merged.projectDiagnosticRequest.kind == RequestKind::Explicit);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::AddressUndefined);
+
+    manifestOptions.san = "ubsan";
+    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::Undefined);
+
+    manifestOptions.san = "off";
+    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(merged.projectDiagnosticRequest.kind == RequestKind::Off);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::None);
+
+    cliOptions.diagnosticRequest = {RequestKind::Explicit, Mode::Undefined};
+    manifestOptions.san = "ubsan";
+    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::Undefined);
+
+    cliOptions.diagnosticRequest = {RequestKind::Off, Mode::None};
+    manifestOptions.san = "asan_ubsan";
+    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::None);
+
+    cliOptions.diagnosticRequest = {RequestKind::Explicit, Mode::Undefined};
+    manifestOptions.san = "off";
+    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
+    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::Undefined);
+
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, true, ProjectKind::NativeVix,
+               {RequestKind::Explicit, Mode::AddressUndefined}) == Mode::AddressUndefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, true, ProjectKind::NativeVix,
+               {RequestKind::Explicit, Mode::Undefined}) == Mode::Undefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Build, false, ProjectKind::NativeVix, {}) == Mode::None);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Test, false, ProjectKind::NativeVix, {}) == Mode::AddressUndefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Test, false, ProjectKind::NativeVix,
+               {RequestKind::Off, Mode::None}) == Mode::None);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Test, false, ProjectKind::NativeVix,
+               {RequestKind::Explicit, Mode::Thread}) == Mode::Thread);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Dev, false, ProjectKind::NativeVix, {}) == Mode::AddressUndefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Dev, false, ProjectKind::StandaloneCpp, {}) == Mode::AddressUndefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Dev, true, ProjectKind::NativeVix, {}) == Mode::None);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, true, ProjectKind::NativeVix,
+               {}, {RequestKind::Explicit, Mode::Undefined}) == Mode::Undefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Test, false, ProjectKind::ExternalCMake, {}) == Mode::None);
   }
 
   void build_run_state_and_artifact_tests()
@@ -201,7 +415,7 @@ namespace
 
     auto failedBuild = hooks;
     failedBuild.build = [&](const fs::path &, const fs::path &, const project::ProjectSnapshot &,
-                            const std::optional<std::string> &, int)
+                            const std::optional<std::string> &, int, vix::engine::SanitizerMode)
     {
       NativeDevelopmentCallbackResult result;
       result.diagnostic = "fake build failure";
@@ -213,7 +427,7 @@ namespace
     assert(read(root.path / "vix.toml") == before && !fs::exists(root.path / "vix.lock"));
 
     auto failedRun = hooks;
-    failedRun.execute = [&](const std::vector<std::string> &, const fs::path &)
+    failedRun.execute = [&](const std::vector<std::string> &, const fs::path &, vix::engine::SanitizerMode)
     {
       NativeDevelopmentCallbackResult result;
       result.diagnostic = "fake process failure";
@@ -389,13 +603,15 @@ namespace
     };
     hooks.configure = [&](const fs::path &projectRoot, const fs::path &sourceRoot, const fs::path &buildRoot,
                           const NativeProject &projectValue, const Lockfile &lockValue,
-                          const std::vector<MaterializedLockedPackage> &packages, std::string_view preset)
+                          const std::vector<MaterializedLockedPackage> &packages, std::string_view preset,
+                          vix::engine::SanitizerMode diagnosticMode)
     {
       ++configureCalls;
       (void)projectRoot; (void)buildRoot; (void)projectValue; (void)lockValue; (void)packages; (void)preset;
       const auto generated = read(sourceRoot / "CMakeLists.txt");
       assert(generated.find("set(CMAKE_EXPORT_COMPILE_COMMANDS ON)") != std::string::npos);
       assert(generated.find("target_link_libraries(app PRIVATE lib_core)") != std::string::npos);
+      assert(diagnosticMode == vix::engine::SanitizerMode::None);
       NativeDevelopmentCallbackResult configured;
       configured.success = true;
       configured.snapshot = snapshot({{"app", {true, true}}}, root.path / "artifact");
@@ -421,11 +637,12 @@ namespace
     const auto configure = hooks.configure;
     hooks.configure = [&](const fs::path &projectRoot, const fs::path &sourceRoot, const fs::path &buildRoot,
                           const NativeProject &projectValue, const Lockfile &lockValue,
-                          const std::vector<MaterializedLockedPackage> &packages, std::string_view preset)
+                          const std::vector<MaterializedLockedPackage> &packages, std::string_view preset,
+                          vix::engine::SanitizerMode diagnosticMode)
     {
       const auto graph = read(sourceRoot / "CMakeLists.txt");
       assert(graph.find("add_test(NAME [[smoke]] COMMAND $<TARGET_FILE:app>)") != std::string::npos);
-      return configure(projectRoot, sourceRoot, buildRoot, projectValue, lockValue, packages, preset);
+      return configure(projectRoot, sourceRoot, buildRoot, projectValue, lockValue, packages, preset, diagnosticMode);
     };
     set_test_phase("registered test execution");
     const auto tested = test_native_project(root.path, std::string{"smoke"}, false, {}, {}, "dev", AcquisitionMode::online, &hooks);
@@ -462,16 +679,21 @@ namespace
     assert(noExecution.empty() && !fs::exists(nonRunnable.path / "vix.lock"));
 
     auto failedTestHooks = hooks_for(nonRunnable.path / "artifact", {{"app", {true, true}}}, configureCalls, buildCalls, noExecution);
-    failedTestHooks.execute = [&](const std::vector<std::string> &, const fs::path &)
+    failedTestHooks.execute = [&](const std::vector<std::string> &, const fs::path &,
+                                  vix::engine::SanitizerMode diagnosticMode)
     {
+      assert(diagnosticMode == vix::engine::SanitizerMode::Undefined);
       NativeDevelopmentCallbackResult result;
       result.exitCode = 4;
       result.diagnostic = "synthetic ctest failure";
+      result.output = "UndefinedBehaviorSanitizer: runtime error at source.cpp:7:3\n";
       return result;
     };
     const auto failedTest = test_native_project(nonRunnable.path, std::string{"smoke"}, false, {}, {}, "dev",
-                                                AcquisitionMode::online, &failedTestHooks);
+                                                AcquisitionMode::online, &failedTestHooks,
+                                                vix::engine::SanitizerMode::Undefined);
     assert(!failedTest.success() && failedTest.code == NativeDevelopmentErrorCode::process_execution_failure);
+    assert(failedTest.output.find("source.cpp:7:3") != std::string::npos);
     assert(read(nonRunnable.path / "vix.toml") == withTest && !fs::exists(nonRunnable.path / "vix.lock"));
   }
 
@@ -564,14 +786,139 @@ namespace
       [&](const project::ProjectLocation &) { ++nativeBuildCalls; return 0; });
     assert(!ambiguousRoute && nativeBuildCalls == 1);
   }
+
+  void native_build_state_context_tests()
+  {
+    Root root;
+    fs::create_directories(root.path);
+    const NativeToolchainIdentity gcc13{
+      "/usr/bin/x86_64-linux-gnu-g++-13", "gcc", "13.3.0", "x86_64-linux-gnu", 123456, 987654, true};
+    const NativeToolchainIdentity sameGcc13{
+      "/usr/bin/x86_64-linux-gnu-g++-13", "gcc", "13.3.0", "x86_64-linux-gnu", 123456, 987654, true};
+    const NativeToolchainIdentity gcc14{
+      "/usr/bin/x86_64-linux-gnu-g++-13", "gcc", "14.1.0", "x86_64-linux-gnu", 123456, 987654, true};
+    const NativeToolchainIdentity gcc13OtherTarget{
+      "/usr/bin/x86_64-linux-gnu-g++-13", "gcc", "13.3.0", "aarch64-linux-gnu", 123456, 987654, true};
+    const auto normal = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", gcc13, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const auto same = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", sameGcc13, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const auto sanitized = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", gcc13, "Ninja",
+      vix::engine::SanitizerMode::AddressUndefined);
+    const auto release = make_native_build_state_context(
+      root.path, "release", "x86_64-linux-gnu", gcc13, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const auto otherPlatform = make_native_build_state_context(
+      root.path, "development", "aarch64-linux-gnu", gcc13, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const auto changedVersion = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", gcc14, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const auto changedTarget = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", gcc13OtherTarget, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const NativeToolchainIdentity clang{
+      "/usr/bin/clang++", "clang", "18.1.0", "x86_64-unknown-linux-gnu", 111000, 987654, true};
+    const auto otherCompiler = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", clang, "Ninja",
+      vix::engine::SanitizerMode::None);
+    const auto otherGenerator = make_native_build_state_context(
+      root.path, "development", "x86_64-linux-gnu", gcc13, "Unix Makefiles",
+      vix::engine::SanitizerMode::None);
+    assert(normal.id == same.id);
+    assert(normal.id != sanitized.id);
+    assert(normal.id != release.id);
+    assert(normal.id != otherPlatform.id);
+    assert(normal.id != changedVersion.id);
+    assert(normal.id != changedTarget.id);
+    assert(normal.id != otherCompiler.id);
+    assert(normal.id != otherGenerator.id);
+    assert(normal.root == normal.projectRoot / ".vix" / "build" / normal.id);
+    assert(normal.generatedSourceDir == normal.root / "source");
+    assert(normal.backendDir == normal.root / "backend");
+    assert(normal.metadataPath == normal.root / "context.toml");
+    assert(normal.configuredInputSignaturePath == normal.root / "configured-input.sha256");
+    assert(normal.snapshotCachePath == normal.root / "target-snapshot.json");
+    assert(native_build_state_root(root.path) == root.path / ".vix" / "build");
+    assert(native_toolchain_identity_cache_path(root.path) ==
+           root.path / ".vix" / "build" / "toolchain-identity.json");
+    const auto metadata = native_build_context_metadata(normal, "test-digest");
+    assert(metadata.find("schema = \"native-build-state-v2\"") != std::string::npos);
+    assert(metadata.find("compiler_family = \"gcc\"") != std::string::npos);
+    assert(metadata.find("compiler_version = \"13.3.0\"") != std::string::npos);
+    assert(metadata.find("compiler_target = \"x86_64-linux-gnu\"") != std::string::npos);
+    assert(metadata.find("diagnostic_mode = \"none\"") != std::string::npos);
+
+    fs::create_directories(normal.root);
+    fs::create_directories(sanitized.root);
+    fs::create_directories(root.path / ".vix" / "packages");
+    fs::create_directories(root.path / "build");
+    write(normal.root / "keep", "other-context");
+    write(sanitized.root / "remove", "selected-context");
+    write(root.path / ".vix" / "packages" / "keep", "package-state");
+    write(root.path / "build" / "keep", "user-build-tree");
+
+    std::string error;
+    assert(reset_native_build_state_context(sanitized, error));
+    assert(!fs::exists(sanitized.root / "remove"));
+    assert(fs::is_directory(sanitized.generatedSourceDir));
+    assert(fs::is_directory(sanitized.backendDir));
+    assert(fs::exists(normal.root / "keep"));
+    assert(fs::exists(root.path / ".vix" / "packages" / "keep"));
+    assert(fs::exists(root.path / "build" / "keep"));
+
+    Root runtimeRoot;
+    fs::create_directories(runtimeRoot.path);
+    write(runtimeRoot.path / "vix.toml", manifest);
+    write(runtimeRoot.path / "main.cpp", "int main() { return 0; }\n");
+    fs::path configuredSource;
+    fs::path configuredBackend;
+    int configureCalls = 0;
+    int buildCalls = 0;
+    std::vector<std::string> executed;
+    auto hooks = hooks_for(runtimeRoot.path / "artifact", {{"app", {true, true}}},
+                           configureCalls, buildCalls, executed);
+    hooks.configure = [&](const fs::path &, const fs::path &sourceRoot, const fs::path &backendRoot,
+                          const NativeProject &, const Lockfile &,
+                          const std::vector<MaterializedLockedPackage> &, std::string_view,
+                          vix::engine::SanitizerMode)
+    {
+      configuredSource = sourceRoot;
+      configuredBackend = backendRoot;
+      NativeDevelopmentCallbackResult configured;
+      configured.success = true;
+      configured.snapshot = snapshot({{"app", {true, true}}}, runtimeRoot.path / "artifact");
+      return configured;
+    };
+    const auto built = build_native_project(runtimeRoot.path, std::nullopt, 0, "dev",
+      AcquisitionMode::online, &hooks);
+    assert(built.success());
+    assert(configuredSource.parent_path() == configuredBackend.parent_path());
+    assert(configuredSource.filename() == "source" && configuredBackend.filename() == "backend");
+    assert(configuredSource.parent_path().parent_path() == runtimeRoot.path / ".vix" / "build");
+    assert(fs::is_regular_file(configuredSource / "CMakeLists.txt"));
+    assert(fs::is_regular_file(configuredSource.parent_path() / "context.toml"));
+    assert(fs::is_regular_file(configuredSource.parent_path() / "configured-input.sha256"));
+    const auto firstContextRoot = configuredSource.parent_path();
+    const auto targetBuild = build_native_project(runtimeRoot.path, std::string{"app"}, 0, "dev",
+      AcquisitionMode::online, &hooks);
+    assert(targetBuild.success());
+    assert(configuredSource.parent_path() == firstContextRoot);
+  }
 }
 
 int main()
 {
+  run_named_test("diagnostic_mode_parser_and_runtime_propagation_tests", diagnostic_mode_parser_and_runtime_propagation_tests);
+  run_named_test("run_manifest_diagnostic_mode_merge_tests", run_manifest_diagnostic_mode_merge_tests);
   run_named_test("build_run_state_and_artifact_tests", build_run_state_and_artifact_tests);
   run_named_test("package_preparation_failure_stops_operations", package_preparation_failure_stops_operations);
   run_named_test("lock_failures_stop_before_preparation_or_build", lock_failures_stop_before_preparation_or_build);
   run_named_test("valid_locked_packages_flow_through_build_graph", valid_locked_packages_flow_through_build_graph);
   run_named_test("registered_test_and_invalid_registration_tests", registered_test_and_invalid_registration_tests);
   run_named_test("project_discovery_command_routing_tests", project_discovery_command_routing_tests);
+  run_named_test("native_build_state_context_tests", native_build_state_context_tests);
 }

@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/commands/RunCommand.hpp>
+#include <vix/cli/commands/DiagnosticMode.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
 #include <vix/cli/commands/replay/ReplayCapture.hpp>
@@ -27,6 +28,7 @@
 #include <vix/cli/project/native/NativeDevelopmentRuntime.hpp>
 #include <vix/cli/build/BuildContext.hpp>
 #include <vix/engine/ExecutionPlanning.hpp>
+#include <vix/engine/Watch.hpp>
 #include <vix/engine/SanitizerMode.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/env/Legacy.hpp>
@@ -36,6 +38,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <optional>
@@ -44,6 +47,7 @@
 #include <vector>
 
 #ifndef _WIN32
+#include <csignal>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -62,7 +66,8 @@ namespace
       const Options &opt,
       const std::string &failureContext,
       int timeoutSec,
-      bool instrumentedBinary = false);
+      bool instrumentedBinary = false,
+      std::function<bool()> cancelForWatch = {});
   bool is_executable_file(const fs::path &p);
 
   enum class RunTargetKind
@@ -181,7 +186,13 @@ namespace
     std::vector<std::string> buildArgs{
         "--dir", location.location->root.string(),
         "--preset", opt.preset,
-        "--require-project-metadata"};
+        "--require-project-metadata",
+        "--quiet"};
+    for (const auto &argument : opt.cmakeArgs)
+    {
+      buildArgs.push_back("--cmake");
+      buildArgs.push_back(argument);
+    }
     if (!requestedName.empty())
     {
       buildArgs.push_back("--build-target");
@@ -195,23 +206,19 @@ namespace
     if (opt.clean)
       buildArgs.push_back("--clean");
 
-    const int buildCode = vix::commands::BuildCommand::run(buildArgs);
+    fs::path backendDirectory;
+    const int buildCode = vix::commands::BuildCommand::run_internal(buildArgs, &backendDirectory);
     if (buildCode != 0)
       return buildCode;
 
-    const auto preset = vix::cli::build::resolve_builtin_preset(opt.preset);
-    if (!preset)
+    if (backendDirectory.empty())
+    {
+      error("External CMake build did not report its Vix-owned backend directory.");
       return 1;
-    vix::engine::ExecutionPlanLayoutOptions layoutOptions;
-    layoutOptions.userProjectDir = location.location->root;
-    layoutOptions.cmakeSourceDir = location.location->root;
-    layoutOptions.preset = *preset;
-    const auto layout = vix::engine::make_execution_plan_layout(layoutOptions);
-    if (!layout.success())
-      return 1;
+    }
 
     const auto snapshot = vix::cli::project::cmake::load_cmake_target_snapshot(
-        *location.location, {layout.plan.buildDir, std::nullopt});
+        *location.location, {backendDirectory, std::nullopt});
     if (!snapshot.success())
     {
       error("Unable to resolve configured run targets (" +
@@ -231,7 +238,7 @@ namespace
     }
 
     const auto artifact = vix::cli::project::cmake::resolve_runnable_artifact(
-        *location.location, {layout.plan.buildDir, std::nullopt}, selected.target->id);
+        *location.location, {backendDirectory, std::nullopt}, selected.target->id);
     if (!artifact.success())
     {
       error("Unable to resolve configured runnable artifact (" +
@@ -396,9 +403,6 @@ namespace
 
   void apply_common_run_environment(Options &opt)
   {
-    if (!opt.cwd.empty())
-      opt.cwd = vix::commands::RunCommand::detail::normalize_cwd_if_needed(opt.cwd);
-
     ensure_mode_env_for_run(opt);
     enable_line_buffered_stdout_for_apps();
 
@@ -411,6 +415,24 @@ namespace
 #else
     _putenv_s("VIX_CLI_CLEAR", opt.clearMode.c_str());
 #endif
+  }
+
+  bool resolve_runtime_cwd(Options &opt, const fs::path &base)
+  {
+    if (opt.cwd.empty())
+      return true;
+    fs::path resolved{opt.cwd};
+    if (resolved.is_relative())
+      resolved = base / resolved;
+    resolved = fs::absolute(resolved).lexically_normal();
+    std::error_code ec;
+    if (!fs::exists(resolved, ec) || ec || !fs::is_directory(resolved, ec) || ec)
+    {
+      error("Runtime working directory does not exist or is not a directory: " + resolved.string());
+      return false;
+    }
+    opt.cwd = resolved.string();
+    return true;
   }
 
   int run_script_mode(Options &opt)
@@ -442,9 +464,12 @@ namespace
       const Options &opt,
       const std::string &failureContext,
       int timeoutSec,
-      bool instrumentedBinary)
+      bool instrumentedBinary,
+      std::function<bool()> cancelForWatch)
   {
+    const bool cancellableWatch = static_cast<bool>(cancelForWatch);
 #ifdef _WIN32
+    (void)cancelForWatch;
     std::string runCmd = "\"" + exePath.string() + "\"";
     runCmd += vix::commands::RunCommand::detail::join_quoted_args_local(opt.runArgs);
     runCmd = vix::commands::RunCommand::detail::wrap_with_cwd_if_needed(opt, runCmd);
@@ -452,10 +477,10 @@ namespace
     int raw = std::system(runCmd.c_str());
     int runExit = vix::commands::RunCommand::detail::normalize_exit_code(raw);
 
-    if (runExit == 130)
+    if (runExit == 130 || (cancellableWatch && runExit == 143))
     {
       hint("ℹ Program interrupted by user (SIGINT).");
-      return 0;
+      return cancellableWatch ? 130 : 0;
     }
 
     if (runExit != 0)
@@ -484,7 +509,7 @@ namespace
     replayConfig.target_path = exePath;
     replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
     replayConfig.target_kind = replay::ReplayTargetKind::Project;
-    replayConfig.command = opt.watch ? "vix run --watch" : "vix run";
+    replayConfig.command = opt.watch ? "vix dev" : "vix run";
     replayConfig.resolved_command = runCmd;
     replayConfig.app_args = opt.runArgs;
     replayConfig.watch = opt.watch;
@@ -501,9 +526,7 @@ namespace
     const bool useSanRuntime =
         instrumentedBinary ||
         vix::commands::RunCommand::detail::want_any_sanitizer(
-            opt.enableSanitizers,
-            opt.enableUbsanOnly,
-            opt.enableThreadSanitizer);
+            opt.diagnosticMode);
 
     const LiveRunResult rr =
         vix::commands::RunCommand::detail::run_cmd_live_filtered_capture(
@@ -513,7 +536,9 @@ namespace
             timeoutSec,
             useSanRuntime,
             false,
-            replayEnabled ? &replayCapture : nullptr);
+            replayEnabled ? &replayCapture : nullptr,
+            {},
+            std::move(cancelForWatch));
 
     if (replayEnabled)
     {
@@ -538,10 +563,13 @@ namespace
 
     int runExit = rr.exitCode;
 
-    if (runExit == 130)
+    if (rr.cancelledByWatch && runExit != 130)
+      return 0;
+
+    if (runExit == 130 || (cancellableWatch && runExit == 143))
     {
       hint("ℹ Program interrupted by user (SIGINT).");
-      return 0;
+      return cancellableWatch ? 130 : 0;
     }
 
     if (runExit != 0)
@@ -581,10 +609,16 @@ namespace
       }
 
       if (!handled)
+      {
+        if (cancellableWatch && !rr.printed_live && !log.empty())
+          std::cerr << log;
         error(failureContext + " (exit code " + std::to_string(runExit) + ").");
+      }
 
       return runExit;
     }
+
+    vix::commands::RunCommand::detail::emit_captured_program_output(rr);
 
     return 0;
 #endif
@@ -758,12 +792,301 @@ namespace vix::commands::RunCommand
 {
   using namespace detail;
 
-  int run(const std::vector<std::string> &args)
+  namespace
   {
-    Options opt = parse(args);
-    if (opt.parseFailed)
-      return opt.parseExitCode;
+#ifndef _WIN32
+    static volatile std::sig_atomic_t g_native_dev_stop_requested = 0;
 
+    static void on_native_dev_signal(int)
+    {
+      g_native_dev_stop_requested = 1;
+    }
+#endif
+
+    static bool native_dev_relevant_path(const fs::path &path)
+    {
+      const auto name = path.filename().string();
+      const auto ext = path.extension().string();
+      return name == "vix.toml" || name == "vix.lock" ||
+             ext == ".cpp" || ext == ".cc" || ext == ".cxx" || ext == ".c" ||
+             ext == ".h" || ext == ".hh" || ext == ".hpp" || ext == ".hxx" ||
+             ext == ".ipp" || ext == ".inl";
+    }
+
+    static bool native_dev_batch_is_relevant(const vix::engine::watch::Batch &batch)
+    {
+      if (batch.overflowed)
+        return true;
+      for (const auto &event : batch.events)
+      {
+        if (native_dev_relevant_path(event.path) ||
+            (!event.oldPath.empty() && native_dev_relevant_path(event.oldPath)))
+          return true;
+      }
+      return false;
+    }
+
+    static int run_native_project_dev(const Options &opt, const fs::path &projectRoot,
+                                      const std::optional<std::string> &target)
+    {
+#ifdef _WIN32
+      (void)opt;
+      (void)projectRoot;
+      (void)target;
+      error("native vix dev process watching is not supported on this platform yet.");
+      return 2;
+#else
+      namespace watch = vix::engine::watch;
+      watch::Options watchOptions;
+      watchOptions.root = projectRoot;
+      watchOptions.recursive = true;
+      watchOptions.debounce = std::chrono::milliseconds(60);
+      watchOptions.maxBatchWindow = std::chrono::milliseconds(180);
+      watchOptions.pollingInterval = std::chrono::milliseconds(100);
+      watchOptions.ignoredRoots = {
+          projectRoot / ".vix", projectRoot / ".git", projectRoot / ".hg",
+          projectRoot / ".svn", projectRoot / "node_modules", projectRoot / ".cache"};
+
+      watch::FileWatcher watcher(std::move(watchOptions));
+      const auto started = watcher.start();
+      if (!started.ok)
+      {
+        error("unable to watch native project: " + started.error);
+        return 1;
+      }
+
+      struct SignalRestore
+      {
+        using Handler = void (*)(int);
+        Handler oldInt{SIG_DFL};
+        Handler oldTerm{SIG_DFL};
+        ~SignalRestore()
+        {
+          std::signal(SIGINT, oldInt);
+          std::signal(SIGTERM, oldTerm);
+        }
+      } signalRestore;
+      g_native_dev_stop_requested = 0;
+      signalRestore.oldInt = std::signal(SIGINT, on_native_dev_signal);
+      signalRestore.oldTerm = std::signal(SIGTERM, on_native_dev_signal);
+
+      auto waitForChange = [&]()
+      {
+        while (!g_native_dev_stop_requested)
+        {
+          const auto batch = watcher.wait_for_batch(std::chrono::milliseconds(100));
+          if (batch && native_dev_batch_is_relevant(*batch))
+            return true;
+        }
+        return false;
+      };
+
+      for (;;)
+      {
+        if (g_native_dev_stop_requested)
+          break;
+
+        const auto built = vix::cli::project::native::build_native_runnable_project(
+            projectRoot, target, opt.preset,
+            vix::cli::project::native::AcquisitionMode::online, nullptr,
+            opt.diagnosticMode);
+        if (g_native_dev_stop_requested)
+          break;
+        if (!built.success() || !built.artifactPath)
+        {
+          error("native dev build failed: " +
+                (built.diagnostic.empty() ? "runnable artifact is unavailable" : built.diagnostic));
+          if (!waitForChange())
+            break;
+          continue;
+        }
+
+        bool restartRequested = false;
+        const int runCode = run_executable_direct(
+            *built.artifactPath, opt, "native dev program failed", opt.timeoutSec,
+            opt.diagnosticMode != vix::engine::SanitizerMode::None,
+            [&]()
+            {
+              const auto batch = watcher.wait_for_batch(std::chrono::milliseconds(100));
+              if (batch && native_dev_batch_is_relevant(*batch))
+              {
+                restartRequested = true;
+                return true;
+              }
+              return false;
+            });
+        if (g_native_dev_stop_requested || runCode == 130)
+          break;
+        if (restartRequested)
+          continue;
+        if (runCode != 0 && !waitForChange())
+          break;
+        if (runCode == 0 && !waitForChange())
+          break;
+      }
+
+      watcher.stop();
+      return 0;
+#endif
+    }
+
+    bool normalize_public_run_arguments(
+        const std::vector<std::string> &args,
+        std::vector<std::string> &normalized)
+    {
+      bool afterSeparator = false;
+      bool targetSelected = false;
+      bool verboseSelected = false;
+      bool quietSelected = false;
+      std::optional<vix::cli::commands::DiagnosticRequest> diagnosticRequest;
+      for (std::size_t i = 0; i < args.size(); ++i)
+      {
+        const auto &arg = args[i];
+        if (!afterSeparator && arg == "--")
+        {
+          afterSeparator = true;
+          normalized.push_back("--");
+          continue;
+        }
+        if (afterSeparator)
+        {
+          normalized.push_back(arg);
+          continue;
+        }
+        std::string diagnosticError;
+        if (vix::cli::commands::select_diagnostic_request_option(
+                arg, diagnosticRequest, diagnosticError))
+        {
+          if (!diagnosticError.empty())
+          {
+            error(diagnosticError);
+            return false;
+          }
+          normalized.push_back(arg);
+          continue;
+        }
+        if (arg == "-h" || arg == "--help" || arg == "--verbose" || arg == "--quiet" || arg == "-q")
+        {
+          verboseSelected = verboseSelected || arg == "--verbose";
+          quietSelected = quietSelected || arg == "--quiet" || arg == "-q";
+          normalized.push_back(arg);
+          continue;
+        }
+        if (arg == "--release")
+        {
+          normalized.push_back("--preset");
+          normalized.push_back("release");
+          continue;
+        }
+        if (arg == "-d" || arg == "--dir" || arg == "--cwd" || arg == "--env")
+        {
+          if (i + 1 >= args.size() || args[i + 1].empty() || args[i + 1].front() == '-')
+          {
+            error("Missing value for " + arg);
+            return false;
+          }
+          normalized.push_back(arg);
+          const auto value = args[++i];
+          if (arg == "--env" && (value.find('=') == std::string::npos || value.front() == '='))
+          {
+            error("--env requires KEY=VALUE with a non-empty key.");
+            return false;
+          }
+          normalized.push_back(value);
+          continue;
+        }
+        if (arg.rfind("--dir=", 0) == 0 || arg.rfind("--cwd=", 0) == 0 || arg.rfind("--env=", 0) == 0)
+        {
+          const auto equal = arg.find('=');
+          if (equal + 1 == arg.size())
+          {
+            error("Missing value for " + arg.substr(0, equal));
+            return false;
+          }
+          if (arg.rfind("--env=", 0) == 0)
+          {
+            const auto assignment = arg.substr(6);
+            if (assignment.find('=') == std::string::npos || assignment.front() == '=')
+            {
+              error("--env requires KEY=VALUE with a non-empty key.");
+              return false;
+            }
+          }
+          normalized.push_back(arg);
+          continue;
+        }
+        if (arg == "--cmake" || arg == "--compiler-arg" || arg == "--linker-arg")
+        {
+          if (i + 1 >= args.size() || args[i + 1] == "--")
+          {
+            error("Missing value for " + arg);
+            return false;
+          }
+          normalized.push_back(arg);
+          normalized.push_back(args[++i]);
+          continue;
+        }
+        if (arg.rfind("--cmake=", 0) == 0 || arg.rfind("--compiler-arg=", 0) == 0 ||
+            arg.rfind("--linker-arg=", 0) == 0)
+        {
+          const auto equal = arg.find('=');
+          if (equal + 1 == arg.size())
+          {
+            error("Missing value for " + arg.substr(0, equal));
+            return false;
+          }
+          normalized.push_back(arg);
+          continue;
+        }
+        if (!arg.empty() && arg.front() == '-')
+        {
+          error("Unknown run option: " + arg);
+          hint("Use: vix run --help");
+          return false;
+        }
+        if (targetSelected)
+        {
+          error("Run accepts one target or source file; pass program arguments after --.");
+          return false;
+        }
+        const auto inputPath = fs::path{arg};
+        if (inputPath.extension() == ".cc" || inputPath.extension() == ".cxx")
+        {
+          error("Single-source run accepts a .cpp file in format 1.");
+          return false;
+        }
+        std::error_code inputError;
+        if (inputPath.extension() != ".cpp" && fs::is_regular_file(inputPath, inputError) && !inputError)
+        {
+          error("vix run does not accept an arbitrary binary path; select a project target or .cpp source.");
+          return false;
+        }
+        if ((inputPath.has_parent_path() || inputPath.extension() == ".exe") && inputPath.extension() != ".cpp")
+        {
+          error("vix run accepts a project target or .cpp source, not an arbitrary binary path.");
+          return false;
+        }
+        targetSelected = true;
+        normalized.push_back(arg);
+      }
+      if (verboseSelected && quietSelected)
+      {
+        error("--verbose and --quiet cannot be used together.");
+        return false;
+      }
+      return true;
+    }
+
+    int run_impl(const std::vector<std::string> &args, bool watched)
+    {
+      std::vector<std::string> publicArgs;
+      if (!normalize_public_run_arguments(args, publicArgs))
+        return 2;
+      Options opt = parse(publicArgs);
+      if (watched)
+        opt.watch = true;
+      if (opt.parseFailed)
+        return opt.parseExitCode;
     if (opt.manifestMode)
     {
       vix::cli::manifest::Manifest mf{};
@@ -807,10 +1130,31 @@ namespace vix::commands::RunCommand
     if (opt.manifestMode && opt.singleCpp)
       apply_manifest_auto_deps_includes(opt, opt.manifestFile);
 
+    const auto resolveDiagnosticMode = [&](
+        vix::cli::commands::DiagnosticProjectKind projectKind)
+    {
+      return vix::cli::commands::resolve_diagnostic_mode(
+          watched ? vix::cli::commands::DiagnosticCommand::Dev
+                  : vix::cli::commands::DiagnosticCommand::Run,
+          opt.preset == "release",
+          projectKind,
+          opt.diagnosticRequest,
+          opt.projectDiagnosticRequest);
+    };
+
     apply_common_run_environment(opt);
 
     if (opt.singleCpp)
     {
+      if (!opt.cmakeArgs.empty())
+      {
+        error("--cmake is available only for an external CMake project.");
+        return 2;
+      }
+      if (!resolve_runtime_cwd(opt, fs::current_path()))
+        return 2;
+      opt.diagnosticMode = resolveDiagnosticMode(
+          vix::cli::commands::DiagnosticProjectKind::StandaloneCpp);
       return run_script_mode(opt);
     }
 
@@ -830,6 +1174,15 @@ namespace vix::commands::RunCommand
     case RunTargetKind::Script:
       opt.singleCpp = true;
       opt.cppFile = directTarget.path;
+      if (!opt.cmakeArgs.empty())
+      {
+        error("--cmake is available only for an external CMake project.");
+        return 2;
+      }
+      if (!resolve_runtime_cwd(opt, fs::current_path()))
+        return 2;
+      opt.diagnosticMode = resolveDiagnosticMode(
+          vix::cli::commands::DiagnosticProjectKind::StandaloneCpp);
       return run_script_mode(opt);
 
     case RunTargetKind::Container:
@@ -854,31 +1207,72 @@ namespace vix::commands::RunCommand
     }
     if (normalizedProject.success())
     {
+      if (!opt.compilerArgs.empty() || !opt.linkerArgs.empty())
+      {
+        error("--compiler-arg and --linker-arg are available only for a single .cpp source file.");
+        return 2;
+      }
+      if (!opt.cmakeArgs.empty() &&
+          normalizedProject.location->system != vix::cli::project::ProjectSystem::cmake)
+      {
+        error("--cmake is available only for an external CMake project.");
+        return 2;
+      }
+      if (!resolve_runtime_cwd(opt, normalizedProject.location->root))
+        return 2;
+      const auto projectKind =
+          normalizedProject.location->system == vix::cli::project::ProjectSystem::native_vix
+              ? vix::cli::commands::DiagnosticProjectKind::NativeVix
+              : vix::cli::commands::DiagnosticProjectKind::ExternalCMake;
+      opt.diagnosticMode = resolveDiagnosticMode(projectKind);
+
+      if (normalizedProject.location->system == vix::cli::project::ProjectSystem::cmake &&
+          (opt.diagnosticRequest.kind == vix::cli::commands::DiagnosticRequestKind::Explicit ||
+           opt.projectDiagnosticRequest.kind == vix::cli::commands::DiagnosticRequestKind::Explicit))
+      {
+        error("Vix diagnostic modes are not available for arbitrary external CMake projects.");
+        hint("Configure sanitizer instrumentation through the project's CMake options.");
+        return 2;
+      }
       const std::string requestedName =
           directTarget.kind == RunTargetKind::Project ? std::string{} : opt.appName;
 
       if (normalizedProject.location->system == vix::cli::project::ProjectSystem::native_vix && opt.watch)
       {
-        error("watch mode is not available for native vix.toml projects yet.");
-        return 2;
+        return run_native_project_dev(
+            opt, normalizedProject.location->root,
+            requestedName.empty() ? std::nullopt : std::optional<std::string>{requestedName});
       }
 
       const auto nativeRun = vix::cli::project::dispatch_native_run(
         normalizedProject,
         requestedName.empty() ? std::nullopt : std::optional<std::string>{requestedName},
-        opt.runArgs, opt.preset,
-        [](const vix::cli::project::ProjectLocation &location,
+          opt.runArgs, opt.preset,
+        [diagnosticMode = opt.diagnosticMode,
+         runtimeCwd = opt.cwd.empty() ? fs::path{} : fs::path{opt.cwd}](const vix::cli::project::ProjectLocation &location,
            const std::optional<std::string> &target, const std::vector<std::string> &arguments,
            std::string_view preset)
         {
           return vix::cli::project::native::run_native_project(
-            location.root, target, arguments, preset);
+              location.root, target, arguments, preset,
+              vix::cli::project::native::AcquisitionMode::online, nullptr,
+              diagnosticMode, runtimeCwd);
         });
       if (nativeRun)
       {
         const auto &result = *nativeRun;
-        if (!result.output.empty()) std::cout << result.output;
-        if (!result.success()) error("native run failed: " + result.diagnostic);
+        bool handled = false;
+        if (!result.success())
+        {
+          std::string runtimeLog = result.output;
+          runtimeLog += result.diagnostic;
+          handled = opt.diagnosticMode != vix::engine::SanitizerMode::None &&
+              vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(runtimeLog, {}) &&
+              vix::cli::errors::RawLogDetectors::handleRuntimeCrash(runtimeLog, {}, "native run", {});
+          if (!handled)
+            error("native run failed: " + result.diagnostic);
+        }
+        if (!result.output.empty() && !handled) std::cout << result.output;
         return result.exitCode;
       }
 
@@ -898,113 +1292,66 @@ namespace vix::commands::RunCommand
 
     }
 
-    const bool explicitTarget =
-        !opt.appName.empty() ||
-        !opt.dir.empty();
-
-    if (!explicitTarget && !opt.checkOnly)
+    if (!opt.cmakeArgs.empty())
     {
-      hint("No run target provided.");
-      hint("Use `vix run <target>` to run an executable target.");
-      hint("Use `vix run --check` to check/build the current project without running it.");
-      return 0;
+      error("--cmake is available only for an external CMake project.");
+      return 2;
+    }
+    if (!opt.compilerArgs.empty() || !opt.linkerArgs.empty())
+    {
+      error("--compiler-arg and --linker-arg are available only for a single .cpp source file.");
+      return 2;
     }
 
-    error("No CMake project was found for this run target.");
-    hint("Run from a CMake project directory or pass --dir <path>.");
+    error("No Vix or CMake project was found for this run target.");
+    hint("Run from a project directory or pass --dir <path>.");
     return 1;
+    }
+  }
+
+  int run(const std::vector<std::string> &args)
+  {
+    return run_impl(args, false);
+  }
+
+  int run_watched(const std::vector<std::string> &args)
+  {
+    return run_impl(args, true);
   }
 
   int help()
   {
     std::ostream &out = std::cout;
-
     out << "Usage:\n";
-    out << "  vix run [target] [options] [-- compiler/linker flags] [--run <args...>]\n\n";
-
-    out << "Run a C++ file, executable, or a previously built project.\n\n";
-
-    out << "Targets:\n";
-    out << "  project                    Current project or project directory/name\n";
-    out << "  source.cpp                 Single C++ source file\n";
-    out << "  ./app                      Executable binary\n";
-    out << "  docker://<image>           Docker image\n";
-    out << "  container://<image>        Container image\n";
-    out << "  ssh://<target>             SSH target\n";
-    out << "  http://<target>            HTTP target\n\n";
-
-    out << "Project:\n";
-    out << "  -d, --dir <path>           Project directory\n";
-    out << "  --preset <name>            Build preset used with --check, default: dev-ninja\n";
-    out << "  -j, --jobs <n>             Parallel build jobs used with --check\n";
-    out << "  --clean                    Clean/reconfigure when used with --check\n";
-    out << "  --check                    Build the project without running it\n";
-    out << "  --replay                   Record this run under .vix/runs/\n\n";
-
-    out << "Runtime:\n";
-    out << "  --cwd <path>               Runtime working directory\n";
-    out << "  --env <K=V>                Add or override an environment variable\n";
-    out << "  --args <value>             Add one runtime argument, repeatable\n";
-    out << "  --run <args...>            Runtime arguments for script mode\n\n";
-
-    out << "Watch:\n";
-    out << "  --watch                    Rebuild and restart on file changes\n";
-    out << "  --reload                   Alias for --watch\n";
-    out << "  --force-server             Treat the program as a long-running server\n";
-    out << "  --force-script             Treat the program as a short-lived script\n\n";
-
-    out << "Run behavior:\n";
-    out << "  --ui                       Enable interactive run progress UI\n";
-    out << "  --no-ui                    Disable interactive run progress UI\n";
-    out << "  --env-hint                 Show .env hint when .env.example exists\n";
-    out << "  --no-env-hint              Disable the .env hint\n";
-    out << "  --trace-cache              Trace script cache strategy and decisions\n";
-    out << "  --no-trace-cache           Disable script cache tracing\n";
-    out << "  --compiler-fingerprint <mode>\n";
-    out << "                             Compiler cache fingerprint: fast, strict\n\n";
-
-    out << "Script mode:\n";
-    out << "  --auto-deps                Auto-add includes from .vix/deps/*/include\n";
-    out << "  --auto-deps=local          Same as --auto-deps\n";
-    out << "  --auto-deps=up             Search dependencies in parent directories too\n";
-    out << "  --san                      Enable AddressSanitizer and UndefinedBehaviorSanitizer\n";
-    out << "  --no-san                   Disable default sanitizers\n";
-    out << "  --ubsan                    Enable UndefinedBehaviorSanitizer only\n";
-    out << "  --tsan                     Enable ThreadSanitizer only\n";
-    out << "  --with-sqlite              Enable SQLite support\n";
-    out << "  --with-mysql               Enable MySQL support\n";
-    out << "  --local-cache              Use local .vix-scripts cache\n\n";
-
-    out << "Documentation:\n";
-    out << "  --docs                     Enable OpenAPI/docs for this run\n";
-    out << "  --no-docs                  Disable OpenAPI/docs for this run\n";
-    out << "  --docs=<value>             Set OpenAPI/docs: 0, 1, true, false\n\n";
-
-    out << "Output and logging:\n";
-    out << "  --clear <mode>             Terminal clearing: auto, always, never\n";
-    out << "  --no-clear                 Alias for --clear=never\n";
-    out << "  --log-level <level>        trace, debug, info, warn, error, critical, off\n";
-    out << "  --loglevel <level>         Alias for --log-level\n";
-    out << "  --verbose                  Alias for --log-level=debug\n";
-    out << "  -q, --quiet                Alias for --log-level=warn\n";
-    out << "  --log-format <format>      kv, json, json-pretty\n";
-    out << "  --log-color <mode>         auto, always, never\n";
-    out << "  --no-color                 Alias for --log-color=never\n\n";
-
-    out << "Compiler/linker flags:\n";
-    out << "  -- [flags...]              Pass flags to the compiler in script mode\n\n";
-
-    out << "Important:\n";
-    out << "  Use --run or --args for script runtime arguments.\n";
-    out << "  Everything after -- is treated as compiler/linker flags.\n\n";
-
-    out << "Environment:\n";
-    out << "  VIX_DOCS                   0 or 1\n";
-    out << "  VIX_LOG_LEVEL              trace, debug, info, warn, error, critical, off\n";
-    out << "  VIX_LOG_FORMAT             kv, json, json-pretty\n";
-    out << "  VIX_COLOR                  auto, always, never\n\n";
-
-    out << "  -h, --help                 Show this help\n";
+    out << "  vix run [target|source.cpp] [options] [-- program-args...]\n\n";
+    out << "Build if needed, then execute a C++ program once.\n\n";
+    out << "Arguments:\n";
+    out << "  [target]                  Project target to run\n";
+    out << "  [source.cpp]              Compile and run one source file\n";
+    out << "\n";
+    out << "Options:\n";
+    out << "  -d, --dir <path>          Project directory\n";
+    out << "  --release                 Build with release settings\n";
+    out << "  --cwd <path>              Runtime working directory\n";
+    out << "  --env <K=V>               Set a runtime environment variable\n";
+    out << "\nAdvanced:\n";
+    out << "  --cmake <arg>             One configure argument for external CMake projects\n";
+    out << "  --compiler-arg <arg>      One compiler argument for a single source file\n";
+    out << "  --linker-arg <arg>        One linker argument for a single source file\n";
+    out << "\nDiagnostics:\n";
+    out << "  Recommended diagnostics are enabled by default in development when Vix controls compilation.\n";
+    out << "  --san                     ASan + UBSan\n";
+    out << "  --asan                    Detect memory-safety errors\n";
+    out << "  --ubsan                   Detect undefined behavior\n";
+    out << "  --tsan                    Detect data races\n";
+    out << "  --diagnostics=off         Disable automatic diagnostics\n";
+    out << "  --verbose                 Show additional output\n";
+    out << "  -q, --quiet               Reduce command output\n";
+    out << "  -h, --help                Show this help\n\n";
+    out << "Examples:\n";
+    out << "  vix run\n";
+    out << "  vix run app -- --port 8080\n";
+    out << "  vix run src/main.cpp\n";
 
     return 0;
   }

@@ -1,106 +1,65 @@
-# Public command option contract matrix
+# Public command option inventory
 
-`PublicOptionCoverageTest.sh` extracts every long option from the live help
-output and requires a row below. `PASS` means the linked contract test passes;
-`FAIL` is a deliberately visible product regression; `UNAVAILABLE` requires an
-external service/toolchain and is not relabelled as a passing behavior.
+This inventory mirrors the long options printed by the canonical command help.
+`PublicOptionCoverageTest.sh` requires every visible option to have an entry;
+it does not claim runtime test results. Retired historical options are not
+listed as supported syntax.
 
-| Command | Option                   | Contract test                     | Level | Status      |
-| ------- | ------------------------ | --------------------------------- | ----- | ----------- |
-| run     | `--dir`                  | RunCore + existing project tests  | B     | PASS        |
-| run     | `--preset`               | existing project tests            | B     | PASS        |
-| run     | `--run-preset`           | existing project tests            | B     | PASS        |
-| run     | `--jobs`                 | existing project tests            | B     | PASS        |
-| run     | `--clean`                | existing project tests            | C     | PASS        |
-| run     | `--check`                | existing project tests            | C     | PASS        |
-| run     | `--replay`               | existing replay tests             | C     | PASS        |
-| run     | `--cwd`                  | RunCore                           | C     | PASS        |
-| run     | `--env`                  | RunCore                           | C     | PASS        |
-| run     | `--args`                 | RunCore                           | C     | PASS        |
-| run     | `--run`                  | RunCore                           | C     | PASS        |
-| run     | `--watch`                | existing watch tests              | C     | PASS        |
-| run     | `--reload`               | existing watch tests              | B     | PASS        |
-| run     | `--force-server`         | existing run tests                | B     | PASS        |
-| run     | `--force-script`         | RunCore                           | B     | PASS        |
-| run     | `--ui`                   | existing run tests                | B     | PASS        |
-| run     | `--no-ui`                | existing run tests                | B     | PASS        |
-| run     | `--env-hint`             | existing run tests                | C     | PASS        |
-| run     | `--no-env-hint`          | existing run tests                | C     | PASS        |
-| run     | `--trace-cache`          | RunCore, RunSingleCppCacheCliTest | C     | PASS        |
-| run     | `--no-trace-cache`       | RunSingleCppCacheCliTest          | B     | PASS        |
-| run     | `--compiler-fingerprint` | RunCore                           | A/C   | PASS        |
-| run     | `--dep`                  | RunScriptDependencyPathTest       | C     | PASS        |
-| run     | `--save`                 | RunScriptDependencyPathTest       | C     | PASS        |
-| run     | `--auto-deps`            | RunCore                           | A     | PASS        |
-| run     | `--san`                  | existing script tests             | B     | PASS        |
-| run     | `--no-san`               | RunCore                           | C     | PASS        |
-| run     | `--ubsan`                | existing script tests             | B     | PASS        |
-| run     | `--tsan`                 | existing script tests             | B     | PASS        |
-| run     | `--with-sqlite`          | existing dependency tests         | B     | PASS        |
-| run     | `--with-mysql`           | existing dependency tests         | B     | PASS        |
-| run     | `--local-cache`          | RunSingleCppCacheCliTest          | C     | PASS        |
-| run     | `--docs`                 | RunCore                           | A     | PASS        |
-| run     | `--no-docs`              | RunCore                           | A     | PASS        |
-| run     | `--clear`                | RunCore                           | A     | PASS        |
-| run     | `--no-clear`             | RunCore                           | B     | PASS        |
-| run     | `--log-level`            | RunCore                           | A     | PASS        |
-| run     | `--loglevel`             | RunCore                           | B     | PASS        |
-| run     | `--verbose`              | RunCore                           | B     | PASS        |
-| run     | `--quiet`                | RunCore                           | B     | PASS        |
-| run     | `--log-format`           | RunCore                           | A     | PASS        |
-| run     | `--log-color`            | RunCore                           | A     | PASS        |
-| run     | `--no-color`             | RunCore                           | B     | PASS        |
-| run     | `--help`                 | PublicOptionCoverageTest          | A     | PASS        |
-| build   | `--dir`                  | BuildCore                         | C     | PASS        |
-| build   | `--preset`               | BuildCore                         | C     | PASS        |
-| build   | `--build-target`         | BuildCore                         | C     | PASS        |
-| build   | `--jobs`                 | existing planning tests           | B     | PASS        |
-| build   | `--clean`                | BuildCore                         | C     | PASS        |
-| build   | `--watch`                | BuildWatchCliTest                 | C     | PASS        |
-| build   | `--fast`                 | BuildCore                         | B     | PASS        |
-| build   | `--explain`              | BuildPlanningCompatTest           | B     | PASS        |
-| build   | `--warnings`             | BuildWatchCliTest                 | C     | PASS        |
-| build   | `--warning-check`        | BuildCore                         | C     | PASS        |
-| build   | `--sanitize`             | BuildCore                         | C     | PASS        |
-| build   | `--san`                  | BuildCore                         | B     | PASS        |
-| build   | `--asan`                 | BuildCore                         | B     | PASS        |
-| build   | `--ubsan`                | BuildCore                         | B     | PASS        |
-| build   | `--tsan`                 | BuildCore                         | B     | PASS        |
-| build   | `--report`               | cloud endpoint required           | C     | UNAVAILABLE |
-| build   | `--page`                 | BuildCore                         | A     | PASS        |
-| build   | `--limit`                | BuildCore                         | A     | PASS        |
-| build   | `--no-cache`             | BuildCore                         | C     | PASS        |
-| build   | `--no-status`            | BuildProgressCliTest              | C     | PASS        |
-| build   | `--no-up-to-date`        | BuildPlanningCompatTest           | C     | PASS        |
-| build   | `--bin`                  | existing single-file tests        | C     | PASS        |
-| build   | `--out`                  | existing single-file tests        | C     | PASS        |
-| build   | `--launcher`             | BuildToolCliCompatTest            | A/C   | PASS        |
-| build   | `--linker`               | BuildToolCliCompatTest            | A/C   | PASS        |
-| build   | `--target`               | BuildCore, BuildToolCliCompatTest | C     | PASS        |
-| build   | `--sysroot`              | BuildToolCliCompatTest            | B     | PASS        |
-| build   | `--targets`              | BuildCore                         | C     | PASS        |
-| build   | `--static`               | existing planning tests           | B     | PASS        |
-| build   | `--with-sqlite`          | existing dependency tests         | B     | PASS        |
-| build   | `--with-mysql`           | existing dependency tests         | B     | PASS        |
-| build   | `--managed-sdk`          | SDK profile tests                 | C     | PASS        |
-| build   | `--verbose`              | BuildProgressCliTest              | C     | PASS        |
-| build   | `--debug`                | BuildToolCliCompatTest            | C     | PASS        |
-| build   | `--debug-log`            | BuildToolCliCompatTest            | A/C   | PASS        |
-| build   | `--log`                  | BuildCore                         | C     | PASS        |
-| build   | `--cmake-verbose`        | BuildProgressCliTest              | C     | PASS        |
-| build   | `--quiet`                | BuildProgressCliTest              | C     | PASS        |
-| build   | `--help`                 | PublicOptionCoverageTest          | A     | PASS        |
-| build   | `--graph-executor`       | BuildCore                         | A/C   | PASS        |
-| build   | `--heartbeat`            | BuildCore                         | B     | PASS        |
-| build   | `--no-heartbeat`         | BuildCore                         | B     | PASS        |
-| dev     | `--watch`                | vix_cli_dev_command_forwarding_tests | C  | PASS        |
-
-## Parser-only public aliases and undocumented parser surface
-
-Short aliases covered by their long-option tests: run `-d`, `-j`, `-q`, `-h`;
-build `-d`, `-j`, `-v`, `-q`, `-h`. Equal-sign forms are covered where their
-long form accepts a value. `run --loglevel` is the documented alias for
-`--log-level`.
-
-The `RunVixAppContractTest` is covered but currently **FAIL** by design: it is
-a success contract for a real `vix::App` program, not an expected-failure test.
+| Command | Visible option |
+| ------- | -------------- |
+| run | `--dir` |
+| run | `--release` |
+| run | `--cwd` |
+| run | `--env` |
+| run | `--cmake` |
+| run | `--compiler-arg` |
+| run | `--linker-arg` |
+| run | `--san` |
+| run | `--asan` |
+| run | `--ubsan` |
+| run | `--tsan` |
+| run | `--diagnostics=off` |
+| run | `--verbose` |
+| run | `--quiet` |
+| run | `--help` |
+| build | `--dir` |
+| build | `--jobs` |
+| build | `--clean` |
+| build | `--platform` |
+| build | `--out` |
+| build | `--release` |
+| build | `--verbose` |
+| build | `--quiet` |
+| build | `--cmake` |
+| build | `--compiler-arg` |
+| build | `--linker-arg` |
+| build | `--san` |
+| build | `--asan` |
+| build | `--ubsan` |
+| build | `--tsan` |
+| build | `--help` |
+| dev | `--dir` |
+| dev | `--release` |
+| dev | `--cwd` |
+| dev | `--env` |
+| dev | `--verbose` |
+| dev | `--quiet` |
+| dev | `--cmake` |
+| dev | `--san` |
+| dev | `--asan` |
+| dev | `--ubsan` |
+| dev | `--tsan` |
+| dev | `--diagnostics=off` |
+| test | `--dir` |
+| test | `--list` |
+| test | `--watch` |
+| test | `--fail-fast` |
+| test | `--verbose` |
+| test | `--quiet` |
+| test | `--san` |
+| test | `--asan` |
+| test | `--ubsan` |
+| test | `--tsan` |
+| test | `--diagnostics=off` |
+| test | `--ctest` |
+| test | `--help` |

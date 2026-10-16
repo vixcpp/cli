@@ -17,6 +17,31 @@ namespace vix::cli::project::native
 {
   namespace fs = std::filesystem;
 
+  namespace
+  {
+    class OfflineRegistryContentSource final : public RegistryPackageContentSource
+    {
+    public:
+      RegistryPackageContentSourceResult acquire(
+        const RegistryContentLocation &,
+        const RegistryPackageContentRequest &) override
+      {
+        return {RegistryPackageContentSourceStatus::not_found, std::nullopt,
+          "offline policy forbids Registry source access"};
+      }
+    };
+
+    class OfflineGitContentSource final : public GitPackageContentSource
+    {
+    public:
+      GitPackageContentSourceResult acquire(const GitPackageContentRequest &) override
+      {
+        return {PackageContentSourceStatus::unavailable, {},
+          "offline policy forbids Git source access"};
+      }
+    };
+  }
+
   fs::path package_content_store_path()
   {
     if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
@@ -39,6 +64,9 @@ namespace vix::cli::project::native
       std::cerr << "vix: " << parsedArguments.diagnostic << '\n';
       return 2;
     }
+    const AcquisitionMode acquisitionMode = parsedArguments.offline
+        ? AcquisitionMode::offline
+        : AcquisitionMode::online;
     const auto manifest = workingDirectory / "vix.toml";
     if (!fs::is_regular_file(manifest))
     {
@@ -81,18 +109,27 @@ namespace vix::cli::project::native
       return 1;
     }
 
-    const auto configPath = registry_runtime_configuration_path();
-    const auto configuration = load_registry_runtime_configuration(configPath);
-    if (!configuration.valid())
+    RegistryDirectoryBuildResult registryBuild;
+    if (parsedArguments.offline)
     {
-      std::cerr << "vix: invalid Registry runtime configuration: " << configuration.diagnostic << '\n';
-      return 1;
+      // Offline installation does not load registry routing or metadata state.
+      registryBuild = build_registry_directory({});
     }
-    auto definitions = configuration.configuration->registries;
-    for (auto &definition : definitions)
-      for (const auto &location : definition.locations)
-        definition.contentLocations.push_back({location.descriptor});
-    auto registryBuild = build_registry_directory(std::move(definitions));
+    else
+    {
+      const auto configPath = registry_runtime_configuration_path();
+      const auto configuration = load_registry_runtime_configuration(configPath);
+      if (!configuration.valid())
+      {
+        std::cerr << "vix: invalid Registry runtime configuration: " << configuration.diagnostic << '\n';
+        return 1;
+      }
+      auto definitions = configuration.configuration->registries;
+      for (auto &definition : definitions)
+        for (const auto &location : definition.locations)
+          definition.contentLocations.push_back({location.descriptor});
+      registryBuild = build_registry_directory(std::move(definitions));
+    }
     if (!registryBuild.valid())
     {
       const std::string diagnostic = registryBuild.issues.empty() ? "invalid Registry content directory" :
@@ -109,15 +146,27 @@ namespace vix::cli::project::native
     }
     try
     {
-      RequestsRegistryHttpsRequestExecutor httpsExecutor;
-      SchemeRegistryContentTransport transport{httpsExecutor};
-      TransportRegistryPackageContentSource registrySource{transport};
-      NativeGitCommandRunner gitRunner;
-      GitCliPackageContentSource gitSource{fs::temp_directory_path() / "vix-git-content-install", gitRunner};
       FilesystemPackageContentStore store{storePath};
-      auto result = install_native_project_packages(workingDirectory, AcquisitionMode::online,
-        *registryBuild.value, registrySource, gitSource, store,
-        package_materialization_root(workingDirectory));
+      NativePackageInstallResult result;
+      if (parsedArguments.offline)
+      {
+        OfflineRegistryContentSource registrySource;
+        OfflineGitContentSource gitSource;
+        result = install_native_project_packages(workingDirectory, acquisitionMode,
+          *registryBuild.value, registrySource, gitSource, store,
+          package_materialization_root(workingDirectory));
+      }
+      else
+      {
+        RequestsRegistryHttpsRequestExecutor httpsExecutor;
+        SchemeRegistryContentTransport transport{httpsExecutor};
+        TransportRegistryPackageContentSource registrySource{transport};
+        NativeGitCommandRunner gitRunner;
+        GitCliPackageContentSource gitSource{fs::temp_directory_path() / "vix-git-content-install", gitRunner};
+        result = install_native_project_packages(workingDirectory, acquisitionMode,
+          *registryBuild.value, registrySource, gitSource, store,
+          package_materialization_root(workingDirectory));
+      }
       if (!result.valid())
       {
         const auto &issue = result.issues.front();

@@ -1,92 +1,36 @@
 #!/usr/bin/env bash
+# Context isolation, ordered configure identity and scoped clean contract.
 set -euo pipefail
-
 VIX_BIN="${1:?vix binary required}"
-ROOT="${TMPDIR:-/tmp}/vix-cli-build-planning-$$"
+ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
+export HOME="$ROOT/home"; mkdir -p "$HOME" "$ROOT/project/build" "$ROOT/project/.vix/packages/sentinel"
 PROJECT="$ROOT/project"
-
-cleanup() {
-  rm -rf "$ROOT"
-}
-trap cleanup EXIT
-
-mkdir -p "$PROJECT" "$ROOT/home"
-cat > "$PROJECT/CMakeLists.txt" <<'CMAKE'
+cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)
-project(vix_cli_build_planning LANGUAGES CXX)
-add_executable(vix_cli_build_planning main.cpp)
+project(build_context_contract LANGUAGES CXX)
+add_executable(app main.cpp)
 CMAKE
-
-cat > "$PROJECT/main.cpp" <<'CPP'
-int main() { return 0; }
-CPP
-
-run_build() {
-  HOME="$ROOT/home" CCACHE_DISABLE=1 VIX_LOG_LEVEL=debug \
-    "$VIX_BIN" build --verbose --dir "$PROJECT" "$@"
-}
-
-require_configured() {
-  local output="$1"
-  if ! printf '%s\n' "$output" | grep -q '\* configured in '; then
-    printf '%s\n' "$output" >&2
-    echo "expected configuration output" >&2
-    exit 1
-  fi
-}
-
-first_output="$(run_build --launcher none --linker default)"
-require_configured "$first_output"
-test -d "$PROJECT/build-ninja"
-test -f "$PROJECT/build-ninja/.vix-config.sig"
-test -f "$PROJECT/build-ninja/CMakeCache.txt"
-first_sig="$(cat "$PROJECT/build-ninja/.vix-config.sig")"
-printf '%s\n' "$first_sig" | grep -q "preset=dev-ninja"
-printf '%s\n' "$first_sig" | grep -q "linker=1"
-if printf '%s\n' "$first_sig" | grep -Eq '^(useCache|verbose|cmakeVerbose|launcher|launcherTool)='; then
-  echo "presentation or execution option leaked into configuration signature" >&2
-  exit 1
-fi
-
-# These alter presentation or execution policy only. They must not alter the
-# persisted CMake configuration identity.
-HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --dir "$PROJECT" \
-  --launcher none --linker default >/dev/null
-test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
-
-HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --cmake-verbose --dir "$PROJECT" \
-  --launcher none --linker default >/dev/null
-test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
-
-HOME="$ROOT/home" CCACHE_DISABLE=1 "$VIX_BIN" build --quiet --dir "$PROJECT" \
-  --launcher none --linker default >/dev/null
-test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
-
-second_output="$(run_build --launcher none --linker default)"
-if printf '%s\n' "$second_output" | grep -q '\* configured in '; then
-  echo "same signature unexpectedly configured" >&2
-  exit 1
-fi
-
-nocache_output="$(run_build --no-cache --launcher none --linker default)"
-require_configured "$nocache_output"
-test "$(cat "$PROJECT/build-ninja/.vix-config.sig")" = "$first_sig"
-
-clean_output="$(run_build --clean --launcher none --linker default)"
-require_configured "$clean_output"
-
-warning_output="$(run_build --warning-check --launcher none --linker default)"
-require_configured "$warning_output"
-warning_sig="$(cat "$PROJECT/build-ninja/.vix-config.sig")"
-test "$warning_sig" != "$first_sig"
-printf '%s\n' "$warning_sig" | grep -q "warningCheck=1"
-
-release_output="$(run_build --preset release --launcher none --linker default)"
-require_configured "$release_output"
-test -d "$PROJECT/build-release"
-test -f "$PROJECT/build-release/.vix-config.sig"
-
-rm -rf "$PROJECT/build-ninja"
-mkdir -p "$PROJECT/build-ninja/.vix-config.sig.tmp"
-warning_write_output="$(run_build --launcher none --linker default)"
-printf '%s\n' "$warning_write_output" | grep -q "Warning: unable to write config signature file"
+printf 'int main() { return 0; }\n' >"$PROJECT/main.cpp"
+printf 'user build data\n' >"$PROJECT/build/sentinel"
+printf 'package data\n' >"$PROJECT/.vix/packages/sentinel/content"
+build() { "$VIX_BIN" build app --dir "$PROJECT" --cmake "-DCONTEXT_VALUE=$1" >/dev/null; }
+build A
+context_a=("$PROJECT"/.vix/build/*)
+test "${#context_a[@]}" -eq 1
+id_a="${context_a[0]}"
+test -f "${context_a[0]}/context.toml"
+test -f "${context_a[0]}/backend/CMakeCache.txt"
+build B
+context_b=("$PROJECT"/.vix/build/*)
+test "${#context_b[@]}" -eq 2
+id_b="${context_b[0]}"
+[[ "$id_b" == "$id_a" ]] && id_b="${context_b[1]}"
+[[ "$id_b" != "$id_a" ]]
+build A --clean
+context_after=("$PROJECT"/.vix/build/*)
+test "${#context_after[@]}" -eq 2
+test -f "$id_a/context.toml"
+test -f "$id_b/context.toml"
+test -f "$PROJECT/build/sentinel"
+test -f "$PROJECT/.vix/packages/sentinel/content"
+echo "BuildPlanningCompatTest passed"

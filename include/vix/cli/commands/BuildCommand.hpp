@@ -13,12 +13,16 @@
 #ifndef VIX_BUILD_COMMAND_HPP
 #define VIX_BUILD_COMMAND_HPP
 
+#include <filesystem>
 #include <string>
 #include <vector>
 
 namespace vix::commands::BuildCommand
 {
   int run(const std::vector<std::string> &args);
+  int run_internal(
+    const std::vector<std::string> &args,
+    std::filesystem::path *resolvedBackendDirectory = nullptr);
   int help();
 }
 

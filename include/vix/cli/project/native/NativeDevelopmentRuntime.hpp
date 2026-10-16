@@ -17,6 +17,7 @@
 #include <vix/cli/project/native/PackageBuildGraph.hpp>
 #include <vix/cli/project/native/Lockfile.hpp>
 #include <vix/cli/project/native/Models.hpp>
+#include <vix/engine/SanitizerMode.hpp>
 
 namespace vix::cli::project::native
 {
@@ -46,6 +47,7 @@ namespace vix::cli::project::native
     std::string output;
     NativeDevelopmentErrorCode code{NativeDevelopmentErrorCode::project_error};
     std::optional<project::ProjectError> projectError;
+    std::optional<std::filesystem::path> artifactPath;
     [[nodiscard]] bool success() const noexcept { return exitCode == 0; }
   };
 
@@ -66,12 +68,14 @@ namespace vix::cli::project::native
         const std::filesystem::path &, const NativeProject &, const Lockfile &, AcquisitionMode, std::string &)> preparePackages;
     std::function<NativeDevelopmentCallbackResult(
         const std::filesystem::path &, const std::filesystem::path &, const std::filesystem::path &,
-        const NativeProject &, const Lockfile &, const std::vector<MaterializedLockedPackage> &, std::string_view)> configure;
+        const NativeProject &, const Lockfile &, const std::vector<MaterializedLockedPackage> &, std::string_view,
+        vix::engine::SanitizerMode)> configure;
     std::function<NativeDevelopmentCallbackResult(
         const std::filesystem::path &, const std::filesystem::path &, const project::ProjectSnapshot &,
-        const std::optional<std::string> &, int)> build;
+        const std::optional<std::string> &, int, vix::engine::SanitizerMode)> build;
     std::function<NativeDevelopmentCallbackResult(
-        const std::vector<std::string> &, const std::filesystem::path &)> execute;
+        const std::vector<std::string> &, const std::filesystem::path &,
+        vix::engine::SanitizerMode)> execute;
   };
 
   [[nodiscard]] NativeDevelopmentResult build_native_project(
@@ -80,7 +84,9 @@ namespace vix::cli::project::native
     int jobs = 0,
     std::string_view preset = "dev",
     AcquisitionMode mode = AcquisitionMode::online,
-    const NativeDevelopmentHooks *hooks = nullptr);
+    const NativeDevelopmentHooks *hooks = nullptr,
+    vix::engine::SanitizerMode diagnosticMode = vix::engine::SanitizerMode::None,
+    bool clean = false);
 
   [[nodiscard]] NativeDevelopmentResult run_native_project(
     const std::filesystem::path &projectRoot,
@@ -88,7 +94,17 @@ namespace vix::cli::project::native
     const std::vector<std::string> &arguments = {},
     std::string_view preset = "dev",
     AcquisitionMode mode = AcquisitionMode::online,
-    const NativeDevelopmentHooks *hooks = nullptr);
+    const NativeDevelopmentHooks *hooks = nullptr,
+    vix::engine::SanitizerMode diagnosticMode = vix::engine::SanitizerMode::None,
+    const std::filesystem::path &runtimeWorkingDirectory = {});
+
+  [[nodiscard]] NativeDevelopmentResult build_native_runnable_project(
+    const std::filesystem::path &projectRoot,
+    const std::optional<std::string> &target = std::nullopt,
+    std::string_view preset = "dev",
+    AcquisitionMode mode = AcquisitionMode::online,
+    const NativeDevelopmentHooks *hooks = nullptr,
+    vix::engine::SanitizerMode diagnosticMode = vix::engine::SanitizerMode::None);
 
   [[nodiscard]] NativeDevelopmentResult test_native_project(
     const std::filesystem::path &projectRoot,
@@ -98,7 +114,8 @@ namespace vix::cli::project::native
     std::string_view testPattern = {},
     std::string_view preset = "dev",
     AcquisitionMode mode = AcquisitionMode::online,
-    const NativeDevelopmentHooks *hooks = nullptr);
+    const NativeDevelopmentHooks *hooks = nullptr,
+    vix::engine::SanitizerMode diagnosticMode = vix::engine::SanitizerMode::None);
 } // namespace vix::cli::project::native
 
 #endif

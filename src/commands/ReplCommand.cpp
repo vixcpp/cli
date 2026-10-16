@@ -23,30 +23,19 @@ namespace vix::commands::ReplCommand
 {
   int run(const std::vector<std::string> &args)
   {
-    std::vector<std::string> replArgs = args;
-
-    if (!replArgs.empty() && replArgs[0] == "--")
+    if (!args.empty())
     {
-      replArgs.erase(replArgs.begin());
+      std::cerr << "Usage: vix repl\n";
+      return 2;
     }
-
-    return vix::reply::repl_flow_run(replArgs);
+    return vix::reply::repl_flow_run({});
   }
 
   int help()
   {
     std::cout
-        << "Usage:\n"
-        << "  vix repl [-- <args...>]\n\n"
-        << "Description:\n"
-        << "  Start an interactive Vix Reply REPL.\n"
-        << "  Args after `--` are available via Vix.args().\n\n"
-        << "Examples:\n"
-        << "  vix repl\n"
-        << "  vix repl -- --port 8080 --mode dev\n"
-        << "  # inside REPL:\n"
-        << "  #   Vix.args()\n"
-        << "  #   x = 1+2*3\n";
+        << "Usage:\n  vix repl\n\n"
+        << "Start an interactive C++ REPL.\n";
 
     return 0;
   }

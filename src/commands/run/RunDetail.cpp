@@ -121,22 +121,17 @@ namespace vix::commands::RunCommand::detail
   }
 
   void apply_sanitizer_env_if_needed(
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer)
+      DiagnosticMode mode)
   {
-    if (!want_any_sanitizer(
-            enableSanitizers,
-            enableUbsanOnly,
-            enableThreadSanitizer))
+    if (!want_any_sanitizer(mode))
     {
       return;
     }
 
 #ifdef _WIN32
-    (void)enableUbsanOnly;
+    (void)mode;
 #else
-    if (enableThreadSanitizer)
+    if (mode == DiagnosticMode::Thread)
     {
       ::setenv(
           "TSAN_OPTIONS",
@@ -148,12 +143,15 @@ namespace vix::commands::RunCommand::detail
       return;
     }
 
-    ::setenv(
-        "UBSAN_OPTIONS",
-        "halt_on_error=1:print_stacktrace=1:color=never",
-        1);
+    if (mode == DiagnosticMode::Undefined || mode == DiagnosticMode::AddressUndefined)
+    {
+      ::setenv(
+          "UBSAN_OPTIONS",
+          "halt_on_error=1:print_stacktrace=1:color=never",
+          1);
+    }
 
-    if (!enableUbsanOnly)
+    if (mode == DiagnosticMode::AddressUndefined || mode == DiagnosticMode::Address)
     {
       ::setenv(
           "ASAN_OPTIONS",
@@ -169,5 +167,20 @@ namespace vix::commands::RunCommand::detail
           1);
     }
 #endif
+  }
+
+  void apply_sanitizer_env_if_needed(
+      bool enableSanitizers,
+      bool enableUbsanOnly,
+      bool enableThreadSanitizer)
+  {
+    const DiagnosticMode mode = enableThreadSanitizer
+        ? DiagnosticMode::Thread
+        : enableUbsanOnly
+            ? DiagnosticMode::Undefined
+            : enableSanitizers
+                ? DiagnosticMode::AddressUndefined
+                : DiagnosticMode::None;
+    apply_sanitizer_env_if_needed(mode);
   }
 } // namespace vix::commands::RunCommand::detail

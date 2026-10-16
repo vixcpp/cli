@@ -13,8 +13,8 @@ namespace vix::commands
   int UpdateCommand::help()
   {
     std::cout
-        << "vix update\n"
-        << "Re-resolve all native root requirements using fresh online metadata.\n";
+        << "Usage:\n  vix update\n\n"
+        << "Refresh the complete dependency graph declared by the current project.\n";
     return 0;
   }
 } // namespace vix::commands

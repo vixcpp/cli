@@ -956,8 +956,8 @@ namespace vix::commands::RunCommand::detail
     void append_sanitizer_options_block(std::string &s, const ScriptFeatures &feat)
     {
       append_line(s, "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)");
-      append_line(s, "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan_ubsan, ubsan, or tsan\")");
-      append_line(s, "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan_ubsan ubsan tsan)");
+      append_line(s, "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan, asan_ubsan, ubsan, or tsan\")");
+      append_line(s, "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan asan_ubsan ubsan tsan)");
       append_line(s, "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)");
       append_line(s, "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)");
       append_line(s, std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")");
@@ -1027,6 +1027,21 @@ namespace vix::commands::RunCommand::detail
       append_line(s, "target_compile_options(" + targetName + " PRIVATE");
       for (const auto &o : opts)
         append_line(s, "  " + o);
+      append_line(s, ")");
+      append_line(s);
+    }
+
+    void append_explicit_target_options(
+        std::string &s,
+        const std::string &command,
+        const std::string &targetName,
+        const std::vector<std::string> &opts)
+    {
+      if (opts.empty())
+        return;
+      append_line(s, command + "(" + targetName + " PRIVATE");
+      for (const auto &option : opts)
+        append_line(s, "  " + cmake_quote(option));
       append_line(s, ")");
       append_line(s);
     }
@@ -1228,6 +1243,14 @@ namespace vix::commands::RunCommand::detail
       append_line(s, "      -fsanitize=thread");
       append_line(s, "    )");
       append_line(s, "    target_link_options(" + targetName + " PRIVATE -fsanitize=thread)");
+      append_line(s, "  elseif (VIX_SANITIZER_MODE STREQUAL \"asan\")");
+      append_line(s, "    message(STATUS \"Sanitizers: ASan enabled\")");
+      append_line(s, "    target_compile_options(" + targetName + " PRIVATE");
+      append_line(s, "      -O1 -g3");
+      append_line(s, "      -fno-omit-frame-pointer");
+      append_line(s, "      -fsanitize=address");
+      append_line(s, "    )");
+      append_line(s, "    target_link_options(" + targetName + " PRIVATE -fsanitize=address)");
       append_line(s, "  elseif (VIX_SANITIZER_MODE STREQUAL \"ubsan\")");
       append_line(s, "    message(STATUS \"Sanitizers: UBSan enabled\")");
       append_line(s, "    target_compile_options(" + targetName + " PRIVATE");
@@ -1284,7 +1307,9 @@ namespace vix::commands::RunCommand::detail
       bool useVixRuntime,
       const std::vector<std::string> &scriptFlags,
       bool withSqlite,
-      bool withMySql)
+      bool withMySql,
+      const std::vector<std::string> &compilerArgs,
+      const std::vector<std::string> &linkerArgs)
   {
     std::string s;
     s.reserve(32000);
@@ -1348,9 +1373,11 @@ namespace vix::commands::RunCommand::detail
 
     append_target_compile_definitions(s, targetName, cf.defines);
     append_target_compile_options(s, targetName, cf.compileOpts);
+    append_explicit_target_options(s, "target_compile_options", targetName, compilerArgs);
     append_target_link_directories(s, targetName, lf.libDirs);
     append_target_link_libraries_block(s, targetName, lf.libs);
     append_target_link_options(s, targetName, lf.linkOpts);
+    append_explicit_target_options(s, "target_link_options", targetName, linkerArgs);
     append_base_warning_and_platform_flags(s, targetName);
 
     if (!effectiveUseVixRuntime)
@@ -1370,7 +1397,7 @@ namespace vix::commands::RunCommand::detail
     append_sanitizer_runtime_block(s, targetName);
 
     append_line(s, "message(STATUS \"Vix script fallback mode: external non-Vix libraries are not auto-guessed\")");
-    append_line(s, "message(STATUS \"If link fails, pass explicit linker flags after --, for example: vix run file.cpp -- -lfmt\")");
+    append_line(s, "message(STATUS \"If link fails, pass an explicit linker argument, for example: vix run file.cpp --linker-arg=-lfmt\")");
 
     return s;
   }

@@ -148,7 +148,8 @@ namespace vix::cli::project::native
 
     void append_target(std::ostringstream &out, const NativeTarget &target,
       const std::filesystem::path &root, std::string_view generatedName,
-      std::optional<CxxStandard> projectStandard, PackageBuildGraphResult &result)
+      std::optional<CxxStandard> projectStandard, PackageBuildGraphResult &result,
+      vix::engine::SanitizerMode diagnosticMode)
     {
       if (!safe_target_name(generatedName))
       {
@@ -178,12 +179,33 @@ namespace vix::cli::project::native
         for (const auto &value : group.values)
           out << "target_compile_definitions(" << generatedName << " " << visibility_name(group.visibility)
               << " " << bracket(value) << ")\n";
+
+      if (diagnosticMode != vix::engine::SanitizerMode::None)
+      {
+        const char *scope = target.kind == TargetKind::interface_library ? "INTERFACE" : "PRIVATE";
+        const char *flag = diagnosticMode == vix::engine::SanitizerMode::Address
+          ? "address"
+          : diagnosticMode == vix::engine::SanitizerMode::Undefined
+            ? "undefined"
+            : diagnosticMode == vix::engine::SanitizerMode::Thread
+              ? "thread"
+              : "address,undefined";
+        out << "target_compile_options(" << generatedName << " " << scope
+            << " -g3 -fno-omit-frame-pointer -fno-optimize-sibling-calls -fsanitize=" << flag;
+        if (diagnosticMode == vix::engine::SanitizerMode::Undefined ||
+            diagnosticMode == vix::engine::SanitizerMode::AddressUndefined)
+          out << " -fno-sanitize-recover=all";
+        out << ")\n";
+        if (target.kind == TargetKind::executable || target.kind == TargetKind::shared_library)
+          out << "target_link_options(" << generatedName << " PRIVATE -fsanitize=" << flag << ")\n";
+      }
     }
   }
 
   PackageBuildGraphResult generate_package_build_graph(const NativeProject &project,
     const std::filesystem::path &projectRoot, const Lockfile &lockfile,
-    const std::vector<MaterializedLockedPackage> &packages)
+    const std::vector<MaterializedLockedPackage> &packages,
+    vix::engine::SanitizerMode diagnosticMode)
   {
     PackageBuildGraphResult result;
     try
@@ -374,6 +396,10 @@ namespace vix::cli::project::native
     std::ostringstream out;
     out << "cmake_minimum_required(VERSION 3.20)\nproject(" << bracket(project.name)
         << " LANGUAGES CXX)\nset(CMAKE_EXPORT_COMPILE_COMMANDS ON)\n";
+    if (diagnosticMode != vix::engine::SanitizerMode::None)
+      out << "if(NOT CMAKE_CXX_COMPILER_ID MATCHES \"GNU|Clang|AppleClang\")\n"
+          << "  message(FATAL_ERROR \"Vix diagnostic modes require GCC or Clang\")\n"
+          << "endif()\n";
 
     for (const auto &[id, package] : info)
     {
@@ -409,8 +435,8 @@ namespace vix::cli::project::native
     for (const auto &[id, package] : info)
       if (package.project)
         for (const auto &target : package.project->targets)
-          append_target(out, target, package.root, target.name, package.project->cxxStandard, result);
-    for (const auto &target : project.targets) append_target(out, target, root, target.name, project.cxxStandard, result);
+          append_target(out, target, package.root, target.name, package.project->cxxStandard, result, diagnosticMode);
+    for (const auto &target : project.targets) append_target(out, target, root, target.name, project.cxxStandard, result, diagnosticMode);
     if (!result.issues.empty()) return result;
 
     auto package_target = [&](const std::string &nodeId, const std::string &alias, const std::string &exportName)

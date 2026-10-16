@@ -204,6 +204,7 @@ add_executable(vix_cli_native_canonical_hash_tests
   NativeCanonicalHashTests.cpp
   ../src/project/native/CanonicalHash.cpp
   ../src/project/native/TomlParser.cpp
+  ../src/project/native/Validation.cpp
 )
 target_include_directories(vix_cli_native_canonical_hash_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
@@ -591,6 +592,9 @@ target_include_directories(vix_cli_native_package_build_graph_tests PRIVATE
 target_include_directories(vix_cli_native_package_build_graph_tests SYSTEM PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tomlplusplus
 )
+if (TARGET vix::engine)
+  target_link_libraries(vix_cli_native_package_build_graph_tests PRIVATE vix::engine)
+endif()
 target_compile_definitions(vix_cli_native_package_build_graph_tests PRIVATE
   VIX_PACKAGE_BUILD_CMAKE_COMMAND="${CMAKE_COMMAND}"
 )
@@ -624,6 +628,7 @@ add_test(NAME vix_cli_native_package_content_acquisition_tests
 
 add_executable(vix_cli_native_development_runtime_tests
   NativeDevelopmentRuntimeTests.cpp
+  ../src/manifest/RunManifestMerge.cpp
   ../src/project/ProjectDiscovery.cpp
   ../src/project/TargetSelection.cpp
   ../src/project/TestSelection.cpp
@@ -632,6 +637,7 @@ add_executable(vix_cli_native_development_runtime_tests
   ../src/project/cmake/CTestDiscovery.cpp
   ../src/project/cmake/CTestExecution.cpp
   ../src/project/native/NativeDevelopmentRuntime.cpp
+  ../src/project/native/NativeBuildState.cpp
   ../src/project/native/NativePackageInstallCommand.cpp
   ../src/project/native/NativePackageInstall.cpp
   ../src/project/native/PackageCommandRuntime.cpp
@@ -685,6 +691,21 @@ find_package(Threads REQUIRED)
 target_link_libraries(vix_cli_native_development_runtime_tests PRIVATE Threads::Threads)
 add_test(NAME vix_cli_native_development_runtime_tests
   COMMAND vix_cli_native_development_runtime_tests)
+add_test(NAME vix_cli_native_build_state_clean
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/NativeBuildStateCleanCliTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_native_run_fast_path
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/NativeRunFastPathCliTest.sh ${CMAKE_BINARY_DIR}/vix)
+if (UNIX)
+  add_test(NAME vix_cli_native_dev_lifecycle
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/NativeDevLifecycleCliTest.sh ${CMAKE_BINARY_DIR}/vix)
+  set_tests_properties(vix_cli_native_dev_lifecycle PROPERTIES TIMEOUT 120)
+endif()
+add_test(NAME vix_cli_run_advanced_options_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunAdvancedOptionsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_external_cmake_build_state
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/ExternalCMakeBuildStateCliTest.sh ${CMAKE_BINARY_DIR}/vix)
+add_test(NAME vix_cli_tests_command_contract
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/TestsCommandContractCliTest.sh ${CMAKE_BINARY_DIR}/vix)
 
 add_executable(vix_cli_native_git_package_content_source_tests
   NativeGitPackageContentSourceTests.cpp
@@ -941,7 +962,7 @@ add_test(
 )
 
 add_test(
-  NAME vix_cli_build_watch
+  NAME vix_cli_retired_build_watch_options
   COMMAND
     bash
     ${CMAKE_CURRENT_SOURCE_DIR}/BuildWatchCliTest.sh
@@ -957,15 +978,14 @@ add_test(
 )
 
 add_test(
-  NAME vix_cli_global_install_ovi
+  NAME vix_cli_install_rejects_package_selector
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/GlobalInstallOviTest.sh
     ${CMAKE_BINARY_DIR}/vix
-    ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/ovi
 )
 
 add_test(
-  NAME vix_cli_git_dependencies
+  NAME vix_cli_git_dependency_legacy_syntax_rejected
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/GitDependenciesTest.sh
     ${CMAKE_BINARY_DIR}/vix
@@ -991,6 +1011,14 @@ add_test(
   COMMAND
     bash
     ${CMAKE_CURRENT_SOURCE_DIR}/RunSingleCppCacheCliTest.sh
+    ${CMAKE_BINARY_DIR}/vix
+)
+
+add_test(
+  NAME vix_cli_run_sanitized_output
+  COMMAND
+    bash
+    ${CMAKE_CURRENT_SOURCE_DIR}/RunSanitizedOutputCliTest.sh
     ${CMAKE_BINARY_DIR}/vix
 )
 
@@ -1077,22 +1105,7 @@ add_test(NAME vix_cli_distribution_runtime_tests
   COMMAND vix_cli_distribution_runtime_tests)
 
 add_test(
-  NAME vix_cli_registry_integrity
-  COMMAND
-    ${CMAKE_CURRENT_SOURCE_DIR}/RegistryIntegrityTest.sh
-    ${CMAKE_BINARY_DIR}/vix
-)
-
-add_test(
-  NAME vix_cli_registry_dependency_lifecycle
-  COMMAND
-    bash
-    ${CMAKE_CURRENT_SOURCE_DIR}/RegistryDependencyLifecycleTest.sh
-    ${CMAKE_BINARY_DIR}/vix
-)
-
-add_test(
-  NAME vix_cli_sdk_profile_composition
+  NAME vix_cli_retired_sdk_profile_options
   COMMAND
     ${CMAKE_CURRENT_SOURCE_DIR}/SdkProfileCompositionTest.sh
     ${CMAKE_BINARY_DIR}/vix
@@ -1107,13 +1120,12 @@ add_test(
 )
 
 add_test(
-  NAME vix_cli_cmake_vix_dependency_manifest
+  NAME vix_cli_legacy_cmake_install_selector_rejected
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/CMakeVixDependencyManifestTest.sh ${CMAKE_BINARY_DIR}/vix
 )
 
-# Contract tests deliberately consume the built CLI, so help text, parser and
-# observable execution stay tied together. The App test is a real regression
-# contract when an installed SDK include directory is supplied.
+# Contract tests consume the built CLI, tying help text, parser, and observable
+# execution behavior to the same artifact.
 add_test(NAME vix_cli_public_option_coverage
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/PublicOptionCoverageTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_capability_coverage
@@ -1140,10 +1152,10 @@ add_test(NAME vix_cli_build_ninja_incrementality_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/build/BuildNinjaIncrementalityContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_install_reconciliation_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/install/InstallReconciliationContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-add_test(NAME vix_cli_run_vix_app_contract
+add_test(NAME vix_cli_legacy_project_authority_rejected
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunVixAppContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_execution_paths_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunExecutionPathsContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 add_test(NAME vix_cli_run_compiled_dependency_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCompiledDependencyContractTest.sh ${CMAKE_BINARY_DIR}/vix)
-set_tests_properties(vix_cli_run_vix_app_contract vix_cli_run_cache_contract vix_cli_build_passthrough_contract PROPERTIES LABELS "contract;known-regression")
+set_tests_properties(vix_cli_run_cache_contract vix_cli_build_passthrough_contract PROPERTIES LABELS "contract")

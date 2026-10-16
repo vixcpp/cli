@@ -12,6 +12,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #ifndef VIX_PACKAGE_BUILD_CMAKE_COMMAND
 #define VIX_PACKAGE_BUILD_CMAKE_COMMAND "cmake"
@@ -128,6 +129,24 @@ namespace
     assert(testGraph.cmakeLists->find("add_test(NAME [[app-smoke]] COMMAND $<TARGET_FILE:app>)") != std::string::npos);
     const auto repeated = generate_package_build_graph(*appManifest.value, projectRoot, lock, materialized);
     assert(repeated.valid() && repeated.cmakeLists == graph.cmakeLists);
+
+    const std::pair<vix::engine::SanitizerMode, std::string_view> diagnosticModes[] = {
+      {vix::engine::SanitizerMode::AddressUndefined, "address,undefined"},
+      {vix::engine::SanitizerMode::Address, "address"},
+      {vix::engine::SanitizerMode::Undefined, "undefined"},
+      {vix::engine::SanitizerMode::Thread, "thread"}};
+    for (const auto &[mode, instrumentation] : diagnosticModes)
+    {
+      const auto instrumented = generate_package_build_graph(
+        *appManifest.value, projectRoot, lock, materialized, mode);
+      assert(instrumented.valid() && instrumented.cmakeLists);
+      const std::string flag = "-fsanitize=" + std::string{instrumentation};
+      assert(instrumented.cmakeLists->find(flag) != std::string::npos);
+      assert(instrumented.cmakeLists->find("target_link_options(app PRIVATE " + flag + ")") != std::string::npos);
+      if (mode == vix::engine::SanitizerMode::AddressUndefined ||
+          mode == vix::engine::SanitizerMode::Undefined)
+        assert(instrumented.cmakeLists->find("-fno-sanitize-recover=all") != std::string::npos);
+    }
 
     auto missing = generate_package_build_graph(*appManifest.value, projectRoot, lock,
       {{a.id, *PackageContentId::parse(a.contentDigest), packageA}});

@@ -102,12 +102,14 @@ namespace vix::commands::RunCommand::detail
       bool useSan,
       bool captureOnly,
       vix::commands::replay::ReplayCapture *replayCapture,
-      LiveOutputObserver outputObserver)
+      LiveOutputObserver outputObserver,
+      std::function<bool()> cancelForWatch)
   {
     (void)spinnerLabel;
     (void)passthroughRuntime;
     (void)timeoutSec;
     (void)useSan;
+    (void)cancelForWatch;
 
     LiveRunResult result;
 
@@ -1244,6 +1246,7 @@ namespace vix::commands::RunCommand::detail
         bool passthroughRuntime,
         bool captureOnly,
         bool useSan,
+        bool streamSanitizedRuntime,
         RuntimeOutputFilter &runtimeFilter,
         CMakeNoiseFilter &cmakeNoise,
         SanitizerSuppressor &sanitizer,
@@ -1282,7 +1285,9 @@ namespace vix::commands::RunCommand::detail
       if (printable.empty())
         return;
 
-      if (useSan)
+      // A watched dev process may run indefinitely, so ordinary application
+      // output must be streamed even while sanitizer evidence is captured.
+      if (useSan && !streamSanitizedRuntime)
         return;
 
       std::string filtered;
@@ -1328,7 +1333,8 @@ namespace vix::commands::RunCommand::detail
       bool useSan,
       bool captureOnly,
       vix::commands::replay::ReplayCapture *replayCapture,
-      LiveOutputObserver outputObserver)
+      LiveOutputObserver outputObserver,
+      std::function<bool()> cancelForWatch)
   {
     RuntimeSignalGuard signalGuard;
     LiveRunResult result;
@@ -1336,6 +1342,12 @@ namespace vix::commands::RunCommand::detail
     PtySession pty;
     if (!pty.open())
     {
+      if (cancelForWatch)
+      {
+        result.exitCode = 1;
+        result.stderrText = "Unable to create a cancellable process session for vix dev.";
+        return result;
+      }
       const int st = std::system(cmd.c_str());
       result.rawStatus = st;
       result.exitCode = normalize_exit_code(st);
@@ -1345,6 +1357,12 @@ namespace vix::commands::RunCommand::detail
     pid_t pid = ::fork();
     if (pid < 0)
     {
+      if (cancelForWatch)
+      {
+        result.exitCode = 1;
+        result.stderrText = "Unable to start a cancellable process for vix dev.";
+        return result;
+      }
       const int st = std::system(cmd.c_str());
       result.rawStatus = st;
       result.exitCode = normalize_exit_code(st);
@@ -1498,6 +1516,14 @@ namespace vix::commands::RunCommand::detail
 
     while (running)
     {
+      if (cancelForWatch && !result.cancelledByWatch && cancelForWatch())
+      {
+        result.cancelledByWatch = true;
+        kill_group_or_pid(pid, SIGTERM);
+        sentTerm = true;
+        termTime = std::chrono::steady_clock::now();
+      }
+
       if (!sentInt && g_signal_requested)
       {
         const int requestedSignal =
@@ -1572,7 +1598,7 @@ namespace vix::commands::RunCommand::detail
       struct timeval tv;
       struct timeval *tv_ptr = nullptr;
 
-      if (spinnerActive || enableTimeout || heartbeat_env_enabled)
+      if (spinnerActive || enableTimeout || heartbeat_env_enabled || cancelForWatch)
       {
         tv.tv_sec = 0;
         tv.tv_usec = 100000;
@@ -1653,6 +1679,7 @@ namespace vix::commands::RunCommand::detail
                     passthroughRuntime,
                     captureOnly,
                     useSan,
+                    static_cast<bool>(cancelForWatch),
                     runtimeFilter,
                     cmakeNoise,
                     sanitizer,
@@ -1765,6 +1792,32 @@ namespace vix::commands::RunCommand::detail
     return result;
   }
 #endif
+
+  void emit_captured_program_output(const LiveRunResult &result)
+  {
+    if (result.printed_live)
+      return;
+
+    if (!result.stdoutText.empty())
+    {
+      (void)std::fwrite(
+          result.stdoutText.data(),
+          1,
+          result.stdoutText.size(),
+          stdout);
+      std::fflush(stdout);
+    }
+
+    if (!result.stderrText.empty())
+    {
+      (void)std::fwrite(
+          result.stderrText.data(),
+          1,
+          result.stderrText.size(),
+          stderr);
+      std::fflush(stderr);
+    }
+  }
 
   int run_cmd_live_filtered(
       const std::string &cmd,

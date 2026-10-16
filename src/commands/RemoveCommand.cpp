@@ -13,10 +13,10 @@ namespace vix::commands
   int RemoveCommand::help()
   {
     std::cout
-        << "vix remove\n"
-        << "Remove a native root package requirement and re-resolve remaining roots.\n\n"
+        << "Usage:\n"
         << "  vix remove <publisher>/<package> [--registry <id>]\n"
-        << "  vix remove <git-url>\n";
+        << "  vix remove <git-url>\n\n"
+        << "Remove a root package requirement from the current project.\n";
     return 0;
   }
 } // namespace vix::commands

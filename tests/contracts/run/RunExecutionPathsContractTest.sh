@@ -1,66 +1,40 @@
 #!/usr/bin/env bash
-# Public run targets must execute user-visible behavior, not just classify.
+# Current project runs use discovery, positional targets and File API artifacts.
 set -euo pipefail
-
 VIX_BIN="${1:?vix binary required}"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
-export HOME="$ROOT/home"; mkdir -p "$HOME"
+export HOME="$ROOT/home"; mkdir -p "$HOME" "$ROOT/project/runtime" "$ROOT/project/build"
 fail() { echo "RunExecutionPathsContractTest: $*" >&2; exit 1; }
-
-cat >"$ROOT/binary.cpp" <<'CPP'
-#include <cstdlib>
-#include <fstream>
-int main(int argc, char **argv) {
-  std::ofstream(std::getenv("RUN_PATH_RESULT"))
-      << (argc > 1 ? argv[1] : "") << ':' << (std::getenv("RUN_PATH_ENV") ?: "");
+normalize_pty_output() {
+  local normalized="${1//$'\r\n'/$'\n'}"
+  printf '%s' "${normalized%$'\r'}"
 }
-CPP
-c++ -std=c++20 "$ROOT/binary.cpp" -o "$ROOT/binary"
-RUN_PATH_RESULT="$ROOT/binary-result" "$VIX_BIN" run "$ROOT/binary" --env RUN_PATH_ENV=ok --run argument
-grep -Fxq 'argument:ok' "$ROOT/binary-result" || fail "binary target did not receive args/env"
-
-PROJECT="$ROOT/project"; mkdir -p "$PROJECT"
+PROJECT="$ROOT/project"
 cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)
 project(run_project_contract LANGUAGES CXX)
 add_executable(run_project main.cpp)
 CMAKE
 cat >"$PROJECT/main.cpp" <<'CPP'
-#include <iostream>
-int main(int argc, char **argv) { std::cout << "project:" << (argc > 1 ? argv[1] : "") << '\n'; }
-CPP
-"$VIX_BIN" build --dir "$PROJECT" --launcher none --linker default --build-target run_project >/dev/null
-out="$("$VIX_BIN" run "$PROJECT" --run project-arg | tr -d '\r')"
-grep -Fxq 'project:project-arg' <<<"$out" || fail "project target did not run built executable"
-
-cat >"$ROOT/manifest.cpp" <<'CPP'
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
-int main() { std::cout << "manifest:" << (std::getenv("MANIFEST_ENV") ?: "") << '\n'; }
+int main(int argc, char **argv) {
+  std::cout << "project:" << (argc > 1 ? argv[1] : "") << ':'
+            << (std::getenv("RUN_PATH_ENV") ?: "") << ':'
+            << std::filesystem::current_path().filename().string() << '\n';
+}
 CPP
-cat >"$ROOT/run.vix" <<'VIX'
-[app]
-kind = "script"
-name = "manifest-contract"
-entry = "manifest.cpp"
-
-[run]
-env = ["MANIFEST_ENV=ok"]
-VIX
-out="$(cd "$ROOT" && "$VIX_BIN" run run.vix --no-san | tr -d '\r')"
-grep -Fxq 'manifest:ok' <<<"$out" || fail "manifest script did not propagate environment"
-printf '[app]\nkind = "script"\n' >"$ROOT/bad.vix"
-if "$VIX_BIN" run "$ROOT/bad.vix" >/dev/null 2>&1; then fail "malformed manifest unexpectedly ran"; fi
-
-mkdir -p "$ROOT/bin"
-cat >"$ROOT/bin/curl" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >"$RUN_URI_ARGS"
-printf 'uri-contract\n'
-SH
-chmod +x "$ROOT/bin/curl"
-out="$(PATH="$ROOT/bin:$PATH" RUN_URI_ARGS="$ROOT/uri-args" "$VIX_BIN" run 'http://fixture.invalid/index.txt' | tr -d '\r')"
-grep -Fxq 'uri-contract' <<<"$out" || fail "HTTP URI adapter did not dispatch curl"
-grep -Fq -- '-L http://fixture.invalid/index.txt' "$ROOT/uri-args" || fail "HTTP URI adapter passed wrong URL"
-
+printf 'user-owned\n' >"$PROJECT/build/sentinel"
+out="$("$VIX_BIN" run run_project --dir "$PROJECT" --cwd runtime \
+  --env RUN_PATH_ENV=ok -- project-arg)" || fail "discovered CMake target did not run"
+out="$(normalize_pty_output "$out")"
+grep -Fxq 'project:project-arg:ok:runtime' <<<"$out" || fail "target argv/env/cwd were not forwarded"
+test -f "$PROJECT/build/sentinel" || fail "user-owned build directory was changed"
+if "$VIX_BIN" run "$ROOT/not-a-project-binary" >/dev/null 2>&1; then
+  fail "arbitrary binary-path execution was accepted"
+fi
+for retired in 'http://fixture.invalid/app' 'ssh://fixture.invalid/app' 'docker://fixture/app'; do
+  if "$VIX_BIN" run "$retired" >/dev/null 2>&1; then fail "retired execution URI was accepted: $retired"; fi
+done
 echo "RunExecutionPathsContractTest passed"

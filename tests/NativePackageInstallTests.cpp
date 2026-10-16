@@ -149,9 +149,16 @@ namespace
     assert(!fs::exists(root.path / "vix.lock"));
   }
 
-  void install_argument_grammar_is_no_arguments_only()
+  void install_argument_grammar_is_offline_only()
   {
-    assert(parse_native_install_arguments({}).valid);
+    const auto online = parse_native_install_arguments({});
+    assert(online.valid && !online.offline);
+    const auto offline = parse_native_install_arguments({"--offline"});
+    assert(offline.valid && offline.offline);
+    const auto repeated = parse_native_install_arguments({"--offline", "--offline"});
+    assert(!repeated.valid && !repeated.diagnostic.empty());
+    const auto extra = parse_native_install_arguments({"--offline", "fmt"});
+    assert(!extra.valid && !extra.diagnostic.empty());
     const auto package = parse_native_install_arguments({"fmt"});
     const auto url = parse_native_install_arguments({"https://example.invalid/pkg.git"});
     assert(!package.valid && !package.diagnostic.empty());
@@ -234,10 +241,43 @@ namespace
     const auto result = install_native_project_packages(root.path, AcquisitionMode::offline,
       *registryDirectory.value, registry, git, store, root.path / ".vix" / "packages");
     assert(!result.valid() && result.issues.front().code ==
-      NativePackageInstallIssueCode::content_acquisition_failed);
+      NativePackageInstallIssueCode::offline_content_missing);
+    assert(result.issues.front().message.find("offline mode prohibits package source acquisition") != std::string::npos);
     assert(registry.calls == 0 && git.calls == 0);
     assert(read_file(root.path / "vix.toml") == state.manifestBytes);
     assert(read_file(root.path / "vix.lock") == state.lockBytes);
+    assert(!fs::exists(root.path / ".vix" / "packages"));
+  }
+
+  void offline_corrupt_cached_content_fails_closed()
+  {
+    TempRoot root;
+    const auto state = make_project_state();
+    write_file(root.path / "vix.toml", state.manifestBytes);
+    write_file(root.path / "vix.lock", state.lockBytes);
+
+    const auto canonical = canonicalize_package_content_tree(state.tree);
+    assert(canonical.valid());
+    CanonicalPackageContentVerifier verifier;
+    const auto verified = verifier.verify(
+      std::make_shared<CanonicalPackageContentCandidate>(state.tree), state.content);
+    assert(verified.valid());
+    const fs::path storePath = root.path / "store";
+    FilesystemPackageContentStore store{storePath};
+    assert(store.admit(*verified.value).valid());
+    const std::string hex = state.content.digest().substr(7);
+    write_file(storePath / "objects" / "sha256" / hex.substr(0, 2) / hex.substr(2), "corrupted object");
+
+    const auto registryDirectory = build_registry_directory({});
+    assert(registryDirectory.valid());
+    CountingRegistrySource registry;
+    CountingGitSource git;
+    const auto result = install_native_project_packages(root.path, AcquisitionMode::offline,
+      *registryDirectory.value, registry, git, store, root.path / ".vix" / "packages");
+    assert(!result.valid() && result.issues.front().code ==
+      NativePackageInstallIssueCode::corrupt_cached_content);
+    assert(result.issues.front().message.find("corrupt") != std::string::npos);
+    assert(registry.calls == 0 && git.calls == 0);
     assert(!fs::exists(root.path / ".vix" / "packages"));
   }
 
@@ -365,11 +405,12 @@ namespace
 
 int main()
 {
-  install_argument_grammar_is_no_arguments_only();
+  install_argument_grammar_is_offline_only();
   no_dependency_no_lock_is_noop();
   offline_reuses_verified_p10p_without_mutating_project();
   missing_lock_fails_without_source_calls();
   offline_missing_content_fails_before_sources_and_preserves_files();
+  offline_corrupt_cached_content_fails_closed();
   stale_lock_is_rejected_before_sources();
   invalid_lock_is_rejected_before_sources();
   online_registry_content_uses_exact_lock_and_admits_p10p();

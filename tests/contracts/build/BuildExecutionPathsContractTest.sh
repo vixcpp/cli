@@ -1,68 +1,62 @@
 #!/usr/bin/env bash
-# Build paths are validated by produced, runnable artifacts.
+# Public build inputs resolve to Vix-managed artifacts without path guessing.
 set -euo pipefail
 
 VIX_BIN="${1:?vix binary required}"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 export HOME="$ROOT/home"; mkdir -p "$HOME"
+normalize_pty_output() {
+  local normalized="${1//$'\r\n'/$'\n'}"
+  printf '%s' "${normalized%$'\r'}"
+}
 fail() { echo "BuildExecutionPathsContractTest: $*" >&2; exit 1; }
 
 cat >"$ROOT/single.cpp" <<'CPP'
 #include <iostream>
 int main() { std::cout << "single-build\n"; }
 CPP
+"$VIX_BIN" build "$ROOT/single.cpp" >"$ROOT/managed.out" 2>"$ROOT/managed.err" || fail "managed single-source build failed"
+test ! -e "$ROOT/single" || fail "single-source build exported an artifact without --out"
 OUT="$ROOT/out/single-artifact"
-"$VIX_BIN" build "$ROOT/single.cpp" --out "$OUT" --launcher none --linker default >/dev/null
-test -x "$OUT" || fail "single-file build did not export --out executable"
-grep -Fxq 'single-build' < <("$OUT") || fail "single-file artifact is not runnable"
+"$VIX_BIN" build "$ROOT/single.cpp" --out "$OUT" >/dev/null || fail "explicit single-source export failed"
+test -x "$OUT" || fail "single-source build did not export --out executable"
+grep -Fxq 'single-build' < <("$OUT") || fail "single-source artifact is not runnable"
 if "$VIX_BIN" build "$ROOT/missing.cpp" --out "$ROOT/missing" >/dev/null 2>&1; then
   fail "missing single source unexpectedly built"
 fi
 
-# This is deliberately a named CMake target (rather than an `all` shortcut):
-# with the graph executor disabled, CMake/Ninja is the only consumer and no
-# Vix graph may be imported or persisted before that backend runs.
-BACKEND_PROJECT="$ROOT/backend-fixture"; mkdir -p "$BACKEND_PROJECT"
-cat >"$BACKEND_PROJECT/CMakeLists.txt" <<'CMAKE'
-cmake_minimum_required(VERSION 3.20)
-project(generic_backend_fixture LANGUAGES CXX)
-add_executable(backend_alpha main.cpp)
-CMAKE
-cat >"$BACKEND_PROJECT/main.cpp" <<'CPP'
-int main() { return 0; }
-CPP
-BACKEND_LOG="$ROOT/backend.log"
-"$VIX_BIN" build --dir "$BACKEND_PROJECT" --build-target backend_alpha --graph-executor off --no-cache --debug --launcher none --linker default >"$BACKEND_LOG" 2>&1
-test -x "$BACKEND_PROJECT/build-ninja/backend_alpha" || fail "CMake/Ninja backend did not build target"
-if grep -Fq 'build graph:' "$BACKEND_LOG"; then
-  cat "$BACKEND_LOG" >&2
-  fail "CMake/Ninja backend imported a Vix build graph without a consumer"
-fi
-test ! -e "$BACKEND_PROJECT/build-ninja/.vix/build-graph.vix" || fail "CMake/Ninja backend persisted an unused Vix build graph"
-
-PROJECT="$ROOT/graph"; mkdir -p "$PROJECT"
+# External CMake target selection and execution consume CMake File API artifacts.
+PROJECT="$ROOT/external"; mkdir -p "$PROJECT" "$PROJECT/build"
+printf 'user-owned\\n' >"$PROJECT/build/sentinel"
 cat >"$PROJECT/CMakeLists.txt" <<'CMAKE'
 cmake_minimum_required(VERSION 3.20)
-project(graph_executor_contract LANGUAGES CXX)
-add_executable(graph_app main.cpp value.cpp)
+project(external_execution_paths LANGUAGES CXX)
+add_executable(app main.cpp)
 CMAKE
 cat >"$PROJECT/main.cpp" <<'CPP'
-int value();
-int main() { return value() == 9 ? 0 : 1; }
+#include <iostream>
+int main() { std::cout << "external-target\n"; }
 CPP
-cat >"$PROJECT/value.cpp" <<'CPP'
-int value() { return 9; }
-CPP
-"$VIX_BIN" build --dir "$PROJECT" --graph-executor on --launcher none --linker default --build-target graph_app >/dev/null
-test -x "$PROJECT/build-ninja/graph_app" || fail "forced graph executor did not produce target"
-"$PROJECT/build-ninja/graph_app" || fail "graph executor artifact failed"
+"$VIX_BIN" build app --dir "$PROJECT" >/dev/null || fail "positional external target build failed"
+BACKENDS=("$PROJECT"/.vix/build/*/backend)
+test -f "${BACKENDS[0]}/CMakeCache.txt" || fail "external CMake binary directory is not Vix-owned"
+RUN_OUTPUT="$("$VIX_BIN" run app --dir "$PROJECT")" || fail "File API target artifact did not execute"
+RUN_OUTPUT="$(normalize_pty_output "$RUN_OUTPUT")"
+grep -Fxq 'external-target' <<<"$RUN_OUTPUT" || fail "external target output was not preserved"
+test -f "$PROJECT/build/sentinel" || fail "Vix changed a user-owned build directory"
 
-sleep 1
-cat >"$PROJECT/value.cpp" <<'CPP'
-#error graph executor failure propagation
+# Compiler diagnostics from an implicit target build remain visible.
+cat >"$PROJECT/main.cpp" <<'CPP'
+#include "missing-header-for-build-contract.hpp"
+int main() { return 0; }
 CPP
-if "$VIX_BIN" build --dir "$PROJECT" --graph-executor on --launcher none --linker default --build-target graph_app >"$ROOT/graph-failure.log" 2>&1; then
-  cat "$ROOT/graph-failure.log" >&2
-  fail "graph executor did not propagate compile failure"
+if "$VIX_BIN" build app --dir "$PROJECT" >"$ROOT/failure.out" 2>&1; then
+  cat "$ROOT/failure.out" >&2
+  fail "invalid external target source unexpectedly built"
 fi
+grep -Eiq 'error:|failed|unable to build' "$ROOT/failure.out" || {
+  cat "$ROOT/failure.out" >&2
+  fail "useful build failure diagnostics were not preserved"
+}
+
 echo "BuildExecutionPathsContractTest passed"

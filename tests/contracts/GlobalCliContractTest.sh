@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deterministic contracts for global parsing and the implicit source-file route.
+# Deterministic contracts for global parsing and explicit source-file routing.
 set -euo pipefail
 
 VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"
@@ -20,6 +20,14 @@ expect_fail() {
 
 expect_ok "$VIX_BIN" --help
 grep -q 'Global options' "$TEST_ROOT/out"
+for option in '-h, --help' '-v, --version' '--verbose' '-q, --quiet'; do
+  grep -Fq -- "$option" "$TEST_ROOT/out" || { echo "Global help omits $option" >&2; exit 1; }
+done
+for option in '--log-level' '--color' '--debug'; do
+  if grep -Fq -- "$option" "$TEST_ROOT/out"; then
+    echo "Global help exposes retired option $option" >&2; exit 1
+  fi
+done
 expect_ok "$VIX_BIN" -h
 grep -q 'Usage' "$TEST_ROOT/out"
 expect_ok "$VIX_BIN" --version
@@ -27,24 +35,24 @@ grep -q 'version' "$TEST_ROOT/out"
 expect_ok "$VIX_BIN" -v
 grep -q 'version' "$TEST_ROOT/out"
 
-for level in trace debug info warn error critical; do
-  expect_ok "$VIX_BIN" --log-level "$level" --version
-  expect_ok "$VIX_BIN" "--log-level=$level" --version
-done
 expect_fail "$VIX_BIN" --log-level
-grep -q 'requires a value' "$TEST_ROOT/err"
-expect_fail "$VIX_BIN" --log-level= --version
-grep -q 'cannot be empty' "$TEST_ROOT/err"
-expect_fail "$VIX_BIN" --log-level invalid --version
-grep -q 'Invalid log level' "$TEST_ROOT/err"
+grep -q 'unrecognized subcommand' "$TEST_ROOT/err"
+if grep -q -- '--log-level' "$TEST_ROOT/out"; then
+  echo 'Global help still exposes --log-level' >&2; exit 1
+fi
 
-# The explicit and implicit paths must both enter `run`, not command lookup.
+expect_fail "$VIX_BIN" --verbose --quiet
+grep -q 'cannot be used together' "$TEST_ROOT/err"
+expect_fail "$VIX_BIN" --verbose build --quiet
+grep -q 'cannot be used together' "$TEST_ROOT/err"
+
+# Source files require an explicit command; there is no implicit top-level route.
 expect_fail "$VIX_BIN" run "$TEST_ROOT/missing.cpp"
 explicit="$(cat "$TEST_ROOT/out" "$TEST_ROOT/err")"
 expect_fail "$VIX_BIN" "$TEST_ROOT/missing.cpp"
 implicit="$(cat "$TEST_ROOT/out" "$TEST_ROOT/err")"
 grep -qi 'script\|file' <<<"$explicit"
-grep -qi 'script\|file' <<<"$implicit"
+grep -qi 'explicit command: vix build' <<<"$implicit"
 
 expect_fail "$VIX_BIN" buid
 grep -q 'build' "$TEST_ROOT/err"

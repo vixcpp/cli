@@ -14,8 +14,9 @@ namespace vix::commands
   {
     std::cout
         << "Usage:\n"
-        << "  vix install\n\n"
-        << "Acquire and materialize the exact package graph in vix.lock.\n";
+        << "  vix install [--offline]\n\n"
+        << "Materialize the exact package graph in vix.lock.\n"
+        << "  --offline   Use verified local locked content only; never access package sources.\n";
     return 0;
   }
 } // namespace vix::commands

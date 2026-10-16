@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CMake arguments after -- are a public, observable configuration contract.
+# Explicit --cmake arguments configure external CMake projects.
 set -euo pipefail
 VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
@@ -19,4 +19,4 @@ cat >"$ROOT/main.cpp" <<'CPP'
 #endif
 int main() { return 0; }
 CPP
-"$VIX_BIN" build --dir "$ROOT" --launcher none --linker default -- -DTEST_FEATURE=ON
+"$VIX_BIN" build --dir "$ROOT" --cmake=-DTEST_FEATURE=ON

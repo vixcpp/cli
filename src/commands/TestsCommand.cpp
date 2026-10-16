@@ -30,6 +30,7 @@
 #include <vix/cli/process/Process.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/errors/build/BuildErrorDetectors.hpp>
+#include <vix/cli/errors/RawLogDetectors.hpp>
 
 #include <filesystem>
 #include <unordered_map>
@@ -210,35 +211,8 @@ namespace
     return false;
   }
 
-  static std::optional<std::string> value_after_flag(
-      const std::vector<std::string> &args,
-      const std::string &flag)
+  static std::string resolve_preset_name()
   {
-    for (std::size_t i = 0; i < args.size(); ++i)
-    {
-      if (args[i] == flag)
-      {
-        if (i + 1 < args.size())
-          return args[i + 1];
-        return std::nullopt;
-      }
-
-      const std::string prefix = flag + "=";
-      if (args[i].rfind(prefix, 0) == 0 && args[i].size() > prefix.size())
-        return args[i].substr(prefix.size());
-    }
-
-    return std::nullopt;
-  }
-
-  static std::string resolve_preset_name(const vix::commands::TestsCommand::detail::Options &opt)
-  {
-    if (auto p = value_after_flag(opt.forwarded, "--preset"))
-      return *p;
-
-    if (auto p = value_after_flag(opt.forwarded, "-p"))
-      return *p;
-
     return "dev-ninja";
   }
 
@@ -295,6 +269,41 @@ namespace
     return false;
   }
 
+  static std::string literal_ctest_filter(const std::string &filter)
+  {
+    std::string escaped;
+    escaped.reserve(filter.size() + 4);
+    escaped = ".*";
+    for (const char character : filter)
+    {
+      switch (character)
+      {
+      case '.': case '+': case '*': case '?': case '(': case ')':
+      case '[': case ']': case '{': case '}': case '^': case '$':
+      case '|': case '\\':
+        escaped.push_back('\\');
+        break;
+      default:
+        break;
+      }
+      escaped.push_back(character);
+    }
+    escaped += ".*";
+    return escaped;
+  }
+
+  static std::string exact_ctest_filter(const std::vector<std::string> &names)
+  {
+    std::string expression;
+    for (const auto &name : names)
+    {
+      if (!expression.empty())
+        expression += "|";
+      expression += vix::cli::project::cmake::ctest_exact_name_regex(name);
+    }
+    return expression;
+  }
+
   static int run_normalized_cmake_tests(
       const vix::commands::TestsCommand::detail::Options &opt)
   {
@@ -303,29 +312,41 @@ namespace
         location.location->system != vix::cli::project::ProjectSystem::cmake)
       return -1;
 
-    const std::string presetName = resolve_preset_name(opt);
+    const std::string presetName = resolve_preset_name();
     std::vector<std::string> buildArgs{
         "--dir", location.location->root.string(),
         "--preset", presetName,
         "--require-project-metadata",
-        "--", "-DBUILD_TESTING=ON"};
-    const int buildCode = vix::commands::BuildCommand::run(buildArgs);
+        "--quiet",
+        "--cmake=-DBUILD_TESTING=ON"};
+    std::filesystem::path backendDirectory;
+    const int buildCode = vix::commands::BuildCommand::run_internal(buildArgs, &backendDirectory);
     if (buildCode != 0)
       return buildCode;
 
-    const auto preset = vix::cli::build::resolve_builtin_preset(presetName);
-    if (!preset)
+    if (backendDirectory.empty())
+    {
+      error("External CMake test build did not report its Vix-owned backend directory.");
       return 1;
-    vix::engine::ExecutionPlanLayoutOptions layoutOptions;
-    layoutOptions.userProjectDir = location.location->root;
-    layoutOptions.cmakeSourceDir = location.location->root;
-    layoutOptions.preset = *preset;
-    const auto layout = vix::engine::make_execution_plan_layout(layoutOptions);
-    if (!layout.success())
-      return 1;
+    }
+
+    if (opt.ctestMode)
+    {
+      const auto argv = vix::cli::project::cmake::ctest_execution_argv(
+          backendDirectory, std::nullopt, std::nullopt, opt.ctestArgs);
+      vix::engine::process::Command command;
+      command.argv = argv;
+      command.mergeStdErr = true;
+      const auto result = vix::engine::process::execute(command);
+      if (!result.output.empty())
+        std::cout << result.output;
+      if (!result.success() && !result.errorMessage.empty())
+        error(result.errorMessage);
+      return result.success() ? 0 : (result.exitCode == 0 ? 1 : result.exitCode);
+    }
 
     const vix::cli::project::cmake::SnapshotRequest request{
-        layout.plan.buildDir, std::nullopt};
+        backendDirectory, std::nullopt};
     const auto snapshot = vix::cli::project::cmake::load_cmake_project_snapshot(
         *location.location, request);
     if (!snapshot.success())
@@ -355,6 +376,19 @@ namespace
       return 0;
     }
 
+    std::vector<std::string> matchingNames;
+    if (!opt.testPattern.empty())
+    {
+      for (const auto &test : snapshot.snapshot->project.tests)
+        if (test.name.find(opt.testPattern) != std::string::npos)
+          matchingNames.push_back(test.name);
+      if (matchingNames.empty())
+      {
+        info("No tests matched filter '" + opt.testPattern + "'.");
+        return 0;
+      }
+    }
+
     if (opt.list && opt.testPattern.empty())
     {
       for (const auto &test : snapshot.snapshot->project.tests)
@@ -373,10 +407,10 @@ namespace
     const std::optional<std::string> exactName =
         selected ? std::optional<std::string>{selected->name} : std::nullopt;
     std::vector<std::string> nativeArguments = opt.ctestArgs;
-    if (!opt.testPattern.empty())
+    if (!matchingNames.empty())
     {
       nativeArguments.push_back("-R");
-      nativeArguments.push_back(opt.testPattern);
+      nativeArguments.push_back(exact_ctest_filter(matchingNames));
     }
     if (opt.list)
       nativeArguments.push_back("-N");
@@ -408,7 +442,7 @@ namespace
     return 0;
   }
 
-  static int run_tests_once(const vix::commands::TestsCommand::detail::Options &opt)
+  static int run_tests_once(vix::commands::TestsCommand::detail::Options opt)
   {
     const auto discovered = vix::cli::project::discover_project(opt.projectDir);
     if (!discovered.success() &&
@@ -417,22 +451,60 @@ namespace
       error("Project contains both vix.toml and CMakeLists.txt; project authority is ambiguous.");
       return 1;
     }
+    const auto projectKind = discovered.success()
+        ? (discovered.location->system == vix::cli::project::ProjectSystem::native_vix
+               ? vix::cli::commands::DiagnosticProjectKind::NativeVix
+               : vix::cli::commands::DiagnosticProjectKind::ExternalCMake)
+        : vix::cli::commands::DiagnosticProjectKind::Unknown;
+    opt.diagnosticMode = vix::cli::commands::resolve_diagnostic_mode(
+        vix::cli::commands::DiagnosticCommand::Test,
+        false,
+        projectKind,
+        opt.diagnosticRequest);
+    if (discovered.success() &&
+        discovered.location->system == vix::cli::project::ProjectSystem::cmake &&
+        opt.diagnosticRequest.kind == vix::cli::commands::DiagnosticRequestKind::Explicit)
+    {
+      error("Vix diagnostic modes are not available for arbitrary external CMake projects.");
+      hint("Configure sanitizer instrumentation through the project's CMake options.");
+      return 2;
+    }
+    if (opt.ctestMode &&
+        (!discovered.success() ||
+         discovered.location->system != vix::cli::project::ProjectSystem::cmake))
+    {
+      error("--ctest is available only for external CMake projects.");
+      return 2;
+    }
     const auto nativeTests = vix::cli::project::dispatch_native_tests(
       discovered, opt.exactTestName, opt.list, opt.ctestArgs, opt.testPattern,
-      resolve_preset_name(opt),
-      [](const vix::cli::project::ProjectLocation &location,
+      resolve_preset_name(),
+      [diagnosticMode = opt.diagnosticMode](const vix::cli::project::ProjectLocation &location,
          const std::optional<std::string> &testName, bool listOnly,
          const std::vector<std::string> &ctestArguments, std::string_view testPattern,
          std::string_view preset)
       {
+        const std::string literalFilter = testPattern.empty()
+            ? std::string{}
+            : literal_ctest_filter(std::string(testPattern));
         return vix::cli::project::native::test_native_project(
-          location.root, testName, listOnly, ctestArguments, testPattern, preset);
+            location.root, testName, listOnly, ctestArguments, literalFilter, preset,
+            vix::cli::project::native::AcquisitionMode::online, nullptr,
+            diagnosticMode);
       });
     if (nativeTests)
     {
       const auto &result = *nativeTests;
-      if (!result.output.empty()) std::cout << result.output;
-      if (!result.success()) error("native tests failed: " + result.diagnostic);
+      bool handled = false;
+      if (!result.success() && opt.diagnosticMode != vix::engine::SanitizerMode::None)
+      {
+        std::string log = result.output;
+        log += result.diagnostic;
+        handled = vix::cli::errors::RawLogDetectors::hasAuthoritativeRuntimeEvidence(log, {}) &&
+            vix::cli::errors::RawLogDetectors::handleRuntimeCrash(log, {}, "native tests", {});
+      }
+      if (!result.output.empty() && !handled) std::cout << result.output;
+      if (!result.success() && !handled) error("native tests failed: " + result.diagnostic);
       return result.exitCode;
     }
     const int normalized = run_normalized_cmake_tests(opt);
@@ -449,6 +521,12 @@ namespace vix::commands::TestsCommand
   int run(const std::vector<std::string> &args)
   {
     const auto opt = vix::commands::TestsCommand::detail::parse(args);
+    if (opt.parseFailed)
+    {
+      error(opt.parseError);
+      hint("Use: vix test --help");
+      return 2;
+    }
     g_stop.store(false);
     std::signal(SIGINT, on_sigint);
 
@@ -541,62 +619,32 @@ namespace vix::commands::TestsCommand
     std::ostream &out = std::cout;
 
     out << "Usage:\n";
-    out << "  vix test [path] [options] [-- ctest args...]\n\n";
-
-    out << "Description:\n";
-    out << "  Build, discover, and run project tests.\n";
-    out << "  CMake projects use configured CTest metadata and CTest execution.\n";
-    out << "  Native Vix projects use registered tests; CMake projects use CTest.\n";
-    out << "  Native Vix projects execute registered tests; CMake projects use CTest.\n\n";
-
-    out << "Project:\n";
-    out << "  [path]                    Project directory, default: current directory\n\n";
-
-    out << "Test options:\n";
-    out << "  --watch                   Watch files and re-run tests on changes\n";
-    out << "  --list                    List discovered tests without running them\n";
-    out << "  --exact-test <name>       Select one exact configured CTest name\n";
-    out << "  --exact-test=<name>       Same as --exact-test <name>\n";
-    out << "  --test <regex>, -R <regex>  Filter CTest tests by regex\n";
-    out << "  --fail-fast               Stop on first failing test\n";
-    out << "  --raw                     Show raw test runner or CTest output\n\n";
-
-    out << "Runtime check:\n";
-    out << "  --run                     Run runtime checks after tests pass\n\n";
-
-    out << "Build and preset forwarding:\n";
-    out << "  --preset <name>           Use a build preset, default: dev-ninja\n";
-    out << "  --preset=<name>           Same as --preset <name>\n";
-    out << "  --build-target <name>     Build target used while preparing tests\n";
-    out << "  --build-target=<name>     Same as --build-target <name>\n\n";
-
-    out << "CTest passthrough:\n";
-    out << "  -- [args...]              Pass raw arguments to CTest\n";
-    out << "                            Passing raw CTest args forces CTest mode\n\n";
-    out << "                            Use `-- -R <regex>` for advanced native filtering.\n\n";
-
+    out << "  vix test [filter] [options]\n\n";
+    out << "Run project tests, optionally matching a test-name filter.\n\n";
+    out << "Arguments:\n";
+    out << "  [filter]                  Optional test-name filter\n\n";
+    out << "Options:\n";
+    out << "  -d, --dir <path>          Project root\n";
+    out << "  --list                    List tests without running them\n";
+    out << "  --watch                   Run tests again when project files change\n";
+    out << "  --fail-fast               Stop after the first failure\n";
+    out << "  --verbose                 Show additional output\n";
+    out << "  -q, --quiet               Reduce command output\n";
+    out << "\nDiagnostics:\n";
+    out << "  Recommended diagnostics are enabled by default for native development tests.\n";
+    out << "  --san                     ASan + UBSan\n";
+    out << "  --asan                    Detect memory-safety errors\n";
+    out << "  --ubsan                   Detect undefined behavior\n";
+    out << "  --tsan                    Detect data races\n";
+    out << "  --diagnostics=off         Disable automatic diagnostics\n";
+    out << "\nAdvanced:\n";
+    out << "  --ctest <args...>         Forward remaining arguments to CTest (external CMake only)\n";
+    out << "  -h, --help                Show this help\n\n";
     out << "Examples:\n";
     out << "  vix test\n";
     out << "  vix test --list\n";
-    out << "  vix test --watch\n";
-    out << "  vix test --run\n";
-    out << "  vix test ./examples/project\n";
-    out << "  vix test --preset release\n";
-    out << "  vix test --exact-test tree.basic\n";
-    out << "  vix test --exact-test=tree.basic\n";
-    out << "  vix test -R tree.basic\n";
-    out << "  vix test --fail-fast\n";
-    out << "  vix test --raw\n";
-    out << "  vix test -- --output-on-failure\n";
-    out << "  vix test -- -R MySuite\n\n";
-
-    out << "Behavior:\n";
-    out << "  Native Vix projects       Execute registered project tests\n";
-    out << "  CMake projects            Use configured CTest metadata and CTest execution\n";
-    out << "  --list                    Shows clean test names instead of raw CTest paths\n\n";
-
-    out << "See also:\n";
-    out << "  vix build --build-target all\n";
+    out << "  vix test network -d examples/project\n";
+    out << "  vix test --ctest -L integration\n";
 
     return 0;
   }

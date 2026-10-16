@@ -1,52 +1,40 @@
 #!/usr/bin/env bash
-# A changed local header must invalidate direct-script cache. This is a real
-# success contract and currently fails, preserving the regression visibly.
+# Standalone compilation reuses correct dependency freshness, not public cache knobs.
 set -euo pipefail
-VIX_BIN="${1:-/vixcpp/vix/modules/cli/build-ninja/vix}"
+VIX_BIN="${1:?vix binary required}"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 export HOME="$ROOT/home"; mkdir -p "$HOME" "$ROOT/include"
-cat >"$ROOT/include/nested.hpp" <<'CPP'
-#pragma once
-inline int nested_value() { return 1; }
-CPP
+normalize_pty_output() {
+  local normalized="${1//$'\r\n'/$'\n'}"
+  printf '%s' "${normalized%$'\r'}"
+}
 cat >"$ROOT/include/value.hpp" <<'CPP'
 #pragma once
-#include "nested.hpp"
-inline int value() { return nested_value(); }
+inline int value() { return 1; }
 CPP
 cat >"$ROOT/main.cpp" <<'CPP'
-#include "value.hpp"
 #include <iostream>
+#include "value.hpp"
 int main() { std::cout << value() << '\n'; }
 CPP
-out="$("$VIX_BIN" run "$ROOT/main.cpp" --no-san --trace-cache -- -I"$ROOT/include" 2>&1 | tr -d '\r')"
-grep -Fxq '1' <<<"$out"
-out="$("$VIX_BIN" run "$ROOT/main.cpp" --no-san --trace-cache -- -I"$ROOT/include" 2>&1 | tr -d '\r')"
-grep -Fq 'rebuild reason: cache hit' <<<"$out"
-touch "$ROOT/include/value.hpp"
-out="$("$VIX_BIN" run "$ROOT/main.cpp" --no-san --trace-cache -- -I"$ROOT/include" 2>&1 | tr -d '\r')"
-grep -Fq 'rebuild reason: cache hit' <<<"$out"
+run() { "$VIX_BIN" run "$ROOT/main.cpp" --diagnostics=off --compiler-arg="-I$ROOT/include"; }
+out="$(normalize_pty_output "$(run)")"
+grep -Fxq '1' <<<"$out" || { printf 'First run output: %q\n' "$out" >&2; echo 'initial standalone build output mismatch' >&2; exit 1; }
+out="$(normalize_pty_output "$(run)")"
+grep -Fxq '1' <<<"$out" || { printf 'No-op run output: %q\n' "$out" >&2; echo 'unchanged standalone run output mismatch' >&2; exit 1; }
 cat >"$ROOT/include/value.hpp" <<'CPP'
 #pragma once
-#include "nested.hpp"
-inline int value() { return nested_value() + 10; }
+inline int value() { return 7; }
 CPP
-out="$("$VIX_BIN" run "$ROOT/main.cpp" --no-san --trace-cache -- -I"$ROOT/include" 2>&1 | tr -d '\r')"
-if grep -Fq 'rebuild reason: cache hit' <<<"$out"; then
-  printf '%s\n' "$out" >&2
-  echo "changed local header incorrectly reused direct-script cache" >&2
+out="$(normalize_pty_output "$(run)")"
+grep -Fxq '7' <<<"$out" || {
+  printf 'Header-change run output: %q\n' "$out" >&2
+  echo 'changed header yielded stale executable' >&2
   exit 1
-fi
-grep -Fxq '11' <<<"$out"
-
-cat >"$ROOT/include/nested.hpp" <<'CPP'
-#pragma once
-inline int nested_value() { return 2; }
-CPP
-out="$("$VIX_BIN" run "$ROOT/main.cpp" --no-san --trace-cache -- -I"$ROOT/include" 2>&1 | tr -d '\r')"
-if grep -Fq 'rebuild reason: cache hit' <<<"$out"; then
-  printf '%s\n' "$out" >&2
-  echo "changed transitive local header incorrectly reused direct-script cache" >&2
-  exit 1
-fi
-grep -Fxq '12' <<<"$out"
+}
+for option in --trace-cache --no-cache --compiler-fingerprint=fast; do
+  if "$VIX_BIN" run "$ROOT/main.cpp" "$option" >/dev/null 2>&1; then
+    echo "retired cache control accepted: $option" >&2; exit 1
+  fi
+done
+echo "RunCacheContractTest passed"

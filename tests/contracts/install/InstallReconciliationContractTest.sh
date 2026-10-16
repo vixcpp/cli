@@ -1,55 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 VIX_BIN="${1:?missing vix binary}"
-ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
-export HOME="$ROOT/home"; mkdir -p "$HOME"
+ROOT="$(mktemp -d)"
+trap 'rm -rf "$ROOT"' EXIT
+export HOME="$ROOT/home"
+mkdir -p "$HOME"
+
 fail() { echo "InstallReconciliationContractTest: $*" >&2; exit 1; }
-fixture() { local name="$1"; mkdir -p "$ROOT/$name/include/$name"; printf '#pragma once\ninline int %s_value(){return 1;}\n' "$name" >"$ROOT/$name/include/$name/$name.hpp"; cat >"$ROOT/$name/CMakeLists.txt" <<EOF
-cmake_minimum_required(VERSION 3.20)
-project($name LANGUAGES CXX)
-add_library(${name}_lib INTERFACE)
-add_library(example::$name ALIAS ${name}_lib)
-target_include_directories(${name}_lib INTERFACE \${CMAKE_CURRENT_SOURCE_DIR}/include)
-EOF
-git -C "$ROOT/$name" init -q; git -C "$ROOT/$name" config user.email contract@example.invalid; git -C "$ROOT/$name" config user.name contract; git -C "$ROOT/$name" add .; git -C "$ROOT/$name" commit -qm init; git -C "$ROOT/$name" branch dev; git -C "$ROOT/$name" tag v1.0.0; git -C "$ROOT/$name" rev-parse HEAD; }
-A_COMMIT="$(fixture a)"; B_COMMIT="$(fixture b)"; APP="$ROOT/app"; mkdir -p "$APP"
-cat >"$APP/vix.app" <<EOF
-name = "reconciliation" 
+
+# Historical vix.app data is not project authority. Init establishes the
+# current native project, and install remains a no-op without declared roots.
+APP="$ROOT/app"
+mkdir -p "$APP"
+cat >"$APP/vix.app" <<'EOF'
+name = "historical-only"
 type = "executable"
-standard = "c++20"
-[dependencies.a]
-git = "$ROOT/a"
-tag = "v1.0.0"
-target = "example::a"
+[dependencies.legacy]
+git = "file:///not-a-current-dependency-source"
 EOF
-(cd "$APP" && "$VIX_BIN" install >/dev/null)
-cp "$APP/vix.lock" "$APP/lock.before"; LINK_TIME="$(stat -c %Y "$APP/.vix/deps/a")"; CMAKE_TIME="$(stat -c %Y "$APP/.vix/vix_deps.cmake")"
-REAL_GIT="$(command -v git)"; mkdir "$ROOT/git-bin"; cat >"$ROOT/git-bin/git" <<EOF
-#!/usr/bin/env bash
-if [ "\${1:-}" = ls-remote ] && [[ "\$*" == *"$ROOT/a"* ]]; then
-  echo 'unexpected remote resolution for unchanged dependency a' >&2
-  exit 88
+(cd "$APP" && "$VIX_BIN" init >/dev/null)
+test -f "$APP/vix.toml" || fail 'init did not create native project authority'
+test ! -e "$APP/vix.lock" || fail 'init unexpectedly created a dependency lock'
+(cd "$APP" && "$VIX_BIN" install --offline >/dev/null) || fail 'offline install failed for a valid empty native project'
+(cd "$APP" && "$VIX_BIN" install >/dev/null) || fail 'online install failed for a valid empty native project'
+test ! -e "$APP/vix.lock" || fail 'no-op install created or rewrote a lock graph'
+
+# A legacy manifest alone must not authorize package installation.
+LEGACY_ONLY="$ROOT/legacy-only"
+mkdir -p "$LEGACY_ONLY"
+cp "$APP/vix.app" "$LEGACY_ONLY/vix.app"
+if output="$(cd "$LEGACY_ONLY" && "$VIX_BIN" install 2>&1)"; then
+  fail 'install accepted legacy vix.app without vix.toml'
 fi
-exec "$REAL_GIT" "\$@"
-EOF
-chmod +x "$ROOT/git-bin/git"
-sleep 1; (cd "$APP" && PATH="$ROOT/git-bin:$PATH" "$VIX_BIN" install >/dev/null)
-cmp "$APP/lock.before" "$APP/vix.lock"; test "$LINK_TIME" = "$(stat -c %Y "$APP/.vix/deps/a")"; test "$CMAKE_TIME" = "$(stat -c %Y "$APP/.vix/vix_deps.cmake")"
-rm "$APP/.vix/deps/a" "$APP/.vix/vix_deps.cmake"; (cd "$APP" && PATH="$ROOT/git-bin:$PATH" "$VIX_BIN" install >/dev/null); test -e "$APP/.vix/deps/a"
-cat >>"$APP/vix.app" <<EOF
-[dependencies.b]
-git = "$ROOT/b"
-branch = "dev"
-target = "example::b"
-EOF
-(cd "$APP" && PATH="$ROOT/git-bin:$PATH" "$VIX_BIN" install >/dev/null)
-grep -Fq "\"commit\": \"$A_COMMIT\"" "$APP/vix.lock"; grep -Fq "\"commit\": \"$B_COMMIT\"" "$APP/vix.lock"
-cp "$APP/vix.lock" "$APP/lock.before"; cat >>"$APP/vix.app" <<EOF
-[dependencies.bad]
-git = "file://$ROOT/missing"
-rev = "deadbeef"
-target = "example::bad"
-EOF
-if (cd "$APP" && "$VIX_BIN" install >/dev/null 2>&1); then fail "invalid dependency resolved"; fi
-cmp "$APP/lock.before" "$APP/vix.lock"
+grep -Fq -- 'native-project-required (vix.toml not found)' <<<"$output" || {
+  fail 'legacy-only project rejection did not identify missing native authority'
+}
+
 echo "InstallReconciliationContractTest passed"

@@ -19,6 +19,7 @@
 namespace vix::commands::RunCommand
 {
   int run(const std::vector<std::string> &args);
+  int run_watched(const std::vector<std::string> &args);
   int help();
 }
 

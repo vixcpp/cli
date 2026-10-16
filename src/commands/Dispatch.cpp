@@ -71,7 +71,7 @@ namespace vix::cli::dispatch
 
     add({"dev",
          "Project",
-         "Run a C++ project while watching for changes",
+         "Watch a native Vix project and restart its program",
          [](const Args &a)
          { return vix::commands::DevCommand::run(a); },
          []()

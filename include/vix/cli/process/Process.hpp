@@ -191,8 +191,6 @@ namespace vix::cli::process
      */
     bool sanitizerSelectionExplicit = false;
 
-    bool withSqlite = false;
-    bool withMySql = false;
 
     bool exportBin = false;
     std::string outPath;
@@ -208,12 +206,6 @@ namespace vix::cli::process
 
     bool warningCheck{false};
 
-    bool managedSdk{false};
-
-    /**
-     * @brief Submit a Softadastra Cloud build report after the build completes.
-     */
-    bool report{false};
   };
 
   /**

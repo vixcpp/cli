@@ -37,14 +37,11 @@ namespace vix::commands::TestsCommand::detail
     ::vix::cli::commands::DiagnosticRequest diagnosticRequest{};
     bool parseFailed = false;
     std::string parseError;
-    bool runAfter = false; // --run (tests + runtime)
-    bool raw = false;
     // Literal, case-sensitive substring filter over registered test names.
     std::optional<std::string> exactTestName;
     std::string testPattern;
 
     fs::path projectDir;
-    std::vector<std::string> forwarded;
     std::vector<std::string> ctestArgs;
   };
 

@@ -28,7 +28,6 @@
 
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/commands/DiagnosticMode.hpp>
-#include <vix/cli/commands/replay/ReplayCapture.hpp>
 
 #ifndef _WIN32
 #include <sys/wait.h>
@@ -57,7 +56,6 @@ namespace vix::commands::RunCommand::detail
     None,
     Project,
     SingleCpp,
-    Manifest
   };
 
   /**
@@ -81,9 +79,6 @@ namespace vix::commands::RunCommand::detail
     None,
     UsesCompiledDeps,
     UsesVixRuntime,
-    UsesOrm,
-    UsesDatabase,
-    UsesMySql,
     RequiresCMakeTargets,
     UnsupportedFlags,
     UnsupportedLayout,
@@ -107,8 +102,6 @@ namespace vix::commands::RunCommand::detail
     bool singleCpp = false;
     fs::path cppFile;
 
-    bool manifestMode = false;
-    fs::path manifestFile;
 
     // Project/build selection
     std::string preset = "dev-ninja";
@@ -142,9 +135,6 @@ namespace vix::commands::RunCommand::detail
     ::vix::cli::commands::DiagnosticRequest diagnosticRequest{};
     ::vix::cli::commands::DiagnosticRequest projectDiagnosticRequest{};
 
-    bool withSqlite = false;
-    bool withMySql = false;
-
     std::optional<bool> docs;
 
     // Script / runtime forwarding
@@ -162,20 +152,7 @@ namespace vix::commands::RunCommand::detail
     bool parseFailed = false;
     int parseExitCode = 0;
 
-    bool hasDoubleDash = false;
-    std::vector<std::string> doubleDashArgs;
-
-    bool hasRunSeparator = false;
-    std::vector<std::string> runArgsAfterRun;
-
-    bool badDoubleDashRuntimeArgs = false;
-    std::string badDoubleDashArg;
-
-    bool warnedVixFlagAfterDoubleDash = false;
-    std::string warnedArg;
-
     bool localCache = false;
-    bool replay = false;
 
   };
 
@@ -194,7 +171,6 @@ namespace vix::commands::RunCommand::detail
     fs::path buildDir;
 
     fs::path cppFile;
-    fs::path manifestFile;
 
     std::string configurePreset;
     std::string resolvedRunPreset;
@@ -252,9 +228,6 @@ namespace vix::commands::RunCommand::detail
   struct ScriptFeatures
   {
     bool usesVix = false;
-    bool usesOrm = false;
-    bool usesDb = false;
-    bool usesMySql = false;
   };
 
   /**
@@ -462,9 +435,6 @@ namespace vix::commands::RunCommand::detail
     if (opt.singleCpp)
       return RunInputKind::SingleCpp;
 
-    if (opt.manifestMode)
-      return RunInputKind::Manifest;
-
     if (!opt.appName.empty() || !opt.dir.empty())
       return RunInputKind::Project;
 
@@ -526,11 +496,6 @@ namespace vix::commands::RunCommand::detail
   }
 
   /**
-   * @brief Resolve the entry C++ file referenced by a .vix manifest.
-   */
-  fs::path manifest_entry_cpp(const fs::path &manifestFile);
-
-  /**
    * @brief Select the project directory from parsed options and current directory.
    */
   std::optional<fs::path> choose_project_dir(
@@ -583,12 +548,11 @@ namespace vix::commands::RunCommand::detail
       int timeoutSec = 0,
       bool useSan = false,
       bool captureOnly = false,
-      vix::commands::replay::ReplayCapture *replayCapture = nullptr,
       LiveOutputObserver outputObserver = {},
       std::function<bool()> cancelForWatch = {});
 
   /**
-   * @brief Replay buffered process output when it was not already shown live.
+   * @brief Emit buffered process output when it was not already shown live.
    */
   void emit_captured_program_output(const LiveRunResult &result);
 
@@ -756,7 +720,7 @@ namespace vix::commands::RunCommand::detail
       const std::string &stdoutText,
       const std::string &stderrText);
 
-  int replay_direct_script_cached_failure(
+  int report_cached_script_compile_failure(
       const DirectScriptPlan &plan,
       const DirectScriptCacheState &cache);
 
@@ -792,8 +756,6 @@ namespace vix::commands::RunCommand::detail
       const fs::path &cppPath,
       bool useVixRuntime,
       const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql,
       const std::vector<std::string> &compilerArgs = {},
       const std::vector<std::string> &linkerArgs = {});
 

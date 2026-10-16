@@ -115,7 +115,7 @@ namespace vix::cli::util
    *   - CMakeLists.txt
    *   - .cmake files
    *   - CMakePresets.json / CMakeUserPresets.json
-   *   - vix.json / vix.lock when relevant to configuration
+   *   - vix.toml / vix.lock when relevant to configuration
    *
    * @param projectDir Project root directory
    * @return Deterministic configuration fingerprint

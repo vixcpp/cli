@@ -15,11 +15,7 @@
 #include <vix/cli/commands/DiagnosticMode.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
-#include <vix/cli/commands/replay/ReplayCapture.hpp>
-#include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
-#include <vix/cli/manifest/RunManifestMerge.hpp>
-#include <vix/cli/manifest/VixManifest.hpp>
 #include <vix/cli/commands/run/detail/RunnableExecutableResolver.hpp>
 #include <vix/cli/project/ProjectDiscovery.hpp>
 #include <vix/cli/project/NativeProjectCommandDispatch.hpp>
@@ -84,94 +80,6 @@ namespace
     RunTargetKind kind{RunTargetKind::Unknown};
     fs::path path{};
   };
-
-  std::string trim_copy_local(std::string s)
-  {
-    auto is_ws = [](unsigned char c)
-    { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
-
-    while (!s.empty() && is_ws(static_cast<unsigned char>(s.back())))
-      s.pop_back();
-
-    std::size_t i = 0;
-    while (i < s.size() && is_ws(static_cast<unsigned char>(s[i])))
-      ++i;
-
-    s.erase(0, i);
-    return s;
-  }
-
-  std::string to_dep_folder_name(const std::string &pkg)
-  {
-    std::string s = pkg;
-    const auto at = s.find('@');
-    if (at != std::string::npos)
-      s = s.substr(0, at);
-
-    const auto slash = s.find('/');
-    if (slash == std::string::npos)
-      return s;
-
-    return s.substr(0, slash) + "." + s.substr(slash + 1);
-  }
-
-  std::vector<std::string> parse_manifest_dep_packages_v1(const fs::path &manifestFile)
-  {
-    std::ifstream ifs(manifestFile);
-    std::vector<std::string> out;
-    if (!ifs)
-      return out;
-
-    bool inDeps = false;
-    std::string line;
-
-    while (std::getline(ifs, line))
-    {
-      line = trim_copy_local(line);
-      if (line.empty() || line[0] == '#')
-        continue;
-
-      if (line.size() >= 2 && line.front() == '[' && line.back() == ']')
-      {
-        const std::string sec = line.substr(1, line.size() - 2);
-        inDeps = (sec == "deps");
-        continue;
-      }
-
-      if (!inDeps)
-        continue;
-
-      if (line.rfind("packages", 0) != 0)
-        continue;
-
-      const auto eq = line.find('=');
-      if (eq == std::string::npos)
-        continue;
-
-      std::string rhs = trim_copy_local(line.substr(eq + 1));
-      const auto lb = rhs.find('[');
-      const auto rb = rhs.rfind(']');
-      if (lb == std::string::npos || rb == std::string::npos || rb <= lb)
-        continue;
-
-      std::string arr = rhs.substr(lb + 1, rb - lb - 1);
-
-      for (std::size_t i = 0; i < arr.size(); ++i)
-      {
-        if (arr[i] != '"')
-          continue;
-
-        const std::size_t j = arr.find('"', i + 1);
-        if (j == std::string::npos)
-          break;
-
-        out.push_back(arr.substr(i + 1, j - i - 1));
-        i = j;
-      }
-    }
-
-    return out;
-  }
 
   static int run_normalized_cmake_project(
       const fs::path &projectDir,
@@ -256,45 +164,6 @@ namespace
         vix::commands::RunCommand::detail::effective_timeout_sec(opt));
   }
 
-  void apply_manifest_auto_deps_includes(Options &opt, const fs::path &manifestFile)
-  {
-    const fs::path manifestDir = manifestFile.parent_path();
-    const fs::path depsRoot = manifestDir / ".vix" / "deps";
-
-    if (!fs::exists(depsRoot))
-      return;
-
-    const auto pkgs = parse_manifest_dep_packages_v1(manifestFile);
-    if (pkgs.empty())
-      return;
-
-    auto already_has_I = [&](const std::string &inc) -> bool
-    {
-      const std::string flag = "-I" + inc;
-      for (const auto &f : opt.scriptFlags)
-      {
-        if (f == flag)
-          return true;
-        if (f.rfind("-I", 0) == 0 && f.substr(2) == inc)
-          return true;
-      }
-      return false;
-    };
-
-    for (const auto &p : pkgs)
-    {
-      const std::string folder = to_dep_folder_name(p);
-      const fs::path inc = depsRoot / folder / "include";
-
-      std::error_code ec;
-      if (!fs::exists(inc, ec) || ec)
-        continue;
-
-      const std::string incStr = inc.string();
-      if (!already_has_I(incStr))
-        opt.scriptFlags.push_back("-I" + incStr);
-    }
-  }
 
   struct RunProgress
   {
@@ -407,7 +276,20 @@ namespace
     enable_line_buffered_stdout_for_apps();
 
     vix::commands::RunCommand::detail::apply_log_env(opt);
-    vix::cli::manifest::apply_env_pairs(opt.runEnv);
+    for (const auto &assignment : opt.runEnv)
+    {
+      const auto equals = assignment.find('=');
+      if (equals == std::string::npos || equals == 0)
+        continue;
+
+      const std::string key = assignment.substr(0, equals);
+      const std::string value = assignment.substr(equals + 1);
+#ifdef _WIN32
+      _putenv_s(key.c_str(), value.c_str());
+#else
+      ::setenv(key.c_str(), value.c_str(), 1);
+#endif
+    }
     apply_docs_env(opt);
 
 #ifndef _WIN32
@@ -498,31 +380,6 @@ namespace
     runCmd += vix::commands::RunCommand::detail::join_quoted_args_local(opt.runArgs);
     runCmd = vix::commands::RunCommand::detail::wrap_with_cwd_if_needed(opt, runCmd);
 
-    namespace replay = vix::commands::replay;
-
-    replay::ReplayRecorder recorder;
-    replay::ReplayRecorderConfig replayConfig{};
-
-    replayConfig.base_dir = fs::current_path();
-    replayConfig.cwd = fs::current_path();
-    replayConfig.project_dir = fs::current_path();
-    replayConfig.target_path = exePath;
-    replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
-    replayConfig.target_kind = replay::ReplayTargetKind::Project;
-    replayConfig.command = opt.watch ? "vix dev" : "vix run";
-    replayConfig.resolved_command = runCmd;
-    replayConfig.app_args = opt.runArgs;
-    replayConfig.watch = opt.watch;
-    replayConfig.replayable = true;
-
-    std::string replayErr;
-    const bool replayEnabled =
-        opt.replay && recorder.begin(replayConfig, replayErr);
-
-    replay::ReplayCapture replayCapture;
-    if (replayEnabled)
-      replayCapture.attach(&recorder);
-
     const bool useSanRuntime =
         instrumentedBinary ||
         vix::commands::RunCommand::detail::want_any_sanitizer(
@@ -536,30 +393,8 @@ namespace
             timeoutSec,
             useSanRuntime,
             false,
-            replayEnabled ? &replayCapture : nullptr,
             {},
             std::move(cancelForWatch));
-
-    if (replayEnabled)
-    {
-      replay::ReplayProcessResult process =
-          replay::make_replay_process_result(
-              rr.exitCode,
-              rr.rawStatus,
-              rr.terminatedBySignal,
-              rr.termSignal);
-
-      replay::ReplayCapturedResult captured =
-          replay::make_replay_captured_result(
-              replayCapture.output(),
-              process);
-
-      replay::ReplayRecorderFinish finish =
-          replay::make_replay_finish_from_capture(captured);
-
-      std::string finishErr;
-      (void)recorder.finish(finish, finishErr);
-    }
 
     int runExit = rr.exitCode;
 
@@ -1087,49 +922,6 @@ namespace vix::commands::RunCommand
         opt.watch = true;
       if (opt.parseFailed)
         return opt.parseExitCode;
-    if (opt.manifestMode)
-    {
-      vix::cli::manifest::Manifest mf{};
-      auto err = vix::cli::manifest::load_manifest(opt.manifestFile, mf);
-      if (err)
-      {
-        error("Invalid .vix manifest: " + err->message);
-        hint("File: " + opt.manifestFile.string());
-        return 1;
-      }
-
-      opt = vix::cli::manifest::merge_options(mf, opt);
-    }
-
-    if (opt.manifestMode && !opt.singleCpp)
-    {
-      opt.singleCpp = true;
-      opt.cppFile = manifest_entry_cpp(opt.manifestFile);
-    }
-
-    if (opt.hasDoubleDash && !opt.doubleDashArgs.empty())
-    {
-      if (opt.singleCpp)
-      {
-        opt.scriptFlags.insert(
-            opt.scriptFlags.end(),
-            opt.doubleDashArgs.begin(),
-            opt.doubleDashArgs.end());
-      }
-      else
-      {
-        opt.runArgs.insert(
-            opt.runArgs.end(),
-            opt.doubleDashArgs.begin(),
-            opt.doubleDashArgs.end());
-      }
-
-      opt.doubleDashArgs.clear();
-    }
-
-    if (opt.manifestMode && opt.singleCpp)
-      apply_manifest_auto_deps_includes(opt, opt.manifestFile);
-
     const auto resolveDiagnosticMode = [&](
         vix::cli::commands::DiagnosticProjectKind projectKind)
     {

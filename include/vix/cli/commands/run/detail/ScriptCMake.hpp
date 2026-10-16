@@ -43,8 +43,6 @@ namespace vix::commands::RunCommand::detail
       const fs::path &cppPath,
       bool useVixRuntime,
       const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql,
       const std::vector<std::string> &compilerArgs,
       const std::vector<std::string> &linkerArgs);
 

@@ -180,11 +180,6 @@ namespace vix::commands::RunCommand::detail
            mode == DiagnosticMode::Undefined;
   }
 
-  bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly)
-  {
-    return enableSanitizers || enableUbsanOnly;
-  }
-
   std::string sanitizer_mode_string(DiagnosticMode mode)
   {
     if (mode == DiagnosticMode::Thread)
@@ -202,24 +197,10 @@ namespace vix::commands::RunCommand::detail
     return "none";
   }
 
-  std::string sanitizer_mode_string(
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer)
-  {
-    return sanitizer_mode_string(
-        enableThreadSanitizer ? DiagnosticMode::Thread
-            : enableUbsanOnly ? DiagnosticMode::Undefined
-            : enableSanitizers ? DiagnosticMode::AddressUndefined
-                               : DiagnosticMode::None);
-  }
-
   std::string make_script_config_signature(
       bool useVixRuntime,
       DiagnosticMode mode,
       const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql,
       const std::vector<std::string> &compilerArgs,
       const std::vector<std::string> &linkerArgs)
   {
@@ -236,12 +217,6 @@ namespace vix::commands::RunCommand::detail
 
     sig += ";mode=";
     sig += sanitizer_mode_string(mode);
-
-    sig += ";sqlite=";
-    sig += withSqlite ? "1" : "0";
-
-    sig += ";mysql=";
-    sig += withMySql ? "1" : "0";
 
     sig += ";flags=";
     for (const auto &f : scriptFlags)
@@ -264,24 +239,6 @@ namespace vix::commands::RunCommand::detail
     }
 
     return sig;
-  }
-
-  std::string make_script_config_signature(
-      bool useVixRuntime,
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer,
-      const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql)
-  {
-    return make_script_config_signature(
-        useVixRuntime,
-        enableThreadSanitizer ? DiagnosticMode::Thread
-            : enableUbsanOnly ? DiagnosticMode::Undefined
-            : enableSanitizers ? DiagnosticMode::AddressUndefined
-                               : DiagnosticMode::None,
-        scriptFlags, withSqlite, withMySql);
   }
 
   std::string join_quoted_args_local(const std::vector<std::string> &a)

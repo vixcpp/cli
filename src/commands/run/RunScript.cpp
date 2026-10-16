@@ -12,15 +12,12 @@
  *
  */
 #include <vix/cli/commands/run/RunDetail.hpp>
-#include <vix/cli/app/AppManifest.hpp>
 #include <vix/cli/commands/InstallCommand.hpp>
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
 #include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
 #include <vix/cli/commands/run/detail/ScriptProbe.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
-#include <vix/cli/commands/replay/ReplayCapture.hpp>
-#include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/build/BuildStyle.hpp>
 #include <vix/cli/Style.hpp>
@@ -46,7 +43,6 @@
 #include <system_error>
 #include <thread>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #ifndef _WIN32
@@ -174,7 +170,6 @@ namespace vix::commands::RunCommand::detail
 
 #endif
 
-    void print_double_dash_warning_if_needed(const Options &opt);
     bool ensure_script_exists(const fs::path &script);
     std::vector<std::string> extract_script_include_prefixes_for_autodeps(const fs::path &cppPath);
     bool script_may_use_dep_id(const std::vector<std::string> &includePrefixes,
@@ -483,20 +478,6 @@ namespace vix::commands::RunCommand::detail
     {
       std::vector<std::string> ids;
 
-      const fs::path appPath = projectDir / "vix.app";
-      if (fs::exists(appPath))
-      {
-        const auto loaded = vix::cli::app::load_app_manifest(appPath);
-        if (loaded.success())
-        {
-          for (const auto &dep : loaded.manifest.deps)
-            ids.push_back(dep);
-
-          for (const auto &dep : loaded.manifest.gitDependencies)
-            ids.push_back(dep.name);
-        }
-      }
-
       const fs::path lockPath = projectDir / "vix.lock";
       if (fs::exists(lockPath))
       {
@@ -584,8 +565,9 @@ namespace vix::commands::RunCommand::detail
 
       while (!current.empty())
       {
-        if (fs::exists(current / "vix.lock") ||
-            fs::exists(current / "vix.json") ||
+        if (fs::exists(current / "vix.toml") ||
+            fs::exists(current / "vix.lock") ||
+            fs::exists(current / "CMakeLists.txt") ||
             fs::exists(current / ".vix" / "vix_deps.cmake") ||
             fs::exists(current / ".vix" / "deps"))
         {
@@ -609,7 +591,6 @@ namespace vix::commands::RunCommand::detail
 
     int prepare_script_options_common(Options &opt)
     {
-      print_double_dash_warning_if_needed(opt);
 
       if (!ensure_script_exists(opt.cppFile))
         return 1;
@@ -661,31 +642,6 @@ namespace vix::commands::RunCommand::detail
              isMakeInterrupt ||
              log.find("ninja: interrupted") != std::string::npos ||
              log.find("interrupted by user") != std::string::npos;
-    }
-
-    bool log_looks_like_linker_missing_file_due_to_runtime_args(const std::string &log)
-    {
-      if (log.empty())
-        return false;
-
-      const bool hasLd =
-          (log.find("/usr/bin/ld:") != std::string::npos) ||
-          (log.find(" ld:") != std::string::npos) ||
-          (log.find("collect2: error: ld returned") != std::string::npos);
-
-      if (!hasLd)
-        return false;
-
-      if (log.find("cannot find ") != std::string::npos &&
-          log.find("No such file or directory") != std::string::npos)
-      {
-        return true;
-      }
-
-      if (log.find("cannot find ") != std::string::npos)
-        return true;
-
-      return false;
     }
 
 #ifndef _WIN32
@@ -851,16 +807,6 @@ namespace vix::commands::RunCommand::detail
 #endif
     }
 
-    void print_script_runtime_args_hint()
-    {
-      hint("It looks like you passed runtime args after `--`.");
-      hint("In script mode, `--` forwards compiler/linker flags.");
-      hint("Use `--run` for runtime arguments:");
-      step("vix run file.cpp --run arg1 arg2 arg3");
-      hint("Or use repeatable --args:");
-      step("vix run file.cpp --args arg1 --args arg2 --args arg3");
-    }
-
     bool cache_is_ninja_build(const fs::path &buildDir)
     {
       std::error_code ec;
@@ -957,41 +903,6 @@ namespace vix::commands::RunCommand::detail
       return false;
     }
 
-    bool global_package_has_requested_include(
-        const fs::path &installedPath,
-        const std::string &includeDir,
-        const std::vector<std::string> &includeTargets)
-    {
-      const fs::path includeRoot = installedPath / includeDir;
-      std::error_code ec;
-      if (!fs::exists(includeRoot, ec) || ec || !fs::is_directory(includeRoot, ec))
-        return false;
-
-      for (const auto &includeTarget : includeTargets)
-      {
-        if (includeTarget.empty())
-          continue;
-
-        ec.clear();
-        if (fs::exists(includeRoot / includeTarget, ec) && !ec)
-          return true;
-
-        const auto slash = includeTarget.find('/');
-        if (slash == std::string::npos)
-          continue;
-
-        const std::string prefix = includeTarget.substr(0, slash);
-        if (prefix.empty())
-          continue;
-
-        ec.clear();
-        if (fs::exists(includeRoot / prefix, ec) && !ec)
-          return true;
-      }
-
-      return false;
-    }
-
     void apply_auto_deps_includes_from_deps_folder(Options &opt, const fs::path &startDir)
     {
       auto already_has_I = [&](const std::string &inc) -> bool
@@ -1007,42 +918,6 @@ namespace vix::commands::RunCommand::detail
         return false;
       };
 
-      auto home_dir = []() -> std::optional<std::string>
-      {
-#ifdef _WIN32
-        const char *home = vix::env::legacy::getenv("USERPROFILE");
-#else
-        const char *home = vix::env::legacy::getenv("HOME");
-#endif
-        if (!home || std::string(home).empty())
-          return std::nullopt;
-        return std::string(home);
-      };
-
-      auto vix_root = [&]() -> fs::path
-      {
-        if (const auto home = home_dir(); home)
-          return fs::path(*home) / ".vix";
-        return fs::path(".vix");
-      };
-
-      auto global_manifest_path = [&]() -> fs::path
-      {
-        return vix_root() / "global" / "installed.json";
-      };
-
-      auto dep_id_to_dir_local = [](std::string depId) -> std::string
-      {
-        depId.erase(std::remove(depId.begin(), depId.end(), '@'), depId.end());
-        std::replace(depId.begin(), depId.end(), '/', '.');
-        return depId;
-      };
-
-      std::unordered_set<std::string> localPkgDirs;
-
-      const std::vector<std::string> scriptIncludePrefixes =
-          extract_script_include_prefixes_for_autodeps(startDir / opt.cppFile.filename());
-
       auto scan_one = [&](const fs::path &baseDir)
       {
         const fs::path depsRoot = baseDir / ".vix" / "deps";
@@ -1057,10 +932,6 @@ namespace vix::commands::RunCommand::detail
           if (!it->is_directory())
             continue;
 
-          const std::string pkgDir = it->path().filename().string();
-          if (!pkgDir.empty())
-            localPkgDirs.insert(pkgDir);
-
           const fs::path inc = it->path() / "include";
           if (!fs::exists(inc, ec) || ec)
             continue;
@@ -1071,62 +942,9 @@ namespace vix::commands::RunCommand::detail
         }
       };
 
-      auto scan_global = [&]()
-      {
-        const fs::path manifestPath = global_manifest_path();
-        if (!fs::exists(manifestPath))
-          return;
-
-        std::ifstream ifs(manifestPath);
-        if (!ifs)
-          return;
-
-        nlohmann::json root;
-        ifs >> root;
-
-        if (!root.is_object() || !root.contains("packages") || !root["packages"].is_array())
-          return;
-
-        for (const auto &item : root["packages"])
-        {
-          if (!item.is_object())
-            continue;
-
-          if (!item.contains("id") || !item["id"].is_string())
-            continue;
-
-          if (!item.contains("installed_path") || !item["installed_path"].is_string())
-            continue;
-
-          const std::string id = item["id"].get<std::string>();
-
-          if (!script_may_use_dep_id(scriptIncludePrefixes, id))
-            continue;
-
-          const std::string pkgDir = dep_id_to_dir_local(id);
-
-          if (localPkgDirs.contains(pkgDir))
-            continue;
-
-          std::string includeDir = "include";
-          if (item.contains("include") && item["include"].is_string())
-            includeDir = item["include"].get<std::string>();
-
-          const fs::path installedPath = fs::path(item["installed_path"].get<std::string>());
-          if (!global_package_has_requested_include(installedPath, includeDir, scriptIncludePrefixes))
-            continue;
-
-          const fs::path inc = installedPath / includeDir;
-          const std::string incStr = inc.string();
-          if (!already_has_I(incStr))
-            opt.scriptFlags.push_back("-I" + incStr);
-        }
-      };
-
       if (opt.autoDeps == AutoDepsMode::Local)
       {
         scan_one(startDir);
-        scan_global();
         return;
       }
 
@@ -1148,7 +966,6 @@ namespace vix::commands::RunCommand::detail
           cur = parent;
         }
 
-        scan_global();
       }
     }
 
@@ -1159,16 +976,6 @@ namespace vix::commands::RunCommand::detail
 
       error("C++ file not found: " + script.string());
       return false;
-    }
-
-    void print_double_dash_warning_if_needed(const Options &opt)
-    {
-      if (!opt.warnedVixFlagAfterDoubleDash)
-        return;
-
-      hint("Note: '" + opt.warnedArg + "' was passed after `--` so it will be treated as a compiler/linker flag.");
-      hint("If you meant a Vix option, move it before `--`.");
-      hint("If you meant a runtime arg, use `--run` (or repeatable --args).");
     }
 
     int configure_script_project(const Options &opt, const ScriptProjectState &state)
@@ -1350,9 +1157,6 @@ namespace vix::commands::RunCommand::detail
 
       if (!logContent.empty())
       {
-        if (log_looks_like_linker_missing_file_due_to_runtime_args(logContent))
-          print_script_runtime_args_hint();
-
         handled = vix::cli::ErrorHandler::printBuildErrors(
             logContent,
             state.script,
@@ -1391,35 +1195,6 @@ namespace vix::commands::RunCommand::detail
       cmdRun += join_quoted_args_local(opt.runArgs);
       cmdRun = wrap_with_cwd_if_needed(opt, cmdRun);
 
-      namespace replay = vix::commands::replay;
-
-      replay::ReplayRecorder recorder;
-      replay::ReplayRecorderConfig replayConfig{};
-
-      replayConfig.base_dir = fs::current_path();
-      replayConfig.cwd = fs::current_path();
-      replayConfig.project_dir = fs::current_path();
-      replayConfig.target_path = state.script;
-      replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
-      replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
-      replayConfig.command = "vix run " + state.script.string() +
-                             (opt.watch ? " --watch" : "");
-      replayConfig.resolved_command = cmdRun;
-      replayConfig.vix_args = opt.scriptFlags;
-      replayConfig.app_args = opt.runArgs;
-      replayConfig.watch = opt.watch;
-      replayConfig.direct_script = false;
-      replayConfig.cmake_fallback = true;
-      replayConfig.replayable = true;
-
-      std::string replayErr;
-      const bool replayEnabled =
-          opt.replay && recorder.begin(replayConfig, replayErr);
-
-      replay::ReplayCapture replayCapture;
-      if (replayEnabled)
-        replayCapture.attach(&recorder);
-
       const bool useSanRuntime = want_any_sanitizer(opt.diagnosticMode);
 
       LiveRunResult rr = run_cmd_live_filtered_capture(
@@ -1428,29 +1203,7 @@ namespace vix::commands::RunCommand::detail
           isInteractive,
           effective_timeout_sec(opt),
           useSanRuntime,
-          false,
-          replayEnabled ? &replayCapture : nullptr);
-
-      if (replayEnabled)
-      {
-        replay::ReplayProcessResult process =
-            replay::make_replay_process_result(
-                rr.exitCode,
-                rr.rawStatus,
-                rr.terminatedBySignal,
-                rr.termSignal);
-
-        replay::ReplayCapturedResult captured =
-            replay::make_replay_captured_result(
-                replayCapture.output(),
-                process);
-
-        replay::ReplayRecorderFinish finish =
-            replay::make_replay_finish_from_capture(captured);
-
-        std::string finishErr;
-        (void)recorder.finish(finish, finishErr);
-      }
+          false);
 
       int runCode = normalize_exit_code(rr.exitCode);
 
@@ -1655,8 +1408,6 @@ namespace vix::commands::RunCommand::detail
           state.script,
           state.useVixRuntime,
           opt.scriptFlags,
-          opt.withSqlite,
-          opt.withMySql,
           opt.compilerArgs,
           opt.linkerArgs);
 
@@ -1746,12 +1497,6 @@ namespace vix::commands::RunCommand::detail
         return "uses compiled dependencies";
       case ScriptFallbackReason::UsesVixRuntime:
         return "uses Vix runtime without direct installation";
-      case ScriptFallbackReason::UsesOrm:
-        return "uses ORM";
-      case ScriptFallbackReason::UsesDatabase:
-        return "uses database";
-      case ScriptFallbackReason::UsesMySql:
-        return "uses MySQL";
       case ScriptFallbackReason::RequiresCMakeTargets:
         return "requires CMake targets";
       case ScriptFallbackReason::UnsupportedFlags:
@@ -1830,7 +1575,7 @@ namespace vix::commands::RunCommand::detail
 
         if (cache.cachedFailure)
         {
-          return replay_direct_script_cached_failure(
+          return report_cached_script_compile_failure(
               directPlan,
               cache);
         }
@@ -1997,8 +1742,6 @@ namespace vix::commands::RunCommand::detail
         plan.useVixRuntime,
         opt.diagnosticMode,
         opt.scriptFlags,
-        opt.withSqlite,
-        opt.withMySql,
         opt.compilerArgs,
         opt.linkerArgs);
     plan.dependencyRoots = probe.compiledDepPaths;
@@ -2588,7 +2331,6 @@ namespace vix::commands::RunCommand::detail
 
         if (name == "CMakeLists.txt" ||
             name == "CMakePresets.json" ||
-            name == "vix.json" ||
             name == "vix.toml" ||
             name == "vix.lock")
         {
@@ -2834,20 +2576,6 @@ namespace vix::commands::RunCommand::detail
         {
           std::cerr << "[vix][run] setenv VIX_MODE failed: " << std::strerror(errno) << "\n";
           _exit(127);
-        }
-
-        if (opt.withMySql)
-        {
-          ::setenv("VIX_DB_ENGINE", "mysql", 1);
-          ::setenv("VIX_ENABLE_DB", "1", 1);
-          ::setenv("VIX_DB_USE_MYSQL", "1", 1);
-        }
-
-        if (opt.withSqlite)
-        {
-          ::setenv("VIX_DB_ENGINE", "sqlite", 1);
-          ::setenv("VIX_ENABLE_DB", "1", 1);
-          ::setenv("VIX_DB_USE_SQLITE", "1", 1);
         }
 
         const std::string exeStr = exePath.string();

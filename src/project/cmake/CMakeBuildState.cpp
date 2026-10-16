@@ -155,7 +155,6 @@ namespace vix::cli::project::cmake
     append_field(identity, toolchainContent);
     append_field(identity, plan.launcher ? std::string_view(*plan.launcher) : std::string_view{});
     append_field(identity, plan.fastLinkerFlag ? std::string_view(*plan.fastLinkerFlag) : std::string_view{});
-    append_field(identity, plan.sdkConfigDir.string());
     for (const auto &argument : cmakeArguments)
       append_field(identity, argument);
     for (const auto &[name, value] : plan.cmakeVars)

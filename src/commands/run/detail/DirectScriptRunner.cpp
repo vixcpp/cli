@@ -15,8 +15,6 @@
 #include <vix/cli/commands/helpers/ProcessHelpers.hpp>
 #include <vix/cli/commands/helpers/TextHelpers.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
-#include <vix/cli/commands/replay/ReplayCapture.hpp>
-#include <vix/cli/commands/replay/ReplayRecorder.hpp>
 #include <vix/cli/errors/RawLogDetectors.hpp>
 #include <vix/cli/ErrorHandler.hpp>
 #include <vix/cli/Style.hpp>
@@ -509,9 +507,6 @@ namespace vix::commands::RunCommand::detail
       oss << ";san=" << text::bool01(want_any_sanitizer(opt.diagnosticMode));
 
       oss << ";san_mode=" << sanitizer_mode_string(opt.diagnosticMode);
-      oss << ";sqlite=" << text::bool01(opt.withSqlite);
-      oss << ";mysql=" << text::bool01(opt.withMySql);
-
       return oss.str();
     }
 
@@ -1221,11 +1216,6 @@ namespace vix::commands::RunCommand::detail
       return wrap_with_cwd_if_needed(opt, cmd);
     }
 
-    bool direct_replay_enabled(const Options &opt)
-    {
-      return opt.watch || opt.replay;
-    }
-
   } // namespace
 
   fs::path get_direct_scripts_cache_root(bool localCache)
@@ -1444,7 +1434,7 @@ namespace vix::commands::RunCommand::detail
         failureMeta);
   }
 
-  int replay_direct_script_cached_failure(
+  int report_cached_script_compile_failure(
       const DirectScriptPlan &plan,
       const DirectScriptCacheState &cache)
   {
@@ -1496,7 +1486,7 @@ namespace vix::commands::RunCommand::detail
 
     if (cache.cachedFailure)
     {
-      return replay_direct_script_cached_failure(
+      return report_cached_script_compile_failure(
           plan,
           cache);
     }
@@ -1558,68 +1548,13 @@ namespace vix::commands::RunCommand::detail
     if (!plan.shouldRun)
       return 0;
 
-    namespace replay = vix::commands::replay;
-
-    replay::ReplayRecorder recorder;
-    replay::ReplayCapture replayCapture;
-    bool replayEnabled = false;
-
-    if (direct_replay_enabled(opt))
-    {
-      replay::ReplayRecorderConfig replayConfig{};
-
-      replayConfig.base_dir = fs::current_path();
-      replayConfig.cwd = fs::current_path();
-      replayConfig.project_dir = fs::current_path();
-      replayConfig.target_path = plan.scriptPath;
-      replayConfig.mode = opt.watch ? replay::ReplayMode::Dev : replay::ReplayMode::Run;
-      replayConfig.target_kind = replay::ReplayTargetKind::SingleCpp;
-      replayConfig.command = "vix run " + plan.scriptPath.string() +
-                             (opt.watch ? " --watch" : "");
-      replayConfig.resolved_command = plan.runCmd;
-      replayConfig.vix_args = opt.scriptFlags;
-      replayConfig.app_args = opt.runArgs;
-      replayConfig.watch = opt.watch;
-      replayConfig.direct_script = true;
-      replayConfig.cmake_fallback = false;
-      replayConfig.replayable = true;
-
-      std::string replayErr;
-      replayEnabled = recorder.begin(replayConfig, replayErr);
-
-      if (replayEnabled)
-        replayCapture.attach(&recorder);
-    }
-
     const LiveRunResult run = run_cmd_live_filtered_capture(
         plan.runCmd,
         "Running script...",
         plan.passthroughRuntime,
         plan.effectiveTimeoutSec,
         want_any_sanitizer(opt.diagnosticMode),
-        false,
-        replayEnabled ? &replayCapture : nullptr);
-
-    if (replayEnabled)
-    {
-      replay::ReplayProcessResult process =
-          replay::make_replay_process_result(
-              run.exitCode,
-              run.rawStatus,
-              run.terminatedBySignal,
-              run.termSignal);
-
-      replay::ReplayCapturedResult captured =
-          replay::make_replay_captured_result(
-              replayCapture.output(),
-              process);
-
-      replay::ReplayRecorderFinish finish =
-          replay::make_replay_finish_from_capture(captured);
-
-      std::string finishErr;
-      (void)recorder.finish(finish, finishErr);
-    }
+        false);
 
     if (is_user_interrupt_result(run))
     {

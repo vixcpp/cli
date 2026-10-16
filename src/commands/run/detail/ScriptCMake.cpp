@@ -20,10 +20,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <nlohmann/json.hpp>
 #include <optional>
-#include <queue>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -33,15 +31,6 @@ namespace vix::commands::RunCommand::detail
 {
   namespace
   {
-    struct GlobalPackage
-    {
-      std::string id;
-      std::string pkgDir;
-      std::string includeDir{"include"};
-      std::string type{"header-only"};
-      fs::path installedPath;
-    };
-
     struct ResolvedScriptDeps
     {
       std::vector<std::string> orderedDepIds;
@@ -49,20 +38,6 @@ namespace vix::commands::RunCommand::detail
       std::vector<std::string> cmakeDepAliases;
       std::vector<std::string> includeDirs;
     };
-
-    std::string trim_copy(std::string s)
-    {
-      auto is_ws = [](unsigned char c)
-      { return std::isspace(c) != 0; };
-
-      while (!s.empty() && is_ws(static_cast<unsigned char>(s.front())))
-        s.erase(s.begin());
-
-      while (!s.empty() && is_ws(static_cast<unsigned char>(s.back())))
-        s.pop_back();
-
-      return s;
-    }
 
     std::string dep_dir_to_id(const std::string &pkgDir)
     {
@@ -94,8 +69,9 @@ namespace vix::commands::RunCommand::detail
 
       while (!current.empty())
       {
-        if (fs::exists(current / "vix.lock") ||
-            fs::exists(current / "vix.json") ||
+        if (fs::exists(current / "vix.toml") ||
+            fs::exists(current / "vix.lock") ||
+            fs::exists(current / "CMakeLists.txt") ||
             fs::exists(current / ".vix" / "vix_deps.cmake") ||
             fs::exists(current / ".vix" / "deps"))
         {
@@ -128,19 +104,6 @@ namespace vix::commands::RunCommand::detail
         return std::nullopt;
 
       return std::string(home);
-    }
-
-    fs::path vix_root()
-    {
-      if (const auto home = home_dir(); home)
-        return fs::path(*home) / ".vix";
-
-      return fs::path(".vix");
-    }
-
-    fs::path global_manifest_path()
-    {
-      return vix_root() / "global" / "installed.json";
     }
 
     std::string sanitize_identifier(std::string s)
@@ -214,128 +177,6 @@ namespace vix::commands::RunCommand::detail
         items.push_back(value);
     }
 
-    std::vector<std::string> load_package_dependencies_from_manifest(const fs::path &pkgPath)
-    {
-      std::vector<std::string> deps;
-
-      const fs::path manifestPath = pkgPath / "vix.json";
-      if (!fs::exists(manifestPath))
-        return deps;
-
-      std::ifstream ifs(manifestPath);
-      if (!ifs)
-        return deps;
-
-      nlohmann::json j;
-      ifs >> j;
-
-      auto read_dep_block = [&](const nlohmann::json &d)
-      {
-        if (d.is_object())
-        {
-          for (auto it = d.begin(); it != d.end(); ++it)
-            deps.push_back(it.key());
-
-          return;
-        }
-
-        if (d.is_array())
-        {
-          for (const auto &item : d)
-          {
-            if (item.is_string())
-            {
-              deps.push_back(item.get<std::string>());
-            }
-            else if (item.is_object())
-            {
-              if (item.contains("id") && item["id"].is_string())
-                deps.push_back(item["id"].get<std::string>());
-              else if (item.contains("name") && item["name"].is_string())
-                deps.push_back(item["name"].get<std::string>());
-              else if (item.contains("package") && item["package"].is_string())
-                deps.push_back(item["package"].get<std::string>());
-            }
-          }
-        }
-      };
-
-      if (j.contains("dependencies"))
-        read_dep_block(j["dependencies"]);
-
-      if (deps.empty() && j.contains("deps"))
-        read_dep_block(j["deps"]);
-
-      return deps;
-    }
-
-    std::vector<std::pair<std::string, std::string>> topo_sort_dep_packages(
-        const std::vector<std::pair<std::string, std::string>> &depPackages)
-    {
-      std::vector<std::pair<std::string, std::string>> ordered;
-
-      std::unordered_map<std::string, std::string> dirToPath;
-      std::unordered_map<std::string, std::vector<std::string>> graph;
-      std::unordered_map<std::string, int> indegree;
-
-      for (const auto &[pkgDir, pkgPath] : depPackages)
-      {
-        dirToPath[pkgDir] = pkgPath;
-        graph[pkgDir] = {};
-        indegree[pkgDir] = 0;
-      }
-
-      for (const auto &[pkgDir, pkgPath] : depPackages)
-      {
-        const auto manifestDeps = load_package_dependencies_from_manifest(pkgPath);
-
-        for (const auto &depId : manifestDeps)
-        {
-          const std::string depDir = dep_id_to_dir(depId);
-          if (!dirToPath.contains(depDir))
-            continue;
-
-          graph[depDir].push_back(pkgDir);
-          indegree[pkgDir]++;
-        }
-      }
-
-      std::vector<std::string> zero;
-      for (const auto &[pkgDir, _] : depPackages)
-      {
-        if (indegree[pkgDir] == 0)
-          zero.push_back(pkgDir);
-      }
-
-      std::sort(zero.begin(), zero.end());
-
-      std::queue<std::string> q;
-      for (const auto &pkgDir : zero)
-        q.push(pkgDir);
-
-      while (!q.empty())
-      {
-        const std::string cur = q.front();
-        q.pop();
-
-        ordered.push_back({cur, dirToPath[cur]});
-
-        auto nexts = graph[cur];
-        std::sort(nexts.begin(), nexts.end());
-
-        for (const auto &next : nexts)
-        {
-          indegree[next]--;
-          if (indegree[next] == 0)
-            q.push(next);
-        }
-      }
-
-      if (ordered.size() != depPackages.size())
-        return depPackages;
-
-      return ordered;
-    }
 
     std::string dep_id_to_cmake_alias(const std::string &id)
     {
@@ -478,180 +319,6 @@ namespace vix::commands::RunCommand::detail
       return out;
     }
 
-    std::vector<std::string> extract_script_include_targets(const fs::path &cppPath)
-    {
-      std::vector<std::string> targets;
-
-      std::ifstream ifs(cppPath);
-      if (!ifs)
-        return targets;
-
-      std::string line;
-      while (std::getline(ifs, line))
-      {
-        const auto incPos = line.find("#include");
-        if (incPos == std::string::npos)
-          continue;
-
-        std::size_t start = line.find('<', incPos);
-        char closer = '>';
-        if (start == std::string::npos)
-        {
-          start = line.find('"', incPos);
-          closer = '"';
-        }
-
-        if (start == std::string::npos)
-          continue;
-
-        const std::size_t end = line.find(closer, start + 1);
-        if (end == std::string::npos || end <= start + 1)
-          continue;
-
-        std::string inc = trim_copy(line.substr(start + 1, end - start - 1));
-        if (inc.empty())
-          continue;
-
-        targets.push_back(inc);
-      }
-
-      std::sort(targets.begin(), targets.end());
-      targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
-      return targets;
-    }
-
-    std::vector<GlobalPackage> load_global_packages()
-    {
-      std::vector<GlobalPackage> out;
-
-      const fs::path manifestPath = global_manifest_path();
-      if (!fs::exists(manifestPath))
-        return out;
-
-      std::ifstream ifs(manifestPath);
-      if (!ifs)
-        return out;
-
-      nlohmann::json root;
-      ifs >> root;
-
-      if (!root.is_object() || !root.contains("packages") || !root["packages"].is_array())
-        return out;
-
-      for (const auto &item : root["packages"])
-      {
-        if (!item.is_object())
-          continue;
-
-        if (!item.contains("id") || !item["id"].is_string())
-          continue;
-
-        if (!item.contains("installed_path") || !item["installed_path"].is_string())
-          continue;
-
-        GlobalPackage pkg;
-        pkg.id = item["id"].get<std::string>();
-        pkg.pkgDir = dep_id_to_dir(pkg.id);
-        pkg.installedPath = fs::path(item["installed_path"].get<std::string>());
-
-        if (item.contains("include") && item["include"].is_string())
-          pkg.includeDir = item["include"].get<std::string>();
-
-        if (item.contains("type") && item["type"].is_string())
-          pkg.type = item["type"].get<std::string>();
-
-        out.push_back(std::move(pkg));
-      }
-
-      return out;
-    }
-
-    bool package_matches_script_includes(
-        const GlobalPackage &pkg,
-        const std::vector<std::string> &includeTargets)
-    {
-      const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
-      if (!fs::exists(includeRoot) || !fs::is_directory(includeRoot))
-        return false;
-
-      for (const auto &includeTarget : includeTargets)
-      {
-        if (includeTarget.empty())
-          continue;
-
-        if (fs::exists(includeRoot / includeTarget))
-          return true;
-
-        const auto slash = includeTarget.find('/');
-        if (slash == std::string::npos)
-          continue;
-
-        const std::string prefix = includeTarget.substr(0, slash);
-        if (!prefix.empty() && fs::exists(includeRoot / prefix))
-          return true;
-      }
-
-      return false;
-    }
-
-    std::vector<GlobalPackage> select_global_packages_for_script(
-        const fs::path &cppPath,
-        const std::vector<std::string> &localPackageIds)
-    {
-      std::vector<GlobalPackage> selected;
-      const auto allGlobals = load_global_packages();
-      const auto includeTargets = extract_script_include_targets(cppPath);
-
-      if (allGlobals.empty() || includeTargets.empty())
-        return selected;
-
-      std::unordered_set<std::string> localIds(localPackageIds.begin(), localPackageIds.end());
-      std::unordered_map<std::string, GlobalPackage> globalsById;
-
-      for (const auto &pkg : allGlobals)
-        globalsById[pkg.id] = pkg;
-
-      std::unordered_set<std::string> visited;
-
-      std::function<void(const GlobalPackage &)> visit = [&](const GlobalPackage &pkg)
-      {
-        if (pkg.id.empty())
-          return;
-
-        if (localIds.contains(pkg.id))
-          return;
-
-        if (!visited.insert(pkg.id).second)
-          return;
-
-        selected.push_back(pkg);
-
-        if (fs::exists(pkg.installedPath / ".vix" / "vix_deps.cmake"))
-          return;
-
-        for (const auto &depId : load_package_dependencies_from_manifest(pkg.installedPath))
-        {
-          if (localIds.contains(depId))
-            continue;
-
-          const auto it = globalsById.find(depId);
-          if (it != globalsById.end())
-            visit(it->second);
-        }
-      };
-
-      for (const auto &pkg : allGlobals)
-      {
-        if (localIds.contains(pkg.id))
-          continue;
-
-        if (package_matches_script_includes(pkg, includeTargets))
-          visit(pkg);
-      }
-
-      return selected;
-    }
-
     ResolvedScriptDeps resolve_script_deps(
         const fs::path &cppPath,
         ScriptCompileFlags &cf)
@@ -669,15 +336,6 @@ namespace vix::commands::RunCommand::detail
         const auto depPackages = extract_dep_packages_from_include_dirs(cf.includeDirs);
         for (const auto &[pkgDir, _pkgPath] : depPackages)
           resolved.orderedDepIds.push_back(pkgDir);
-      }
-
-      std::unordered_set<std::string> localPackageIds;
-      for (const auto &depId : resolved.orderedDepIds)
-      {
-        if (depId.find('/') != std::string::npos || depId.find('@') != std::string::npos)
-          localPackageIds.insert(depId);
-        else
-          localPackageIds.insert(dep_dir_to_id(depId));
       }
 
       std::vector<std::pair<std::string, fs::path>> cmakeDeps;
@@ -708,33 +366,8 @@ namespace vix::commands::RunCommand::detail
         }
       }
 
-      const std::vector<std::string> localIdsForGlobal(localPackageIds.begin(), localPackageIds.end());
-      const auto globalPkgs = select_global_packages_for_script(cppPath, localIdsForGlobal);
-
-      for (const auto &pkg : globalPkgs)
-      {
-        const fs::path includePath = pkg.installedPath / pkg.includeDir;
-        if (fs::exists(includePath))
-          append_unique_string(cf.includeDirs, includePath.string());
-
-        if (fs::exists(pkg.installedPath / "CMakeLists.txt"))
-          cmakeDeps.emplace_back(pkg.pkgDir, pkg.installedPath);
-      }
-
-      std::vector<std::pair<std::string, std::string>> topoInput;
-      topoInput.reserve(cmakeDeps.size());
-
-      for (const auto &[pkgDir, pkgPath] : cmakeDeps)
-        topoInput.emplace_back(pkgDir, pkgPath.string());
-
-      const auto topoSorted = topo_sort_dep_packages(topoInput);
-
-      std::vector<std::pair<std::string, fs::path>> cmakeDepsSorted;
-      for (const auto &[pkgDir, pkgPath] : topoSorted)
-        cmakeDepsSorted.emplace_back(pkgDir, fs::path(pkgPath));
-
       std::unordered_set<std::string> seenPkgDirs;
-      for (const auto &[pkgDir, pkgPath] : cmakeDepsSorted)
+      for (const auto &[pkgDir, pkgPath] : cmakeDeps)
       {
         if (seenPkgDirs.insert(pkgDir).second)
           resolved.uniqueCmakeDeps.emplace_back(pkgDir, pkgPath);
@@ -953,14 +586,13 @@ namespace vix::commands::RunCommand::detail
       append_line(s);
     }
 
-    void append_sanitizer_options_block(std::string &s, const ScriptFeatures &feat)
+    void append_sanitizer_options_block(std::string &s)
     {
       append_line(s, "option(VIX_ENABLE_SANITIZERS \"Enable sanitizers (dev only)\" OFF)");
       append_line(s, "set(VIX_SANITIZER_MODE \"asan_ubsan\" CACHE STRING \"Sanitizer mode: asan, asan_ubsan, ubsan, or tsan\")");
       append_line(s, "set_property(CACHE VIX_SANITIZER_MODE PROPERTY STRINGS asan asan_ubsan ubsan tsan)");
       append_line(s, "option(VIX_ENABLE_LIBCXX_ASSERTS \"Enable libstdc++ debug mode (_GLIBCXX_ASSERTIONS/_GLIBCXX_DEBUG)\" OFF)");
       append_line(s, "option(VIX_ENABLE_HARDENING \"Enable extra hardening flags (non-MSVC)\" OFF)");
-      append_line(s, std::string("option(VIX_USE_ORM \"Enable Vix ORM (requires vix::orm)\" ") + (feat.usesOrm ? "ON" : "OFF") + ")");
       append_line(s);
     }
 
@@ -1163,29 +795,8 @@ namespace vix::commands::RunCommand::detail
 
     void append_vix_runtime_block(
         std::string &s,
-        const std::string &targetName,
-        bool withSqlite,
-        bool withMySql,
-        bool wantsOrm)
+        const std::string &targetName)
     {
-      if (withSqlite || withMySql)
-        append_line(s, "set(VIX_ENABLE_DB ON CACHE BOOL \"\" FORCE)");
-
-      if (withSqlite)
-      {
-        append_line(s, "set(VIX_DB_USE_SQLITE ON CACHE BOOL \"\" FORCE)");
-        append_line(s, "set(VIX_DB_REQUIRE_SQLITE ON CACHE BOOL \"\" FORCE)");
-      }
-
-      if (withMySql)
-      {
-        append_line(s, "set(VIX_DB_USE_MYSQL ON CACHE BOOL \"\" FORCE)");
-        append_line(s, "set(VIX_DB_REQUIRE_MYSQL ON CACHE BOOL \"\" FORCE)");
-      }
-
-      if (withSqlite || withMySql)
-        append_line(s);
-
       append_line(s, "find_package(Vix CONFIG REQUIRED)");
       append_line(s);
 
@@ -1200,35 +811,6 @@ namespace vix::commands::RunCommand::detail
       append_line(s);
 
       append_line(s, "target_link_libraries(" + targetName + " PRIVATE ${VIX_MAIN_TARGET})");
-      append_line(s);
-
-      if (wantsOrm)
-      {
-        append_line(s, "if (VIX_USE_ORM)");
-        append_line(s, "  if (TARGET vix::orm)");
-        append_line(s, "    target_link_libraries(" + targetName + " PRIVATE vix::orm)");
-        append_line(s, "    target_compile_definitions(" + targetName + " PRIVATE VIX_USE_ORM=1)");
-        append_line(s, "  elseif (TARGET Vix::orm)");
-        append_line(s, "    target_link_libraries(" + targetName + " PRIVATE Vix::orm)");
-        append_line(s, "    target_compile_definitions(" + targetName + " PRIVATE VIX_USE_ORM=1)");
-        append_line(s, "  else()");
-        append_line(s, "    message(FATAL_ERROR \"VIX_USE_ORM=ON but ORM target is not available (vix::orm/Vix::orm)\")");
-        append_line(s, "  endif()");
-        append_line(s);
-        append_line(s, "  if (TARGET vix::db)");
-        append_line(s, "    target_link_libraries(" + targetName + " PRIVATE vix::db)");
-        append_line(s, "  elseif (TARGET Vix::db)");
-        append_line(s, "    target_link_libraries(" + targetName + " PRIVATE Vix::db)");
-        append_line(s, "  else()");
-        append_line(s, "    message(FATAL_ERROR \"VIX_USE_ORM=ON but DB target is not available (vix::db/Vix::db)\")");
-        append_line(s, "  endif()");
-        append_line(s, "endif()");
-        append_line(s);
-      }
-
-      append_line(s, "if (VIX_DB_USE_MYSQL)");
-      append_line(s, "  message(STATUS \"MySQL requested. If your connector is external, pass explicit link flags such as: -- -lmysqlcppconn8\")");
-      append_line(s, "endif()");
       append_line(s);
     }
 
@@ -1306,8 +888,6 @@ namespace vix::commands::RunCommand::detail
       const fs::path &cppPath,
       bool useVixRuntime,
       const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql,
       const std::vector<std::string> &compilerArgs,
       const std::vector<std::string> &linkerArgs)
   {
@@ -1331,7 +911,7 @@ namespace vix::commands::RunCommand::detail
     ScriptLinkFlags lf = parse_link_flags(scriptFlags);
     ScriptCompileFlags cf = parse_compile_flags(scriptFlags);
 
-    append_sanitizer_options_block(s, feat);
+    append_sanitizer_options_block(s);
 
     const ResolvedScriptDeps deps = resolve_script_deps(cppPath, cf);
 
@@ -1386,12 +966,7 @@ namespace vix::commands::RunCommand::detail
     }
     else
     {
-      append_vix_runtime_block(
-          s,
-          targetName,
-          withSqlite,
-          withMySql,
-          feat.usesOrm);
+      append_vix_runtime_block(s, targetName);
     }
 
     append_sanitizer_runtime_block(s, targetName);

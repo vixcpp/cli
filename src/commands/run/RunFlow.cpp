@@ -46,7 +46,6 @@ namespace vix::commands::RunCommand::detail
     enum class Zone
     {
       Vix,
-      Script,
       Run
     };
 
@@ -94,43 +93,6 @@ namespace vix::commands::RunCommand::detail
       }
 
       return std::nullopt;
-    }
-
-    bool is_known_vix_flag(const std::string &v)
-    {
-      return v == "--verbose" || v == "--quiet" || v == "-q" ||
-             v == "--watch" || v == "--reload" ||
-             v == "--force-server" || v == "--force-script" ||
-             v == "--san" || v == "--asan" ||
-             v == "--ubsan" || v == "--tsan" ||
-             v == "--docs" || v == "--no-docs" || v.rfind("--docs=", 0) == 0 ||
-             v == "--no-color" ||
-             v == "--replay" ||
-             v == "--preset" || v.rfind("--preset=", 0) == 0 ||
-             v == "--run-preset" || v.rfind("--run-preset=", 0) == 0 ||
-             v == "--cwd" || v.rfind("--cwd=", 0) == 0 ||
-             v == "--env" || v.rfind("--env=", 0) == 0 ||
-             v == "--args" || v.rfind("--args=", 0) == 0 ||
-             v == "--log-level" || v == "--loglevel" || v.rfind("--log-level=", 0) == 0 ||
-             v == "--log-format" || v.rfind("--log-format=", 0) == 0 ||
-             v == "--log-color" || v.rfind("--log-color=", 0) == 0 ||
-             v == "--clear" || v.rfind("--clear=", 0) == 0 ||
-             v == "--no-clear" ||
-             v == "--auto-deps" || v.rfind("--auto-deps=", 0) == 0 ||
-             v == "--with-sqlite" ||
-             v == "--with-mysql" ||
-             v == "--clean" ||
-             v == "--check" ||
-             v == "-j" || v == "--jobs";
-    }
-
-    void warn_if_vix_flag_in_script(Options &opt, const std::string &value)
-    {
-      if (!opt.warnedVixFlagAfterDoubleDash && is_known_vix_flag(value))
-      {
-        opt.warnedVixFlagAfterDoubleDash = true;
-        opt.warnedArg = value;
-      }
     }
 
     std::string take_value(
@@ -231,8 +193,9 @@ namespace vix::commands::RunCommand::detail
       const fs::path p{arg};
       if (p.extension() == ".vix")
       {
-        opt.manifestMode = true;
-        opt.manifestFile = fs::absolute(p);
+        error("vix run no longer accepts .vix run manifests.");
+        opt.parseFailed = true;
+        opt.parseExitCode = 2;
       }
       else if (p.extension() == ".cpp")
       {
@@ -285,101 +248,6 @@ namespace vix::commands::RunCommand::detail
 #endif
   } // namespace
 
-  fs::path manifest_entry_cpp(const fs::path &manifestFile)
-  {
-    const fs::path root = manifestFile.parent_path();
-
-    auto abs_if_exists = [&](fs::path p) -> std::optional<fs::path>
-    {
-      std::error_code ec;
-      if (p.is_relative())
-        p = root / p;
-
-      p = fs::weakly_canonical(p, ec);
-      if (ec)
-        p = fs::absolute(p);
-
-      if (fs::exists(p, ec) && !ec)
-        return p;
-
-      return std::nullopt;
-    };
-
-    auto trim = [](std::string s) -> std::string
-    {
-      auto is_space = [](unsigned char c)
-      { return std::isspace(c) != 0; };
-
-      while (!s.empty() && is_space(static_cast<unsigned char>(s.front())))
-        s.erase(s.begin());
-
-      while (!s.empty() && is_space(static_cast<unsigned char>(s.back())))
-        s.pop_back();
-
-      return s;
-    };
-
-    auto strip_quotes = [&](std::string s) -> std::string
-    {
-      s = trim(std::move(s));
-      if (s.size() >= 2 && s.front() == '"' && s.back() == '"')
-        return s.substr(1, s.size() - 2);
-
-      return s;
-    };
-
-    const fs::path fallbackMain = root / "main.cpp";
-    const fs::path fallbackSrcMain = root / "src" / "main.cpp";
-
-    {
-      std::error_code ec;
-      if (!fs::exists(manifestFile, ec) || ec)
-      {
-        if (auto p = abs_if_exists(fallbackSrcMain))
-          return *p;
-        if (auto p = abs_if_exists(fallbackMain))
-          return *p;
-
-        return fs::absolute(fallbackSrcMain);
-      }
-    }
-
-    std::ifstream in(manifestFile.string());
-    std::string line;
-
-    while (std::getline(in, line))
-    {
-      line = trim(line);
-      if (line.empty() || line[0] == '#')
-        continue;
-
-      if (const auto hash = line.find('#'); hash != std::string::npos)
-        line = trim(line.substr(0, hash));
-
-      if (line.rfind("entry", 0) != 0)
-        continue;
-
-      const auto posEq = line.find('=');
-      const auto posCl = line.find(':');
-      const auto pos = (posEq == std::string::npos) ? posCl : posEq;
-      if (pos == std::string::npos)
-        continue;
-
-      std::string rhs = strip_quotes(line.substr(pos + 1));
-      if (rhs.empty())
-        continue;
-
-      if (auto p = abs_if_exists(fs::path(rhs)))
-        return *p;
-    }
-
-    if (auto p = abs_if_exists(fallbackSrcMain))
-      return *p;
-    if (auto p = abs_if_exists(fallbackMain))
-      return *p;
-
-    return fs::absolute(fallbackSrcMain);
-  }
 
   Options parse(const std::vector<std::string> &args)
   {
@@ -392,32 +260,15 @@ namespace vix::commands::RunCommand::detail
     {
       const std::string &a = args[i];
 
-      if (zone != Zone::Run && a == "--run")
-      {
-        opt.hasRunSeparator = true;
-        zone = Zone::Run;
-        continue;
-      }
-
       if (zone == Zone::Run)
       {
         opt.runArgs.push_back(a);
-        opt.runArgsAfterRun.push_back(a);
         continue;
       }
 
       if (a == "--")
       {
-        opt.hasDoubleDash = true;
         zone = Zone::Run;
-        continue;
-      }
-
-      if (zone == Zone::Script)
-      {
-        warn_if_vix_flag_in_script(opt, a);
-        opt.scriptFlags.push_back(a);
-        opt.doubleDashArgs.push_back(a);
         continue;
       }
 
@@ -499,10 +350,6 @@ namespace vix::commands::RunCommand::detail
       else if (a == "--local-cache")
       {
         opt.localCache = true;
-      }
-      else if (a == "--replay")
-      {
-        opt.replay = true;
       }
       else if (a == "--log-level" || a == "--loglevel")
       {
@@ -601,14 +448,6 @@ namespace vix::commands::RunCommand::detail
           opt.docs = false;
         else
           hint("Invalid value for --docs. Use 0|1|true|false.");
-      }
-      else if (a == "--with-sqlite")
-      {
-        opt.withSqlite = true;
-      }
-      else if (a == "--with-mysql")
-      {
-        opt.withMySql = true;
       }
       else if (a == "--clean")
       {

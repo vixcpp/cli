@@ -55,16 +55,6 @@ file(GLOB_RECURSE CLI_SOURCES
   CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
-# AppProjectResolver belongs to the retired vix.app project architecture.
-# Keep the historical source available for reference, but do not compile it
-# into the canonical CLI.
-list(FILTER CLI_SOURCES EXCLUDE REGEX "/src/app/AppProjectResolver\\.cpp$")
-# The old Git-index RegistryCatalog is only used by the retired Note command.
-list(FILTER CLI_SOURCES EXCLUDE REGEX "/src/registry/RegistryCatalog\\.cpp$")
-# These command implementations remain historical source assets, but are not
-# part of the canonical C++ development CLI.
-list(FILTER CLI_SOURCES EXCLUDE REGEX
-  "/src/commands/(AgentCommand|GameExportCommand|NoteCommand|DesktopCommand|MobileCommand|MobileCommandUnavailable|OrmCommand|DbCommand|P2PCommand|ServiceCommand|ProxyCommand|HealthCommand|DeployCommand|LogsCommand|EnvCommand|ProductionCommand|WsCommand)\\.cpp$|/src/commands/replay/ReplayCommand\\.cpp$|/src/commands/(db|ws|env)/.*\\.cpp$")
 list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
@@ -299,10 +289,6 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::core)
     endif()
 
-    if (TARGET vix::json)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::json)
-    endif()
-
     if (TARGET vix::reply)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::reply)
     endif()
@@ -321,7 +307,6 @@ else()
 
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_JSON_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REPLY_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REQUESTS_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")

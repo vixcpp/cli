@@ -41,15 +41,6 @@ namespace vix::commands::NewCommand
         std::cerr << "vix new: destination is not empty: " << destination << '\n';
         return 1;
       }
-      for (const char *marker : {"CMakeLists.txt", "vix.json", "vix.app", "vix.lock"})
-      {
-        if (fs::exists(destination / marker, error) && !error)
-        {
-          std::cerr << "vix new: refusing to overlay conflicting project authority: " << marker << '\n';
-          return 1;
-        }
-        error.clear();
-      }
     }
 
     std::string diagnostic;

@@ -13,7 +13,6 @@
  */
 #include <vix/cli/commands/run/detail/ScriptProbe.hpp>
 #include <vix/cli/commands/run/RunScriptHelpers.hpp>
-#include <vix/cli/cmake/GlobalPackages.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -70,8 +69,9 @@ namespace vix::commands::RunCommand::detail
 
       while (!current.empty())
       {
-        if (fs::exists(current / "vix.lock") ||
-            fs::exists(current / "vix.json") ||
+        if (fs::exists(current / "vix.toml") ||
+            fs::exists(current / "vix.lock") ||
+            fs::exists(current / "CMakeLists.txt") ||
             fs::exists(current / ".vix" / "vix_deps.cmake") ||
             fs::exists(current / ".vix" / "deps"))
         {
@@ -398,85 +398,6 @@ namespace vix::commands::RunCommand::detail
       return matchedCompiledDep;
     }
 
-    bool global_package_matches_script_include(
-        const vix::cli::build::GlobalPackage &pkg,
-        const std::vector<std::string> &includeTargets)
-    {
-      if (pkg.installedPath.empty() || pkg.includeDir.empty())
-        return false;
-
-      const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
-
-      std::error_code ec;
-      if (!fs::exists(includeRoot, ec) || ec)
-        return false;
-
-      ec.clear();
-      if (!fs::is_directory(includeRoot, ec) || ec)
-        return false;
-
-      for (const auto &includeTarget : includeTargets)
-      {
-        if (includeTarget.empty())
-          continue;
-
-        ec.clear();
-        if (fs::exists(includeRoot / includeTarget, ec) && !ec)
-          return true;
-
-        const auto slash = includeTarget.find('/');
-        if (slash == std::string::npos)
-          continue;
-
-        const std::string prefix = includeTarget.substr(0, slash);
-        if (prefix.empty())
-          continue;
-
-        ec.clear();
-        if (fs::exists(includeRoot / prefix, ec) && !ec)
-          return true;
-      }
-
-      return false;
-    }
-
-    bool global_package_requires_cmake_targets(
-        const vix::cli::build::GlobalPackage &pkg)
-    {
-      std::error_code ec;
-      const bool hasCMake =
-          fs::exists(pkg.installedPath / "CMakeLists.txt", ec) && !ec;
-
-      return hasCMake && pkg.type != "header-only";
-    }
-
-    void apply_matching_global_package_includes(
-        const fs::path &cppPath,
-        ScriptProbeResult &out)
-    {
-      const std::vector<std::string> includeTargets =
-          extract_script_include_targets(cppPath);
-
-      if (includeTargets.empty())
-        return;
-
-      for (const auto &pkg : vix::cli::build::load_global_packages())
-      {
-        if (!global_package_matches_script_include(pkg, includeTargets))
-          continue;
-
-        const fs::path includeRoot = pkg.installedPath / pkg.includeDir;
-        append_unique(out.includeDirs, includeRoot.string());
-        out.headerOnlyDepIncludeDirs.push_back(includeRoot);
-
-        if (global_package_requires_cmake_targets(pkg))
-        {
-          out.requiresCMakeTargets = true;
-          out.usesCompiledDeps = true;
-          out.compiledDepPaths.push_back(pkg.installedPath);
-        }
-      }
-    }
 
     /**
      * @brief Return true when forwarded include paths suggest dependency-managed code.
@@ -616,15 +537,6 @@ namespace vix::commands::RunCommand::detail
         bool requiresCMakeTargets,
         bool unsupportedFlags)
     {
-      if (features.usesOrm)
-        return ScriptFallbackReason::UsesOrm;
-
-      if (features.usesDb)
-        return ScriptFallbackReason::UsesDatabase;
-
-      if (features.usesMySql)
-        return ScriptFallbackReason::UsesMySql;
-
       if (requiresCMakeTargets)
         return ScriptFallbackReason::RequiresCMakeTargets;
 
@@ -682,39 +594,7 @@ namespace vix::commands::RunCommand::detail
         f.usesVix = true;
       }
 
-      // ORM detection — vix/orm sub-tree or vix::orm namespace
-      if (has("#include <vix/orm") || has("#include \"vix/orm") ||
-          has("vix::orm") || has("using namespace vix::orm"))
-      {
-        f.usesOrm = true;
-      }
-
-      // DB detection — vix/db sub-tree or vix::db namespace
-      if (has("#include <vix/db") || has("#include \"vix/db") ||
-          has("vix::db") || has("using namespace vix::db"))
-      {
-        f.usesDb = true;
-      }
-
-      // MySQL detection — factory helpers, engine enum, connector headers
-      if (has("make_mysql_factory") ||
-          has("Engine::MySQL") ||
-          has("mysqlcppconn") ||
-          has("#include <mysql") ||
-          has("#include \"mysql"))
-      {
-        f.usesMySql = true;
-      }
-
-      if (!f.usesMySql &&
-          (has("tcp://") || has(":3306") || has("MySQL")))
-      {
-        f.usesMySql = true;
-      }
     }
-
-    if (f.usesOrm)
-      f.usesDb = true;
 
     return f;
   }
@@ -854,7 +734,6 @@ namespace vix::commands::RunCommand::detail
     out.linkOpts = out.linkFlags.linkOpts;
 
     apply_matching_project_dependency_includes(opt.cppFile, out);
-    apply_matching_global_package_includes(opt.cppFile, out);
 
     const bool unsupportedFlags =
         script_flags_require_cmake_fallback(opt.scriptFlags);
@@ -867,11 +746,6 @@ namespace vix::commands::RunCommand::detail
     out.requiresCMakeTargets =
         out.requiresCMakeTargets ||
         out.features.usesVix ||
-        out.features.usesOrm ||
-        out.features.usesDb ||
-        out.features.usesMySql ||
-        opt.withSqlite ||
-        opt.withMySql ||
         !out.libs.empty() ||
         !out.libDirs.empty() ||
         !out.linkOpts.empty();
@@ -896,27 +770,6 @@ namespace vix::commands::RunCommand::detail
 
     if (out.usesCompiledDeps && !onlyVixIncludesAdded)
       out.compiledDepPaths.push_back(opt.cppFile.parent_path() / ".vix" / "deps");
-
-    const bool requiresFullBuildSystem =
-        out.features.usesOrm ||
-        out.features.usesDb ||
-        out.features.usesMySql ||
-        opt.withSqlite ||
-        opt.withMySql;
-
-    if (requiresFullBuildSystem)
-    {
-      out.strategy = ScriptExecutionStrategy::CMakeFallback;
-      out.fallbackReason = choose_fallback_reason(
-          out.features,
-          out.usesCompiledDeps,
-          out.requiresCMakeTargets,
-          unsupportedFlags);
-
-      out.canUseDirectCompile = false;
-      out.shouldUseCMakeFallback = true;
-      return out;
-    }
 
     const bool allowDirect =
         !unsupportedFlags &&

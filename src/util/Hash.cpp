@@ -401,10 +401,6 @@ namespace vix::cli::util
     if (file_exists(userPresets))
       files.push_back(userPresets);
 
-    const fs::path vixJson = projectDir / "vix.json";
-    if (file_exists(vixJson))
-      files.push_back(vixJson);
-
     const fs::path vixLock = projectDir / "vix.lock";
     if (file_exists(vixLock))
       files.push_back(vixLock);

@@ -1,7 +1,6 @@
 #include <vix/cli/project/native/NativeDevelopmentRuntime.hpp>
 #include <vix/cli/project/native/NativeBuildState.hpp>
 #include <vix/cli/commands/DiagnosticMode.hpp>
-#include <vix/cli/manifest/RunManifestMerge.hpp>
 #include <vix/cli/project/native/ProjectLockState.hpp>
 #include <vix/cli/project/NativeProjectCommandDispatch.hpp>
 #include <vix/cli/project/ProjectDiscovery.hpp>
@@ -271,67 +270,27 @@ namespace
            testExecuted == Mode::AddressUndefined);
   }
 
-  void run_manifest_diagnostic_mode_merge_tests()
+  void diagnostic_policy_tests()
   {
     using Mode = vix::cli::commands::DiagnosticMode;
     using RequestKind = vix::cli::commands::DiagnosticRequestKind;
     using Command = vix::cli::commands::DiagnosticCommand;
     using ProjectKind = vix::cli::commands::DiagnosticProjectKind;
-    using RunOptions = vix::commands::RunCommand::detail::Options;
-
-    vix::cli::manifest::Manifest manifestOptions;
-    RunOptions cliOptions;
-
-    const auto resolveRun = [](const RunOptions &options, ProjectKind projectKind, bool release = false)
-    {
-      return vix::cli::commands::resolve_diagnostic_mode(
-          Command::Run, release, projectKind, options.diagnosticRequest,
-          options.projectDiagnosticRequest);
-    };
-
-    assert(!manifestOptions.san);
-    auto merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(merged.projectDiagnosticRequest.kind == RequestKind::Unspecified);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::AddressUndefined);
-    assert(resolveRun(merged, ProjectKind::StandaloneCpp) == Mode::AddressUndefined);
-    assert(resolveRun(merged, ProjectKind::StandaloneCpp, true) == Mode::None);
-    assert(resolveRun(merged, ProjectKind::ExternalCMake) == Mode::None);
-
-    manifestOptions.san = "asan_ubsan";
-    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(merged.projectDiagnosticRequest.kind == RequestKind::Explicit);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::AddressUndefined);
-
-    manifestOptions.san = "ubsan";
-    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::Undefined);
-
-    manifestOptions.san = "off";
-    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(merged.projectDiagnosticRequest.kind == RequestKind::Off);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::None);
-
-    cliOptions.diagnosticRequest = {RequestKind::Explicit, Mode::Undefined};
-    manifestOptions.san = "ubsan";
-    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::Undefined);
-
-    cliOptions.diagnosticRequest = {RequestKind::Off, Mode::None};
-    manifestOptions.san = "asan_ubsan";
-    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::None);
-
-    cliOptions.diagnosticRequest = {RequestKind::Explicit, Mode::Undefined};
-    manifestOptions.san = "off";
-    merged = vix::cli::manifest::merge_options(manifestOptions, cliOptions);
-    assert(resolveRun(merged, ProjectKind::NativeVix) == Mode::Undefined);
 
     assert(vix::cli::commands::resolve_diagnostic_mode(
-               Command::Run, true, ProjectKind::NativeVix,
-               {RequestKind::Explicit, Mode::AddressUndefined}) == Mode::AddressUndefined);
+               Command::Run, false, ProjectKind::NativeVix, {}) == Mode::AddressUndefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, false, ProjectKind::StandaloneCpp, {}) == Mode::AddressUndefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, true, ProjectKind::StandaloneCpp, {}) == Mode::None);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, false, ProjectKind::ExternalCMake, {}) == Mode::None);
     assert(vix::cli::commands::resolve_diagnostic_mode(
                Command::Run, true, ProjectKind::NativeVix,
                {RequestKind::Explicit, Mode::Undefined}) == Mode::Undefined);
+    assert(vix::cli::commands::resolve_diagnostic_mode(
+               Command::Run, false, ProjectKind::NativeVix,
+               {RequestKind::Off, Mode::None}) == Mode::None);
     assert(vix::cli::commands::resolve_diagnostic_mode(
                Command::Build, false, ProjectKind::NativeVix, {}) == Mode::None);
     assert(vix::cli::commands::resolve_diagnostic_mode(
@@ -348,11 +307,6 @@ namespace
                Command::Dev, false, ProjectKind::StandaloneCpp, {}) == Mode::AddressUndefined);
     assert(vix::cli::commands::resolve_diagnostic_mode(
                Command::Dev, true, ProjectKind::NativeVix, {}) == Mode::None);
-    assert(vix::cli::commands::resolve_diagnostic_mode(
-               Command::Run, true, ProjectKind::NativeVix,
-               {}, {RequestKind::Explicit, Mode::Undefined}) == Mode::Undefined);
-    assert(vix::cli::commands::resolve_diagnostic_mode(
-               Command::Test, false, ProjectKind::ExternalCMake, {}) == Mode::None);
   }
 
   void build_run_state_and_artifact_tests()
@@ -913,7 +867,7 @@ namespace
 int main()
 {
   run_named_test("diagnostic_mode_parser_and_runtime_propagation_tests", diagnostic_mode_parser_and_runtime_propagation_tests);
-  run_named_test("run_manifest_diagnostic_mode_merge_tests", run_manifest_diagnostic_mode_merge_tests);
+  run_named_test("diagnostic_policy_tests", diagnostic_policy_tests);
   run_named_test("build_run_state_and_artifact_tests", build_run_state_and_artifact_tests);
   run_named_test("package_preparation_failure_stops_operations", package_preparation_failure_stops_operations);
   run_named_test("lock_failures_stop_before_preparation_or_build", lock_failures_stop_before_preparation_or_build);

@@ -16,7 +16,6 @@
 #include <vix/cli/cache/ArtifactCache.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
 #include <vix/cli/commands/DiagnosticMode.hpp>
-#include <vix/cli/commands/CloudCommand.hpp>
 #include <vix/cli/build/BuildGraph.hpp>
 #include <vix/cli/build/BuildScheduler.hpp>
 #include <vix/cli/build/ObjectCache.hpp>
@@ -57,7 +56,6 @@
 #endif
 
 #include <vix/cli/cmake/CMakeBuild.hpp>
-#include <vix/cli/cmake/GlobalPackages.hpp>
 #include <vix/cli/cmake/Toolchain.hpp>
 #include <vix/cli/project/ProjectDiscovery.hpp>
 #include <vix/cli/project/NativeProjectCommandDispatch.hpp>
@@ -78,7 +76,6 @@
 #include <vix/cli/commands/run/detail/DirectScriptRunner.hpp>
 #include <vix/cli/commands/run/detail/ScriptCMake.hpp>
 #include <vix/cli/commands/run/RunDetail.hpp>
-#include <vix/cli/sdk/SdkProfiles.hpp>
 #include <vix/engine/BuildTools.hpp>
 #include <vix/engine/CMakeConfiguration.hpp>
 #include <vix/engine/ConfigurationSignature.hpp>
@@ -124,7 +121,6 @@ namespace vix::commands::BuildCommand
     struct ResolvedBuildPlan
     {
       process::Plan plan;
-      std::string sdkResolutionError;
       std::string toolchainContent;
       std::string buildStateError;
     };
@@ -1120,11 +1116,6 @@ namespace vix::commands::BuildCommand
         vix::engine::SanitizerMode sanitizerMode);
     ;
 
-    static void resolve_sdk_for_plan(
-        process::Plan &plan,
-        std::string &sdkResolutionError,
-        const process::Options &opt);
-
     static std::optional<fs::path> resolve_main_executable(
         const fs::path &buildDir,
         const fs::path &projectDir,
@@ -1291,9 +1282,6 @@ namespace vix::commands::BuildCommand
         return false;
 
       if (!opt.cmakeArgs.empty())
-        return false;
-
-      if (opt.withSqlite || opt.withMySql)
         return false;
 
       if (opt.linkStatic)
@@ -1520,9 +1508,6 @@ namespace vix::commands::BuildCommand
         return false;
 
       if (!opt.targetTriple.empty())
-        return false;
-
-      if (opt.withSqlite || opt.withMySql)
         return false;
 
       if (opt.linkStatic)
@@ -1818,10 +1803,6 @@ namespace vix::commands::BuildCommand
         {
           o.warningCheck = true;
         }
-        else if (a == "--managed-sdk")
-        {
-          o.managedSdk = true;
-        }
         else if (a == "--page")
         {
           auto v = util::take_value(args, i);
@@ -1924,14 +1905,6 @@ namespace vix::commands::BuildCommand
             return o;
           }
           o.preset = std::string(*v);
-        }
-        else if (a == "--with-sqlite")
-        {
-          o.withSqlite = true;
-        }
-        else if (a == "--with-mysql")
-        {
-          o.withMySql = true;
         }
         else if (!a.empty() && a[0] != '-')
         {
@@ -2138,10 +2111,6 @@ namespace vix::commands::BuildCommand
         {
           o.fast = true;
         }
-        else if (a == "--report")
-        {
-          o.report = true;
-        }
         else if (a == "--no-cache")
         {
           o.useCache = false;
@@ -2263,23 +2232,14 @@ namespace vix::commands::BuildCommand
         const process::Options &opt,
         const fs::path &toolchainFile,
         const std::optional<std::string> &launcher,
-        const std::optional<std::string> &fastLinkerFlag,
-        const fs::path &globalPackagesFile,
-        vix::engine::DependencyEnvironmentMode dependencyEnvironmentMode,
-        const fs::path &sdkConfigDir)
+        const std::optional<std::string> &fastLinkerFlag)
     {
       vix::engine::CMakeConfigurationOptions engineOptions;
       engineOptions.buildType = p.buildType;
       engineOptions.targetTriple = opt.targetTriple;
       engineOptions.linkStatic = opt.linkStatic;
-      engineOptions.withSqlite = opt.withSqlite;
-      engineOptions.withMySql = opt.withMySql;
       engineOptions.warningCheck = opt.warningCheck;
       engineOptions.toolchainFile = toolchainFile;
-      engineOptions.globalPackagesFile = globalPackagesFile;
-      engineOptions.dependencyEnvironmentMode =
-          dependencyEnvironmentMode;
-      engineOptions.sdkConfigDir = sdkConfigDir;
       engineOptions.launcher = launcher;
       engineOptions.fastLinkerFlag = fastLinkerFlag;
 
@@ -2500,9 +2460,6 @@ namespace vix::commands::BuildCommand
       plan.projectFingerprint =
           util::compute_cmake_config_fingerprint(plan.cmakeSourceDir);
 
-      std::string sdkResolutionError;
-      resolve_sdk_for_plan(plan, sdkResolutionError, opt);
-
       std::string toolchainContent;
 
       if (!opt.targetTriple.empty())
@@ -2530,25 +2487,18 @@ namespace vix::commands::BuildCommand
           opt,
           plan.toolchainFile,
           plan.launcher,
-          plan.fastLinkerFlag,
-          plan.buildDir / "vix-global-packages.cmake",
-          plan.dependencyEnvironmentMode,
-          plan.sdkConfigDir);
+          plan.fastLinkerFlag);
 
       context = vix::cli::project::cmake::make_external_cmake_build_state_context(
           userProjectDir, plan, platform, compilerIdentity.str(), opt.sysroot,
           opt.sanitizerMode, opt.cmakeArgs, toolchainContent);
       vix::cli::project::cmake::apply_external_cmake_build_state_context(plan, context);
-      const fs::path globalPackagesFile = plan.buildDir / "vix-global-packages.cmake";
       plan.cmakeVars = build_cmake_vars(
           plan.preset,
           opt,
           plan.toolchainFile,
           plan.launcher,
-          plan.fastLinkerFlag,
-          globalPackagesFile,
-          plan.dependencyEnvironmentMode,
-          plan.sdkConfigDir);
+          plan.fastLinkerFlag);
       plan.signature = build_configuration_signature(plan, opt, toolchainContent);
 
       std::string buildStateError;
@@ -2561,7 +2511,6 @@ namespace vix::commands::BuildCommand
 
       return ResolvedBuildPlan{
           std::move(plan),
-          std::move(sdkResolutionError),
           std::move(toolchainContent),
           std::move(buildStateError)};
     }
@@ -2823,543 +2772,6 @@ namespace vix::commands::BuildCommand
       out << "}\n";
     }
 
-    static bool sdk_scan_skip_dir(const fs::path &path)
-    {
-      for (const auto &part : path)
-      {
-        const std::string item = part.string();
-        if (item == ".git" || item == "build" || item == "build-ninja" ||
-            item == "build-release" || item == "CMakeFiles" || item == "_deps" ||
-            item == "deps" || item == "node_modules")
-          return true;
-      }
-      return false;
-    }
-
-    static bool sdk_scan_file_name(const fs::path &path)
-    {
-      const std::string name = path.filename().string();
-      return name == "CMakeLists.txt" ||
-             name == "vix.module" || path.extension() == ".cmake";
-    }
-
-    static void collect_vix_targets_from_text(const std::string &text, std::set<std::string> &targets)
-    {
-      const std::string prefix = "vix::";
-      std::size_t pos = 0;
-      while ((pos = text.find(prefix, pos)) != std::string::npos)
-      {
-        std::size_t end = pos + prefix.size();
-        while (end < text.size())
-        {
-          const unsigned char c = static_cast<unsigned char>(text[end]);
-          if (!(std::isalnum(c) || text[end] == '_'))
-            break;
-          ++end;
-        }
-        if (end > pos + prefix.size())
-          targets.insert(text.substr(pos, end - pos));
-        pos = end;
-      }
-    }
-
-    static bool sdk_debug_enabled(const process::Options &opt)
-    {
-      if (opt.debug || !opt.debugLogScope.empty())
-        return true;
-      const char *level = std::getenv("VIX_LOG_LEVEL");
-      if (!level)
-        return false;
-
-      std::string value(level);
-      std::transform(
-          value.begin(),
-          value.end(),
-          value.begin(),
-          [](unsigned char c)
-          {
-            return static_cast<char>(std::tolower(c));
-          });
-
-      return value == "debug" || value == "trace";
-    }
-
-    static bool cmake_argument_sets_variable(
-        const std::string &argument,
-        const std::string &name)
-    {
-      const std::string prefix = "-D" + name;
-
-      if (argument.rfind(prefix, 0) != 0)
-        return false;
-
-      if (argument.size() <= prefix.size())
-        return false;
-
-      const char next = argument[prefix.size()];
-      return next == '=' || next == ':';
-    }
-
-    static std::optional<std::string> cmake_argument_variable_value(
-        const std::string &argument,
-        const std::string &name)
-    {
-      if (!cmake_argument_sets_variable(argument, name))
-        return std::nullopt;
-
-      const std::size_t eq = argument.find('=');
-      if (eq == std::string::npos)
-        return std::nullopt;
-
-      return argument.substr(eq + 1);
-    }
-
-    static bool vix_config_file_exists(const fs::path &dir)
-    {
-      return util::file_exists(dir / "VixConfig.cmake") ||
-             util::file_exists(dir / "vixConfig.cmake");
-    }
-
-    static bool valid_vix_config_dir_hint(const std::string &raw)
-    {
-      if (raw.empty())
-        return false;
-
-      const fs::path path(raw);
-
-      if (util::file_exists(path))
-      {
-        const std::string name = path.filename().string();
-        return name == "VixConfig.cmake" ||
-               name == "vixConfig.cmake";
-      }
-
-      return vix_config_file_exists(path);
-    }
-
-    static std::vector<std::string> split_cmake_path_list(
-        const std::string &value)
-    {
-      std::vector<std::string> out;
-      std::string current;
-
-      auto flush =
-          [&]()
-      {
-        if (!current.empty())
-          out.push_back(current);
-        current.clear();
-      };
-
-      for (char c : value)
-      {
-#ifdef _WIN32
-        const bool sep = c == ';';
-#else
-        const bool sep = c == ';' || c == ':';
-#endif
-        if (sep)
-          flush();
-        else
-          current.push_back(c);
-      }
-
-      flush();
-      return out;
-    }
-
-    static bool valid_vix_prefix_hint(const std::string &raw)
-    {
-      for (const std::string &entry : split_cmake_path_list(raw))
-      {
-        if (entry.empty())
-          continue;
-
-        const fs::path prefix(entry);
-
-        if (vix_config_file_exists(prefix / "lib" / "cmake" / "Vix") ||
-            vix_config_file_exists(prefix / "share" / "cmake" / "Vix") ||
-            vix_config_file_exists(prefix / "share" / "Vix" / "cmake") ||
-            vix_config_file_exists(prefix))
-        {
-          return true;
-        }
-      }
-
-      return false;
-    }
-
-    static bool valid_existing_file_hint(const std::string &raw)
-    {
-      return !raw.empty() && util::file_exists(fs::path(raw));
-    }
-
-    static bool has_explicit_vix_discovery_override(
-        const process::Options &opt)
-    {
-      const char *configDirEnvironmentVariables[] = {
-          "Vix_DIR",
-          "vix_DIR"};
-
-      for (const char *name : configDirEnvironmentVariables)
-      {
-        const char *value = std::getenv(name);
-        if (value && valid_vix_config_dir_hint(value))
-          return true;
-      }
-
-      const char *prefixEnvironmentVariables[] = {
-          "Vix_ROOT",
-          "vix_ROOT",
-          "CMAKE_PREFIX_PATH",
-          "CMAKE_FIND_ROOT_PATH"};
-
-      for (const char *name : prefixEnvironmentVariables)
-      {
-        const char *value = std::getenv(name);
-        if (value && valid_vix_prefix_hint(value))
-          return true;
-      }
-
-      if (const char *value = std::getenv("CMAKE_TOOLCHAIN_FILE"))
-      {
-        if (valid_existing_file_hint(value))
-          return true;
-      }
-
-      const char *configDirCmakeVariables[] = {
-          "Vix_DIR",
-          "vix_DIR"};
-
-      const char *prefixCmakeVariables[] = {
-          "Vix_ROOT",
-          "vix_ROOT",
-          "CMAKE_PREFIX_PATH",
-          "CMAKE_FIND_ROOT_PATH"};
-
-      for (const std::string &argument :
-           opt.cmakeArgs)
-      {
-        for (const char *name : configDirCmakeVariables)
-        {
-          const auto value =
-              cmake_argument_variable_value(argument, name);
-          if (value && valid_vix_config_dir_hint(*value))
-            return true;
-        }
-
-        for (const char *name : prefixCmakeVariables)
-        {
-          const auto value =
-              cmake_argument_variable_value(argument, name);
-          if (value && valid_vix_prefix_hint(*value))
-            return true;
-        }
-
-        if (const auto value =
-                cmake_argument_variable_value(
-                    argument,
-                    "CMAKE_TOOLCHAIN_FILE"))
-        {
-          if (valid_existing_file_hint(*value))
-            return true;
-        }
-      }
-
-      return false;
-    }
-
-    static bool has_local_vix_dependency_modules(
-        const fs::path &projectDir,
-        const std::set<std::string> &modules)
-    {
-      if (modules.empty())
-        return false;
-
-      const fs::path root =
-          projectDir / "deps" / "vix";
-
-      for (const std::string &module : modules)
-      {
-        if (!util::file_exists(root / module / "CMakeLists.txt"))
-          return false;
-      }
-
-      return true;
-    }
-
-    static std::set<std::string> collect_project_vix_targets(const fs::path &projectDir, const fs::path &cmakeSourceDir)
-    {
-      std::set<std::string> targets;
-      std::vector<fs::path> roots{projectDir};
-      if (!cmakeSourceDir.empty() && cmakeSourceDir != projectDir)
-        roots.push_back(cmakeSourceDir);
-
-      for (const fs::path &root : roots)
-      {
-        std::error_code ec;
-        if (!fs::exists(root, ec) || ec)
-          continue;
-
-        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
-             !ec && it != fs::recursive_directory_iterator(); ++it)
-        {
-          const fs::path path = it->path();
-          if (it->is_directory(ec))
-          {
-            if (sdk_scan_skip_dir(path.lexically_relative(root)))
-              it.disable_recursion_pending();
-            continue;
-          }
-
-          if (!it->is_regular_file(ec) || !sdk_scan_file_name(path))
-            continue;
-
-          collect_vix_targets_from_text(util::read_text_file_or_empty(path), targets);
-        }
-      }
-
-      return targets;
-    }
-
-    static std::string join_words(const std::vector<std::string> &items)
-    {
-      std::string out;
-      for (const std::string &item : items)
-      {
-        if (!out.empty())
-          out += " ";
-        out += item;
-      }
-      return out;
-    }
-
-    static std::string sdk_resolution_error_message(
-        const vix::cli::sdk::SdkResolution &resolution)
-    {
-      std::ostringstream out;
-
-      if (!resolution.missingModules.empty())
-      {
-        out << "Missing SDK modules\n";
-        for (const std::string &module : resolution.missingModules)
-        {
-          const std::string target =
-              vix::cli::sdk::target_for_module(module);
-          std::string provider;
-          const auto providerIt =
-              resolution.moduleProviders.find(module);
-          if (providerIt != resolution.moduleProviders.end())
-            provider = providerIt->second;
-          else if (const auto fallback =
-                       vix::cli::sdk::provider_profile_for_module(module))
-            provider = *fallback;
-
-          out << target;
-          if (!provider.empty())
-            out << "  provider profile: " << provider;
-          out << "\n";
-        }
-
-        std::set<std::string> providers;
-        for (const std::string &module : resolution.missingModules)
-        {
-          const auto providerIt =
-              resolution.moduleProviders.find(module);
-          if (providerIt != resolution.moduleProviders.end())
-            providers.insert(providerIt->second);
-        }
-
-        for (const std::string &provider : providers)
-          out << "Required Vix SDK profile is not installed: " << provider << "\n";
-      }
-
-      if (!resolution.error.empty())
-      {
-        if (out.tellp() > 0)
-          out << "\n";
-        out << "Managed Vix SDK profiles error: "
-            << resolution.error
-            << "\n";
-      }
-
-      return out.str();
-    }
-
-    static void resolve_sdk_for_plan(
-        process::Plan &plan,
-        std::string &sdkResolutionError,
-        const process::Options &opt)
-    {
-      plan.sdkConfigDir.clear();
-      sdkResolutionError.clear();
-      plan.dependencyEnvironmentMode =
-          vix::engine::DependencyEnvironmentMode::Native;
-
-      const char *managedSdkEnv = std::getenv("VIX_BUILD_MANAGED_SDK");
-      const bool envManagedSdk =
-          managedSdkEnv &&
-          *managedSdkEnv &&
-          std::string(managedSdkEnv) != "0" &&
-          std::string(managedSdkEnv) != "false" &&
-          std::string(managedSdkEnv) != "FALSE";
-
-      if (!opt.managedSdk && !envManagedSdk)
-      {
-        if (sdk_debug_enabled(opt) && !opt.quiet)
-        {
-          hint("SDK resolution:");
-          hint("  route: native CMake discovery");
-        }
-        return;
-      }
-
-      plan.dependencyEnvironmentMode =
-          vix::engine::DependencyEnvironmentMode::ManagedSdk;
-
-      /*
-       * Explicit CMake discovery always has priority.
-       *
-       * Vix must not override explicit Vix package hints,
-       * custom package roots or package-manager toolchains.
-       */
-      if (has_explicit_vix_discovery_override(opt))
-      {
-        if (sdk_debug_enabled(opt) && !opt.quiet)
-        {
-          hint("SDK resolution:");
-          hint("  route: explicit CMake discovery override");
-        }
-        return;
-      }
-
-      const std::set<std::string> targets =
-          collect_project_vix_targets(
-              plan.userProjectDir,
-              plan.cmakeSourceDir);
-
-      const std::set<std::string> modules =
-          vix::cli::sdk::normalize_required_vix_targets(
-              targets);
-
-      if (modules.empty())
-        return;
-
-      if (has_local_vix_dependency_modules(
-              plan.userProjectDir,
-              modules))
-      {
-        if (sdk_debug_enabled(opt) && !opt.quiet)
-        {
-          hint("SDK resolution:");
-          hint("  route: local deps/vix source modules");
-          hint("  required modules: " +
-               join_words(
-                   std::vector<std::string>(
-                       modules.begin(),
-                       modules.end())));
-        }
-
-        return;
-      }
-
-      /*
-       * Managed SDK profiles are optional.
-       *
-       * They are selected only when a complete and coherent
-       * profile set is already installed. Otherwise, normal
-       * CMake package discovery remains responsible for
-       * locating Vix.
-       */
-      const vix::cli::sdk::SdkResolution resolution =
-          vix::cli::sdk::resolve_profiles_for_modules(
-              modules);
-
-      if (sdk_debug_enabled(opt) && !opt.quiet)
-      {
-        hint("SDK resolution:");
-        hint("  route: managed profile candidate");
-        hint("  required modules: " +
-             join_words(
-                 std::vector<std::string>(
-                     modules.begin(),
-                     modules.end())));
-        hint("  selected profiles: " +
-             (resolution.selectedProfiles.empty()
-                  ? std::string("none")
-                  : join_words(resolution.selectedProfiles)));
-        if (!resolution.missingModules.empty())
-        {
-          hint("  missing modules: " +
-               join_words(resolution.missingModules));
-        }
-      }
-
-      if (!resolution.ok ||
-          resolution.selectedProfiles.empty())
-      {
-        if (!resolution.ok)
-        {
-          sdkResolutionError =
-              sdk_resolution_error_message(
-                  resolution);
-          return;
-        }
-
-        if (opt.verbose)
-        {
-          if (!resolution.error.empty())
-          {
-            hint(
-                "Managed Vix SDK profiles are unavailable: " +
-                resolution.error);
-          }
-
-          hint(
-              "Falling back to normal CMake package discovery.");
-        }
-
-        return;
-      }
-
-      const std::string identity =
-          resolution.version +
-          "-" +
-          join_words(resolution.selectedProfiles);
-
-      const fs::path composedRoot =
-          plan.buildDir /
-          ".vix-sdk" /
-          identity;
-
-      std::string sdkError;
-
-      if (!vix::cli::sdk::write_composed_sdk_config(
-              composedRoot,
-              resolution,
-              sdkError))
-      {
-        if (opt.verbose)
-        {
-          hint(
-              "Unable to compose managed Vix SDK profiles.");
-
-          if (!sdkError.empty())
-            hint(sdkError);
-
-          hint(
-              "Falling back to normal CMake package discovery.");
-        }
-
-        return;
-      }
-
-      plan.sdkConfigDir =
-          composedRoot /
-          "lib" /
-          "cmake" /
-          "Vix";
-    }
     static bool export_built_binary(
         const fs::path &sourceExe,
         const fs::path &destination,
@@ -4518,12 +3930,6 @@ namespace vix::commands::BuildCommand
           *resolvedBackendDirectory_ = plan_.buildDir;
         std::string tc = resolvedPlanOpt->toolchainContent;
 
-        if (!resolvedPlanOpt->sdkResolutionError.empty())
-        {
-          error(resolvedPlanOpt->sdkResolutionError);
-          return 1;
-        }
-
         if (!resolvedPlanOpt->buildStateError.empty())
         {
           error(resolvedPlanOpt->buildStateError);
@@ -4568,7 +3974,6 @@ namespace vix::commands::BuildCommand
           return 0;
         }
 
-        const fs::path globalPackagesFile = plan_.buildDir / "vix-global-packages.cmake";
 
         const bool debugMode = debug_build_details_enabled(opt_);
         const bool verboseMode = opt_.verbose || debugMode;
@@ -4651,10 +4056,7 @@ namespace vix::commands::BuildCommand
             opt_,
             plan_.toolchainFile,
             plan_.launcher,
-            plan_.fastLinkerFlag,
-            globalPackagesFile,
-            plan_.dependencyEnvironmentMode,
-            plan_.sdkConfigDir);
+            plan_.fastLinkerFlag);
 
         plan_.signature = build_configuration_signature(plan_, opt_, tc);
 #endif
@@ -5742,12 +5144,6 @@ namespace vix::commands::BuildCommand
       return 2;
     }
 
-    if (opt.watch && opt.report)
-    {
-      error("Options --watch and --report cannot be used together.");
-      hint("Cloud build reports are only submitted for one-shot builds.");
-      return 2;
-    }
 
     if (parseExit == -2)
       return help();
@@ -5867,18 +5263,15 @@ namespace vix::commands::BuildCommand
       return 2;
     }
 
-    process::Options reportOpt = opt;
-    const auto reportStart = std::chrono::steady_clock::now();
-
     int buildCode = 0;
     const std::optional<std::string> requestedBuildTarget =
-      reportOpt.buildTarget.empty() || reportOpt.buildTarget == "all"
-        ? std::nullopt : std::optional<std::string>{reportOpt.buildTarget};
+      opt.buildTarget.empty() || opt.buildTarget == "all"
+        ? std::nullopt : std::optional<std::string>{opt.buildTarget};
     const auto nativeBuild = opt.singleCpp
       ? std::optional<vix::cli::project::native::NativeDevelopmentResult>{}
       : vix::cli::project::dispatch_native_build(
-          projectLocation, requestedBuildTarget, reportOpt.jobs, reportOpt.preset,
-          [diagnosticMode = reportOpt.sanitizerMode, clean = reportOpt.clean](const vix::cli::project::ProjectLocation &location,
+          projectLocation, requestedBuildTarget, opt.jobs, opt.preset,
+          [diagnosticMode = opt.sanitizerMode, clean = opt.clean](const vix::cli::project::ProjectLocation &location,
              const std::optional<std::string> &target, int jobs, std::string_view preset)
           {
             return vix::cli::project::native::build_native_project(
@@ -5889,9 +5282,9 @@ namespace vix::commands::BuildCommand
     if (nativeBuild)
     {
       const auto &built = *nativeBuild;
-      if (!reportOpt.quiet && !built.output.empty()) std::cout << built.output;
+      if (!opt.quiet && !built.output.empty()) std::cout << built.output;
       if (!built.success()) error("native build failed: " + built.diagnostic);
-      else if (!reportOpt.quiet) success("Build succeeded.");
+      else if (!opt.quiet) success("Build succeeded.");
       buildCode = built.exitCode;
     }
     else
@@ -5907,38 +5300,6 @@ namespace vix::commands::BuildCommand
         buildCode = cmd.run();
       }
     }
-
-    if (!reportOpt.report)
-      return buildCode;
-
-    const auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::steady_clock::now() - reportStart)
-                                .count();
-
-    CloudBuildReport report;
-    report.status = buildCode == 0 ? "success" : "failed";
-    report.target = reportOpt.buildTarget.empty() ? "default" : reportOpt.buildTarget;
-    report.profile = reportOpt.preset;
-    report.toolchain = reportOpt.targetTriple;
-    report.summary_message = buildCode == 0 ? "Build completed" : "Build failed";
-    report.duration_ms = durationMs < 0 ? 0 : static_cast<std::int64_t>(durationMs);
-    report.warnings_count = 0;
-    report.errors_count = buildCode == 0 ? 0 : 1;
-
-    std::string cloudMessage;
-    const bool sent = CloudCommand::submit_build_report(report, cloudMessage);
-
-    if (buildCode == 0)
-      std::cout << "Build succeeded.\n";
-    else
-      std::cout << "Build failed.\n";
-
-    if (sent)
-      std::cout << "Build report sent to Softadastra Cloud.\n";
-    else
-      std::cout << "Could not send build report to Softadastra Cloud: "
-                << (cloudMessage.empty() ? "Cloud request failed." : cloudMessage)
-                << "\n";
 
     return buildCode;
   }
@@ -5972,8 +5333,6 @@ namespace vix::commands::BuildCommand
     runOpt.quiet = opt_.quiet;
     runOpt.verbose = opt_.verbose;
 
-    runOpt.withSqlite = opt_.withSqlite;
-    runOpt.withMySql = opt_.withMySql;
 
     // Single-file builds reuse the script engine.  Do not silently drop the
     // sanitizer selected by `vix build`: its cache key and generated CMake

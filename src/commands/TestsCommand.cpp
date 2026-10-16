@@ -13,7 +13,6 @@
  */
 #include <vix/cli/commands/TestsCommand.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
-#include <vix/cli/commands/CheckCommand.hpp>
 #include <vix/cli/commands/tests/TestsDetail.hpp>
 #include <vix/cli/Style.hpp>
 
@@ -537,15 +536,6 @@ namespace vix::commands::TestsCommand
       if (code == 130)
         return 0;
 
-      if (opt.runAfter)
-      {
-        if (code != 0)
-          return code;
-
-        info("Running runtime checks after tests (--run).");
-        return vix::commands::CheckCommand::run(opt.forwarded);
-      }
-
       return code;
     }
 
@@ -601,11 +591,6 @@ namespace vix::commands::TestsCommand
 
         lastCode = run_tests_once(opt);
 
-        if (opt.runAfter && lastCode == 0)
-        {
-          info("Runtime checks after tests (--run).");
-          lastCode = vix::commands::CheckCommand::run(opt.forwarded);
-        }
       }
     }
 

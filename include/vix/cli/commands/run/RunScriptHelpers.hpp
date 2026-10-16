@@ -35,18 +35,11 @@ namespace vix::commands::RunCommand::detail
   void print_watch_restart_banner(const fs::path &path, std::string_view label);
 
   /**
-   * @brief Checks whether ASan+UBSan or UBSan-only mode is enabled.
-   *
-   * This helper intentionally does not include ThreadSanitizer.
-   * For ASan, UBSan, and TSan together, use want_any_sanitizer()
-   * from RunDetail.hpp.
-   *
-   * @param enableSanitizers True when ASan+UBSan mode is enabled.
-   * @param enableUbsanOnly True when UBSan-only mode is enabled.
+   * @brief Checks whether address/undefined sanitizer instrumentation is enabled.
+   * @param mode Resolved Vix diagnostic mode.
    * @return True for address/undefined instrumentation modes (not TSan).
    */
   bool want_sanitizers(DiagnosticMode mode);
-  bool want_sanitizers(bool enableSanitizers, bool enableUbsanOnly);
 
   /**
    * @brief Returns the sanitizer mode string used by generated CMake projects.
@@ -58,49 +51,27 @@ namespace vix::commands::RunCommand::detail
    * - "tsan"
    * - "none"
    *
-   * @param enableSanitizers True when ASan+UBSan mode is enabled.
-   * @param enableUbsanOnly True when UBSan-only mode is enabled.
-   * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
    * @return Sanitizer mode string.
    */
   std::string sanitizer_mode_string(DiagnosticMode mode);
-  std::string sanitizer_mode_string(
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer);
 
   /**
    * @brief Builds the configuration signature for generated script CMake projects.
    *
    * The signature is used to decide whether a cached generated CMake project
    * must be reconfigured. It includes every option that can affect the produced
-   * binary, including sanitizer mode, script flags, and optional database support.
+   * binary, including sanitizer mode and script/compiler/linker arguments.
    *
    * @param useVixRuntime True if the script links against the Vix runtime.
-   * @param enableSanitizers True when ASan+UBSan mode is enabled.
-   * @param enableUbsanOnly True when UBSan-only mode is enabled.
-   * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
    * @param scriptFlags Compiler/linker flags forwarded to script mode.
-   * @param withSqlite True if SQLite support is enabled.
-   * @param withMySql True if MySQL support is enabled.
    * @return Stable configuration signature string.
    */
   std::string make_script_config_signature(
       bool useVixRuntime,
       DiagnosticMode mode,
       const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql,
       const std::vector<std::string> &compilerArgs = {},
       const std::vector<std::string> &linkerArgs = {});
-  std::string make_script_config_signature(
-      bool useVixRuntime,
-      bool enableSanitizers,
-      bool enableUbsanOnly,
-      bool enableThreadSanitizer,
-      const std::vector<std::string> &scriptFlags,
-      bool withSqlite,
-      bool withMySql);
 
   /**
    * @brief Starts the watch-mode spinner.
@@ -129,9 +100,7 @@ namespace vix::commands::RunCommand::detail
    * to capture and convert into friendly diagnostics. On Windows this is a
    * no-op because the current runtime sanitizer environment is POSIX-only.
    *
-   * @param enableSanitizers True when ASan+UBSan mode is enabled.
-   * @param enableUbsanOnly True when UBSan-only mode is enabled.
-   * @param enableThreadSanitizer True when ThreadSanitizer mode is enabled.
+   * @param mode Resolved Vix diagnostic mode.
    */
   void apply_sanitizer_env_if_needed(
       DiagnosticMode mode);

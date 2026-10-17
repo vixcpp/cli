@@ -43,11 +43,11 @@ namespace vix::cli::project::native
   struct NativeDevelopmentResult
   {
     int exitCode{1};
-    std::string diagnostic;
-    std::string output;
+    std::string diagnostic{};
+    std::string output{};
     NativeDevelopmentErrorCode code{NativeDevelopmentErrorCode::project_error};
-    std::optional<project::ProjectError> projectError;
-    std::optional<std::filesystem::path> artifactPath;
+    std::optional<project::ProjectError> projectError{};
+    std::optional<std::filesystem::path> artifactPath{};
     [[nodiscard]] bool success() const noexcept { return exitCode == 0; }
   };
 

@@ -7,6 +7,7 @@
 #include <cassert>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -102,12 +103,12 @@ namespace
     }
   };
 
-  const ResolvedRegistryNode &registry_node(const ResolvedGraph &graph, const std::string &name)
+  const ResolvedRegistryNode &registry_node(const ResolvedGraph &graph, std::string_view name)
   {
     const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const auto &node)
     {
       const auto *registry = std::get_if<ResolvedRegistryNode>(&node);
-      return registry && registry->identity.name == name;
+      return registry && std::string_view{registry->identity.name} == name;
     });
     assert(found != graph.nodes.end());
     return std::get<ResolvedRegistryNode>(*found);

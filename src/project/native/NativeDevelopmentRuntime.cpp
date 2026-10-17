@@ -732,7 +732,6 @@ namespace vix::cli::project::native
           return std::nullopt;
         }
         prepared.snapshot = std::move(*configured.snapshot);
-        configuredSuccessfully = true;
         prepared.snapshot->project.root = root;
         prepared.snapshot->project.tests.clear();
         for (std::size_t index = 0; index < prepared.project.tests.size(); ++index)

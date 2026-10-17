@@ -1582,7 +1582,6 @@ namespace vix::commands::RunCommand::detail
         {
           finalStatus = status;
           haveStatus = true;
-          running = false;
         }
         break;
       }

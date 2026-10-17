@@ -202,7 +202,11 @@ namespace vix::cli::project::native
             entry.executable = executable_file(status);
             const auto bytes = read_file_bytes(it->path());
             entry.content.reserve(bytes.size());
-            for (const unsigned char byte : bytes) entry.content.push_back(static_cast<std::byte>(byte));
+            for (const char character : bytes)
+            {
+              const auto byte = static_cast<unsigned char>(character);
+              entry.content.push_back(static_cast<std::byte>(byte));
+            }
           }
           else if (!fs::is_directory(status))
           {

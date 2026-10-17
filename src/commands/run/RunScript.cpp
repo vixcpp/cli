@@ -2188,8 +2188,6 @@ namespace vix::commands::RunCommand::detail
         pid_t r = waitpid(pid, &status, WNOHANG);
         if (r == pid)
         {
-          running = false;
-
           const auto childEnd = Clock::now();
           const auto ms =
               std::chrono::duration_cast<std::chrono::milliseconds>(childEnd - childStart).count();

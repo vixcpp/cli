@@ -182,22 +182,22 @@ namespace
   void directory_identity_and_validation_tests()
   {
     const RegistryPackageIdentity logical{"vix", "softadastra", "sqlite"};
-    auto first = build_registry_directory({{"vix", {{"location-A"}, {"location-B"}}}});
-    auto relocated = build_registry_directory({{"vix", {{"location-C"}}}});
+    auto first = build_registry_directory({{"vix", {{"location-A"}, {"location-B"}}, {}}});
+    auto relocated = build_registry_directory({{"vix", {{"location-C"}}, {}}});
     assert(first.valid() && relocated.valid());
     assert(first.value->find(logical.registry)->id == relocated.value->find(logical.registry)->id);
     assert(logical.registry == "vix" && logical.publisher == "softadastra" && logical.name == "sqlite");
 
-    auto sharedLocation = build_registry_directory({{"vix", {{"location-X"}}}, {"company", {{"location-X"}}}});
+    auto sharedLocation = build_registry_directory({{"vix", {{"location-X"}}, {}}, {"company", {{"location-X"}}, {}}});
     assert(sharedLocation.valid());
     assert(sharedLocation.value->find("vix") && sharedLocation.value->find("company"));
     assert(sharedLocation.value->find("vix")->locations.front() == sharedLocation.value->find("company")->locations.front());
     assert((RegistryPackageIdentity{"vix", "example", "pkg"} !=
             RegistryPackageIdentity{"company", "example", "pkg"}));
 
-    auto duplicateIds = build_registry_directory({{"vix", {{"A"}}}, {"vix", {{"B"}}}});
+    auto duplicateIds = build_registry_directory({{"vix", {{"A"}}, {}}, {"vix", {{"B"}}, {}}});
     assert(!duplicateIds.valid() && duplicateIds.issues.front().code == RegistryDirectoryErrorCode::duplicate_registry_id);
-    auto noLocations = build_registry_directory({{"vix", {}}});
+    auto noLocations = build_registry_directory({{"vix", {}, {}}});
     assert(!noLocations.valid() && noLocations.issues.front().code == RegistryDirectoryErrorCode::no_registry_locations);
 
     auto orderOne = build_registry_directory({{"company", {{"X"}}, {}}, {"vix", {{"A"}, {"B"}}, {}}});

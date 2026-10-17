@@ -117,7 +117,7 @@ namespace vix::cli::distribution
     ArchiveFormat archive{ArchiveFormat::tar_gz};
     DistributionArtifactDigest digest;
     std::optional<std::uint64_t> size;
-    std::optional<std::string> installPath;
+    std::optional<std::string> installPath{};
   };
 
   struct ReleaseManifest

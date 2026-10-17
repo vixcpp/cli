@@ -459,10 +459,10 @@ int main()
     const auto exposed = root / "user-bin" / "vix";
     PosixExecutableExposure exposure{exposed};
     ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
-    const auto host = parse_host_platform("x86_64-linux-gnu");
-    assert(host.valid());
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
+    assert(bootstrap_host.valid());
     const auto home = root / "home";
-    const auto result = runtime.install(home, trust, exposed, *host.value);
+    const auto result = runtime.install(home, trust, exposed, *bootstrap_host.value);
     assert(result.valid() && result.value->version == "2.4.0");
     assert(source.calls == 1 && fetcher.calls == 1 && packageExtractor.calls == 1);
     assert(fs::is_symlink(exposed));
@@ -489,8 +489,8 @@ int main()
     PosixInstallationActivator activator{root / "home"};
     FakeExposure exposure;
     ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
-    const auto host = parse_host_platform("x86_64-linux-gnu");
-    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *bootstrap_host.value);
     assert(!result.valid() && result.error->code == ErrorCode::wrong_generation);
     assert(fetcher.calls == 0 && packageExtractor.calls == 0 && exposure.calls == 0);
     const auto active = activator.current_version();
@@ -511,8 +511,8 @@ int main()
     PosixInstallationActivator activator{root / "home"};
     FakeExposure exposure;
     ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
-    const auto host = parse_host_platform("x86_64-linux-gnu");
-    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *bootstrap_host.value);
     assert(!result.valid() && result.error->code == ErrorCode::invalid_signature);
     assert(fetcher.calls == 0 && packageExtractor.calls == 0 && exposure.calls == 0);
   }
@@ -531,8 +531,8 @@ int main()
     assert(activator.activate("2.3.0").valid());
     FakeExposure exposure;
     ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
-    const auto host = parse_host_platform("x86_64-linux-gnu");
-    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *bootstrap_host.value);
     assert(!result.valid() && result.error->code == ErrorCode::already_installed);
     assert(source.calls == 0 && fetcher.calls == 0 && packageExtractor.calls == 0);
     const auto current = activator.current_version();
@@ -554,14 +554,14 @@ int main()
     ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
     const auto arm = parse_host_platform("aarch64-linux-gnu");
     assert(arm.valid());
-    const auto unsupported = runtime.install(root / "home", trust, root / "bin" / "vix", *arm.value);
-    assert(!unsupported.valid() && unsupported.error->code == ErrorCode::unsupported_host_artifact);
+    const auto unsupported_arch_install = runtime.install(root / "home", trust, root / "bin" / "vix", *arm.value);
+    assert(!unsupported_arch_install.valid() && unsupported_arch_install.error->code == ErrorCode::unsupported_host_artifact);
     assert(fetcher.calls == 0 && packageExtractor.calls == 0);
 
     source.value = signed_fixture(archiveBytes);
     fetcher.bytes = "different-archive-bytes";
-    const auto host = parse_host_platform("x86_64-linux-gnu");
-    const auto mismatch = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
+    const auto mismatch = runtime.install(root / "home", trust, root / "bin" / "vix", *bootstrap_host.value);
     assert(!mismatch.valid() && mismatch.error->code == ErrorCode::artifact_digest_mismatch);
     assert(packageExtractor.calls == 0 && exposure.calls == 0);
   }
@@ -580,8 +580,8 @@ int main()
     PosixInstallationActivator activator{root / "home"};
     FakeExposure exposure;
     ManagedInstallerRuntime runtime{source, fetcher, packageExtractor, activator, exposure};
-    const auto host = parse_host_platform("x86_64-linux-gnu");
-    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *host.value);
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
+    const auto result = runtime.install(root / "home", trust, root / "bin" / "vix", *bootstrap_host.value);
     assert(!result.valid() && result.error->code == ErrorCode::unsafe_archive);
     assert(exposure.calls == 0 && !fs::exists(root / "home" / "current"));
     assert(!fs::exists(root / "home" / "install.toml"));
@@ -596,7 +596,7 @@ int main()
     const auto trust = load_release_trust_store(trustPath);
     assert(trust.valid());
     const auto home = root / "managed";
-    const auto host = parse_host_platform("x86_64-linux-gnu");
+    const auto bootstrap_host = parse_host_platform("x86_64-linux-gnu");
     FakeSource source;
     source.value = signed_fixture(archiveBytes, "current", {}, {2, 3, 0, {}});
     FakeFetcher fetcher;
@@ -604,13 +604,13 @@ int main()
     PosixInstallationActivator activator{home};
     FakeExposure exposure;
     ManagedInstallerRuntime installer{source, fetcher, packageExtractor, activator, exposure};
-    const auto installed = installer.install(home, *trust.value, root / "bin" / "vix", *host.value);
+    const auto installed = installer.install(home, *trust.value, root / "bin" / "vix", *bootstrap_host.value);
     assert(installed.valid() && installed.value->version == "2.3.0");
     assert(fs::is_directory(home / "versions" / "2.3.0"));
 
     source.value = signed_fixture(archiveBytes);
     UpgradeRuntime upgrader{source, fetcher, packageExtractor, activator};
-    const auto upgraded = upgrader.run(home / "install.toml", trustPath, *host.value);
+    const auto upgraded = upgrader.run(home / "install.toml", trustPath, *bootstrap_host.value);
     assert(upgraded.valid() && upgraded.value->kind == RuntimeOutcomeKind::upgraded &&
            upgraded.value->version == std::optional<std::string>{"2.4.0"});
     const auto activeB = activator.current_version();

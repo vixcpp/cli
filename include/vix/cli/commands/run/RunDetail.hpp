@@ -93,51 +93,6 @@ namespace vix::commands::RunCommand::detail
    */
   struct Options
   {
-    // -------------------------------------------------------------------------
-    // Input selection
-    // -------------------------------------------------------------------------
-    std::string appName;
-    std::string exampleName;
-
-    bool singleCpp = false;
-    fs::path cppFile;
-
-
-    // Project/build selection
-    std::string preset = "dev-ninja";
-    std::string runPreset;
-    std::string dir;
-    int jobs = 0;
-    bool clean = false;
-    bool checkOnly = false;
-
-    // Output / UI
-    bool quiet = false;
-    bool verbose = false;
-    std::string logLevel;
-    std::string logFormat;
-    std::string logColor; // auto|always|never
-    bool noColor = false;
-    std::string clearMode = "auto";
-    bool ui = false;
-    bool envHint = false;
-    bool traceCache = false;
-    std::string compilerFingerprint = "fast";
-
-    // Behavior switches
-    bool watch = false;
-    AutoDepsMode autoDeps = AutoDepsMode::None;
-
-    bool forceServerLike = false;
-    bool forceScriptLike = false;
-
-    DiagnosticMode diagnosticMode{DiagnosticMode::None};
-    ::vix::cli::commands::DiagnosticRequest diagnosticRequest{};
-    ::vix::cli::commands::DiagnosticRequest projectDiagnosticRequest{};
-
-    std::optional<bool> docs;
-
-    // Script / runtime forwarding
     std::vector<std::string> scriptFlags;
     std::vector<std::string> cmakeArgs;
     std::vector<std::string> compilerArgs;
@@ -145,15 +100,43 @@ namespace vix::commands::RunCommand::detail
     std::vector<std::string> runArgs;
     std::vector<std::string> runEnv;
 
-    int timeoutSec = 0;
+    // Input and project selection
+    std::string appName;
+    std::string exampleName;
+    std::string preset = "dev-ninja";
+    std::string runPreset;
+    std::string dir;
+    std::string logLevel;
+    std::string logFormat;
+    std::string logColor; // auto|always|never
+    std::string clearMode = "auto";
+    std::string compilerFingerprint = "fast";
     std::string cwd;
+    fs::path cppFile;
 
-    // Parse diagnostics / separators
-    bool parseFailed = false;
+    int jobs = 0;
+    AutoDepsMode autoDeps = AutoDepsMode::None;
+    DiagnosticMode diagnosticMode{DiagnosticMode::None};
+    int timeoutSec = 0;
     int parseExitCode = 0;
+    ::vix::cli::commands::DiagnosticRequest diagnosticRequest{};
+    ::vix::cli::commands::DiagnosticRequest projectDiagnosticRequest{};
 
+    bool singleCpp = false;
+    bool clean = false;
+    bool checkOnly = false;
+    bool quiet = false;
+    bool verbose = false;
+    bool noColor = false;
+    bool ui = false;
+    bool envHint = false;
+    bool traceCache = false;
+    bool watch = false;
+    bool forceServerLike = false;
+    bool forceScriptLike = false;
+    bool parseFailed = false;
     bool localCache = false;
-
+    std::optional<bool> docs;
   };
 
   /**

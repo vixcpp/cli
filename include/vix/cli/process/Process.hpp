@@ -40,6 +40,12 @@ namespace vix::cli::process
    */
   struct Options
   {
+    std::size_t warningsPage{1};
+    std::size_t warningsLimit{10};
+    std::vector<std::string> cmakeArgs;
+    std::vector<std::string> compilerArgs;
+    std::vector<std::string> linkerArgs;
+
     /**
      * @brief Selected embedded preset.
      *
@@ -49,163 +55,49 @@ namespace vix::cli::process
      * - release
      */
     std::string preset = "dev-ninja";
-
-    /**
-     * @brief Cross-compilation target triple passed with `--target`.
-     */
     std::string targetTriple;
-
-    /**
-     * @brief Optional sysroot path for cross-compilation.
-     */
     std::string sysroot;
-
-    /**
-     * @brief Enables static linking when supported by the project.
-     */
-    bool linkStatic = false;
-
-    /**
-     * @brief Number of parallel jobs to use for the build.
-     *
-     * A value of 0 means "auto-detect".
-     */
-    int jobs = 0;
-
-    /**
-     * @brief Forces a fresh configure step.
-     */
-    bool clean = false;
-
-    /**
-     * @brief Enables quiet console output.
-     */
-    bool quiet = false;
-
-    /**
-     * @brief Enables detailed build output.
-     *
-     * When false, `vix build` should prefer a minimal product-style output.
-     */
-    bool verbose = false;
-
-    /** Enables structured internal Vix build diagnostics. */
-    bool debug = false;
-
-    /** Optional focused internal diagnostic scope. */
     std::string debugLogScope;
-
-    /** Optional captured log scope to display instead of building. */
     std::string logScope;
-    bool showLog = false;
     std::string logPath;
-
-    /**
-     * @brief Explains why Vix rebuilds files or targets.
-     */
-    bool explain = false;
-
-    /**
-     * @brief Keep the build process alive and rebuild after project changes.
-     */
-    bool watch = false;
-
-    /**
-     * @brief Optional project directory passed with `--dir`.
-     */
     std::string dir;
-
-    /**
-     * @brief Enables fast no-op detection before building.
-     */
-    bool fast = false;
-
-    /**
-     * @brief Enables signature/configuration cache reuse.
-     */
-    bool useCache = true;
-
-    /**
-     * @brief Preferred linker mode.
-     */
-    LinkerMode linker = LinkerMode::Auto;
-
-    /**
-     * @brief Preferred compiler launcher mode.
-     */
-    LauncherMode launcher = LauncherMode::Auto;
-
-    /**
-     * @brief Enables Ninja progress status output.
-     */
-    bool status = true;
-
-    /**
-     * @brief Enables Ninja dry-run up-to-date detection.
-     */
-    bool dryUpToDate = true;
-
-    /**
-     * @brief Enables raw CMake verbose configure output.
-     */
-    bool cmakeVerbose = false;
-
-    /** Graph executor policy: auto, on, or off. */
     std::string graphExecutor = "auto";
-    bool graphExecutorExplicit = false;
-
-    /** Lists detected target toolchains and exits. */
-    bool listTargets = false;
-
-    /** Explicit heartbeat control; unset keeps the legacy/default behavior. */
-    std::optional<bool> heartbeat;
-
-    /**
-     * @brief Builds only a specific CMake target when provided.
-     */
     std::string buildTarget;
-
-    /** Internal caller request: ensure a CMake File API snapshot is available. */
-    bool requireProjectMetadata{false};
-
-    /**
-     * @brief Extra arguments forwarded directly to CMake.
-     */
-    std::vector<std::string> cmakeArgs;
-
-    /** Exact compiler arguments for standalone single-source builds. */
-    std::vector<std::string> compilerArgs;
-
-    /** Exact linker arguments for standalone single-source builds. */
-    std::vector<std::string> linkerArgs;
-
-    /**
-     * @brief Sanitizer instrumentation selected for this build.
-     *
-     * The default build remains uninstrumented.
-     */
-    SanitizerMode sanitizerMode = SanitizerMode::None;
-
-    /**
-     * @brief True when the sanitizer mode was explicitly selected.
-     */
-    bool sanitizerSelectionExplicit = false;
-
-
-    bool exportBin = false;
     std::string outPath;
-
-    bool singleCpp = false;
     fs::path cppFile;
 
+    /**
+     * @brief Number of parallel jobs to use; zero means auto-detect.
+     */
+    int jobs = 0;
+    LinkerMode linker = LinkerMode::Auto;
+    LauncherMode launcher = LauncherMode::Auto;
+    SanitizerMode sanitizerMode = SanitizerMode::None;
+
+    bool linkStatic = false;
+    bool clean = false;
+    bool quiet = false;
+    bool verbose = false;
+    bool debug = false;
+    bool showLog = false;
+    bool explain = false;
+    bool watch = false;
+    bool fast = false;
+    bool useCache = true;
+    bool status = true;
+    bool dryUpToDate = true;
+    bool cmakeVerbose = false;
+    bool graphExecutorExplicit = false;
+    bool listTargets = false;
+    bool requireProjectMetadata{false};
+    bool sanitizerSelectionExplicit = false;
+    bool exportBin = false;
+    bool singleCpp = false;
     bool warnings{false};
-    std::size_t warningsPage{1};
-    std::size_t warningsLimit{10};
     bool warningsPageSet{false};
     bool warningsLimitSet{false};
-
     bool warningCheck{false};
-
+    std::optional<bool> heartbeat;
   };
 
   /**

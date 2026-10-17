@@ -95,7 +95,7 @@ namespace
 
   RegistryDirectory make_locations(std::vector<std::string> descriptors)
   {
-    RegistryDefinition definition{"vix", {}};
+    RegistryDefinition definition{"vix", {}, {}};
     for (auto &descriptor : descriptors) definition.locations.push_back({std::move(descriptor)});
     auto result = build_registry_directory({std::move(definition)});
     assert(result.valid());

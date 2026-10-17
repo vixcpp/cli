@@ -200,8 +200,8 @@ namespace
     auto noLocations = build_registry_directory({{"vix", {}}});
     assert(!noLocations.valid() && noLocations.issues.front().code == RegistryDirectoryErrorCode::no_registry_locations);
 
-    auto orderOne = build_registry_directory({{"company", {{"X"}}}, {"vix", {{"A"}, {"B"}}}});
-    auto orderTwo = build_registry_directory({{"vix", {{"A"}, {"B"}}}, {"company", {{"X"}}}});
+    auto orderOne = build_registry_directory({{"company", {{"X"}}, {}}, {"vix", {{"A"}, {"B"}}, {}}});
+    auto orderTwo = build_registry_directory({{"vix", {{"A"}, {"B"}}, {}}, {"company", {{"X"}}, {}}});
     assert(orderOne.valid() && orderTwo.valid());
     assert(orderOne.value->find("vix")->locations == orderTwo.value->find("vix")->locations);
 

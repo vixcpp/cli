@@ -36,7 +36,7 @@ namespace vix::cli::project::native
     std::vector<RegistryLocation> locations;
     // Independent content mirrors; declaration order is fallback preference.
     // Empty is valid when this Registry serves metadata but no content mirrors.
-    std::vector<RegistryContentLocation> contentLocations;
+    std::vector<RegistryContentLocation> contentLocations{};
   };
 
   enum class RegistryDirectoryErrorCode

@@ -133,8 +133,14 @@ project-target = "core"
     }
 
     MemoryMetadataTransport transport() const
-    { MemoryMetadataTransport value; value.files.emplace(headPath, head); value.files.emplace(manifestPath, manifest);
-      if (!packagePath.empty()) value.files.emplace(packagePath, packageDocument); return value; }
+    {
+      MemoryMetadataTransport value;
+      value.files.emplace(headPath, head);
+      value.files.emplace(manifestPath, manifest);
+      if (!packagePath.empty())
+        value.files.emplace(packagePath, packageDocument);
+      return value;
+    }
   };
 
   void canonical_manifest_and_authority_tests()

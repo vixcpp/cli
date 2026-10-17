@@ -1141,3 +1141,12 @@ add_test(NAME vix_cli_run_execution_paths_contract
 add_test(NAME vix_cli_run_compiled_dependency_contract
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/contracts/run/RunCompiledDependencyContractTest.sh ${CMAKE_BINARY_DIR}/vix)
 set_tests_properties(vix_cli_run_cache_contract vix_cli_build_passthrough_contract PROPERTIES LABELS "contract")
+
+# All C++ executables defined by this test directory are Vix-owned contract or
+# unit tests. Apply the same strict diagnostics as the CLI and release tools.
+get_property(_vix_cli_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(_vix_cli_test_target IN LISTS _vix_cli_test_targets)
+  if (_vix_cli_test_target MATCHES "^vix_cli_")
+    vix_enable_cli_warnings("${_vix_cli_test_target}")
+  endif()
+endforeach()

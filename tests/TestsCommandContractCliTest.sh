@@ -23,19 +23,45 @@ add_test(NAME network.alpha COMMAND test_fixture)
 set_tests_properties(network.alpha PROPERTIES LABELS "integration")
 add_test(NAME networkXalpha COMMAND test_fixture)
 add_test(NAME Network.alpha COMMAND test_fixture)
+add_executable(failure_fixture failure.cpp)
+add_test(NAME failure.case COMMAND failure_fixture)
 CMAKE
 cat >"$PROJECT/main.cpp" <<'CPP'
 int main() { return 0; }
+CPP
+cat >"$PROJECT/failure.cpp" <<'CPP'
+#include <iostream>
+int main() { std::cout << "CTEST_FAILURE_MARKER\n"; return 23; }
 CPP
 
 FILTER_OUT="$("$VIX_BIN" test --dir "$PROJECT" 'network.')" || fail "literal test filter failed"
 grep -Fq 'network.alpha' <<<"$FILTER_OUT" || fail "literal filter omitted matching registration"
 if grep -Fq 'networkXalpha' <<<"$FILTER_OUT"; then fail "filter treated dot as a regex wildcard"; fi
 if grep -Fq 'Network.alpha' <<<"$FILTER_OUT"; then fail "filter was not case-sensitive"; fi
+if grep -Eiq 'ninja:|no work to do|Building CXX object|Linking CXX|Configuring done|Generating done|cmake --build' <<<"$FILTER_OUT"; then
+  fail "successful external test build exposed backend chatter"
+fi
+
+LIST_OUT="$("$VIX_BIN" test --dir "$PROJECT" --list)" || fail "--list failed"
+for test_name in network.alpha networkXalpha Network.alpha; do
+  grep -Fq "$test_name" <<<"$LIST_OUT" || fail "--list omitted registered test: $test_name"
+done
+if grep -Fq '100% tests passed' <<<"$LIST_OUT"; then
+  fail "--list ran tests instead of listing registrations"
+fi
 
 CTEST_OUT="$("$VIX_BIN" test --dir "$PROJECT" --ctest -L integration -N)" || fail "terminal CTest forwarding failed"
 grep -Fq 'network.alpha' <<<"$CTEST_OUT" || fail "CTest label argument was not forwarded"
 if grep -Fq 'networkXalpha' <<<"$CTEST_OUT"; then fail "CTest label filter was not applied"; fi
+
+if CTEST_FAILURE_OUT="$("$VIX_BIN" test --dir "$PROJECT" --ctest -R '^failure\.case$' 2>&1)"; then
+  fail "failing CTest case unexpectedly succeeded through --ctest"
+else
+  CTEST_FAILURE_STATUS=$?
+fi
+[[ "$CTEST_FAILURE_STATUS" -ne 0 ]] || fail "failing CTest case lost its non-zero exit status"
+grep -Fq 'CTEST_FAILURE_MARKER' <<<"$CTEST_FAILURE_OUT" ||
+  fail "--ctest did not preserve failing test output"
 
 assert_parse_rejected() {
   local expected="$1"

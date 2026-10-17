@@ -104,7 +104,7 @@ namespace
     RegistryDirectory locations;
     RegistryAuthorityDirectory authorities;
     Fixture()
-      : locations(*build_registry_directory({{"vix", {{"first"}, {"second"}}}}).value),
+      : locations(*build_registry_directory({{"vix", {{"first"}, {"second"}}, {}}}).value),
         authorities(*build_registry_authority_directory({{"vix", "authority"}}).value) {}
   };
 
@@ -221,7 +221,7 @@ namespace
   void independent_registry_pin_tests()
   {
     auto locationResult = build_registry_directory({
-      {"vix", {{"shared-vix"}}}, {"acme", {{"shared-acme"}}}});
+      {"vix", {{"shared-vix"}}, {}}, {"acme", {{"shared-acme"}}, {}}});
     auto authorityResult = build_registry_authority_directory({
       {"vix", "authority-vix"}, {"acme", "authority-acme"}});
     assert(locationResult.valid() && authorityResult.valid());

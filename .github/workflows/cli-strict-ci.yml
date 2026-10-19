@@ -577,11 +577,11 @@ jobs:
           timeout 20s ./build-runtime/vix --help \
             | tee vix-help.log
 
-          timeout 20s ./build-runtime/vix note --help \
-            | tee vix-note-help.log
+          timeout 20s ./build-runtime/vix upgrade --help \
+            | tee vix-upgrade-help.log
 
           grep -qi "vix" vix-help.log
-          grep -qi "note" vix-note-help.log
+          grep -qi "upgrade" vix-upgrade-help.log
 
       - name: Upload runtime diagnostics
         if: failure()

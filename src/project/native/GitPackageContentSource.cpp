@@ -273,8 +273,8 @@ namespace vix::cli::project::native
     GitCommandResult result; result.started = true;
     auto writeInput = [&] {
       sigset_t blockedSignals;
-      (void)::sigemptyset(&blockedSignals);
-      (void)::sigaddset(&blockedSignals, SIGPIPE);
+      (void)sigemptyset(&blockedSignals);
+      (void)sigaddset(&blockedSignals, SIGPIPE);
       (void)::pthread_sigmask(SIG_BLOCK, &blockedSignals, nullptr);
       std::size_t pos = 0;
       while (pos < command.standardInput.size())

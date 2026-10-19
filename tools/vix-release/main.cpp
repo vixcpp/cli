@@ -1,5 +1,4 @@
 #include <vix/cli/distribution/Distribution.hpp>
-#include <vix/env/Legacy.hpp>
 #include <toml.hpp>
 
 #include <cstdlib>
@@ -27,6 +26,26 @@ namespace
 #else
     return std::getenv("VIX_RELEASE_SIGNING_KEY_HEX");
 #endif
+  }
+
+  std::optional<std::string> copied_environment_value(const char *name)
+  {
+#if defined(_WIN32)
+    char *value = nullptr;
+    std::size_t length = 0;
+    if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
+      return std::nullopt;
+    std::string result{value};
+    std::free(value);
+#else
+    const char *value = std::getenv(name);
+    if (value == nullptr)
+      return std::nullopt;
+    std::string result{value};
+#endif
+    if (result.empty())
+      return std::nullopt;
+    return result;
   }
 
   void erase_signing_key_environment_value(char *value, std::size_t length) noexcept
@@ -273,13 +292,11 @@ int main(int argc, char **argv)
                  "       vix-release-tool --spec <release-spec.toml>\n";
     return 2;
   }
-  const char *keyIdValue = vix::env::legacy::getenv("VIX_RELEASE_KEY_ID");
-  const std::string keyId = keyIdValue == nullptr ? std::string{} : std::string{keyIdValue};
+  const auto keyId = copied_environment_value("VIX_RELEASE_KEY_ID");
   char *mutableEnvironmentKey = signing_key_environment_value();
   const char *keyHex = mutableEnvironmentKey;
-  const char *trustPathValue = vix::env::legacy::getenv("VIX_RELEASE_TRUST_FILE");
-  const std::string trustPath = trustPathValue == nullptr ? std::string{} : std::string{trustPathValue};
-  if (keyId.empty() || !keyHex || !*keyHex || trustPath.empty())
+  const auto trustPath = copied_environment_value("VIX_RELEASE_TRUST_FILE");
+  if (!keyId || !keyHex || !*keyHex || !trustPath)
   {
     erase_signing_key_environment_value(
         mutableEnvironmentKey,
@@ -340,7 +357,7 @@ int main(int argc, char **argv)
       std::fill(key.begin(), key.end(), 0);
       return 1;
     }
-    auto signature = sign_release_manifest(*manifestResult.value, keyId, key);
+    auto signature = sign_release_manifest(*manifestResult.value, *keyId, key);
     std::fill(key.begin(), key.end(), 0);
     if (!signature.valid())
     {
@@ -349,7 +366,7 @@ int main(int argc, char **argv)
     }
     const auto manifestText = serialize_release_manifest(*manifestResult.value);
     const auto signatureText = serialize_signature_envelope(*signature.value);
-    const auto trust = load_release_trust_store(trustPath);
+    const auto trust = load_release_trust_store(*trustPath);
     const auto verified = manifestText.valid() && trust.valid()
                               ? verify_release_manifest(*manifestText.value, *signature.value, *trust.value, "current")
                               : Result<VerifiedReleaseManifest>{};

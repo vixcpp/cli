@@ -83,6 +83,15 @@ namespace vix::cli::project::native
     const std::string &revision_value(const GitRevisionRequirement &revision)
     { return std::visit([](const auto &value) -> const std::string & { return value.value; }, revision); }
 
+    GitRevisionRequirement parse_revision(std::string_view mode, std::string value)
+    {
+      if (mode == "commit")
+        return CommitRevision{std::move(value)};
+      if (mode == "tag")
+        return TagRevision{std::move(value)};
+      return BranchRevision{std::move(value)};
+    }
+
     toml::table requirement_table(const PackageRequirement &requirement)
     {
       toml::table table;
@@ -480,8 +489,7 @@ namespace vix::cli::project::native
         strict_keys(revision, {"commit", "tag", "branch"}, path + ".revision");
         const auto mode = mode_key(revision, {"commit", "tag", "branch"}, path + ".revision", revisionNode);
         auto value = string_value(required(revision, mode, path + ".revision"), path + ".revision." + mode);
-        GitRevisionRequirement parsed = mode == "commit" ? GitRevisionRequirement{CommitRevision{std::move(value)}} : mode == "tag" ? GitRevisionRequirement{TagRevision{std::move(value)}}
-                                                                                                                                    : GitRevisionRequirement{BranchRevision{std::move(value)}};
+        auto parsed = parse_revision(mode, std::move(value));
         return {alias, GitRequirement{std::move(repository), true, std::move(parsed)}};
       }
       fail(ParseErrorCode::invalid_value, path + ".source", "source must be registry or git", sourceNode);
@@ -694,8 +702,7 @@ namespace vix::cli::project::native
         auto repository = required_string(table, "repository", path);
         const auto mode = mode_key(table, {"commit", "tag", "branch"}, path, node);
         auto value = required_string(table, mode, path);
-        GitRevisionRequirement revision = mode == "commit" ? GitRevisionRequirement{CommitRevision{std::move(value)}} : mode == "tag" ? GitRevisionRequirement{TagRevision{std::move(value)}}
-                                                                                                                                      : GitRevisionRequirement{BranchRevision{std::move(value)}};
+        auto revision = parse_revision(mode, std::move(value));
         return NormalizedDeclaredGit{std::move(repository), true, std::move(revision)};
       }
       fail(ParseErrorCode::invalid_value, path + ".source", "source must be registry or git", sourceNode);

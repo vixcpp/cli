@@ -1,4 +1,5 @@
 #include <vix/cli/project/native/PackageCommandRuntime.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <vix/cli/project/native/GitPackageMetadataSource.hpp>
 #include <vix/cli/project/native/MetadataStorage.hpp>
@@ -87,7 +88,7 @@ namespace vix::cli::project::native
 
     std::optional<std::string> env_value(const char *name)
     {
-      const char *value = std::getenv(name);
+      const char *value = vix::env::legacy::getenv(name);
       if (!value || value[0] == '\0') return std::nullopt;
       return std::string{value};
     }

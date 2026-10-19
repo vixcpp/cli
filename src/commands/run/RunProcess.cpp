@@ -99,7 +99,7 @@ namespace vix::commands::RunCommand::detail
       bool passthroughRuntime,
       int timeoutSec,
       bool useSan,
-      bool captureOnly,
+      [[maybe_unused]] bool captureOnly,
       LiveOutputObserver outputObserver,
       std::function<bool()> cancelForWatch)
   {
@@ -1219,7 +1219,7 @@ namespace vix::commands::RunCommand::detail
       ::setvbuf(stdout, nullptr, _IOLBF, 0);
       ::setvbuf(stderr, nullptr, _IONBF, 0);
 
-      if (::getenv("VIX_MODE") == nullptr)
+      if (vix::env::legacy::getenv("VIX_MODE") == nullptr)
         ::setenv("VIX_MODE", "run", 1);
 
 #ifdef RLIMIT_CORE
@@ -1413,11 +1413,13 @@ namespace vix::commands::RunCommand::detail
         return false;
 
       const char *runValue = vix::env::legacy::getenv("VIX_RUN_HEARTBEAT");
+      const std::string runValueCopy = runValue == nullptr ? std::string{} : std::string{runValue};
       const char *buildValue = vix::env::legacy::getenv("VIX_BUILD_HEARTBEAT");
+      const std::string buildValueCopy = buildValue == nullptr ? std::string{} : std::string{buildValue};
 
-      const char *value = runValue && *runValue ? runValue : buildValue;
+      const std::string &value = !runValueCopy.empty() ? runValueCopy : buildValueCopy;
 
-      if (!value || !*value)
+      if (value.empty())
         return true;
 
       std::string s(value);

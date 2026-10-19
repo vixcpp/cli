@@ -1,4 +1,5 @@
 #include <vix/cli/project/native/NativePackageInstall.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <vix/cli/project/native/GitPackageContentSource.hpp>
 #include <vix/cli/project/native/PackageCommandRuntime.hpp>
@@ -44,9 +45,9 @@ namespace vix::cli::project::native
 
   fs::path package_content_store_path()
   {
-    if (const char *xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg)
+    if (const char *xdg = vix::env::legacy::getenv("XDG_CACHE_HOME"); xdg && *xdg)
       return fs::path{xdg} / "vix" / "package-content";
-    if (const char *home = std::getenv("HOME"); home && *home)
+    if (const char *home = vix::env::legacy::getenv("HOME"); home && *home)
       return fs::path{home} / ".cache" / "vix" / "package-content";
     return {};
   }

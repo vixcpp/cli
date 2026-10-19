@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/ErrorHandler.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <vix/cli/errors/ClangGccParser.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
@@ -310,7 +311,7 @@ namespace vix::cli
 
       const bool debugOutput = []()
       {
-        const char *level = std::getenv("VIX_LOG_LEVEL");
+        const char *level = vix::env::legacy::getenv("VIX_LOG_LEVEL");
 
         if (!level || !*level)
           return false;

@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/errors/runtime/RuntimeRuleUtils.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/ErrorContext.hpp>
 
@@ -343,7 +344,7 @@ namespace vix::cli::errors::runtime
 
   bool runtime_technical_details_enabled()
   {
-    const char *level = std::getenv("VIX_LOG_LEVEL");
+    const char *level = vix::env::legacy::getenv("VIX_LOG_LEVEL");
 
     if (level == nullptr || *level == '\0')
       return false;

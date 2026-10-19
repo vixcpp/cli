@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/ErrorHandler.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/Style.hpp>
 #include <vix/cli/cache/ArtifactCache.hpp>
 #include <vix/cli/commands/BuildCommand.hpp>
@@ -1243,7 +1244,7 @@ namespace vix::commands::BuildCommand
       if (opt.graphExecutorExplicit)
         return true;
 
-      const char *value = std::getenv("VIX_GRAPH_EXECUTOR");
+      const char *value = vix::env::legacy::getenv("VIX_GRAPH_EXECUTOR");
 
       if (!value || !*value)
         return true;
@@ -2471,10 +2472,14 @@ namespace vix::commands::BuildCommand
 
       std::ostringstream compilerIdentity;
       compilerIdentity << detect_compiler_identity();
-      if (const char *cc = std::getenv("CC"); cc && *cc)
-        compilerIdentity << ";CC=" << cc;
-      if (const char *cxx = std::getenv("CXX"); cxx && *cxx)
-        compilerIdentity << ";CXX=" << cxx;
+      const char *cc = vix::env::legacy::getenv("CC");
+      const std::string ccValue = cc == nullptr ? std::string{} : std::string{cc};
+      const char *cxx = vix::env::legacy::getenv("CXX");
+      const std::string cxxValue = cxx == nullptr ? std::string{} : std::string{cxx};
+      if (!ccValue.empty())
+        compilerIdentity << ";CC=" << ccValue;
+      if (!cxxValue.empty())
+        compilerIdentity << ";CXX=" << cxxValue;
       const std::string platform =
           opt.targetTriple.empty() ? detect_native_target_triple() : opt.targetTriple;
       auto context = vix::cli::project::cmake::make_external_cmake_build_state_context(
@@ -2636,9 +2641,9 @@ namespace vix::commands::BuildCommand
     static fs::path vix_home_dir()
     {
 #ifdef _WIN32
-      const char *home = std::getenv("USERPROFILE");
+      const char *home = vix::env::legacy::getenv("USERPROFILE");
 #else
-      const char *home = std::getenv("HOME");
+      const char *home = vix::env::legacy::getenv("HOME");
 #endif
 
       if (home && *home)
@@ -3040,7 +3045,7 @@ namespace vix::commands::BuildCommand
     {
       if (opt.debug || !opt.debugLogScope.empty())
         return true;
-      const char *level = std::getenv("VIX_LOG_LEVEL");
+      const char *level = vix::env::legacy::getenv("VIX_LOG_LEVEL");
 
       if (!level || !*level)
         return false;
@@ -5214,7 +5219,7 @@ namespace vix::commands::BuildCommand
         return 0;
       }
       std::map<std::string, std::string> detected;
-      if (const char *pathEnv = std::getenv("PATH"); pathEnv && *pathEnv)
+      if (const char *pathEnv = vix::env::legacy::getenv("PATH"); pathEnv && *pathEnv)
       {
 #ifdef _WIN32
         const char separator = ';';

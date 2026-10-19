@@ -112,13 +112,19 @@ namespace vix::cli::project::native
       return std::visit([&](const auto &mode)
       {
         using Mode = std::decay_t<decltype(mode)>;
-        if constexpr (std::is_same_v<Mode, ExactVersion>) return candidate == mode.version;
-        if (candidate.prerelease) return false;
-        const auto &minimum = mode.version;
-        if (compare_versions(candidate, minimum) < 0) return false;
-        if (minimum.major > 0) return candidate.major == minimum.major;
-        if (minimum.minor > 0) return candidate.major == 0 && candidate.minor == minimum.minor;
-        return candidate.major == 0 && candidate.minor == 0 && candidate.patch == minimum.patch;
+        if constexpr (std::is_same_v<Mode, ExactVersion>)
+        {
+          return candidate == mode.version;
+        }
+        else
+        {
+          if (candidate.prerelease) return false;
+          const auto &minimum = mode.version;
+          if (compare_versions(candidate, minimum) < 0) return false;
+          if (minimum.major > 0) return candidate.major == minimum.major;
+          if (minimum.minor > 0) return candidate.major == 0 && candidate.minor == minimum.minor;
+          return candidate.major == 0 && candidate.minor == 0 && candidate.patch == minimum.patch;
+        }
       }, requirement);
     }
 
@@ -176,9 +182,12 @@ namespace vix::cli::project::native
           return std::visit([](const auto &revision)
           {
             using Revision = std::decay_t<decltype(revision)>;
-            const char *mode = std::is_same_v<Revision, CommitRevision> ? "commit" :
-              std::is_same_v<Revision, TagRevision> ? "tag" : "branch";
-            return std::string{mode} + " " + revision.value;
+            if constexpr (std::is_same_v<Revision, CommitRevision>)
+              return std::string{"commit "} + revision.value;
+            else if constexpr (std::is_same_v<Revision, TagRevision>)
+              return std::string{"tag "} + revision.value;
+            else
+              return std::string{"branch "} + revision.value;
           }, source.revision);
       }, requirement.source);
     }
@@ -188,9 +197,12 @@ namespace vix::cli::project::native
       return std::visit([](const auto &value)
       {
         using Revision = std::decay_t<decltype(value)>;
-        const char *mode = std::is_same_v<Revision, CommitRevision> ? "commit" :
-          std::is_same_v<Revision, TagRevision> ? "tag" : "branch";
-        return std::string{mode} + " " + value.value;
+        if constexpr (std::is_same_v<Revision, CommitRevision>)
+          return std::string{"commit "} + value.value;
+        else if constexpr (std::is_same_v<Revision, TagRevision>)
+          return std::string{"tag "} + value.value;
+        else
+          return std::string{"branch "} + value.value;
       }, revision);
     }
 

@@ -1,4 +1,5 @@
 #include <vix/cli/project/native/NativeDevelopmentRuntime.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/project/native/NativeBuildState.hpp>
 #include <vix/cli/project/native/CanonicalHash.hpp>
 
@@ -165,7 +166,7 @@ namespace vix::cli::project::native
 
     NativeToolchainIdentity native_toolchain_identity(const fs::path &projectRoot)
     {
-      const char *configured = std::getenv("CXX");
+      const char *configured = vix::env::legacy::getenv("CXX");
 #ifdef _WIN32
       const std::string command = configured && *configured ? configured : "cl";
       const char separator = ';';
@@ -178,7 +179,7 @@ namespace vix::cli::project::native
       NativeToolchainIdentity identity;
       if (candidate.has_parent_path() && fs::exists(candidate, ec) && !ec)
         identity.compilerPath = fs::weakly_canonical(candidate, ec).string();
-      else if (const char *path = std::getenv("PATH"))
+      else if (const char *path = vix::env::legacy::getenv("PATH"))
       {
         std::string paths{path};
         std::size_t begin = 0;

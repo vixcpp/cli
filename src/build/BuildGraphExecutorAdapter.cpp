@@ -15,6 +15,7 @@
  */
 
 #include <vix/cli/build/BuildGraphExecutorAdapter.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -33,7 +34,7 @@ namespace vix::cli::build
   {
     static bool graph_debug_logs_enabled()
     {
-      const char *level = std::getenv("VIX_LOG_LEVEL");
+      const char *level = vix::env::legacy::getenv("VIX_LOG_LEVEL");
 
       if (!level || !*level)
         return false;

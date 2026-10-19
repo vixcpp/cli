@@ -457,7 +457,9 @@ namespace vix::commands::RunCommand::detail
     /**
      * @brief Return the compiler version used by direct script mode.
      */
-    std::string compiler_version_string(const std::string &compiler, const Options &opt)
+    std::string compiler_version_string(
+        [[maybe_unused]] const std::string &compiler,
+        [[maybe_unused]] const Options &opt)
     {
 #ifdef _WIN32
       return "unknown";
@@ -471,7 +473,9 @@ namespace vix::commands::RunCommand::detail
     /**
      * @brief Return the compiler target triple used by direct script mode.
      */
-    std::string compiler_target_triple(const std::string &compiler, const Options &opt)
+    std::string compiler_target_triple(
+        [[maybe_unused]] const std::string &compiler,
+        [[maybe_unused]] const Options &opt)
     {
 #ifdef _WIN32
       return "windows";

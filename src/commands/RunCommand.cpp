@@ -345,8 +345,8 @@ namespace
       const fs::path &exePath,
       const Options &opt,
       const std::string &failureContext,
-      int timeoutSec,
-      bool instrumentedBinary,
+      [[maybe_unused]] int timeoutSec,
+      [[maybe_unused]] bool instrumentedBinary,
       std::function<bool()> cancelForWatch)
   {
     const bool cancellableWatch = static_cast<bool>(cancelForWatch);
@@ -545,7 +545,9 @@ namespace
     return t;
   }
 
-  static int run_container_target(const std::string &raw, const Options &opt)
+  static int run_container_target(
+      [[maybe_unused]] const std::string &raw,
+      [[maybe_unused]] const Options &opt)
   {
 #ifndef _WIN32
 
@@ -648,7 +650,8 @@ namespace vix::commands::RunCommand
              ext == ".ipp" || ext == ".inl";
     }
 
-    static bool native_dev_batch_is_relevant(const vix::engine::watch::Batch &batch)
+    [[maybe_unused]] static bool native_dev_batch_is_relevant(
+        const vix::engine::watch::Batch &batch)
     {
       if (batch.overflowed)
         return true;

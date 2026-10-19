@@ -45,7 +45,7 @@ namespace vix::cli::util
       return true;
     }
   }
-  ProjectMutationLock::ProjectMutationLock(const fs::path &root)
+  ProjectMutationLock::ProjectMutationLock([[maybe_unused]] const fs::path &root)
   {
 #ifdef _WIN32
     error_ = "Project mutation lock is not implemented on this platform.";

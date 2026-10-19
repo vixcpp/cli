@@ -40,9 +40,12 @@ namespace vix::cli::project::native
       return std::visit([](const auto &value)
       {
         using Revision = std::decay_t<decltype(value)>;
-        const char *mode = std::is_same_v<Revision, CommitRevision> ? "commit" :
-          std::is_same_v<Revision, TagRevision> ? "tag" : "branch";
-        return std::string{mode} + ":" + value.value;
+        if constexpr (std::is_same_v<Revision, CommitRevision>)
+          return std::string{"commit:"} + value.value;
+        else if constexpr (std::is_same_v<Revision, TagRevision>)
+          return std::string{"tag:"} + value.value;
+        else
+          return std::string{"branch:"} + value.value;
       }, revision);
     }
 

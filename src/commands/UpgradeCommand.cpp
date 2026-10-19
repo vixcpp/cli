@@ -1,4 +1,5 @@
 #include <vix/cli/commands/UpgradeCommand.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <vix/cli/distribution/Runtime.hpp>
 
@@ -35,7 +36,7 @@ namespace vix::commands
         const auto resolved = fs::canonical(requested, ec);
         return ec ? fs::path{} : resolved;
       }
-      const char *pathValue = std::getenv("PATH");
+      const char *pathValue = vix::env::legacy::getenv("PATH");
       if (!pathValue)
         return {};
       std::string paths{pathValue};
@@ -76,18 +77,18 @@ namespace vix::commands
           break;
         candidate = parent;
       }
-      if (const char *receipt = std::getenv("VIX_INSTALL_RECEIPT"); receipt && *receipt && fs::is_regular_file(receipt))
+      if (const char *receipt = vix::env::legacy::getenv("VIX_INSTALL_RECEIPT"); receipt && *receipt && fs::is_regular_file(receipt))
         return fs::path{receipt};
       const auto systemPrefixReceipt = executable.parent_path().parent_path() / "share" / "vix" / "install.toml";
       if (fs::is_regular_file(systemPrefixReceipt))
         return systemPrefixReceipt;
-      if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+      if (const char *xdg = vix::env::legacy::getenv("XDG_DATA_HOME"); xdg && *xdg)
       {
         const auto receipt = fs::path{xdg} / "vix" / "install.toml";
         if (fs::is_regular_file(receipt))
           return receipt;
       }
-      if (const char *home = std::getenv("HOME"); home && *home)
+      if (const char *home = vix::env::legacy::getenv("HOME"); home && *home)
       {
         const auto receipt = fs::path{home} / ".local" / "share" / "vix" / "install.toml";
         if (fs::is_regular_file(receipt))
@@ -111,7 +112,7 @@ namespace vix::commands
     std::cerr << "vix: " << unsupported.message << ".\n";
     return 1;
 #else
-    const auto receiptPath = receipt_path_for_executable(std::getenv("VIX_CLI_PATH"));
+    const auto receiptPath = receipt_path_for_executable(vix::env::legacy::getenv("VIX_CLI_PATH"));
     if (receiptPath.empty())
     {
       std::cerr << "vix: installation receipt is unavailable; reinstall through a managed distribution before using upgrade.\n";
@@ -135,7 +136,7 @@ namespace vix::commands
     if (receipt.value->installKind == InstallKind::managed)
     {
       std::error_code ec;
-      const auto runningExecutable = resolve_executable(std::getenv("VIX_CLI_PATH"));
+      const auto runningExecutable = resolve_executable(vix::env::legacy::getenv("VIX_CLI_PATH"));
       if (runningExecutable.empty())
       {
         std::cerr << "vix: cannot identify the running managed executable.\n";

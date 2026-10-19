@@ -61,7 +61,7 @@ namespace vix::cli::project::native
         return false;
       }
       const auto before = fs::symlink_status(absolute, ec);
-      const bool existed = !ec && before.type() != fs::file_type::not_found;
+      [[maybe_unused]] const bool existed = !ec && before.type() != fs::file_type::not_found;
       if (ec == std::errc::no_such_file_or_directory) ec.clear();
       if (ec)
       {

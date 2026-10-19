@@ -12,6 +12,7 @@
  *
  */
 #include <vix/cli/errors/RawLogDetectors.hpp>
+#include <vix/env/Legacy.hpp>
 #include <vix/cli/errors/BuildFailureClassification.hpp>
 #include <vix/cli/errors/CodeFrame.hpp>
 #include <vix/cli/errors/CompilerError.hpp>
@@ -176,7 +177,7 @@ namespace vix::cli::errors
 
     bool runtime_technical_details_enabled()
     {
-      const char *level = std::getenv("VIX_LOG_LEVEL");
+      const char *level = vix::env::legacy::getenv("VIX_LOG_LEVEL");
 
       if (level == nullptr || *level == '\0')
         return false;
@@ -553,7 +554,7 @@ namespace vix::cli::errors
     bool linker_technical_details_enabled()
     {
       const char *level =
-          std::getenv("VIX_LOG_LEVEL");
+          vix::env::legacy::getenv("VIX_LOG_LEVEL");
 
       if (level == nullptr || *level == '\0')
         return false;

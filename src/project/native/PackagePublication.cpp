@@ -1,4 +1,5 @@
 #include <vix/cli/project/native/PackagePublication.hpp>
+#include <vix/env/Legacy.hpp>
 
 #include <toml.hpp>
 #include <vix/requests/Body.hpp>
@@ -60,15 +61,16 @@ namespace vix::cli::project::native
       result.reserve(((bytes.size() + 2) / 3) * 4);
       for (std::size_t i = 0; i < bytes.size(); i += 3)
       {
+        const auto remaining = bytes.size() - i;
         const auto a = static_cast<unsigned char>(bytes[i]);
-        const auto b = i + 1 < bytes.size() ? static_cast<unsigned char>(bytes[i + 1]) : 0U;
-        const auto c = i + 2 < bytes.size() ? static_cast<unsigned char>(bytes[i + 2]) : 0U;
+        const auto b = remaining > 1 ? static_cast<unsigned char>(bytes[i + 1]) : 0U;
+        const auto c = remaining > 2 ? static_cast<unsigned char>(bytes[i + 2]) : 0U;
         const auto bits = (static_cast<unsigned int>(a) << 16U) |
           (static_cast<unsigned int>(b) << 8U) | static_cast<unsigned int>(c);
         result.push_back(alphabet[(bits >> 18U) & 63U]);
         result.push_back(alphabet[(bits >> 12U) & 63U]);
-        result.push_back(i + 1 < bytes.size() ? alphabet[(bits >> 6U) & 63U] : '=');
-        result.push_back(i + 2 < bytes.size() ? alphabet[bits & 63U] : '=');
+        result.push_back(remaining > 1 ? alphabet[(bits >> 6U) & 63U] : '=');
+        result.push_back(remaining > 2 ? alphabet[bits & 63U] : '=');
       }
       return result;
     }
@@ -104,7 +106,7 @@ namespace vix::cli::project::native
 
     std::optional<std::string> env_value(const char *name)
     {
-      const char *value = std::getenv(name);
+      const char *value = vix::env::legacy::getenv(name);
       if (!value || !*value) return std::nullopt;
       return std::string{value};
     }
@@ -392,11 +394,11 @@ namespace vix::cli::project::native
 
   fs::path registry_publication_configuration_path()
   {
-    if (const char *overridePath = std::getenv("VIX_PUBLISH_CONFIG"); overridePath && *overridePath)
+    if (const char *overridePath = vix::env::legacy::getenv("VIX_PUBLISH_CONFIG"); overridePath && *overridePath)
       return fs::path{overridePath};
-    if (const char *xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
+    if (const char *xdg = vix::env::legacy::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
       return fs::path{xdg} / "vix" / "publishing.toml";
-    if (const char *home = std::getenv("HOME"); home && *home)
+    if (const char *home = vix::env::legacy::getenv("HOME"); home && *home)
       return fs::path{home} / ".config" / "vix" / "publishing.toml";
     return {};
   }

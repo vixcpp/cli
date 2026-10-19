@@ -562,8 +562,8 @@ jobs:
           "$BIN" --version || "$BIN" version || true
           "$BIN" --help >/tmp/vix-help.txt
           head -n 40 /tmp/vix-help.txt
-          "$BIN" note --help >/tmp/vix-note-help.txt
-          head -n 80 /tmp/vix-note-help.txt
+          "$BIN" upgrade --help >/tmp/vix-upgrade-help.txt
+          head -n 80 /tmp/vix-upgrade-help.txt
 
       - name: Smoke test CLI (Windows)
         if: runner.os == 'Windows'
@@ -593,7 +593,7 @@ jobs:
 
           & $bin --version
           & $bin --help | Select-Object -First 40
-          & $bin note --help | Select-Object -First 80
+          & $bin upgrade --help | Select-Object -First 80
 
       - name: Upload build logs
         if: always()

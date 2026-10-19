@@ -59,6 +59,21 @@ namespace
 #endif
   }
 
+  struct SigningKeyEnvironmentValue
+  {
+    char *value{};
+
+    void clear() noexcept
+    {
+      if (value == nullptr)
+        return;
+      erase_signing_key_environment_value(value, std::char_traits<char>::length(value) + 1);
+      value = nullptr;
+    }
+
+    ~SigningKeyEnvironmentValue() { clear(); }
+  };
+
   std::optional<std::string> field(const toml::table &table, std::string_view key)
   {
     const auto value = table[key].value<std::string>();
@@ -293,18 +308,14 @@ int main(int argc, char **argv)
     return 2;
   }
   const auto keyId = copied_environment_value("VIX_RELEASE_KEY_ID");
-  char *mutableEnvironmentKey = signing_key_environment_value();
-  const char *keyHex = mutableEnvironmentKey;
+  SigningKeyEnvironmentValue mutableEnvironmentKey{signing_key_environment_value()};
+  const char *keyHex = mutableEnvironmentKey.value;
   const auto trustPath = copied_environment_value("VIX_RELEASE_TRUST_FILE");
   if (!keyId || !keyHex || !*keyHex || !trustPath)
   {
-    erase_signing_key_environment_value(
-        mutableEnvironmentKey,
-        mutableEnvironmentKey == nullptr ? 0 : std::char_traits<char>::length(mutableEnvironmentKey));
     std::cerr << "vix-release-tool: release signing inputs or public trust verification input are not provisioned.\n";
     return 1;
   }
-  const auto keyLength = std::char_traits<char>::length(keyHex);
   try
   {
     Result<ReleaseManifest> manifestResult;
@@ -350,7 +361,7 @@ int main(int argc, char **argv)
                                                      {std::move(artifact)});
     }
     auto key = decode_hex(keyHex);
-    erase_signing_key_environment_value(mutableEnvironmentKey, keyLength);
+    mutableEnvironmentKey.clear();
     if (!manifestResult.valid() || key.size() != 64)
     {
       std::cerr << "vix-release-tool: manifest or signing key is invalid.\n";

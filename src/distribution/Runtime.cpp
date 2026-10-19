@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -121,6 +122,12 @@ namespace vix::cli::distribution
     {
       return !value.empty() && value != "." && value != ".." &&
              value.find('/') == std::string::npos && value.find('\\') == std::string::npos;
+    }
+
+    bool qualified_target_sdk(std::string_view target)
+    {
+      return target == "android-arm64-v8a-api21" || target == "android-x86_64-api21" ||
+             target == "wasm32-wasip2";
     }
 
     std::string version_string(const vix::cli::project::native::Version &version)
@@ -319,8 +326,13 @@ namespace vix::cli::distribution
     const auto &manifest = verified.value->manifest();
     if (manifest.channel != channel)
       return {{}, fail(ErrorCode::channel_mismatch, "signed release channel differs from requested channel")};
-    if (!manifest.components.empty())
-      return {{}, fail(ErrorCode::unsupported_components, "release declares components that this bootstrap cannot install")};
+    // Host bootstrap installs exactly one host artifact. Signed optional
+    // components are not part of that transaction and are deliberately left
+    // untouched. Component kinds without an explicitly separate installation
+    // contract remain fail-closed.
+    if (std::any_of(manifest.components.begin(), manifest.components.end(), [](const ReleaseComponent &component)
+                    { return component.kind != ComponentKind::target_sdk; }))
+      return {{}, fail(ErrorCode::unsupported_components, "bootstrap cannot install non-target-SDK release components")};
     const auto artifactIt = std::find_if(manifest.artifacts.begin(), manifest.artifacts.end(),
                                          [&](const ReleaseArtifact &artifact) { return artifact.host == host; });
     if (artifactIt == manifest.artifacts.end())
@@ -884,8 +896,13 @@ namespace vix::cli::distribution
     auto verified = verify_release_manifest(signedManifest.value->manifestText, signedManifest.value->signature, *trust.value, "current");
     if (!verified.valid())
       return {{}, verified.error};
-    if (!verified.value->manifest().components.empty())
-      return {{}, fail(ErrorCode::unsupported_components, "release declares components that this runtime cannot install")};
+    // `vix upgrade` is intentionally a host-installation operation. Optional
+    // target SDK components in the same signed release are not selected or
+    // installed by this transaction. Unknown component kinds remain rejected.
+    if (std::any_of(verified.value->manifest().components.begin(), verified.value->manifest().components.end(),
+                    [](const ReleaseComponent &component)
+                    { return component.kind != ComponentKind::target_sdk; }))
+      return {{}, fail(ErrorCode::unsupported_components, "host upgrade cannot install non-target-SDK release components")};
     auto plan = plan_upgrade(receipt, *verified.value, host);
     if (!plan.valid())
       return {{}, plan.error};
@@ -1002,5 +1019,151 @@ namespace vix::cli::distribution
       return {{}, fail(ErrorCode::activation_failed, "receipt replacement failed; previous version restored")};
     }
     return {RuntimeOutcome{RuntimeOutcomeKind::upgraded, {}, newVersion}, {}};
+  }
+  Result<TargetSdkInstallOutcome> TargetSdkInstallRuntime::install(
+      const fs::path &componentRoot, const fs::path &trustStorePath,
+      const TargetPlatform &target, const std::string &channel)
+  {
+    const auto canonicalTarget = parse_target_platform(target.triple);
+    if (componentRoot.empty() || !componentRoot.is_absolute() ||
+        componentRoot != componentRoot.lexically_normal() || !canonicalTarget.valid() ||
+        !qualified_target_sdk(target.triple) ||
+        *canonicalTarget.value != target || channel.empty())
+      return {{}, fail(ErrorCode::invalid_value, "target SDK installation inputs are invalid")};
+
+    const auto signedManifest = source_.fetch(channel);
+    if (!signedManifest.valid()) return {{}, signedManifest.error};
+    const auto trust = load_release_trust_store(trustStorePath);
+    if (!trust.valid()) return {{}, trust.error};
+    const auto verified = verify_release_manifest(signedManifest.value->manifestText,
+                                                  signedManifest.value->signature, *trust.value, "current");
+    if (!verified.valid()) return {{}, verified.error};
+    const auto &manifest = verified.value->manifest();
+    if (manifest.channel != channel)
+      return {{}, fail(ErrorCode::channel_mismatch, "signed release channel differs from requested channel")};
+
+    const ReleaseComponent *selected = nullptr;
+    for (const auto &component : manifest.components)
+    {
+      if (component.kind != ComponentKind::target_sdk || !component.target || *component.target != target)
+        continue;
+      if (selected)
+        return {{}, fail(ErrorCode::malformed_manifest, "release contains multiple target SDK components for the requested target")};
+      selected = &component;
+    }
+    if (!selected)
+      return {{}, fail(ErrorCode::unsupported_host_artifact, "release has no target SDK component for the requested target")};
+    if (selected->archive != ArchiveFormat::tar_gz)
+      return {{}, fail(ErrorCode::unsupported_archive, "target SDK installation currently supports tar.gz artifacts only")};
+
+    const auto version = version_string(manifest.version);
+    if (selected->installPath && *selected->installPath != "target-sdks")
+      return {{}, fail(ErrorCode::unsupported_components, "target SDK installation is restricted to the owned target-sdks root")};
+    const fs::path namespacePath{"target-sdks"};
+
+    std::error_code ec;
+    const auto componentRootStatus = fs::symlink_status(componentRoot, ec);
+    if (!ec && fs::is_symlink(componentRootStatus))
+      return {{}, fail(ErrorCode::staging_failed, "target SDK component root must not be a symlink")};
+    if (ec != std::errc::no_such_file_or_directory && ec)
+      return {{}, fail(ErrorCode::staging_failed, "target SDK component root could not be inspected")};
+    ec.clear();
+    fs::path checked = componentRoot;
+    for (const auto &part : namespacePath / target.triple)
+    {
+      checked /= part;
+      const auto status = fs::symlink_status(checked, ec);
+      if (!ec && fs::is_symlink(status))
+        return {{}, fail(ErrorCode::staging_failed, "target SDK component path contains a symlink")};
+      if (ec != std::errc::no_such_file_or_directory && ec)
+        return {{}, fail(ErrorCode::staging_failed, "target SDK component path could not be inspected")};
+      ec.clear();
+    }
+    const fs::path targetRoot = componentRoot / namespacePath / target.triple;
+    const fs::path destination = targetRoot / version;
+    const auto destinationStatus = fs::symlink_status(destination, ec);
+    if (!ec && fs::is_symlink(destinationStatus))
+      return {{}, fail(ErrorCode::staging_failed, "target SDK destination must not be a symlink")};
+    if (!ec && fs::exists(destinationStatus))
+    {
+      const auto receiptPath = destination / "share" / "vix" / "target-sdk-install.toml";
+      std::ifstream receiptInput(receiptPath, std::ios::binary);
+      const std::string receiptText{std::istreambuf_iterator<char>{receiptInput}, std::istreambuf_iterator<char>{}};
+      const auto expected = std::string{"format = 1\nversion = \""} + version + "\"\ntarget = \"" +
+                            target.triple + "\"\ncomponent = \"" + selected->id + "\"\ndigest = \"" +
+                            selected->digest.value + "\"\n";
+      if (receiptInput.is_open() && receiptText == expected)
+        return {TargetSdkInstallOutcome{selected->id, target, destination, true}, {}};
+      return {{}, fail(ErrorCode::already_installed, "a different target SDK already occupies this versioned path")};
+    }
+    if (ec != std::errc::no_such_file_or_directory && ec)
+      return {{}, fail(ErrorCode::staging_failed, "target SDK destination could not be inspected")};
+    ec.clear();
+    fs::create_directories(targetRoot, ec);
+    if (ec || fs::is_symlink(fs::symlink_status(targetRoot, ec)) || ec)
+      return {{}, fail(ErrorCode::staging_failed, "target SDK installation root is invalid or symlinked")};
+
+    static std::atomic<std::uint64_t> stagingSequence{0};
+    const auto staging = targetRoot / (".staging-" + version + "-" +
+                                       std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+                                       std::to_string(stagingSequence.fetch_add(1, std::memory_order_relaxed)));
+    if (!fs::create_directory(staging, ec) || ec)
+      return {{}, fail(ErrorCode::staging_failed, "unique target SDK staging directory could not be created")};
+    const auto cleanup = [&]
+    {
+      std::error_code ignored;
+      fs::remove_all(staging, ignored);
+    };
+    const auto archive = fetcher_.fetch(selected->location, staging / "component.archive");
+    if (!archive.valid()) { cleanup(); return {{}, archive.error}; }
+    const auto archiveSize = fs::file_size(*archive.value, ec);
+    if (ec || archiveSize > maximum_distribution_archive_bytes ||
+        (selected->size && archiveSize != *selected->size))
+    {
+      cleanup();
+      return {{}, fail(ErrorCode::artifact_digest_mismatch, "target SDK archive size differs from signed metadata or exceeds the bound")};
+    }
+    std::ifstream archiveInput(*archive.value, std::ios::binary);
+    if (!archiveInput) { cleanup(); return {{}, fail(ErrorCode::artifact_fetch_failed, "target SDK archive cannot be read")}; }
+    const std::string bytes{std::istreambuf_iterator<char>{archiveInput}, std::istreambuf_iterator<char>{}};
+    if (bytes.size() != archiveSize || !verify_distribution_artifact(bytes, selected->digest).valid())
+    {
+      cleanup();
+      return {{}, fail(ErrorCode::artifact_digest_mismatch, "target SDK archive differs from signed digest")};
+    }
+    const auto extracted = extractor_.extract(selected->archive, *archive.value, staging / "unpacked");
+    if (!extracted.valid()) { cleanup(); return {{}, extracted.error}; }
+    if (!fs::is_directory(*extracted.value / "include", ec) || ec ||
+        !fs::is_regular_file(*extracted.value / "lib" / "cmake" / "Vix" / "VixConfig.cmake", ec) || ec)
+    {
+      cleanup();
+      return {{}, fail(ErrorCode::invalid_distribution, "target SDK is missing public headers or its Vix CMake package")};
+    }
+    const auto metadataDirectory = *extracted.value / "share" / "vix";
+    const auto metadataStatus = fs::symlink_status(metadataDirectory, ec);
+    if (ec || !fs::is_directory(metadataStatus) || fs::is_symlink(metadataStatus))
+    {
+      cleanup();
+      return {{}, fail(ErrorCode::invalid_distribution, "target SDK metadata directory must be a real directory")};
+    }
+    const auto receiptPath = metadataDirectory / "target-sdk-install.toml";
+    (void)fs::symlink_status(receiptPath, ec);
+    if (!ec || (ec != std::errc::no_such_file_or_directory && ec))
+    {
+      cleanup();
+      return {{}, fail(ErrorCode::invalid_distribution, "target SDK archive contains a conflicting ownership record")};
+    }
+    ec.clear();
+    std::ofstream receiptOutput(receiptPath,
+                                std::ios::binary | std::ios::trunc);
+    receiptOutput << "format = 1\nversion = \"" << version << "\"\ntarget = \"" << target.triple
+                  << "\"\ncomponent = \"" << selected->id << "\"\ndigest = \""
+                  << selected->digest.value << "\"\n";
+    receiptOutput.close();
+    if (!receiptOutput) { cleanup(); return {{}, fail(ErrorCode::staging_failed, "target SDK ownership metadata could not be written")}; }
+    fs::rename(*extracted.value, destination, ec);
+    if (ec) { cleanup(); return {{}, fail(ErrorCode::staging_failed, "validated target SDK could not be atomically promoted")}; }
+    cleanup();
+    return {TargetSdkInstallOutcome{selected->id, target, destination, false}, {}};
   }
 } // namespace vix::cli::distribution

@@ -73,7 +73,11 @@ namespace
       {
         fs::create_directories(root / "bin", ec);
         fs::create_directories(root / "share" / "vix", ec);
+        fs::create_directories(root / "include", ec);
+        fs::create_directories(root / "lib" / "cmake" / "Vix", ec);
         std::ofstream(root / "bin" / "vix", std::ios::binary) << "executable-not-run";
+        std::ofstream(root / "lib" / "cmake" / "Vix" / "VixConfig.cmake", std::ios::binary)
+            << "# fake installed Vix package\n";
       }
       return {root, {}};
     }
@@ -185,7 +189,26 @@ namespace
     return *loaded.value;
   }
 
-  void component_release_fails_closed(const std::string &label, ReleaseComponent component)
+  void optional_component_does_not_change_host_upgrade(const std::string &label, ReleaseComponent component)
+  {
+    constexpr const char *archiveBytes = "archive-bytes";
+    const auto root = make_root(label);
+    const auto receipt = write_receipt(root);
+    const auto trust = write_trust(root);
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes, "current", std::move(component));
+    FakeFetcher fetcher;
+    FakeExtractor extractor;
+    FakeActivator activator;
+    UpgradeRuntime runtime{source, fetcher, extractor, activator};
+    const auto result = runtime.run(receipt, trust, *parse_host_platform("x86_64-linux-gnu").value);
+    assert(result.valid() && result.value->kind == RuntimeOutcomeKind::upgraded);
+    assert(source.calls == 1 && fetcher.calls == 1 && extractor.calls == 1);
+    assert(activator.activations == 1 && activator.active == std::optional<std::string>{"2.4.0"});
+    assert(!fs::exists(root / "target-sdks"));
+  }
+
+  void unsupported_component_keeps_host_upgrade_fail_closed(const std::string &label, ReleaseComponent component)
   {
     constexpr const char *archiveBytes = "archive-bytes";
     const auto root = make_root(label);
@@ -201,7 +224,6 @@ namespace
     assert(!result.valid() && result.error->code == ErrorCode::unsupported_components);
     assert(source.calls == 1 && fetcher.calls == 0 && extractor.calls == 0);
     assert(activator.activations == 0 && activator.active == std::optional<std::string>{"2.3.0"});
-    assert(!fs::exists(root / "staging"));
   }
 
   fs::path write_tar_gz(const fs::path &path, const std::string &name,
@@ -285,20 +307,63 @@ int main()
     const auto componentHost = parse_host_platform("x86_64-linux-gnu");
     const auto digest = digest_distribution_artifact(archiveBytes);
     assert(componentHost.valid() && digest.valid());
-    component_release_fails_closed("host-component",
+    unsupported_component_keeps_host_upgrade_fail_closed("host-component",
         ReleaseComponent{"host-tools", ComponentKind::host, *componentHost.value, {},
                          "https://releases.invalid/host-tools.tar.gz", ArchiveFormat::tar_gz,
                          *digest.value, {}, {}});
   }
 
   {
-    const auto target = parse_target_platform("wasm32-wasi");
+    const auto target = parse_target_platform("wasm32-wasip2");
     const auto digest = digest_distribution_artifact(archiveBytes);
     assert(target.valid() && digest.valid());
-    component_release_fails_closed("target-sdk-component",
+    optional_component_does_not_change_host_upgrade("target-sdk-component",
         ReleaseComponent{"wasm-sdk", ComponentKind::target_sdk, {}, *target.value,
                          "https://releases.invalid/wasm-sdk.tar.gz", ArchiveFormat::tar_gz,
                          *digest.value, {}, {}});
+  }
+
+  {
+    const auto root = make_root("target-sdk-install");
+    const auto trust = write_trust(root);
+    const auto target = parse_target_platform("wasm32-wasip2");
+    const auto otherTarget = parse_target_platform("android-arm64-v8a-api21");
+    const auto digest = digest_distribution_artifact(archiveBytes);
+    assert(target.valid() && otherTarget.valid() && digest.valid());
+    fs::create_directories(root / "target-sdks" / otherTarget.value->triple / "2.4.0");
+    std::ofstream(root / "target-sdks" / otherTarget.value->triple / "2.4.0" / "keep.txt") << "preserve";
+    FakeSource source;
+    source.value = signed_fixture(archiveBytes, "current",
+        ReleaseComponent{"wasi-sdk-p2", ComponentKind::target_sdk, {}, *target.value,
+                         "https://releases.invalid/wasi-sdk.tar.gz", ArchiveFormat::tar_gz,
+                         *digest.value, static_cast<std::uint64_t>(std::char_traits<char>::length(archiveBytes)),
+                         std::string{"target-sdks"}});
+    FakeFetcher fetcher;
+    FakeExtractor extractor;
+    extractor.fail = true;
+    TargetSdkInstallRuntime runtime{source, fetcher, extractor};
+    const auto failed = runtime.install(root, trust, *target.value);
+    assert(!failed.valid() && failed.error->code == ErrorCode::unsafe_archive);
+    assert(!fs::exists(root / "target-sdks" / target.value->triple / "2.4.0"));
+
+    extractor.fail = false;
+    const auto installed = runtime.install(root, trust, *target.value);
+    const auto expectedPath = root / "target-sdks" / target.value->triple / "2.4.0";
+    assert(installed.valid() && installed.value->installationPath == expectedPath && !installed.value->alreadyInstalled);
+    assert(fs::is_regular_file(expectedPath / "lib" / "cmake" / "Vix" / "VixConfig.cmake"));
+    assert(fs::is_regular_file(expectedPath / "share" / "vix" / "target-sdk-install.toml"));
+    const auto repeated = runtime.install(root, trust, *target.value);
+    assert(repeated.valid() && repeated.value->alreadyInstalled && repeated.value->installationPath == expectedPath);
+    assert(fs::exists(root / "versions" / "2.3.0"));
+    assert(fs::is_regular_file(root / "target-sdks" / otherTarget.value->triple / "2.4.0" / "keep.txt"));
+    source.value = signed_fixture(archiveBytes, "current",
+        ReleaseComponent{"different-wasi-sdk", ComponentKind::target_sdk, {}, *target.value,
+                         "https://releases.invalid/wasi-sdk.tar.gz", ArchiveFormat::tar_gz,
+                         *digest.value, static_cast<std::uint64_t>(std::char_traits<char>::length(archiveBytes)),
+                         std::string{"target-sdks"}});
+    const auto collision = runtime.install(root, trust, *target.value);
+    assert(!collision.valid() && collision.error->code == ErrorCode::already_installed);
+    assert(source.calls == 4 && fetcher.calls == 2 && extractor.calls == 2);
   }
 
   {
@@ -452,7 +517,13 @@ int main()
     fs::create_directories(root, ec);
     const auto trust = trusted_release_store(root);
     FakeSource source;
-    source.value = signed_fixture(archiveBytes);
+    const auto target = parse_target_platform("wasm32-wasip2");
+    const auto componentDigest = digest_distribution_artifact(archiveBytes);
+    assert(target.valid() && componentDigest.valid());
+    source.value = signed_fixture(archiveBytes, "current",
+        ReleaseComponent{"wasi-sdk-p2", ComponentKind::target_sdk, {}, *target.value,
+                         "https://releases.invalid/wasi-sdk.tar.gz", ArchiveFormat::tar_gz,
+                         *componentDigest.value, {}, std::string{"target-sdks"}});
     FakeFetcher fetcher;
     FakeExtractor packageExtractor;
     PosixInstallationActivator activator{root / "home"};

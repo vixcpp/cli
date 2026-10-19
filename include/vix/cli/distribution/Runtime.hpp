@@ -135,6 +135,35 @@ namespace vix::cli::distribution
     InstallationActivator &activator_;
   };
 
+  struct TargetSdkInstallOutcome
+  {
+    std::string componentId;
+    TargetPlatform target;
+    std::filesystem::path installationPath;
+    bool alreadyInstalled{false};
+  };
+
+  // Installs exactly one signed target SDK into an immutable, versioned
+  // component directory. It does not change the active host installation and
+  // deliberately provides no CLI command or implicit target selection.
+  class TargetSdkInstallRuntime
+  {
+  public:
+    TargetSdkInstallRuntime(ReleaseManifestSource &source, DistributionArtifactFetcher &fetcher,
+                            ArchiveExtractor &extractor)
+        : source_(source), fetcher_(fetcher), extractor_(extractor) {}
+
+    Result<TargetSdkInstallOutcome> install(const std::filesystem::path &componentRoot,
+                                            const std::filesystem::path &trustStorePath,
+                                            const TargetPlatform &target,
+                                            const std::string &channel = "stable");
+
+  private:
+    ReleaseManifestSource &source_;
+    DistributionArtifactFetcher &fetcher_;
+    ArchiveExtractor &extractor_;
+  };
+
   class SafeTarGzExtractor final : public ArchiveExtractor
   {
   public:

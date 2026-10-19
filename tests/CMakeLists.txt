@@ -1085,6 +1085,12 @@ if (TARGET vix_warnings)
 endif()
 add_test(NAME vix_cli_distribution_runtime_tests
   COMMAND vix_cli_distribution_runtime_tests)
+if (TARGET vix_release_tool)
+  add_test(NAME vix_cli_release_spec_signing_tests
+    COMMAND ${CMAKE_COMMAND}
+      -DVIX_RELEASE_TOOL=$<TARGET_FILE:vix_release_tool>
+      -P ${CMAKE_CURRENT_SOURCE_DIR}/ReleaseSpecSigningTest.cmake)
+endif()
 
 add_test(
   NAME vix_cli_retired_sdk_profile_options

@@ -7,6 +7,7 @@ on:
       - master
       - dev
       - release/**
+      - integration/**
     paths:
       - ".github/workflows/cli-release-check.yml"
       - ".github/workflows/cli-ci.yml"
@@ -25,6 +26,7 @@ on:
       - master
       - dev
       - release/**
+      - integration/**
     paths:
       - ".github/workflows/cli-release-check.yml"
       - ".github/workflows/cli-ci.yml"
@@ -49,6 +51,9 @@ concurrency:
 env:
   BUILD_JOBS: 2
   VIX_GIT_BRANCH: dev
+  # Keep these aligned with the current-generation Vix root submodule pins.
+  VIX_LOG_COMMIT: 3890d0a4c735e6daf53d96bdc519eac039d70907
+  VIX_REQUESTS_COMMIT: 588c52cc57e25e8aec415307190234e7c0ab0c50
 
 jobs:
   cross-platform:
@@ -168,6 +173,7 @@ jobs:
             nlohmann-json `
             openssl `
             sqlite3 `
+            zlib `
             spdlog `
             fmt `
             --triplet x64-windows
@@ -202,6 +208,7 @@ jobs:
             ../agent \
             ../websocket \
             ../db \
+            ../log \
             ../engine \
             ../note
 
@@ -216,10 +223,17 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/json.git ../json
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" --recurse-submodules https://github.com/vixcpp/async.git ../async
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/core.git ../core
+          git init ../log
+          git -C ../log remote add origin https://github.com/vixcpp/log.git
+          git -C ../log fetch --depth 1 origin "$VIX_LOG_COMMIT"
+          git -C ../log checkout --detach FETCH_HEAD
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/reply.git ../reply || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/template.git ../template || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/net.git ../net
-          git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/requests.git ../requests
+          git init ../requests
+          git -C ../requests remote add origin https://github.com/vixcpp/requests.git
+          git -C ../requests fetch --depth 1 origin "$VIX_REQUESTS_COMMIT"
+          git -C ../requests checkout --detach FETCH_HEAD
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/crypto.git ../crypto
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/sync.git ../sync || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/cache.git ../cache || true
@@ -229,6 +243,16 @@ jobs:
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/db.git ../db || true
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/engine.git ../engine
           git clone --depth 1 --branch "${VIX_GIT_BRANCH}" https://github.com/vixcpp/note.git ../note
+          : > dependency-revisions.txt
+          for module in error path fs io log env os process utils json async core reply template net requests crypto sync cache p2p agent websocket db engine note; do
+            if [ -d "../$module" ]; then
+              printf '%s %s\n' "$module" "$(git -C "../$module" rev-parse HEAD)" >> dependency-revisions.txt
+            else
+              printf '%s %s\n' "$module" unavailable >> dependency-revisions.txt
+            fi
+          done
+          grep -Fx "log ${VIX_LOG_COMMIT}" dependency-revisions.txt
+          grep -Fx "requests ${VIX_REQUESTS_COMMIT}" dependency-revisions.txt
 
       - name: Fetch sibling modules (Windows)
         if: runner.os == 'Windows'
@@ -251,6 +275,7 @@ jobs:
             "reply",
             "template",
             "net",
+            "log",
             "requests",
             "crypto",
             "sync",
@@ -284,7 +309,14 @@ jobs:
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/reply.git ..\reply
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/template.git ..\template
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/net.git ..\net
-          git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/requests.git ..\requests
+          git init ..\log
+          git -C ..\log remote add origin https://github.com/vixcpp/log.git
+          git -C ..\log fetch --depth 1 origin "$env:VIX_LOG_COMMIT"
+          git -C ..\log checkout --detach FETCH_HEAD
+          git init ..\requests
+          git -C ..\requests remote add origin https://github.com/vixcpp/requests.git
+          git -C ..\requests fetch --depth 1 origin "$env:VIX_REQUESTS_COMMIT"
+          git -C ..\requests checkout --detach FETCH_HEAD
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/crypto.git ..\crypto
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/sync.git ..\sync
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/cache.git ..\cache
@@ -294,6 +326,15 @@ jobs:
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/db.git ..\db
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/engine.git ..\engine
           git clone --depth 1 --branch "$env:VIX_GIT_BRANCH" https://github.com/vixcpp/note.git ..\note
+          $dependencyModules = @("error", "path", "fs", "io", "log", "env", "os", "process", "utils", "json", "async", "core", "reply", "template", "net", "requests", "crypto", "sync", "cache", "p2p", "agent", "websocket", "db", "engine", "note")
+          $revisionLines = foreach ($module in $dependencyModules) {
+            $revision = git -C "..\$module" rev-parse HEAD
+            if ($LASTEXITCODE -ne 0) { throw "Unable to record revision for $module" }
+            "$module $revision"
+          }
+          $revisionLines | Out-File -FilePath dependency-revisions.txt -Encoding ascii
+          if ((Get-Content dependency-revisions.txt) -notcontains "log $env:VIX_LOG_COMMIT") { throw "Log revision mismatch" }
+          if ((Get-Content dependency-revisions.txt) -notcontains "requests $env:VIX_REQUESTS_COMMIT") { throw "Requests revision mismatch" }
 
       - name: Prepare Asio for modules (Windows)
         if: runner.os == 'Windows'
@@ -389,6 +430,7 @@ jobs:
           test -f ../json/CMakeLists.txt
           test -f ../async/CMakeLists.txt
           test -f ../core/CMakeLists.txt
+          test -f ../log/CMakeLists.txt
           test -f ../reply/CMakeLists.txt
           test -f ../net/CMakeLists.txt
           test -f ../requests/CMakeLists.txt
@@ -412,6 +454,7 @@ jobs:
             "..\json\CMakeLists.txt",
             "..\async\CMakeLists.txt",
             "..\core\CMakeLists.txt",
+            "..\log\CMakeLists.txt",
             "..\reply\CMakeLists.txt",
             "..\net\CMakeLists.txt",
             "..\requests\CMakeLists.txt",
@@ -562,4 +605,5 @@ jobs:
             build/CMakeFiles/CMakeError.log
             build/CMakeFiles/CMakeOutput.log
             build/CMakeFiles/CMakeConfigureLog.yaml
+            dependency-revisions.txt
           if-no-files-found: warn

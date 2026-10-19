@@ -7,6 +7,7 @@ on:
       - master
       - dev
       - release/**
+      - integration/**
     paths:
       - ".github/workflows/cli-strict-ci.yml"
       - "CMakeLists.txt"
@@ -30,6 +31,7 @@ on:
       - master
       - dev
       - release/**
+      - integration/**
     paths:
       - ".github/workflows/cli-strict-ci.yml"
       - "CMakeLists.txt"
@@ -59,6 +61,9 @@ concurrency:
 env:
   BUILD_JOBS: 2
   VIX_GIT_BRANCH: dev
+  # Keep these aligned with the current-generation Vix root submodule pins.
+  VIX_LOG_COMMIT: 3890d0a4c735e6daf53d96bdc519eac039d70907
+  VIX_REQUESTS_COMMIT: 588c52cc57e25e8aec415307190234e7c0ab0c50
   VIX_DEPENDENCY_ARTIFACT: cli-sibling-dependencies
   VIX_DEPENDENCY_ARCHIVE: vix-cli-dependencies.tar.gz
   DEPS: >
@@ -149,6 +154,20 @@ jobs:
             local branch="${VIX_GIT_BRANCH}"
 
             rm -rf "$destination"
+
+            if [ "$module" = "requests" ] || [ "$module" = "log" ]; then
+              local revision
+              if [ "$module" = "requests" ]; then
+                revision="${VIX_REQUESTS_COMMIT}"
+              else
+                revision="${VIX_LOG_COMMIT}"
+              fi
+              git init "$destination"
+              git -C "$destination" remote add origin "$repository"
+              git -C "$destination" fetch --depth 1 origin "$revision"
+              git -C "$destination" checkout --detach FETCH_HEAD
+              return
+            fi
 
             if ! git ls-remote \
               --exit-code \
@@ -255,6 +274,14 @@ jobs:
         run: |
           set -euxo pipefail
 
+          : > "$GITHUB_WORKSPACE/dependency-revisions.txt"
+          for module in error path fs io log env os process utils json async core reply template net requests crypto sync cache p2p time agent engine note; do
+            printf '%s %s\n' "$module" "$(git -C "$GITHUB_WORKSPACE/../$module" rev-parse HEAD)" \
+              | tee -a "$GITHUB_WORKSPACE/dependency-revisions.txt"
+          done
+          grep -Fx "log ${VIX_LOG_COMMIT}" "$GITHUB_WORKSPACE/dependency-revisions.txt"
+          grep -Fx "requests ${VIX_REQUESTS_COMMIT}" "$GITHUB_WORKSPACE/dependency-revisions.txt"
+
           tar \
             --exclude='*/.git' \
             --exclude='*/build' \
@@ -301,7 +328,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.VIX_DEPENDENCY_ARTIFACT }}
-          path: ${{ env.VIX_DEPENDENCY_ARCHIVE }}
+          path: |
+            ${{ env.VIX_DEPENDENCY_ARCHIVE }}
+            dependency-revisions.txt
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
@@ -364,6 +393,8 @@ jobs:
           test -f ../reply/CMakeLists.txt
           test -f ../requests/CMakeLists.txt
           test -f ../note/CMakeLists.txt
+          grep -Fx "log ${VIX_LOG_COMMIT}" .ci-dependencies/dependency-revisions.txt
+          grep -Fx "requests ${VIX_REQUESTS_COMMIT}" .ci-dependencies/dependency-revisions.txt
 
       - name: Select compiler
         shell: bash

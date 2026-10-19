@@ -62,7 +62,7 @@ env:
   BUILD_JOBS: 2
   VIX_GIT_BRANCH: dev
   # Keep these aligned with the current-generation Vix root submodule pins.
-  VIX_LOG_COMMIT: d25d1d4e0c2bf08b1d381c83a953ee02f4b09f62
+  VIX_LOG_COMMIT: d25d1d485db3d110115ea999f6e1bef05be944ec
   VIX_REQUESTS_COMMIT: 588c52cc57e25e8aec415307190234e7c0ab0c50
   VIX_DEPENDENCY_ARTIFACT: cli-sibling-dependencies
   VIX_DEPENDENCY_ARCHIVE: vix-cli-dependencies.tar.gz

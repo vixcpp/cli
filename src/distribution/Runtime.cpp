@@ -1,5 +1,4 @@
 #include <vix/cli/distribution/Runtime.hpp>
-#include <vix/env/Legacy.hpp>
 
 #include <toml.hpp>
 #include <vix/requests/Client.hpp>
@@ -10,14 +9,13 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <system_error>
-#ifndef _WIN32
-#include <cstdlib>
-#endif
 
 #include <zlib.h>
 
@@ -30,6 +28,26 @@ namespace vix::cli::distribution
     Error fail(ErrorCode code, std::string message)
     {
       return {code, std::move(message)};
+    }
+
+    std::optional<std::string> environment_value(const char *name)
+    {
+#if defined(_WIN32)
+      char *value = nullptr;
+      std::size_t length = 0;
+      if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
+        return std::nullopt;
+      std::string result{value};
+      std::free(value);
+#else
+      const char *value = std::getenv(name);
+      if (value == nullptr)
+        return std::nullopt;
+      std::string result{value};
+#endif
+      if (result.empty())
+        return std::nullopt;
+      return result;
     }
 
     bool https_url(const std::string &text)
@@ -210,23 +228,23 @@ namespace vix::cli::distribution
 #ifdef _WIN32
     return {{}, fail(ErrorCode::unsupported_activation_platform, "managed bootstrap is not supported on Windows yet")};
 #else
-    if (const char *overrideRoot = vix::env::legacy::getenv("VIX_HOME"); overrideRoot && *overrideRoot)
+    if (const auto overrideRoot = environment_value("VIX_HOME"))
     {
-      const fs::path path{overrideRoot};
+      const fs::path path{*overrideRoot};
       if (!path.is_absolute())
         return {{}, fail(ErrorCode::invalid_value, "VIX_HOME must be an absolute path")};
       return {path, {}};
     }
-    if (const char *xdg = vix::env::legacy::getenv("XDG_DATA_HOME"); xdg && *xdg)
+    if (const auto xdg = environment_value("XDG_DATA_HOME"))
     {
-      const fs::path path{xdg};
+      const fs::path path{*xdg};
       if (!path.is_absolute())
         return {{}, fail(ErrorCode::invalid_value, "XDG_DATA_HOME must be an absolute path")};
       return {path / "vix", {}};
     }
-    if (const char *home = vix::env::legacy::getenv("HOME"); home && *home)
+    if (const auto home = environment_value("HOME"))
     {
-      const fs::path path{home};
+      const fs::path path{*home};
       if (!path.is_absolute())
         return {{}, fail(ErrorCode::invalid_value, "HOME must be an absolute path for managed installation")};
       return {path / ".local" / "share" / "vix", {}};
@@ -240,10 +258,10 @@ namespace vix::cli::distribution
 #ifdef _WIN32
     return {{}, fail(ErrorCode::unsupported_activation_platform, "managed bootstrap is not supported on Windows yet")};
 #else
-    const char *home = vix::env::legacy::getenv("HOME");
-    if (!home || !*home)
+    const auto home = environment_value("HOME");
+    if (!home)
       return {{}, fail(ErrorCode::invalid_value, "HOME is required to expose vix on PATH")};
-    const fs::path path{home};
+    const fs::path path{*home};
     if (!path.is_absolute())
       return {{}, fail(ErrorCode::invalid_value, "HOME must be an absolute path to expose vix on PATH")};
     return {path / ".local" / "bin" / "vix", {}};

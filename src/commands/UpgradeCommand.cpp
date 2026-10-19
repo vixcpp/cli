@@ -107,9 +107,7 @@ namespace vix::commands
       return 2;
     }
 #ifdef _WIN32
-    const Error unsupported{ErrorCode::unsupported_activation_platform,
-                            "managed self-upgrade is not supported on this platform yet"};
-    std::cerr << "vix: " << unsupported.message << ".\n";
+    std::cerr << "vix: managed self-upgrade is not supported on this platform yet.\n";
     return 1;
 #else
     const auto receiptPath = receipt_path_for_executable(vix::env::legacy::getenv("VIX_CLI_PATH"));

@@ -496,7 +496,7 @@ namespace vix::cli::project::native
       return 1;
     }
     const auto &submission = *result.submission;
-    std::cout << "published " << submission.identity.publisher << '/' << submission.identity.name << '@'
+    std::cout << "Registry accepted " << submission.identity.publisher << '/' << submission.identity.name << '@'
       << version_text(submission.version) << " (" << submission.contentId.digest() << ")\n";
     return 0;
   }

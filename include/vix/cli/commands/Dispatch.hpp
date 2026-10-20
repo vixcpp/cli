@@ -29,7 +29,7 @@ namespace vix::cli::dispatch
   {
     std::string name;
     std::string category; // "Project", "Packaging", "Info", ...
-    std::string summary;  // one-liner shown in REPL help list
+    std::string summary;  // one-liner shown in command help listings
 
     RunFn run;
     HelpFn help;

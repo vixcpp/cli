@@ -58,7 +58,6 @@ file(GLOB_RECURSE CLI_SOURCES
 list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
-list(FILTER CLI_SOURCES EXCLUDE REGEX "/commands/ReplCommand\\.cpp$")
 list(REMOVE_DUPLICATES CLI_SOURCES)
 
 add_executable(vix_cli ${CLI_SOURCES})

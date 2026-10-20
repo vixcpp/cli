@@ -98,7 +98,6 @@ Project:
   make                       Generate C++ scaffolding
   check                      Validate a project or source file
   replay                     Replay a recorded execution
-  repl                       Start the interactive REPL
   task                       Run project tasks
   fmt                        Format C++ source files
   clean                      Remove local build caches

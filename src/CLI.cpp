@@ -391,7 +391,7 @@ namespace vix
     out << "  run                        Build and run the project\n";
     out << "  test                       Run registered project tests\n";
     out << "  dev                        Run while watching for changes\n";
-    out << "  repl                       Start the C++ REPL\n\n";
+    out << "\n";
 
     out << "Packages:\n";
     out << "  add <package-or-url>       Add a package dependency\n";

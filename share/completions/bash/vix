@@ -1,6 +1,6 @@
 # Bash completion for the current Vix CLI.
 _vix_complete() {
-  local commands="new init build run test dev repl add remove update install publish upgrade"
+  local commands="new init build run test dev add remove update install publish upgrade"
   COMPREPLY=( $(compgen -W "$commands" -- "${COMP_WORDS[COMP_CWORD]}") )
 }
 complete -F _vix_complete vix

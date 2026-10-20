@@ -9,7 +9,7 @@ MANIFEST="$ROOT/tests/contracts/CommandCoverage.md"
 CLI="${1:-}"
 
 mapfile -t commands < <(sed -n 's/^[[:space:]]*add({"\([^"]*\)".*/\1/p' "$DISPATCH" | sort -u)
-expected_commands=(add build dev init install new publish remove repl run test update upgrade)
+expected_commands=(add build dev init install new publish remove run test update upgrade)
 expected_sorted="$(printf '%s\n' "${expected_commands[@]}" | sort)"
 actual_sorted="$(printf '%s\n' "${commands[@]}")"
 [[ "$actual_sorted" == "$expected_sorted" ]] || {
@@ -38,7 +38,7 @@ for command in "${commands[@]}"; do
   esac
 done
 
-for command in new init build run test dev repl add remove update install publish upgrade; do
+for command in new init build run test dev add remove update install publish upgrade; do
   grep -Fq "add({\"$command\"" "$DISPATCH" || {
     echo "Required canonical command is not registered: $command" >&2
     exit 1
@@ -48,7 +48,7 @@ done
 for completion in bash/vix zsh/_vix fish/vix.fish; do
   file="$ROOT/share/completions/$completion"
   [[ -f "$file" ]] || { echo "Missing shell completion asset: $completion" >&2; exit 1; }
-  for command in new init build run test dev repl add remove update install publish upgrade; do
+  for command in new init build run test dev add remove update install publish upgrade; do
     grep -Eq "(^|[^[:alnum:]_-])$command([^[:alnum:]_-]|$)" "$file" || {
       echo "Shell completion omits canonical command $command: $completion" >&2; exit 1; }
   done
@@ -73,7 +73,7 @@ if grep -Eq 'file\(COPY .*modules/|GLOB_RECURSE' "$ASSEMBLER"; then
   echo "Distribution assembler sweeps repository modules instead of admitted inputs" >&2; exit 1
 fi
 
-for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion uninstall make task target targets module modules tests up i deps; do
+for command in check fmt clean reset login logout registry search list outdated store unpublish pack verify cache doctor info completion uninstall make task target targets module modules tests up i deps repl; do
   if grep -Fq "add({\"$command\"" "$DISPATCH"; then
     echo "Removed command remains registered: $command" >&2
     exit 1
@@ -112,6 +112,11 @@ if [[ -n "$CLI" ]]; then
       echo "Removed command remains in top-level help: $command" >&2; exit 1
     fi
   done
+  if output="$("$CLI" help repl 2>&1)"; then
+    echo 'Removed REPL help topic was accepted' >&2; exit 1
+  fi
+  grep -Fq 'unknown help topic' <<<"$output" || {
+    echo 'Removed REPL help topic did not fail as unknown' >&2; exit 1; }
   grep -Fq 'https://vixcpp.com/docs' <<<"$help_output" || {
     echo "Canonical documentation URL is missing from CLI help" >&2; exit 1; }
 
@@ -120,13 +125,9 @@ if [[ -n "$CLI" ]]; then
   dev_help="$($CLI dev --help)"
   test_help="$($CLI test --help)"
   new_help="$($CLI new --help)"
-  repl_help="$($CLI repl --help)"
   grep -Fq 'vix new <path>' <<<"$new_help" || { echo 'New help omits the canonical path syntax' >&2; exit 1; }
   if grep -Eq -- '--force|--dir|template|application|CMakeLists' <<<"$new_help"; then
     echo 'New help exposes retired project-creation concepts' >&2; exit 1
-  fi
-  if grep -Eq 'Vix.args|--port|server|application' <<<"$repl_help"; then
-    echo 'REPL help exposes an application argument model' >&2; exit 1
   fi
   for option in '--dir' '--jobs' '--clean' '--platform' '--out' '--release' '--verbose' '--quiet' '--san' '--asan' '--ubsan' '--tsan' '--cmake' '--compiler-arg' '--linker-arg'; do
     grep -Fq -- "$option" <<<"$build_help" || { echo "Build help omits $option" >&2; exit 1; }
@@ -252,7 +253,9 @@ if [[ -n "$CLI" ]]; then
 
   if output="$("$CLI" dev example.cpp 2>&1)"; then echo 'Single-source dev was accepted' >&2; exit 1; fi
   grep -Fq 'not a single source file' <<<"$output" || { echo 'Dev did not explain its project-target-only input' >&2; exit 1; }
-  if output="$("$CLI" repl -- --port 8080 2>&1)"; then echo 'REPL argument tail was accepted' >&2; exit 1; fi
+  if output="$("$CLI" repl 2>&1)"; then echo 'Removed REPL command was accepted' >&2; exit 1; fi
+  grep -Eiq 'unknown|unrecognized' <<<"$output" || {
+    echo 'Removed REPL command did not fail as an unknown command' >&2; exit 1; }
   for args in 'install package-name' 'publish --dry-run' 'upgrade --check' 'update acme/json'; do
     if output="$($CLI $args 2>&1)"; then echo "Unsupported command option/argument was accepted: $args" >&2; exit 1; fi
   done

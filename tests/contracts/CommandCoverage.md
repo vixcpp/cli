@@ -13,7 +13,6 @@ command gate also invokes `vix help <command>` for every canonical command.
 | `run` | main | yes | RunCommand | — | REGISTERED | vix_cli_run_core_contract |
 | `dev` | main | yes | DevCommand | — | REGISTERED | vix_cli_dev_command_forwarding_tests |
 | `test` | main | yes | TestsCommand | — | REGISTERED | vix_cli_tests_command_contract |
-| `repl` | main | yes | ReplCommand | — | HELP_ONLY | vix_cli_command_coverage |
 | `add` | main | yes | AddCommand | — | REGISTERED | vix_cli_mutation_command_contracts |
 | `remove` | main | yes | RemoveCommand | — | REGISTERED | vix_cli_mutation_command_contracts |
 | `update` | main | yes | UpdateCommand | — | REGISTERED | vix_cli_mutation_command_contracts |
@@ -22,9 +21,9 @@ command gate also invokes `vix help <command>` for every canonical command.
 | `upgrade` | main | yes | UpgradeCommand | — | REGISTERED | vix_cli_distribution_runtime_tests |
 
 `help` and `version` are CLI infrastructure routes, not public commands. No
-other dispatcher route is part of this checkpoint. `repl` remains the only
-canonical command without a dedicated operation-level contract; its help and
-dispatch route are checked by `vix_cli_command_coverage`.
+other dispatcher route is part of this checkpoint. The historical `repl`
+implementation is excluded from the Vix 3.0 public command surface and is not
+part of this command-coverage manifest.
 
 The mutation CLI contract currently exercises failure boundaries; successful
 dependency mutation is covered by the native package command/runtime tests.

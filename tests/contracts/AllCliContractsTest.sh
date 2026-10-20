@@ -82,7 +82,7 @@ run install/InstallReconciliationContractTest.sh
 run run/RunAdvancedOptionsContractTest.sh
 run_test TestsCommandContractCliTest.sh
 check_command 'top-level help' "$VIX_BIN" --help
-for command in new init build run dev test repl add remove update install publish upgrade; do
+for command in new init build run dev test add remove update install publish upgrade; do
   check_command "help $command" "$VIX_BIN" help "$command"
 done
 case "$(uname -s)" in

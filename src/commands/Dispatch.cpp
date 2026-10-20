@@ -18,7 +18,6 @@
 #include <vix/cli/commands/RunCommand.hpp>
 #include <vix/cli/commands/DevCommand.hpp>
 #include <vix/cli/commands/TestsCommand.hpp>
-#include <vix/cli/commands/ReplCommand.hpp>
 #include <vix/cli/commands/AddCommand.hpp>
 #include <vix/cli/commands/RemoveCommand.hpp>
 #include <vix/cli/commands/PublishCommand.hpp>
@@ -84,14 +83,6 @@ namespace vix::cli::dispatch
          { return vix::commands::TestsCommand::run(a); },
          []()
          { return vix::commands::TestsCommand::help(); }});
-
-    add({"repl",
-         "Project",
-         "Start interactive Vix REPL",
-         [](const Args &a)
-         { return vix::commands::ReplCommand::run(a); },
-         []()
-         { return vix::commands::ReplCommand::help(); }});
 
     add({"add",
          "Registry",

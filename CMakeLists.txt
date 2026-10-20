@@ -58,6 +58,7 @@ file(GLOB_RECURSE CLI_SOURCES
 list(APPEND CLI_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/run/RunDetail.cpp"
 )
+list(FILTER CLI_SOURCES EXCLUDE REGEX "/commands/ReplCommand\\.cpp$")
 list(REMOVE_DUPLICATES CLI_SOURCES)
 
 add_executable(vix_cli ${CLI_SOURCES})
@@ -175,19 +176,12 @@ function(vix_append_if_exists out_var path_value)
 endfunction()
 
 # ----------------------------------------------------
-# Reply module
-# - The CLI REPL command depends on vix::reply.
-# - Load it before umbrella/core short-circuit branches.
+# Resolve the execution engine before local/installed Core dependencies.
 # ----------------------------------------------------
 get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
-set(_VIX_REPLY_DIR    "${_VIX_MODULES_DIR}/reply")
 set(_VIX_ENGINE_DIR   "${_VIX_MODULES_DIR}/engine")
 set(_VIX_REQUESTS_DIR "${_VIX_MODULES_DIR}/requests")
-
-if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
-  add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
-endif()
 
 if (EXISTS "${_VIX_ENGINE_DIR}/CMakeLists.txt" AND NOT TARGET vix::engine)
   set(VIX_ENGINE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -213,17 +207,9 @@ if (TARGET vix::vix)
   message(STATUS "[cli] Using umbrella target vix::vix")
   target_link_libraries(vix_cli PRIVATE vix::vix)
 
-  if (TARGET vix::reply)
-    target_link_libraries(vix_cli PRIVATE vix::reply)
-  endif()
-
 elseif (TARGET vix::core)
   message(STATUS "[cli] Using umbrella target vix::core")
   target_link_libraries(vix_cli PRIVATE vix::core)
-
-  if (TARGET vix::reply)
-    target_link_libraries(vix_cli PRIVATE vix::reply)
-  endif()
 
 else()
   get_filename_component(_VIX_MODULES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
@@ -244,10 +230,6 @@ else()
 
     if (EXISTS "${_VIX_JSON_DIR}/CMakeLists.txt" AND NOT TARGET vix::json)
       add_subdirectory("${_VIX_JSON_DIR}" "${CMAKE_BINARY_DIR}/_vix_json")
-    endif()
-
-    if (EXISTS "${_VIX_REPLY_DIR}/CMakeLists.txt" AND NOT TARGET vix::reply)
-      add_subdirectory("${_VIX_REPLY_DIR}" "${CMAKE_BINARY_DIR}/_vix_reply")
     endif()
 
     if (EXISTS "${_VIX_CORE_DIR}/CMakeLists.txt" AND NOT TARGET vix::core)
@@ -281,10 +263,6 @@ else()
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::core)
     endif()
 
-    if (TARGET vix::reply)
-      list(APPEND _VIX_LOCAL_LINK_TARGETS vix::reply)
-    endif()
-
     if (TARGET vix::requests)
       list(APPEND _VIX_LOCAL_LINK_TARGETS vix::requests)
     endif()
@@ -299,7 +277,6 @@ else()
 
     # Fallback header visibility for modules that expose headers but not imported targets
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CORE_DIR}/include")
-    vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REPLY_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_REQUESTS_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_CRYPTO_DIR}/include")
     vix_append_if_exists(_VIX_LOCAL_INCLUDE_DIRS "${_VIX_ENGINE_DIR}/include")
